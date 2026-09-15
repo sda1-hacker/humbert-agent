@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=My Product
+Comment=A humbert-agent application
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/humbert-agent %u
+Terminal=false
+Type=Application
+Icon=humbert-agent
+Categories=Utility;
+StartupWMClass=humbert-agent
+
+ 

@@ -1,0 +1,185 @@
+app:
+  name: Humbert
+
+logging:
+  level: info
+
+  # json / text
+  format: json
+
+runtime:
+  context:
+    # 达到模型 Context Budget 阈值后自动压缩。手动压缩不受该开关影响。
+    auto_compaction: true
+
+    # 小窗口模型使用百分比 reserve；大窗口模型至少保留 16k，并使用 10% reserve。
+    small_window_threshold: 65536
+    min_reserve_tokens: 16384
+    large_reserve_ratio: 0.10
+    small_reserve_ratio: 0.20
+
+    # 压缩后以原始消息形式保留的近期历史预算。
+    keep_recent_ratio: 0.20
+    keep_recent_min_tokens: 8192
+    keep_recent_max_tokens: 32768
+
+    # 单条 Thinking/ToolResult 送给内部摘要模型的最大字符数。原始 JSONL 不会截断。
+    serializer_max_chars: 4000
+
+    # 单 Session Memory 自动刷新阈值，满足任一条件即可刷新。
+    memory_turn_interval: 10
+    memory_token_interval: 12288
+
+    # Compaction / Memory 单次模型调用最长 120 秒。
+    operation_timeout_ms: 120000
+  skills:
+    # 单个 SKILL.md 最大 512 KiB。
+    max_definition_bytes: 524288
+    # 单个 references/scripts 资源最大 4 MiB。
+    max_asset_bytes: 4194304
+    # 单个 Skill Package 总大小最大 16 MiB。
+    max_package_bytes: 16777216
+    # 单个 Skill Package 最多 256 个文件。
+    max_files: 256
+    # 远程 Skill 下载体积上限 32 MiB。解压后的 Package 仍受 max_package_bytes 约束。
+    max_download_bytes: 33554432
+    # 单次远程 Skill 下载 / 更新超时 120 秒。
+    download_timeout_ms: 120000
+    # HTTP Redirect 最大跟随次数。每次跳转都会重新执行公开网络地址校验。
+    max_redirects: 5
+
+  mcp:
+    # MCP Server（stdio / Streamable HTTP）初始化握手最长等待 15 秒。
+    connect_timeout_ms: 15000
+    # 单个 Agent 从同一 MCP Server 最多显式启用多少 Tool。
+    max_tools_per_server: 64
+    # Eino officialmcp 自动翻页读取 tools/list 的最大页数。
+    max_tool_pages: 20
+    # 进入模型上下文的单个 MCP Tool 描述最大字符数。
+    max_tool_description_chars: 4000
+    # 单次 MCP ToolResult 最大字符数。
+    max_tool_result_chars: 100000
+    # ToolResult 被裁剪时额外保留的尾部字符数。
+    preserve_tool_result_tail_chars: 4000
+    catalog_ttl_ms: 6000
+
+security:
+  # 应用级文件安全硬限制。
+  # Tool 自己还有 tools.files 下的细粒度限制。
+  max_file_bytes: 1048576
+
+  # 本地程序执行默认关闭。
+  #
+  # 开启后才会注册 run_command。
+  #
+  # run_command 不会执行 shell command string，
+  # 而是使用 executable + argv 直接启动程序。
+  #
+  # 但本地程序仍具有当前用户真实系统权限，
+  # 所以在 OS Sandbox / Approval UI 完成前不要默认打开。
+  shell_enabled: false
+
+  # Permission + Approval 默认策略。read 通常自动允许；写文件和本地程序执行默认需要
+  # 用户确认。配置只决定没有用户规则命中时的默认动作，不保存批准结果。
+  permissions:
+    enabled: true
+    read_action: allow
+    write_action: ask
+    exec_action: ask
+
+    # 待审批最长保持 30 分钟。超时后按“拒绝本次”恢复 Agent，避免 Session 永久占用。
+    approval_timeout_ms: 1800000
+
+  # 即使 shell_enabled=true，
+  # 也只能执行这里列出的 executable 名称。
+  #
+  # 这里只允许程序名称，
+  # 不能填写 /usr/bin/git 等路径。
+  #
+  # 不建议加入：
+  #
+  # bash
+  # sh
+  # zsh
+  # powershell
+  # cmd
+  shell_allowed_commands:
+    - go
+    - git
+    - node
+    - npm
+    - npx
+    - python
+    - python3
+
+tools:
+  files:
+    # 同时控制：
+    #
+    # list_files
+    # read_file
+    # write_file
+    # edit_file
+    enabled: true
+
+    # read_file 可以打开的最大物理文件大小。
+    max_readable_file_bytes: 2097152
+
+    # write_file / edit_file
+    # 允许创建或修改后的最大文件大小。
+    max_writable_file_bytes: 2097152
+
+    # 单次 read_file 最多返回给模型的文本字节数。
+    # edit_file 的变更预览也使用该值作为预算。
+    max_read_output_bytes: 131072
+
+    # 未指定 line_count 时默认读取多少行。
+    default_read_lines: 200
+
+    # 单次允许请求的最大行数。
+    max_read_lines: 1000
+
+    # list_files 单次最多返回多少目录项。
+    max_list_entries: 1000
+
+  web_search:
+    enabled: true
+    provider: auto
+    timeout_seconds: 15
+    default_results: 10
+    max_results: 20
+
+  web_fetch:
+    enabled: true
+    timeout_seconds: 15
+    max_body_bytes: 5242880
+    default_max_chars: 12000
+    max_chars: 50000
+    max_redirects: 5
+
+  command:
+    # run_command 是否真正注册，
+    # 仍由 security.shell_enabled 决定。
+    #
+    # 这里只定义资源边界。
+
+    # 未指定 timeout_seconds 时的默认超时。
+    default_timeout_seconds: 120
+
+    # Agent 单次命令能够申请的最大超时。
+    max_timeout_seconds: 600
+
+    # stdout + stderr 最多保留多少字节。
+    #
+    # 超过以后会保留：
+    #
+    # head
+    # ...
+    # tail
+    max_output_bytes: 131072
+
+    # argv 最大参数数量。
+    max_args: 128
+
+    # 单个 argv 参数最大字节数。
+    max_arg_bytes: 16384

@@ -1,0 +1,953 @@
+@layer theme, base, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+:root {
+    /*
+     * Humbert 全局视觉主题。
+     *
+     * 设计目标：
+     *
+     * - 暖白、低对比背景，避免纯白造成桌面应用过亮；
+     * - 低饱和棕色作为唯一主要强调色，替代 Arco 默认蓝色；
+     * - 普通交互主要依靠描边、轻微底色和文字变化表达状态；
+     * - 危险、成功、警告仍保留语义差异，但全部降低饱和度，避免突兀；
+     * - 业务组件优先使用这些 Token，不直接散落大量 Hex 色值。
+     */
+    --h-bg: #f7f4ef;
+
+    --h-sidebar: #f1ede7;
+
+    --h-surface: #fbf9f5;
+
+    --h-surface-hover: #f2ece5;
+
+    --h-surface-active: #ece4da;
+
+    --h-border: #e2dcd4;
+
+    --h-border-strong: #d1c5b9;
+
+    --h-text: #4b4742;
+
+    --h-text-secondary: #746d65;
+
+    --h-text-muted: #a19990;
+
+    /*
+     * 主强调色使用柔和的 Walnut / Taupe Brown。
+     *
+     * --h-accent-border 比文字色更浅，专门用于空心按钮描边，
+     * 避免按钮在静止状态下显得过重。
+     */
+    --h-accent: #9a7f69;
+
+    --h-accent-hover: #816855;
+
+    --h-accent-border: #bda996;
+
+    --h-accent-soft: #f3ece5;
+
+    /*
+     * 状态色全部采用低饱和方案。
+     *
+     * Danger 仍然必须让用户意识到这是删除、停止等危险动作，
+     * 因此不能与普通按钮完全一致。
+     *
+     * 这里使用偏深的胡桃褐色，而不是高饱和红色。
+     */
+    --h-danger: #8d7062;
+
+    --h-danger-border: #c8b4a8;
+
+    --h-danger-soft: #f4ede8;
+
+    --h-warning: #98784f;
+
+    --h-warning-soft: #f5efe5;
+
+    --h-success: #77806a;
+
+    --h-success-soft: #eef1e9;
+
+    --h-radius-sm: 7px;
+
+    --h-radius-md: 10px;
+
+    --h-radius-lg: 14px;
+
+    /*
+     * Arco Design 使用 RGB Triplet 形式的 Palette Token。
+     *
+     * 在全局覆盖 Primary / Danger / Warning / Success，
+     * 可以让 Radio、Checkbox、Switch、Tabs、Select、Message 等
+     * 没有被业务 CSS 显式覆盖的组件也自动进入 Humbert 的暖棕主题，
+     * 避免页面里残留默认 Arcoblue 或鲜红色。
+     */
+    --primary-1: 250, 247, 244;
+    --primary-2: 246, 240, 234;
+    --primary-3: 239, 229, 219;
+    --primary-4: 224, 207, 192;
+    --primary-5: 190, 166, 145;
+    --primary-6: 154, 127, 105;
+    --primary-7: 129, 104, 85;
+    --primary-8: 108, 85, 68;
+    --primary-9: 86, 66, 53;
+    --primary-10: 65, 49, 40;
+
+    --danger-1: 251, 247, 245;
+    --danger-2: 247, 238, 234;
+    --danger-3: 239, 221, 215;
+    --danger-4: 215, 197, 187;
+    --danger-5: 181, 153, 138;
+    --danger-6: 141, 112, 98;
+    --danger-7: 119, 91, 78;
+    --danger-8: 98, 73, 62;
+    --danger-9: 78, 57, 48;
+    --danger-10: 59, 42, 35;
+
+    --warning-1: 251, 248, 242;
+    --warning-2: 247, 241, 230;
+    --warning-3: 239, 226, 201;
+    --warning-4: 219, 197, 158;
+    --warning-5: 187, 154, 105;
+    --warning-6: 152, 120, 79;
+    --warning-7: 128, 98, 62;
+    --warning-8: 106, 80, 50;
+    --warning-9: 83, 62, 39;
+    --warning-10: 63, 46, 29;
+
+    --success-1: 248, 249, 246;
+    --success-2: 240, 243, 236;
+    --success-3: 224, 231, 216;
+    --success-4: 198, 210, 186;
+    --success-5: 159, 176, 145;
+    --success-6: 119, 128, 106;
+    --success-7: 96, 106, 85;
+    --success-8: 77, 86, 68;
+    --success-9: 60, 68, 53;
+    --success-10: 45, 51, 40;
+}
+
+html,
+body,
+#app {
+    width: 100%;
+    height: 100%;
+
+    margin: 0;
+
+    overflow: hidden;
+}
+
+html,
+body {
+    background: var(--h-bg);
+
+    color: var(--h-text);
+
+    font-family:
+            -apple-system,
+            BlinkMacSystemFont,
+            "SF Pro Text",
+            "PingFang SC",
+            "Microsoft YaHei",
+            "Segoe UI",
+            sans-serif;
+
+    font-synthesis: none;
+
+    text-rendering: optimizeLegibility;
+
+    -webkit-font-smoothing: antialiased;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+/*
+ * Humbert 明确采用 Flat UI。
+ *
+ * 产品层不使用阴影表达层级，
+ * 层级只通过背景差异、Border、间距和 Typography 表达。
+ */
+#app *,
+.arco-trigger-popup,
+.arco-modal,
+.arco-drawer,
+.arco-message,
+.arco-notification {
+    box-shadow: none !important;
+}
+
+button,
+input,
+textarea,
+select {
+    font: inherit;
+}
+
+a {
+    color: var(--h-accent-hover);
+}
+
+::selection {
+    background: rgba(154, 127, 105, 0.18);
+}
+
+/*
+ * 键盘导航时保留清晰但不过分抢眼的焦点状态。
+ *
+ * mouse click 不额外制造蓝色 Focus Ring；
+ * keyboard focus 则必须保留可访问性提示。
+ */
+:focus-visible {
+    outline: 2px solid rgba(154, 127, 105, 0.32);
+    outline-offset: 2px;
+}
+
+/* =============================
+   Scrollbar
+   ============================= */
+
+* {
+    scrollbar-width: thin;
+
+    scrollbar-color:
+            #cec3b8
+            transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 6px;
+
+    height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+
+    background: #cec3b8;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background: #bcae9f;
+}
+
+/* =============================
+   Arco Theme - Button
+   ============================= */
+
+/*
+ * Humbert 的按钮默认使用“空心暖棕”视觉。
+ *
+ * Arco 的 primary / secondary / outline 在 Humbert 中不通过
+ * 大面积实心背景区分主次，而通过 Border 深浅和文字颜色区分。
+ *
+ * 这样能够保持桌面助手界面的轻量、安静感。
+ */
+.arco-btn {
+    border: 1px solid var(--h-accent-border) !important;
+
+    border-radius: var(--h-radius-sm);
+
+    background: transparent !important;
+
+    color: var(--h-accent-hover) !important;
+
+    box-shadow: none !important;
+
+    font-weight: 400;
+
+    transition:
+            border-color 120ms ease,
+            background-color 120ms ease,
+            color 120ms ease;
+}
+
+.arco-btn:hover:not(.arco-btn-disabled):not([disabled]) {
+    border-color: var(--h-accent) !important;
+
+    background: var(--h-accent-soft) !important;
+
+    color: var(--h-accent-hover) !important;
+}
+
+.arco-btn:active:not(.arco-btn-disabled):not([disabled]) {
+    border-color: var(--h-accent-hover) !important;
+
+    background: var(--h-surface-active) !important;
+}
+
+/*
+ * Primary 仍然保留稍强的描边，
+ * 用于“保存 / 发送 / 创建”等主动作，
+ * 但绝不使用实心底色。
+ */
+.arco-btn-primary,
+.arco-btn-secondary,
+.arco-btn-outline {
+    border-color: var(--h-accent-border) !important;
+
+    background: transparent !important;
+
+    color: var(--h-accent-hover) !important;
+}
+
+.arco-btn-primary:hover:not(.arco-btn-disabled):not([disabled]),
+.arco-btn-secondary:hover:not(.arco-btn-disabled):not([disabled]),
+.arco-btn-outline:hover:not(.arco-btn-disabled):not([disabled]) {
+    border-color: var(--h-accent) !important;
+
+    background: var(--h-accent-soft) !important;
+
+    color: var(--h-accent-hover) !important;
+}
+
+/*
+ * Text Button 常用于侧边栏的：
+ *
+ * - 新建；
+ * - 编辑；
+ * - 更多；
+ * - 删除图标；
+ *
+ * 等轻量动作。
+ *
+ * 如果也强制显示描边会让 Sidebar 过于拥挤，
+ * 因此保持无边框，但仍使用同一暖棕文字和浅棕 Hover。
+ */
+.arco-btn-text {
+    border-color: transparent !important;
+
+    background: transparent !important;
+
+    color: var(--h-accent) !important;
+}
+
+.arco-btn-text:hover:not(.arco-btn-disabled):not([disabled]) {
+    border-color: transparent !important;
+
+    background: var(--h-accent-soft) !important;
+
+    color: var(--h-accent-hover) !important;
+}
+
+/*
+ * 危险动作使用低饱和深胡桃棕描边。
+ *
+ * 仍与普通动作保持语义差异，
+ * 但避免 Arco 默认的鲜红实心按钮。
+ */
+.arco-btn-status-danger,
+.arco-btn-status-danger.arco-btn-primary,
+.arco-btn-status-danger.arco-btn-secondary,
+.arco-btn-status-danger.arco-btn-outline {
+    border-color: var(--h-danger-border) !important;
+
+    background: transparent !important;
+
+    color: var(--h-danger) !important;
+}
+
+.arco-btn-status-danger:hover:not(.arco-btn-disabled):not([disabled]),
+.arco-btn-status-danger.arco-btn-primary:hover:not(.arco-btn-disabled):not([disabled]),
+.arco-btn-status-danger.arco-btn-secondary:hover:not(.arco-btn-disabled):not([disabled]),
+.arco-btn-status-danger.arco-btn-outline:hover:not(.arco-btn-disabled):not([disabled]) {
+    border-color: var(--h-danger) !important;
+
+    background: var(--h-danger-soft) !important;
+
+    color: var(--h-danger) !important;
+}
+
+.arco-btn-status-danger.arco-btn-text {
+    border-color: transparent !important;
+
+    background: transparent !important;
+
+    color: var(--h-danger) !important;
+}
+
+.arco-btn-status-danger.arco-btn-text:hover:not(.arco-btn-disabled):not([disabled]) {
+    background: var(--h-danger-soft) !important;
+}
+
+/*
+ * Disabled 状态不应继续显示主色 Hover 或实心背景。
+ */
+.arco-btn.arco-btn-disabled,
+.arco-btn[disabled] {
+    border-color: var(--h-border) !important;
+
+    background: transparent !important;
+
+    color: var(--h-text-muted) !important;
+
+    opacity: 0.62;
+}
+
+/*
+ * Loading Spinner 继承按钮文字色，
+ * 避免重新出现默认蓝色。
+ */
+.arco-btn .arco-icon-loading {
+    color: currentColor;
+}
+
+/* =============================
+   Arco Theme - Form Controls
+   ============================= */
+
+.arco-input-wrapper,
+.arco-textarea-wrapper,
+.arco-select-view-single,
+.arco-input-number,
+.arco-input-number .arco-input-wrapper {
+    border-color: var(--h-border) !important;
+
+    border-radius: var(--h-radius-sm);
+
+    background: var(--h-surface) !important;
+
+    color: var(--h-text);
+
+    box-shadow: none !important;
+}
+
+.arco-input-wrapper:hover,
+.arco-textarea-wrapper:hover,
+.arco-select-view-single:hover,
+.arco-input-number:hover {
+    border-color: var(--h-border-strong) !important;
+}
+
+.arco-input-wrapper.arco-input-focus,
+.arco-textarea-wrapper.arco-textarea-focus,
+.arco-select-view-single.arco-select-view-focus,
+.arco-input-number.arco-input-number-focus {
+    border-color: var(--h-accent) !important;
+
+    box-shadow: none !important;
+}
+
+.arco-input,
+.arco-textarea,
+.arco-select-view-value,
+.arco-input-number-input {
+    color: var(--h-text) !important;
+}
+
+.arco-input::placeholder,
+.arco-textarea::placeholder,
+.arco-select-view-placeholder {
+    color: var(--h-text-muted) !important;
+}
+
+.arco-form-item-label-col > .arco-form-item-label,
+.arco-form-item-label {
+    color: var(--h-text-secondary) !important;
+}
+
+/* =============================
+   Arco Theme - Select / Popup
+   ============================= */
+
+.arco-trigger-popup,
+.arco-select-dropdown {
+    border: 1px solid var(--h-border);
+
+    border-radius: var(--h-radius-md);
+
+    background: var(--h-surface) !important;
+
+    box-shadow: none !important;
+}
+
+.arco-select-option {
+    border-radius: 6px;
+
+    color: var(--h-text-secondary) !important;
+}
+
+.arco-select-option:hover,
+.arco-select-option-hover {
+    background: var(--h-surface-hover) !important;
+
+    color: var(--h-text) !important;
+}
+
+.arco-select-option-selected {
+    background: var(--h-accent-soft) !important;
+
+    color: var(--h-accent-hover) !important;
+
+    font-weight: 500;
+}
+
+/* =============================
+   Arco Theme - Radio / Checkbox / Switch
+   ============================= */
+
+.arco-radio-label,
+.arco-checkbox-label {
+    color: var(--h-text-secondary);
+}
+
+.arco-radio-icon,
+.arco-checkbox-icon {
+    border-color: var(--h-border-strong) !important;
+
+    box-shadow: none !important;
+}
+
+.arco-radio:hover .arco-radio-icon,
+.arco-checkbox:hover .arco-checkbox-icon {
+    border-color: var(--h-accent) !important;
+}
+
+.arco-radio-checked .arco-radio-icon {
+    border-color: var(--h-accent) !important;
+
+    color: var(--h-accent) !important;
+}
+
+.arco-checkbox-checked .arco-checkbox-icon {
+    border-color: var(--h-accent) !important;
+
+    background: var(--h-accent) !important;
+}
+
+.arco-switch {
+    background: var(--h-border-strong) !important;
+
+    box-shadow: none !important;
+}
+
+.arco-switch-checked {
+    background: var(--h-accent) !important;
+}
+
+/* =============================
+   Arco Theme - Tabs
+   ============================= */
+
+.arco-tabs-nav::before {
+    background: var(--h-border) !important;
+}
+
+.arco-tabs-tab {
+    color: var(--h-text-muted) !important;
+}
+
+.arco-tabs-tab:hover {
+    color: var(--h-text-secondary) !important;
+}
+
+.arco-tabs-tab-active,
+.arco-tabs-tab-active:hover {
+    color: var(--h-accent-hover) !important;
+}
+
+.arco-tabs-nav-ink {
+    background: var(--h-accent) !important;
+}
+
+/* =============================
+   Arco Theme - Modal / Drawer
+   ============================= */
+
+.arco-drawer {
+    background: var(--h-surface) !important;
+
+    box-shadow: none !important;
+}
+
+.arco-drawer-header {
+    border-bottom: 1px solid var(--h-border);
+
+    color: var(--h-text);
+}
+
+.arco-drawer-title {
+    color: var(--h-text) !important;
+
+    font-weight: 500;
+}
+
+.arco-modal {
+    border: 1px solid var(--h-border);
+
+    border-radius: var(--h-radius-lg);
+
+    background: var(--h-surface) !important;
+
+    box-shadow: none !important;
+}
+
+.arco-modal-header {
+    border-bottom: 1px solid var(--h-border);
+}
+
+.arco-modal-title {
+    color: var(--h-text) !important;
+
+    font-weight: 500;
+}
+
+.arco-modal-footer {
+    border-top-color: var(--h-border) !important;
+}
+
+/* =============================
+   Arco Theme - Message / Notification
+   ============================= */
+
+/*
+ * Toast / Message 不再使用大面积状态色背景。
+ *
+ * 状态通过小图标颜色表达，
+ * 主体始终保持暖白 Surface。
+ */
+.arco-message,
+.arco-notification {
+    border: 1px solid var(--h-border) !important;
+
+    background: var(--h-surface) !important;
+
+    color: var(--h-text-secondary) !important;
+
+    box-shadow: none !important;
+}
+
+.arco-message-content,
+.arco-notification-content,
+.arco-notification-title {
+    color: var(--h-text-secondary) !important;
+}
+
+/* =============================
+   Arco Theme - Tooltip
+   ============================= */
+
+.arco-tooltip-content {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+
+    background: #5e554d !important;
+
+    color: #f8f4ef !important;
+
+    box-shadow: none !important;
+}
+/* =============================
+   Humbert UI Foundations
+   ============================= */
+
+:root {
+    --h-content-wide: 1180px;
+    --h-content-standard: 980px;
+    --h-content-narrow: 760px;
+    --h-page-gutter: 28px;
+    --h-page-top: 34px;
+    --h-page-bottom: 56px;
+    --h-panel-padding: 18px;
+    --h-section-gap: 16px;
+    --h-row-gap: 10px;
+    --h-control-height: 32px;
+    --h-control-height-sm: 28px;
+    --h-transition: 120ms ease;
+}
+
+/*
+ * UI-01 以后一级业务页统一使用这组排版基元。
+ * 业务组件只负责内容，不再各自重新定义 Page Header / Card / Empty State。
+ */
+.h-page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 22px;
+}
+
+.h-page-header__copy {
+    min-width: 0;
+}
+
+.h-page-header__eyebrow {
+    margin-bottom: 5px;
+    color: var(--h-text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+.h-page-header__title {
+    margin: 0;
+    color: var(--h-text);
+    font-size: 29px;
+    font-weight: 650;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+}
+
+.h-page-header__description {
+    max-width: 760px;
+    margin: 8px 0 0;
+    color: var(--h-text-secondary);
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.h-page-header__side {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: flex-end;
+    gap: 10px;
+}
+
+.h-page-header__aside {
+    color: var(--h-text-muted);
+    font-size: 11px;
+}
+
+.h-page-header__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.h-section-card {
+    min-width: 0;
+    padding: var(--h-panel-padding);
+    border: 1px solid var(--h-border);
+    border-radius: var(--h-radius-lg);
+    background: var(--h-surface);
+}
+
+.h-section-card--compact {
+    padding: 14px;
+}
+
+.h-section-card--subtle {
+    background: color-mix(in srgb, var(--h-surface) 78%, var(--h-bg) 22%);
+}
+
+.h-section-card--warning {
+    background: color-mix(in srgb, var(--h-surface) 88%, var(--h-warning) 12%);
+}
+
+.h-section-card__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px 16px;
+    margin-bottom: 16px;
+}
+
+.h-section-card__copy {
+    min-width: 0;
+    flex: 1 1 280px;
+}
+
+.h-section-card__title {
+    margin: 0;
+    color: var(--h-text);
+    font-size: 14px;
+    font-weight: 650;
+    line-height: 1.4;
+}
+
+.h-section-card__description {
+    margin: 6px 0 0;
+    color: var(--h-text-muted);
+    font-size: 12px;
+    line-height: 1.65;
+}
+
+.h-section-card__actions {
+    display: flex;
+    min-width: 0;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.h-section-card__body {
+    min-width: 0;
+}
+
+.h-section-card__footer {
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--h-border);
+}
+
+.h-empty-state {
+    display: flex;
+    min-height: 168px;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 7px;
+    padding: 26px 20px;
+    border: 1px dashed var(--h-border-strong);
+    border-radius: var(--h-radius-md);
+    background: color-mix(in srgb, var(--h-bg) 58%, transparent);
+    text-align: center;
+}
+
+.h-empty-state--compact {
+    min-height: 108px;
+    padding: 18px;
+}
+
+.h-empty-state__icon {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    place-items: center;
+    margin-bottom: 2px;
+    border: 1px solid var(--h-border);
+    border-radius: 10px;
+    background: var(--h-surface);
+    color: var(--h-accent);
+    font-size: 16px;
+}
+
+.h-empty-state__title {
+    color: var(--h-text);
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.h-empty-state__description {
+    max-width: 520px;
+    margin: 0;
+    color: var(--h-text-muted);
+    font-size: 12px;
+    line-height: 1.65;
+}
+
+.h-empty-state__actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.h-status-pill {
+    display: inline-flex;
+    min-height: 22px;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border: 1px solid var(--h-border);
+    border-radius: 999px;
+    background: var(--h-bg);
+    color: var(--h-text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.h-status-pill__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.h-status-pill--success {
+    border-color: color-mix(in srgb, var(--h-success) 34%, var(--h-border));
+    background: var(--h-success-soft);
+    color: var(--h-success);
+}
+
+.h-status-pill--warning {
+    border-color: color-mix(in srgb, var(--h-warning) 34%, var(--h-border));
+    background: var(--h-warning-soft);
+    color: var(--h-warning);
+}
+
+.h-status-pill--danger {
+    border-color: color-mix(in srgb, var(--h-danger) 34%, var(--h-border));
+    background: var(--h-danger-soft);
+    color: var(--h-danger);
+}
+
+.h-status-pill--info {
+    border-color: color-mix(in srgb, var(--h-accent) 34%, var(--h-border));
+    background: var(--h-accent-soft);
+    color: var(--h-accent-hover);
+}
+
+/* Settings / Workspace 中的通用列表行。 */
+.h-list-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px;
+    border: 1px solid transparent;
+    border-radius: var(--h-radius-md);
+    background: var(--h-bg);
+    transition:
+            border-color var(--h-transition),
+            background-color var(--h-transition);
+}
+
+.h-list-row:hover {
+    border-color: var(--h-border);
+    background: var(--h-surface-hover);
+}
+
+.h-list-row--selected {
+    border-color: var(--h-accent-border);
+    background: var(--h-accent-soft);
+}
+
+/* Arco 控件在设置页统一高度，减少同页按钮、输入框参差。 */
+.arco-btn:not(.arco-btn-size-mini),
+.arco-input-wrapper,
+.arco-select-view-single,
+.arco-input-number {
+    min-height: var(--h-control-height);
+}
+
+.arco-btn-size-small {
+    min-height: var(--h-control-height-sm) !important;
+}
+
+@media (max-width: 920px) {
+    :root {
+        --h-page-gutter: 14px;
+        --h-page-top: 22px;
+        --h-page-bottom: 36px;
+    }
+
+    .h-page-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .h-page-header__side,
+    .h-page-header__actions {
+        width: 100%;
+    }
+}
