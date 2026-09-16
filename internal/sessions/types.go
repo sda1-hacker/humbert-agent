@@ -60,6 +60,20 @@ type Message struct {
 	CreatedAt time.Time
 }
 
+// MessagePage 是当前 Active Branch 上一页稳定的消息窗口。
+//
+// NextBeforeID 指向本页第一条消息；下一页使用它作为 before 游标。StartIndex 是本页
+// 第一条消息在 Active Branch 消息序列中的零基序号，用来生成跨页稳定的展示编号。
+type MessagePage struct {
+	Messages []Message
+
+	StartIndex int
+
+	HasMore bool
+
+	NextBeforeID string
+}
+
 // CreateSessionInput 描述创建 Session 所需参数。
 type CreateSessionInput struct {
 	AgentID string

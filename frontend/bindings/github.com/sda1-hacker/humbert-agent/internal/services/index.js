@@ -46,6 +46,7 @@ export {
     MCPToolDTO,
     MCPToolSelectionDTO,
     MessageDTO,
+    MessagePageDTO,
     ModelCapabilitiesDTO,
     ModelCapabilityConfigDTO,
     ModelDTO,

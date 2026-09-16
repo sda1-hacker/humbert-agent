@@ -12,6 +12,9 @@ import ToolTraceGroup
 import MarkdownRenderer
   from "./MarkdownRenderer.vue";
 
+import MessageActions
+  from "./MessageActions.vue";
+
 const props =
     defineProps({
       message: {
@@ -121,6 +124,11 @@ const incomplete =
     >
       <MarkdownRenderer :content="content" />
     </div>
+
+    <MessageActions
+        :content="content"
+        :session-id="message?.sessionID || ''"
+    />
 
     <div
         v-if="incomplete"

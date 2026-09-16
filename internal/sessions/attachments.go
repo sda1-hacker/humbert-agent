@@ -35,12 +35,13 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 		return Message{}, errors.New("用户消息或附件至少需要一个")
 	}
 
-	directory, err := s.store.SessionDirectory(ctx, sessionID)
-	if err != nil {
-		return Message{}, err
-	}
-	attachmentDir := filepath.Join(directory, "attachments")
+	attachmentDir := ""
 	if len(input.Attachments) > 0 {
+		directory, err := s.store.SessionDirectory(ctx, sessionID)
+		if err != nil {
+			return Message{}, err
+		}
+		attachmentDir = filepath.Join(directory, "attachments")
 		if err := ensureAttachmentDirectory(attachmentDir); err != nil {
 			return Message{}, err
 		}
@@ -115,7 +116,51 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 		cleanup()
 		return Message{}, err
 	}
+	s.renameDefaultSessionFromFirstInput(ctx, sessionID, stored, text, input.Attachments)
 	return stored, nil
+}
+
+// renameDefaultSessionFromFirstInput 为首次输入生成短标题。
+//
+// 标题属于辅助控制面；自动命名失败不能让一条已经落盘的用户消息表现为发送失败。
+func (s *Service) renameDefaultSessionFromFirstInput(
+	ctx context.Context,
+	sessionID string,
+	stored Message,
+	text string,
+	attachments []AttachmentInput,
+) {
+	// 第一条 Tree Entry 没有 parent。直接使用 Append 返回的事实，既避免为自动标题再次
+	// 全量读取 Transcript，也不会在两个并发输入先后落盘后因观察到两条消息而都放弃命名。
+	if stored.ParentID != nil {
+		return
+	}
+	session, err := s.store.GetSession(ctx, sessionID)
+	if err != nil || session.Title != defaultSessionTitle {
+		return
+	}
+
+	title := strings.Join(strings.Fields(text), " ")
+	if title == "" && len(attachments) > 0 {
+		title = strings.TrimSpace(attachments[0].Name)
+	}
+	if title == "" {
+		return
+	}
+	const maxAutomaticTitleRunes = 42
+	runes := []rune(title)
+	if len(runes) > maxAutomaticTitleRunes {
+		title = string(runes[:maxAutomaticTitleRunes-1]) + "…"
+	}
+	if err := s.store.RenameSession(ctx, sessionID, title); err != nil {
+		s.logger.Warn(
+			ctx,
+			"Session 自动命名失败",
+			"operation", "session.title.auto",
+			"session_id", sessionID,
+			"error", err,
+		)
+	}
 }
 
 func (s *Service) userInputMatchesStoredMessage(ctx context.Context, sessionID string, input UserInput, message *schema.Message) (bool, error) {

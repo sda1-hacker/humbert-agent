@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +108,194 @@ func TestRetryReusesOnlyTheLastUnansweredUserMessage(t *testing.T) {
 	}
 	if _, err := svc.PrepareUserMessage(ctx, "session", UserInput{Text: "hello"}, first.EntryID); err == nil {
 		t.Fatal("answered message retried")
+	}
+}
+
+func TestListMessagePageUsesStableBeforeCursor(t *testing.T) {
+	ctx := context.Background()
+	tr, err := transcript.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, Session{ID: "paged", AgentID: "agent", Title: "test", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+
+	for index := 1; index <= 7; index++ {
+		message := schema.UserMessage(fmt.Sprintf("message-%d", index))
+		options := transcript.EncodeOptions{}
+		if index%2 == 0 {
+			message = schema.AssistantMessage(fmt.Sprintf("message-%d", index), nil)
+			options.Provider = "test"
+			options.Model = "test"
+		}
+		if _, err := store.AppendMessage(ctx, "paged", message, options); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	latest, err := store.ListMessagePage(ctx, "paged", "", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.StartIndex != 4 || !latest.HasMore || len(latest.Messages) != 3 {
+		t.Fatalf("unexpected latest page: %#v", latest)
+	}
+	if latest.Messages[0].Message.Content != "message-5" || latest.Messages[2].Message.Content != "message-7" {
+		t.Fatalf("unexpected latest contents: %#v", latest.Messages)
+	}
+
+	middle, err := store.ListMessagePage(ctx, "paged", latest.NextBeforeID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if middle.StartIndex != 1 || !middle.HasMore || len(middle.Messages) != 3 {
+		t.Fatalf("unexpected middle page: %#v", middle)
+	}
+	if middle.Messages[0].Message.Content != "message-2" || middle.Messages[2].Message.Content != "message-4" {
+		t.Fatalf("unexpected middle contents: %#v", middle.Messages)
+	}
+
+	oldest, err := store.ListMessagePage(ctx, "paged", middle.NextBeforeID, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldest.StartIndex != 0 || oldest.HasMore || len(oldest.Messages) != 1 || oldest.Messages[0].Message.Content != "message-1" {
+		t.Fatalf("unexpected oldest page: %#v", oldest)
+	}
+	if _, err := store.ListMessagePage(ctx, "paged", "missing", 3); !errors.Is(err, ErrMessageCursorNotFound) {
+		t.Fatalf("invalid cursor error: %v", err)
+	}
+}
+
+func TestListMessagePageKeepsToolTransactionTogether(t *testing.T) {
+	ctx := context.Background()
+	tr, err := transcript.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, Session{ID: "tools", AgentID: "agent", Title: "test", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	messages := []*schema.Message{
+		schema.UserMessage("run tools"),
+		schema.AssistantMessage("", []schema.ToolCall{
+			{ID: "call-1", Function: schema.FunctionCall{Name: "first", Arguments: `{}`}},
+			{ID: "call-2", Function: schema.FunctionCall{Name: "second", Arguments: `{}`}},
+		}),
+		schema.ToolMessage("first", "call-1"),
+		schema.ToolMessage("second", "call-2"),
+		schema.AssistantMessage("finished", nil),
+	}
+	for _, message := range messages {
+		options := transcript.EncodeOptions{}
+		if message.Role == schema.Assistant {
+			options.Provider = "test"
+			options.Model = "test"
+		}
+		if message.Role == schema.Tool {
+			message.ToolName = "test-tool"
+		}
+		if _, err := store.AppendMessage(ctx, "tools", message, options); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page, err := store.ListMessagePage(ctx, "tools", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != 4 || page.Messages[0].Message.Role != schema.Assistant || page.Messages[3].Message.Content != "finished" {
+		t.Fatalf("tool transaction was split: %#v", page.Messages)
+	}
+}
+
+func TestFirstUserInputAutomaticallyNamesDefaultSession(t *testing.T) {
+	ctx := context.Background()
+	tr, err := transcript.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, Session{ID: "auto-title", AgentID: "agent", Title: defaultSessionTitle, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{store: store, logger: logging.NewBootstrap()}
+	if _, err := svc.AppendUserMessage(ctx, "auto-title", "  帮我   整理今天的工作计划  "); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetSession(ctx, "auto-title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "帮我 整理今天的工作计划" {
+		t.Fatalf("unexpected automatic title: %q", got.Title)
+	}
+	if _, err := svc.AppendUserMessage(ctx, "auto-title", "第二条不能改标题"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.GetSession(ctx, "auto-title")
+	if err != nil || got.Title != "帮我 整理今天的工作计划" {
+		t.Fatalf("automatic title changed again: %#v, %v", got, err)
+	}
+}
+
+func TestConcurrentFirstInputsStillAutomaticallyNameSession(t *testing.T) {
+	ctx := context.Background()
+	tr, err := transcript.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, Session{ID: "concurrent-title", AgentID: "agent", Title: defaultSessionTitle, CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	svc := &Service{store: store, logger: logging.NewBootstrap()}
+	errs := make(chan error, 2)
+	for _, content := range []string{"第一条并发输入", "第二条并发输入"} {
+		content := content
+		go func() {
+			_, appendErr := svc.AppendUserMessage(ctx, "concurrent-title", content)
+			errs <- appendErr
+		}()
+	}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := store.GetSession(ctx, "concurrent-title")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "第一条并发输入" && got.Title != "第二条并发输入" {
+		t.Fatalf("concurrent first inputs left default title: %q", got.Title)
+	}
+}
+
+func TestNormalizeTitleCountsCharactersInsteadOfUTF8Bytes(t *testing.T) {
+	title := strings.Repeat("会", maxSessionTitleLength)
+	got, err := normalizeTitle(title)
+	if err != nil || got != title {
+		t.Fatalf("valid multibyte title rejected: %q, %v", got, err)
+	}
+	if _, err := normalizeTitle(title + "话"); err == nil {
+		t.Fatal("overlong title accepted")
 	}
 }
 

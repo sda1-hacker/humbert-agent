@@ -57,6 +57,15 @@ Provider、Model、Agent 等低频配置使用“临时文件 + `fsync` + `renam
 - 初始化失败返回已保存消息的收据；当前界面内相同内容重试会复用消息 ID。该机制不等于跨进程可靠任务队列。
 - 回答后的压缩/记忆维护显示独立状态，用户停止或应用关闭均可取消。
 
+### 日常会话体验
+
+- 聊天界面按游标加载历史，每次默认展示最新 80 条；向前加载时保持当前阅读位置。
+- 文字草稿按 Session 保存在本地，切换会话或重启界面不会互相覆盖；附件草稿按 Session 在当前进程内隔离。
+- 用户消息支持复制和再次填入输入框，Assistant 回复支持整段复制。
+- 默认“新会话”会在第一条用户输入落盘后自动生成短标题；用户手工命名的会话不会被覆盖。
+
+当前分页只把选中窗口恢复成 Eino Message，限制了恢复、IPC 与前端渲染量；底层仍会加载并校验完整 JSONL Tree。长历史的增量索引/读取仍是后续性能工作，不能把界面分页等同于存储层随机读取。
+
 本轮修复、测试和剩余工作见 [可靠性修复记录](docs/reviews/2026-09-15-reliability-fixes.md)。
 
 ## 开发环境
@@ -87,7 +96,6 @@ export HUMBERT_SECURITY_SHELL_ENABLED=false
 在项目根目录执行：
 
 ```bash
-wails3 generate bindings ./.. -d ./frontend/bindings
 wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings
 wails3 dev
 

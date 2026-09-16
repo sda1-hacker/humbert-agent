@@ -17,11 +17,13 @@ import (
 )
 
 const (
-	defaultSessionTitle   = "新会话"
-	maxSessionTitleLength = 200
-	maxUserMessageBytes   = 256 * 1024
-	defaultMessageLimit   = 200
-	maxMessageLimit       = 1000
+	defaultSessionTitle     = "新会话"
+	maxSessionTitleLength   = 200
+	maxUserMessageBytes     = 256 * 1024
+	defaultMessageLimit     = 200
+	maxMessageLimit         = 1000
+	defaultMessagePageLimit = 80
+	maxMessagePageLimit     = 200
 )
 
 // Service 是 Humbert 唯一的 SessionManager。
@@ -153,8 +155,8 @@ func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session
 
 // Rename 原子更新该 Session 自己的 config.json，不写 Conversation Tree。
 func (s *Service) Rename(ctx context.Context, sessionID string, title string) (Session, error) {
-	if _, err := s.store.GetSession(ctx, sessionID); err != nil {
-		return Session{}, err
+	if strings.TrimSpace(sessionID) == "" {
+		return Session{}, errors.New("Session ID 不能为空")
 	}
 
 	normalized, err := normalizeTitle(title)
@@ -277,8 +279,8 @@ func (s *Service) AppendToolResult(
 
 // Messages 返回当前 Active Branch 上最近的消息记录。
 func (s *Service) Messages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
-	if _, err := s.store.GetSession(ctx, sessionID); err != nil {
-		return nil, err
+	if strings.TrimSpace(sessionID) == "" {
+		return nil, errors.New("Session ID 不能为空")
 	}
 	if limit == 0 {
 		limit = defaultMessageLimit
@@ -287,6 +289,25 @@ func (s *Service) Messages(ctx context.Context, sessionID string, limit int) ([]
 		return nil, fmt.Errorf("Message limit 必须位于 1-%d 之间", maxMessageLimit)
 	}
 	return s.store.ListMessages(ctx, sessionID, limit)
+}
+
+// MessagePage 返回聊天界面使用的一页历史消息。
+func (s *Service) MessagePage(
+	ctx context.Context,
+	sessionID string,
+	beforeEntryID string,
+	limit int,
+) (MessagePage, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return MessagePage{}, errors.New("Session ID 不能为空")
+	}
+	if limit == 0 {
+		limit = defaultMessagePageLimit
+	}
+	if limit < 1 || limit > maxMessagePageLimit {
+		return MessagePage{}, fmt.Errorf("Message page limit 必须位于 1-%d 之间", maxMessagePageLimit)
+	}
+	return s.store.ListMessagePage(ctx, sessionID, beforeEntryID, limit)
 }
 
 // BuildContext 返回当前 Active Branch 对应的 Eino Runtime Messages。
@@ -364,10 +385,6 @@ func (s *Service) append(
 	message *schema.Message,
 	options transcript.EncodeOptions,
 ) (Message, error) {
-	if _, err := s.store.GetSession(ctx, sessionID); err != nil {
-		return Message{}, err
-	}
-
 	value, err := s.store.AppendMessage(ctx, sessionID, message, options)
 	if err != nil {
 		return Message{}, err
@@ -389,7 +406,7 @@ func normalizeTitle(title string) (string, error) {
 	if title == "" {
 		title = defaultSessionTitle
 	}
-	if len(title) > maxSessionTitleLength {
+	if len([]rune(title)) > maxSessionTitleLength {
 		return "", fmt.Errorf("Session 标题长度不能超过 %d", maxSessionTitleLength)
 	}
 	return title, nil

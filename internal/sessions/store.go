@@ -362,32 +362,87 @@ func (s *Store) AppendMessage(
 
 // ListMessages 返回当前 Active Branch 上的 Eino Runtime Message。
 func (s *Store) ListMessages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
-	session, err := s.GetSession(ctx, sessionID)
+	page, err := s.ListMessagePage(ctx, sessionID, "", limit)
 	if err != nil {
 		return nil, err
+	}
+	return page.Messages, nil
+}
+
+// ListMessagePage 返回 beforeEntryID 之前的一页 Active Branch Message。
+//
+// beforeEntryID 为空时从分支末尾读取。游标只接受当前 Active Branch 上的 Message
+// Entry，避免在分支变化后静默返回错误窗口。
+func (s *Store) ListMessagePage(
+	ctx context.Context,
+	sessionID string,
+	beforeEntryID string,
+	limit int,
+) (MessagePage, error) {
+	session, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return MessagePage{}, err
 	}
 
 	document, err := s.transcripts.LoadSession(ctx, session.AgentID, sessionID)
 	if err != nil {
-		return nil, translateTranscriptError(err)
+		return MessagePage{}, translateTranscriptError(err)
 	}
 
-	messages := make([]Message, 0, len(document.ActiveBranch))
+	messageEntries := make([]transcript.Entry, 0, len(document.ActiveBranch))
 	for _, entry := range document.ActiveBranch {
 		if entry.Type != transcript.EntryMessage || entry.Message == nil {
 			continue
 		}
+		messageEntries = append(messageEntries, entry)
+	}
 
+	end := len(messageEntries)
+	beforeEntryID = strings.TrimSpace(beforeEntryID)
+	if beforeEntryID != "" {
+		end = -1
+		for index := range messageEntries {
+			if messageEntries[index].ID == beforeEntryID {
+				end = index
+				break
+			}
+		}
+		if end < 0 {
+			return MessagePage{}, fmt.Errorf("%w: %s", ErrMessageCursorNotFound, beforeEntryID)
+		}
+	}
+
+	start := 0
+	if limit > 0 && end > limit {
+		start = end - limit
+		// Tool Result 不能脱离触发它的 Assistant ToolCall 单独进入历史；最终 Assistant
+		// 回答也不应与紧邻它之前的 Tool 事务拆到两页。必要时向前扩展到发起 ToolCall 的
+		// Assistant Message，但不把更早的 User Message 强行并入本页。
+		for start > 0 && messageEntries[start].Message != nil {
+			if messageEntries[start].Message.Role == transcript.RoleToolResult {
+				start--
+				continue
+			}
+			previous := messageEntries[start-1].Message
+			if messageEntries[start].Message.Role == transcript.RoleAssistant && previous != nil && previous.Role == transcript.RoleToolResult {
+				start--
+				continue
+			}
+			break
+		}
+	}
+
+	pageMessages := make([]Message, 0, end-start)
+	for _, entry := range messageEntries[start:end] {
 		decoded, err := transcript.DecodeMessage(entry.Message)
 		if err != nil {
-			return nil, fmt.Errorf("恢复 Message Entry %s 失败: %w", entry.ID, err)
+			return MessagePage{}, fmt.Errorf("恢复 Message Entry %s 失败: %w", entry.ID, err)
 		}
 		createdAt, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
 		if err != nil {
-			return nil, fmt.Errorf("解析 Message Entry %s 时间失败: %w", entry.ID, err)
+			return MessagePage{}, fmt.Errorf("解析 Message Entry %s 时间失败: %w", entry.ID, err)
 		}
-
-		messages = append(messages, Message{
+		pageMessages = append(pageMessages, Message{
 			EntryID:     entry.ID,
 			ParentID:    entry.ParentID,
 			SessionID:   sessionID,
@@ -398,17 +453,16 @@ func (s *Store) ListMessages(ctx context.Context, sessionID string, limit int) (
 			CreatedAt:   createdAt.UTC(),
 		})
 	}
-
-	if limit > 0 && len(messages) > limit {
-		start := len(messages) - limit
-		// Tool Result 不能脱离触发它的 Assistant ToolCall 单独进入模型历史。若窗口截断点
-		// 正好落在 Tool Result，则向前扩展到最近一个非 Tool Message。
-		for start > 0 && messages[start].Message != nil && messages[start].Message.Role == schema.Tool {
-			start--
-		}
-		messages = messages[start:]
+	nextBeforeID := ""
+	if start > 0 && len(pageMessages) > 0 {
+		nextBeforeID = messageEntries[start].ID
 	}
-	return messages, nil
+	return MessagePage{
+		Messages:     pageMessages,
+		StartIndex:   start,
+		HasMore:      start > 0,
+		NextBeforeID: nextBeforeID,
+	}, nil
 }
 
 // LoadTranscript 返回指定 Session 的完整 JSONL Tree 内存投影。

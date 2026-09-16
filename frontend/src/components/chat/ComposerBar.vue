@@ -30,12 +30,6 @@ import {
   useSessionStore,
 } from "../../stores/sessions.js";
 
-const draft =
-    ref("");
-
-const attachments =
-    ref([]);
-
 const fileInput =
     ref(null);
 
@@ -60,6 +54,48 @@ const runtimeStore =
 
 const sessionStore =
     useSessionStore();
+
+const attachmentDrafts =
+    ref({});
+
+const draft =
+    computed({
+      get() {
+        return sessionStore
+            .draftForSession(
+                sessionStore.selectedID,
+            );
+      },
+      set(value) {
+        sessionStore.setDraft(
+            sessionStore.selectedID,
+            value,
+        );
+      },
+    });
+
+const attachments =
+    computed({
+      get() {
+        return attachmentDrafts
+            .value[
+                sessionStore.selectedID
+                ] ?? [];
+      },
+      set(value) {
+        const sessionID =
+            sessionStore.selectedID;
+        if (!sessionID) {
+          return;
+        }
+        attachmentDrafts.value = {
+          ...attachmentDrafts.value,
+          [sessionID]: Array.isArray(value)
+              ? value
+              : [],
+        };
+      },
+    });
 
 const running =
     computed(() => (
@@ -482,8 +518,14 @@ async function send() {
     return;
   }
 
+  const sessionID =
+      sessionStore.selectedID;
   const content =
-      draft.value.trim();
+      sessionStore
+          .draftForSession(
+              sessionID,
+          )
+          .trim();
   const pendingAttachments = attachments.value.map((item) => ({...item}));
   const capabilityError = attachmentCapabilityError(pendingAttachments);
   if (capabilityError) {
@@ -491,21 +533,32 @@ async function send() {
     return;
   }
 
-  draft.value = "";
-  attachments.value = [];
+  sessionStore.clearDraft(
+      sessionID,
+  );
+  attachmentDrafts.value = {
+    ...attachmentDrafts.value,
+    [sessionID]: [],
+  };
 
   sending.value = true;
 
   try {
     await runtimeStore.send(
-        sessionStore.selectedID,
+        sessionID,
         content,
         pendingAttachments.map(({name, mimeType, base64Data}) => ({name, mimeType, base64Data})),
     );
   } catch (error) {
     /* 启动失败时恢复文字和附件，避免用户输入丢失。 */
-    draft.value = content;
-    attachments.value = pendingAttachments;
+    sessionStore.setDraft(
+        sessionID,
+        content,
+    );
+    attachmentDrafts.value = {
+      ...attachmentDrafts.value,
+      [sessionID]: pendingAttachments,
+    };
 
     Message.error(
         error?.message ??

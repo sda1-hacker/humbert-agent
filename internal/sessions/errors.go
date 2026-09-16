@@ -12,4 +12,7 @@ var (
 
 	// ErrInvalidMessageRole 表示调用了错误的强类型 Session 写入入口。
 	ErrInvalidMessageRole = errors.New("非法 Message Role")
+
+	// ErrMessageCursorNotFound 表示分页游标已不在当前 Active Branch 上。
+	ErrMessageCursorNotFound = errors.New("Message 分页游标不存在")
 )

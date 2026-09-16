@@ -173,6 +173,36 @@ async function resolveCurrentApproval(decision) {
   }
 }
 
+async function loadOlderMessages() {
+  const element =
+      viewport.value;
+  const previousHeight =
+      element?.scrollHeight ?? 0;
+  const previousTop =
+      element?.scrollTop ?? 0;
+
+  try {
+    const added =
+        await sessionStore
+            .loadOlderMessages();
+    if (!added || !element) {
+      return;
+    }
+
+    await nextTick();
+    element.scrollTop =
+        previousTop +
+        element.scrollHeight -
+        previousHeight;
+    followLatest.value = false;
+  } catch (error) {
+    Message.error(
+        error?.message ??
+        String(error),
+    );
+  }
+}
+
 const currentLiveTools =
     computed(() =>
         runtimeStore.liveTools(
@@ -365,6 +395,20 @@ onUnmounted(() => {
       <div
           class="message-container"
       >
+        <div
+            v-if="sessionStore.messageHasMore"
+            class="message-history-more"
+        >
+          <a-button
+              size="small"
+              type="text"
+              :loading="sessionStore.loadingOlderMessages"
+              @click="loadOlderMessages"
+          >
+            加载更早消息
+          </a-button>
+        </div>
+
         <div
             v-if="
             conversationBlocks.length ===
@@ -606,6 +650,13 @@ onUnmounted(() => {
 .message-container > * {
   max-width: 100%;
   min-width: 0;
+}
+
+.message-history-more {
+  display: flex;
+  justify-content: center;
+  min-height: 36px;
+  margin-bottom: 10px;
 }
 
 .message-empty {

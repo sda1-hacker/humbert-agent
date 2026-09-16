@@ -32,8 +32,8 @@ export function CreateAgent(request) {
 /**
  * DeleteAgent 删除完整 Agent Aggregate。
  * 
- * Project 只是 UI 名称。删除 Agent 会先删除它的全部 Session/附件/Session Memory，
- * 再删除 Agent Profile 与 managed workspace；Custom Workspace 只解除引用。
+ * 删除 Agent 会一并删除它的全部 Session、附件、Session Memory、Profile 与 Managed
+ * Workspace；Custom Workspace 只解除引用。
  * @param {string} id
  * @returns {$CancellablePromise<void>}
  */

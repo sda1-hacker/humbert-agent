@@ -78,6 +78,20 @@ export async function listMessages(
         limit,
     );
 }
+
+export function listMessagePage(
+    sessionID,
+    beforeEntryID = "",
+    limit = 80,
+) {
+    return Call.ByName(
+        `${sessionServiceName}.MessagePage`,
+        sessionID,
+        beforeEntryID,
+        limit,
+    );
+}
+
 export function readAttachment(sessionID, attachmentID) {
     return Call.ByName(
         `${sessionServiceName}.ReadAttachment`,

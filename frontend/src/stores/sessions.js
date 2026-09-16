@@ -5,10 +5,104 @@ import {
 import {
     createSession,
     deleteSession,
-    listMessages,
+    listMessagePage,
     listSessions,
     renameSession,
 } from "../api/sessions.js";
+
+const DRAFT_STORAGE_KEY =
+    "humbert.session-drafts.v1";
+
+const MAX_PERSISTED_DRAFTS = 32;
+
+const MAX_DRAFT_CHARACTERS = 256 * 1024;
+
+const DRAFT_PERSIST_DELAY_MS = 180;
+
+let draftPersistTimer = null;
+
+let pendingDrafts = null;
+
+function loadDrafts() {
+    try {
+        const value = JSON.parse(
+            localStorage.getItem(
+                DRAFT_STORAGE_KEY,
+            ) ?? "{}",
+        );
+        if (!value || typeof value !== "object") {
+            return {};
+        }
+        const records =
+            Object.entries(value)
+                .filter(
+                    ([sessionID, record]) =>
+                        Boolean(sessionID) &&
+                        typeof record?.text ===
+                        "string" &&
+                        record.text.length <=
+                        MAX_DRAFT_CHARACTERS,
+                )
+                .sort(
+                    (left, right) =>
+                        Number(
+                            right[1]
+                                ?.updatedAt ??
+                            0,
+                        ) -
+                        Number(
+                            left[1]
+                                ?.updatedAt ??
+                            0,
+                        ),
+                )
+                .slice(
+                    0,
+                    MAX_PERSISTED_DRAFTS,
+                );
+        return Object.fromEntries(records);
+    } catch {
+        return {};
+    }
+}
+
+function flushPersistedDrafts() {
+    if (draftPersistTimer !== null) {
+        clearTimeout(draftPersistTimer);
+        draftPersistTimer = null;
+    }
+    if (!pendingDrafts) {
+        return;
+    }
+    try {
+        localStorage.setItem(
+            DRAFT_STORAGE_KEY,
+            JSON.stringify(pendingDrafts),
+        );
+    } catch {
+        // 草稿持久化不可用时仍保留当前进程内状态，不阻塞聊天。
+    } finally {
+        pendingDrafts = null;
+    }
+}
+
+function persistDrafts(drafts) {
+    pendingDrafts = drafts;
+    if (draftPersistTimer !== null) {
+        clearTimeout(draftPersistTimer);
+    }
+    draftPersistTimer = setTimeout(
+        flushPersistedDrafts,
+        DRAFT_PERSIST_DELAY_MS,
+    );
+}
+
+if (typeof window !== "undefined") {
+    window.addEventListener(
+        "pagehide",
+        flushPersistedDrafts,
+    );
+}
 
 /**
  * loadForAgentSequence 用于防止快速切换 Agent 时出现旧请求覆盖新状态。
@@ -25,6 +119,10 @@ import {
  * 如果不做序列保护，A 的 Session List 有可能覆盖 B。
  */
 let loadForAgentSequence = 0;
+
+// 自动标题只需要在首条用户消息落盘后刷新一次 Sidebar Metadata。
+// 该刷新属于辅助 UI，不允许失败后把已经成功的消息同步伪装成发送失败。
+const automaticTitleRefreshes = new Set();
 
 /**
  * SessionStore 管理：
@@ -89,6 +187,14 @@ export const useSessionStore =
                 selectedID: "",
 
                 messages: [],
+
+                messageHasMore: false,
+
+                messageBeforeID: "",
+
+                loadingOlderMessages: false,
+
+                drafts: loadDrafts(),
 
                 search: "",
 
@@ -187,6 +293,19 @@ export const useSessionStore =
                                 ),
                     );
                 },
+
+                draftForSession:
+                    (state) =>
+                        (sessionID) => {
+                            const record =
+                                state.drafts[
+                                    sessionID
+                                    ];
+                            return typeof record?.text ===
+                            "string"
+                                ? record.text
+                                : "";
+                        },
             },
 
             actions: {
@@ -321,6 +440,8 @@ export const useSessionStore =
                         agentID;
 
                     this.messages = [];
+
+                    this.resetMessagePage();
 
                     if (!agentID) {
                         this.items = [];
@@ -461,6 +582,8 @@ export const useSessionStore =
 
                     this.messages = [];
 
+                    this.resetMessagePage();
+
                     await this
                         .refreshMessages(
                             result.id,
@@ -486,12 +609,16 @@ export const useSessionStore =
                     this.selectedID =
                         id;
 
+                    this.messages = [];
+
+                    this.resetMessagePage();
+
                     await this
                         .refreshMessages(id);
                 },
 
                 /**
-                 * 从 Session Transcript 读取当前 Session 最近消息。
+                 * 从 Session Transcript 读取当前 Session 最新一页消息。
                  */
                 async refreshMessages(
                     sessionID =
@@ -504,9 +631,10 @@ export const useSessionStore =
                     }
 
                     const result =
-                        await listMessages(
+                        await listMessagePage(
                             sessionID,
-                            200,
+                            "",
+                            80,
                         );
 
                     /**
@@ -521,11 +649,197 @@ export const useSessionStore =
                     ) {
                         this.messages =
                             Array.isArray(
-                                result,
+                                result?.messages,
                             )
-                                ? result
+                                ? result.messages
                                 : [];
+
+                        this.messageHasMore =
+                            Boolean(
+                                result?.hasMore,
+                            );
+
+                        this.messageBeforeID =
+                            result?.nextBeforeID ??
+                            "";
+
+                        const selected =
+                            this.items.find(
+                                (session) =>
+                                    session.id ===
+                                    sessionID,
+                            );
+                        if (
+                            selected?.title ===
+                            "新会话" &&
+                            !automaticTitleRefreshes.has(
+                                sessionID,
+                            ) &&
+                            this.messages.some(
+                                (message) =>
+                                    message.role ===
+                                    "user",
+                            )
+                        ) {
+                            automaticTitleRefreshes.add(
+                                sessionID,
+                            );
+                            try {
+                                await this
+                                    .loadAgentSessions(
+                                        this.agentID,
+                                        {force: true},
+                                    );
+                            } catch {
+                                // 标题刷新失败不影响消息；保留下一次非阻塞重试机会。
+                                automaticTitleRefreshes.delete(
+                                    sessionID,
+                                );
+                            }
+                        }
                     }
+                },
+
+                /**
+                 * 向前读取一页历史，并保留当前页已有消息。
+                 */
+                async loadOlderMessages() {
+                    const sessionID =
+                        this.selectedID;
+                    if (
+                        !sessionID ||
+                        !this.messageHasMore ||
+                        !this.messageBeforeID ||
+                        this.loadingOlderMessages
+                    ) {
+                        return 0;
+                    }
+
+                    const beforeID =
+                        this.messageBeforeID;
+                    this.loadingOlderMessages =
+                        true;
+                    try {
+                        const result =
+                            await listMessagePage(
+                                sessionID,
+                                beforeID,
+                                80,
+                            );
+                        if (
+                            sessionID !==
+                            this.selectedID ||
+                            beforeID !==
+                            this.messageBeforeID
+                        ) {
+                            return 0;
+                        }
+
+                        const older =
+                            Array.isArray(
+                                result?.messages,
+                            )
+                                ? result.messages
+                                : [];
+                        const existing =
+                            new Set(
+                                this.messages.map(
+                                    (message) =>
+                                        message.id,
+                                ),
+                            );
+                        const unique =
+                            older.filter(
+                                (message) =>
+                                    !existing.has(
+                                        message.id,
+                                    ),
+                            );
+                        this.messages = [
+                            ...unique,
+                            ...this.messages,
+                        ];
+                        this.messageHasMore =
+                            Boolean(
+                                result?.hasMore,
+                            );
+                        this.messageBeforeID =
+                            result?.nextBeforeID ??
+                            "";
+                        return unique.length;
+                    } finally {
+                        if (
+                            sessionID ===
+                            this.selectedID
+                        ) {
+                            this.loadingOlderMessages =
+                                false;
+                        }
+                    }
+                },
+
+                resetMessagePage() {
+                    this.messageHasMore = false;
+                    this.messageBeforeID = "";
+                    this.loadingOlderMessages = false;
+                },
+
+                setDraft(sessionID, text) {
+                    if (!sessionID) {
+                        return;
+                    }
+                    const normalized =
+                        typeof text === "string"
+                            ? text
+                            : "";
+                    if (!normalized) {
+                        delete this.drafts[
+                            sessionID
+                            ];
+                    } else {
+                        this.drafts[sessionID] = {
+                            text: normalized,
+                            updatedAt: Date.now(),
+                        };
+                    }
+
+                    const retained =
+                        Object.entries(
+                            this.drafts,
+                        )
+                            .sort(
+                                (left, right) =>
+                                    Number(
+                                        right[1]
+                                            ?.updatedAt ??
+                                        0,
+                                    ) -
+                                    Number(
+                                        left[1]
+                                            ?.updatedAt ??
+                                        0,
+                                    ),
+                            )
+                            .slice(
+                                0,
+                                MAX_PERSISTED_DRAFTS,
+                            );
+                    this.drafts =
+                        Object.fromEntries(
+                            retained,
+                        );
+                    persistDrafts(
+                        this.drafts,
+                    );
+                },
+
+                clearDraft(sessionID) {
+                    this.setDraft(
+                        sessionID,
+                        "",
+                    );
+                    // 已发送或已删除的草稿必须立即落盘，避免快速退出后重新出现。
+                    flushPersistedDrafts();
                 },
 
                 /**
@@ -650,6 +964,12 @@ export const useSessionStore =
                             );
                     }
 
+                    this.clearDraft(id);
+
+                    automaticTitleRefreshes.delete(
+                        id,
+                    );
+
                     if (!wasSelected) {
                         return;
                     }
@@ -659,6 +979,8 @@ export const useSessionStore =
                         "";
 
                     this.messages = [];
+
+                    this.resetMessagePage();
 
                     if (
                         this.selectedID
@@ -678,6 +1000,19 @@ export const useSessionStore =
                 forgetAgent(agentID) {
                     if (!agentID) {
                         return;
+                    }
+
+                    const forgottenSessions =
+                        this.itemsByAgent[
+                            agentID
+                            ] ?? [];
+                    for (const session of forgottenSessions) {
+                        this.clearDraft(
+                            session.id,
+                        );
+                        automaticTitleRefreshes.delete(
+                            session.id,
+                        );
                     }
 
                     delete this
@@ -709,6 +1044,8 @@ export const useSessionStore =
                     this.selectedID = "";
 
                     this.messages = [];
+
+                    this.resetMessagePage();
                 },
             },
         },

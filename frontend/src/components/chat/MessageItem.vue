@@ -13,6 +13,7 @@ import {
 
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import MessageAttachments from "./MessageAttachments.vue";
+import MessageActions from "./MessageActions.vue";
 
 const props =
     defineProps({
@@ -129,6 +130,12 @@ const assistantName =
             :attachments="message.attachments || []"
         />
       </div>
+
+      <MessageActions
+          :content="message.content"
+          :session-id="message.sessionID"
+          allow-reuse
+      />
     </div>
   </article>
 
@@ -184,6 +191,12 @@ const assistantName =
           回复未完整生成
         </div>
       </div>
+
+
+      <MessageActions
+          :content="message.content"
+          :session-id="message.sessionID"
+      />
     </div>
   </article>
 </template>

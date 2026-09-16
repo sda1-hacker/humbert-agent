@@ -37,13 +37,26 @@ export function Delete(id) {
 }
 
 /**
- * List 返回 Agent（UI 中称为 Project）的 Sessions。
+ * List 返回 Agent 的 Sessions。
  * @param {string} agentID
  * @returns {$CancellablePromise<$models.SessionDTO[]>}
  */
 export function List(agentID) {
     return $Call.ByID(3883780506, agentID).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType1($result);
+    }));
+}
+
+/**
+ * MessagePage 返回 beforeEntryID 之前的一页消息，不依赖生成的 Wails Binding。
+ * @param {string} sessionID
+ * @param {string} beforeEntryID
+ * @param {number} limit
+ * @returns {$CancellablePromise<$models.MessagePageDTO>}
+ */
+export function MessagePage(sessionID, beforeEntryID, limit) {
+    return $Call.ByID(2540075902, sessionID, beforeEntryID, limit).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType2($result);
     }));
 }
 
@@ -58,7 +71,7 @@ export function List(agentID) {
  */
 export function Messages(sessionID, limit) {
     return $Call.ByID(3505348282, sessionID, limit).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType4($result);
     }));
 }
 
@@ -70,7 +83,7 @@ export function Messages(sessionID, limit) {
  */
 export function ReadAttachment(sessionID, attachmentID) {
     return $Call.ByID(2267594691, sessionID, attachmentID).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -89,6 +102,7 @@ export function Rename(id, title) {
 // Private type creation functions
 const $$createType0 = $models.SessionDTO.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = $models.MessageDTO.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = $models.AttachmentContentDTO.createFrom;
+const $$createType2 = $models.MessagePageDTO.createFrom;
+const $$createType3 = $models.MessageDTO.createFrom;
+const $$createType4 = $Create.Array($$createType3);
+const $$createType5 = $models.AttachmentContentDTO.createFrom;

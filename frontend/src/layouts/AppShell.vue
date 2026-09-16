@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  defineAsyncComponent,
   onMounted,
   onUnmounted,
   ref,
@@ -23,14 +24,28 @@ import SidebarResizer
 import ChatView
   from "../components/chat/ChatView.vue";
 
-import SettingsView
-  from "../components/settings/SettingsView.vue";
+// 设置、Skills 与 Connectors 都是低频一级页面。按需加载可避免它们的表单、详情组件
+// 和领域 API 全部进入聊天首屏主包，同时不改变任何 Pinia/Runtime 生命周期。
+const SettingsView =
+    defineAsyncComponent(
+        () => import(
+            "../components/settings/SettingsView.vue"
+        ),
+    );
 
-import SkillWorkspaceView
-  from "../components/skills/SkillWorkspaceView.vue";
+const SkillWorkspaceView =
+    defineAsyncComponent(
+        () => import(
+            "../components/skills/SkillWorkspaceView.vue"
+        ),
+    );
 
-import MCPWorkspaceView
-  from "../components/mcp/MCPWorkspaceView.vue";
+const MCPWorkspaceView =
+    defineAsyncComponent(
+        () => import(
+            "../components/mcp/MCPWorkspaceView.vue"
+        ),
+    );
 
 import {
   useAgentStore,

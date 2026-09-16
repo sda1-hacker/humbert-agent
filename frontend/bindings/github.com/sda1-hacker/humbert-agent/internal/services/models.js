@@ -1602,6 +1602,55 @@ export class MessageDTO {
 }
 
 /**
+ * MessagePageDTO 是聊天界面的游标分页结果。
+ */
+export class MessagePageDTO {
+    /**
+     * Creates a new MessagePageDTO instance.
+     * @param {Partial<MessagePageDTO>} [$$source = {}] - The source object to create the MessagePageDTO.
+     */
+    constructor($$source = {}) {
+        if (!("messages" in $$source)) {
+            /**
+             * @member
+             * @type {MessageDTO[]}
+             */
+            this["messages"] = [];
+        }
+        if (!("hasMore" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["hasMore"] = false;
+        }
+        if (!("nextBeforeID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["nextBeforeID"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new MessagePageDTO instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {MessagePageDTO}
+     */
+    static createFrom($$source = {}) {
+        const $$createField0_0 = $$createType18;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("messages" in $$parsedSource) {
+            $$parsedSource["messages"] = $$createField0_0($$parsedSource["messages"]);
+        }
+        return new MessagePageDTO(/** @type {Partial<MessagePageDTO>} */($$parsedSource));
+    }
+}
+
+/**
  * ModelCapabilitiesDTO 是 Runtime 经过 Auto 推断 + Override 后的有效能力。
  */
 export class ModelCapabilitiesDTO {
@@ -1851,8 +1900,8 @@ export class ModelDTO {
      * @returns {ModelDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType17;
-        const $$createField10_0 = $$createType18;
+        const $$createField9_0 = $$createType19;
+        const $$createField10_0 = $$createType20;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("capabilityConfig" in $$parsedSource) {
             $$parsedSource["capabilityConfig"] = $$createField9_0($$parsedSource["capabilityConfig"]);
@@ -1904,8 +1953,8 @@ export class ModelSettingsState {
      * @returns {ModelSettingsState}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType20;
-        const $$createField2_0 = $$createType22;
+        const $$createField1_0 = $$createType22;
+        const $$createField2_0 = $$createType24;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("providers" in $$parsedSource) {
             $$parsedSource["providers"] = $$createField1_0($$parsedSource["providers"]);
@@ -2150,8 +2199,8 @@ export class PermissionStateDTO {
      * @returns {PermissionStateDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType24;
-        const $$createField6_0 = $$createType24;
+        const $$createField5_0 = $$createType26;
+        const $$createField6_0 = $$createType26;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("persistentRules" in $$parsedSource) {
             $$parsedSource["persistentRules"] = $$createField5_0($$parsedSource["persistentRules"]);
@@ -2364,7 +2413,7 @@ export class SandboxDiagnosticsDTO {
      * @returns {SandboxDiagnosticsDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType26;
+        const $$createField1_0 = $$createType28;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("checks" in $$parsedSource) {
             $$parsedSource["checks"] = $$createField1_0($$parsedSource["checks"]);
@@ -2700,7 +2749,7 @@ export class SaveModelRequest {
      * @returns {SaveModelRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType17;
+        const $$createField6_0 = $$createType19;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("capabilityConfig" in $$parsedSource) {
             $$parsedSource["capabilityConfig"] = $$createField6_0($$parsedSource["capabilityConfig"]);
@@ -3029,11 +3078,11 @@ export class SkillDTO {
      * @returns {SkillDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType27;
-        const $$createField11_0 = $$createType29;
-        const $$createField12_0 = $$createType31;
-        const $$createField24_0 = $$createType32;
-        const $$createField25_0 = $$createType34;
+        const $$createField7_0 = $$createType29;
+        const $$createField11_0 = $$createType31;
+        const $$createField12_0 = $$createType33;
+        const $$createField24_0 = $$createType34;
+        const $$createField25_0 = $$createType36;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadata" in $$parsedSource) {
             $$parsedSource["metadata"] = $$createField7_0($$parsedSource["metadata"]);
@@ -3223,11 +3272,11 @@ export class SkillDetailDTO {
      * @returns {SkillDetailDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType27;
-        const $$createField11_0 = $$createType29;
-        const $$createField12_0 = $$createType31;
-        const $$createField19_0 = $$createType32;
-        const $$createField20_0 = $$createType36;
+        const $$createField7_0 = $$createType29;
+        const $$createField11_0 = $$createType31;
+        const $$createField12_0 = $$createType33;
+        const $$createField19_0 = $$createType34;
+        const $$createField20_0 = $$createType38;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadata" in $$parsedSource) {
             $$parsedSource["metadata"] = $$createField7_0($$parsedSource["metadata"]);
@@ -3431,8 +3480,8 @@ export class SkillDiscoveryCandidateDTO {
      * @returns {SkillDiscoveryCandidateDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField15_0 = $$createType29;
-        const $$createField16_0 = $$createType31;
+        const $$createField15_0 = $$createType31;
+        const $$createField16_0 = $$createType33;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("diagnostics" in $$parsedSource) {
             $$parsedSource["diagnostics"] = $$createField15_0($$parsedSource["diagnostics"]);
@@ -3491,7 +3540,7 @@ export class SkillDiscoveryDTO {
      * @returns {SkillDiscoveryDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType38;
+        const $$createField3_0 = $$createType40;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("candidates" in $$parsedSource) {
             $$parsedSource["candidates"] = $$createField3_0($$parsedSource["candidates"]);
@@ -3829,8 +3878,8 @@ export class SkillStateDTO {
      */
     static createFrom($$source = {}) {
         const $$createField2_0 = $$createType1;
-        const $$createField3_0 = $$createType34;
-        const $$createField4_0 = $$createType40;
+        const $$createField3_0 = $$createType36;
+        const $$createField4_0 = $$createType42;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("sourceResolvers" in $$parsedSource) {
             $$parsedSource["sourceResolvers"] = $$createField2_0($$parsedSource["sourceResolvers"]);
@@ -3965,7 +4014,7 @@ export class SkillUpdateResultDTO {
      * @returns {SkillUpdateResultDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType32;
+        const $$createField4_0 = $$createType34;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("source" in $$parsedSource) {
             $$parsedSource["source"] = $$createField4_0($$parsedSource["source"]);
@@ -4021,7 +4070,7 @@ export class StartTurnRequest {
      * @returns {StartTurnRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType42;
+        const $$createField2_0 = $$createType44;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("attachments" in $$parsedSource) {
             $$parsedSource["attachments"] = $$createField2_0($$parsedSource["attachments"]);
@@ -4341,29 +4390,31 @@ const $$createType13 = $Create.Array($$createType12);
 const $$createType14 = $Create.Map($Create.Any, $Create.Any);
 const $$createType15 = AttachmentDTO.createFrom;
 const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = ModelCapabilityConfigDTO.createFrom;
-const $$createType18 = ModelCapabilitiesDTO.createFrom;
-const $$createType19 = ProviderDTO.createFrom;
-const $$createType20 = $Create.Array($$createType19);
-const $$createType21 = ModelDTO.createFrom;
+const $$createType17 = MessageDTO.createFrom;
+const $$createType18 = $Create.Array($$createType17);
+const $$createType19 = ModelCapabilityConfigDTO.createFrom;
+const $$createType20 = ModelCapabilitiesDTO.createFrom;
+const $$createType21 = ProviderDTO.createFrom;
 const $$createType22 = $Create.Array($$createType21);
-const $$createType23 = PermissionRuleDTO.createFrom;
+const $$createType23 = ModelDTO.createFrom;
 const $$createType24 = $Create.Array($$createType23);
-const $$createType25 = SandboxDiagnosticCheckDTO.createFrom;
+const $$createType25 = PermissionRuleDTO.createFrom;
 const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = $Create.Map($Create.Any, $Create.Any);
-const $$createType28 = SkillDiagnosticDTO.createFrom;
-const $$createType29 = $Create.Array($$createType28);
-const $$createType30 = SkillScriptRuntimeDTO.createFrom;
+const $$createType27 = SandboxDiagnosticCheckDTO.createFrom;
+const $$createType28 = $Create.Array($$createType27);
+const $$createType29 = $Create.Map($Create.Any, $Create.Any);
+const $$createType30 = SkillDiagnosticDTO.createFrom;
 const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = SkillSourceDTO.createFrom;
-const $$createType33 = SkillAgentDTO.createFrom;
-const $$createType34 = $Create.Array($$createType33);
-const $$createType35 = SkillFileDTO.createFrom;
+const $$createType32 = SkillScriptRuntimeDTO.createFrom;
+const $$createType33 = $Create.Array($$createType32);
+const $$createType34 = SkillSourceDTO.createFrom;
+const $$createType35 = SkillAgentDTO.createFrom;
 const $$createType36 = $Create.Array($$createType35);
-const $$createType37 = SkillDiscoveryCandidateDTO.createFrom;
+const $$createType37 = SkillFileDTO.createFrom;
 const $$createType38 = $Create.Array($$createType37);
-const $$createType39 = SkillDTO.createFrom;
+const $$createType39 = SkillDiscoveryCandidateDTO.createFrom;
 const $$createType40 = $Create.Array($$createType39);
-const $$createType41 = AttachmentRequest.createFrom;
+const $$createType41 = SkillDTO.createFrom;
 const $$createType42 = $Create.Array($$createType41);
+const $$createType43 = AttachmentRequest.createFrom;
+const $$createType44 = $Create.Array($$createType43);

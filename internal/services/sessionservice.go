@@ -48,6 +48,15 @@ type MessageDTO struct {
 	CreatedAt string `json:"createdAt"`
 }
 
+// MessagePageDTO 是聊天界面的游标分页结果。
+type MessagePageDTO struct {
+	Messages []MessageDTO `json:"messages"`
+
+	HasMore bool `json:"hasMore"`
+
+	NextBeforeID string `json:"nextBeforeID"`
+}
+
 // AttachmentDTO 是 UserMessage 附件的安全元数据；二进制通过 ReadAttachment 按需读取。
 type AttachmentDTO struct {
 	ID        string `json:"id"`
@@ -157,6 +166,31 @@ func (s *SessionService) Messages(sessionID string, limit int) ([]MessageDTO, er
 		result = append(result, dto)
 	}
 	return result, nil
+}
+
+// MessagePage 返回 beforeEntryID 之前的一页消息，不依赖生成的 Wails Binding。
+func (s *SessionService) MessagePage(sessionID string, beforeEntryID string, limit int) (MessagePageDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	page, err := s.core.Sessions().MessagePage(ctx, sessionID, beforeEntryID, limit)
+	if err != nil {
+		return MessagePageDTO{}, fmt.Errorf("分页读取 Session Message 失败: %w", err)
+	}
+
+	result := make([]MessageDTO, 0, len(page.Messages))
+	for index, value := range page.Messages {
+		dto, err := messageDTO(value, int64(page.StartIndex+index+1))
+		if err != nil {
+			return MessagePageDTO{}, fmt.Errorf("投影 Message Entry %s 失败: %w", value.EntryID, err)
+		}
+		result = append(result, dto)
+	}
+	return MessagePageDTO{
+		Messages:     result,
+		HasMore:      page.HasMore,
+		NextBeforeID: page.NextBeforeID,
+	}, nil
 }
 
 // ReadAttachment 按需读取 Session sidecar。前端只在图片进入历史视图时调用。
