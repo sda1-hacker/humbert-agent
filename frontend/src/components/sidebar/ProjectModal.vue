@@ -21,17 +21,10 @@ import {
 } from "@arco-design/web-vue/es/icon";
 
 import {
-  listSessions,
-} from "../../api/sessions.js";
-
-import {
   getSandboxStatus,
   listBuiltinTools,
+  selectWorkspaceDirectory,
 } from "../../api/agents.js";
-
-import {
-  selectProjectWorkspaceDirectory,
-} from "../../api/projects.js";
 
 import {
   useAgentStore,
@@ -191,7 +184,7 @@ const workspaceDisplay =
       }
 
       return (
-          "~/.humbert-agent/workspaces/<project-id>"
+          "~/.humbert-agent/workspaces/<agent-id>"
       );
     });
 
@@ -405,7 +398,7 @@ async function chooseWorkspace() {
 
   try {
     const selected =
-        await selectProjectWorkspaceDirectory(
+        await selectWorkspaceDirectory(
             form.workspaceMode ===
             "custom"
                 ? form.workspacePath
@@ -441,8 +434,7 @@ async function chooseWorkspace() {
 /**
  * 创建或更新 Project。
  *
- * Project 拥有 Workspace；Agent 只负责人格、模型、Skills 与安全能力。
- * Store 暂时保留 useAgentStore 名称作为旧 UI 的兼容门面。
+ * UI 中的 Project 就是 Agent；Agent 自己拥有 Workspace、模型、Skills 与安全能力。
  */
 async function save() {
   if (saving.value) {
@@ -620,14 +612,10 @@ async function save() {
 }
 
 /**
- * 删除 Project Profile。
+ * 删除 Project（即删除对应 Agent Aggregate）。
  *
- * 当前后端约束：
- *
- * Project 只要仍然存在 Session，
- * 就不能删除。
- *
- * Workspace 文件永远不会因为删除 Project 自动删除。
+ * 后端会级联删除全部 Session、附件、Session Memory、Agent Profile，以及 Humbert 管理的
+ * managed workspace。Custom Workspace 属于用户外部目录，只解除引用，不会删除真实文件。
  */
 async function removeProject() {
   if (!form.id) {
@@ -635,29 +623,13 @@ async function removeProject() {
   }
 
   try {
-    const related =
-        await listSessions(
-            form.id,
-        );
-
-    if (
-        Array.isArray(related) &&
-        related.length > 0
-    ) {
-      Message.warning(
-          `当前项目仍有 ${related.length} 个对话，请先删除这些对话`,
-      );
-
-      return;
-    }
-
     const answer =
         await Dialogs.Question({
           Title:
               "删除项目",
 
           Message:
-              `确定删除项目「${form.name}」吗？Workspace 中的文件不会被删除。`,
+              `确定删除项目「${form.name}」吗？该项目的全部对话、附件、记忆和 Humbert 管理的 Workspace 会一并删除；如果使用的是自定义外部 Workspace，外部文件不会被删除。`,
 
           Buttons: [
             {
@@ -751,7 +723,7 @@ async function removeProject() {
             <template #extra>
               <div class="model-role-extra">
                 <span>普通对话和默认 Runtime 使用该模型。</span>
-                <ModelCapabilityBadges v-if="selectedChatModel" :capabilities="selectedChatModel.capabilities" compact/>
+                <ModelCapabilityBadges v-if="selectedChatModel" :capabilities="selectedChatModel.capabilities" compact />
               </div>
             </template>
           </a-form-item>
@@ -763,8 +735,7 @@ async function removeProject() {
             </div>
             <div class="model-role-grid">
               <a-form-item label="Utility 模型">
-                <a-select v-model="form.modelRoles.utilityModelID" allow-clear allow-search
-                          placeholder="回退 Chat 模型">
+                <a-select v-model="form.modelRoles.utilityModelID" allow-clear allow-search placeholder="回退 Chat 模型">
                   <a-option
                       v-for="model in roleModelOptions(form.modelRoles.utilityModelID)"
                       :key="model.id" :value="model.id" :disabled="!model.enabled"
@@ -776,8 +747,7 @@ async function removeProject() {
               </a-form-item>
 
               <a-form-item label="Memory 模型">
-                <a-select v-model="form.modelRoles.memoryModelID" allow-clear allow-search
-                          placeholder="回退 Utility / Chat">
+                <a-select v-model="form.modelRoles.memoryModelID" allow-clear allow-search placeholder="回退 Utility / Chat">
                   <a-option
                       v-for="model in roleModelOptions(form.modelRoles.memoryModelID)"
                       :key="model.id" :value="model.id" :disabled="!model.enabled"
@@ -789,8 +759,7 @@ async function removeProject() {
               </a-form-item>
 
               <a-form-item label="Vision 模型">
-                <a-select v-model="form.modelRoles.visionModelID" allow-clear allow-search
-                          placeholder="仅 Chat 不满足附件能力时使用">
+                <a-select v-model="form.modelRoles.visionModelID" allow-clear allow-search placeholder="仅 Chat 不满足附件能力时使用">
                   <a-option
                       v-for="model in roleModelOptions(form.modelRoles.visionModelID)"
                       :key="model.id" :value="model.id" :disabled="!model.enabled"
@@ -798,14 +767,13 @@ async function removeProject() {
                     {{ model.displayName }} · {{ model.providerName }}{{ model.enabled ? "" : "（已禁用）" }}
                   </a-option>
                 </a-select>
-                <template #extra>用于补足 Chat 的 Vision / Files 能力；若 Agent 暴露工具，该模型也必须支持 Tools。
-                </template>
+                <template #extra>用于补足 Chat 的 Vision / Files 能力；若 Agent 暴露工具，该模型也必须支持 Tools。</template>
               </a-form-item>
             </div>
           </div>
 
           <a-form-item label="Skills">
-            <SkillSelector v-model="form.enabledSkills"/>
+            <SkillSelector v-model="form.enabledSkills" />
           </a-form-item>
 
           <a-form-item label="项目目录">
@@ -826,9 +794,7 @@ async function removeProject() {
                     :loading="selectingWorkspace"
                     @click="chooseWorkspace"
                 >
-                  <template #icon>
-                    <IconFolder/>
-                  </template>
+                  <template #icon><IconFolder /></template>
                   {{ form.workspacePath ? "重新选择" : "选择目录" }}
                 </a-button>
               </div>
@@ -888,9 +854,7 @@ async function removeProject() {
             :disabled="saving"
             @click="removeProject"
         >
-          <template #icon>
-            <IconDelete/>
-          </template>
+          <template #icon><IconDelete /></template>
           删除项目
         </a-button>
         <span v-else></span>

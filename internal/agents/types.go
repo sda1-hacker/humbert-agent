@@ -48,9 +48,8 @@ type Agent struct {
 	// Sandbox 保存 Agent 的文件、进程与网络边界。零值表示继承应用级默认安全策略。
 	Sandbox sandbox.AgentPolicy `json:"sandbox,omitempty"`
 
-	// WorkspaceMode/WorkspacePath 是 v1 Profile 的迁移兼容字段。
-	// 新 Runtime 不再读取它们；Workspace 的权威配置属于 projects.Project。
-	// 在所有旧 Agent 都完成 Project 迁移后的未来 schema 版本中可删除。
+	// WorkspaceMode/WorkspacePath 是 Agent 自己的 Workspace 配置。
+	// Humbert 当前产品语义中 Project 只是 Agent 的 UI 别名；不存在独立 Project Domain。
 	WorkspaceMode workspace.Mode `json:"workspace_mode"`
 	WorkspacePath string         `json:"workspace_path,omitempty"`
 

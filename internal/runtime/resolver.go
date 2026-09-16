@@ -17,7 +17,6 @@ import (
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
-	"github.com/sda1-hacker/humbert-agent/internal/projects"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
@@ -39,8 +38,6 @@ type resolvedContextBase struct {
 	session sessions.Session
 
 	agentInfo agents.AgentInfo
-
-	project projects.Project
 
 	model models.RuntimeSnapshot
 
@@ -73,8 +70,6 @@ type resolvedContextBase struct {
 type Resolver struct {
 	agents *agents.Service
 
-	projects *projects.Service
-
 	sessions *sessions.Service
 
 	models modelSnapshotResolver
@@ -101,7 +96,6 @@ type Resolver struct {
 // NewResolver 创建 Runtime Resolver。
 func NewResolver(
 	agentService *agents.Service,
-	projectService *projects.Service,
 	sessionService *sessions.Service,
 	modelResolver modelSnapshotResolver,
 	workspaceManager *workspace.Manager,
@@ -115,7 +109,6 @@ func NewResolver(
 ) *Resolver {
 	return &Resolver{
 		agents:        agentService,
-		projects:      projectService,
 		sessions:      sessionService,
 		models:        modelResolver,
 		workspaces:    workspaceManager,
@@ -205,7 +198,6 @@ func (r *Resolver) ResolveTurn(
 		RequestID:         requestID,
 		RunID:             runID,
 		SessionID:         base.session.ID,
-		ProjectID:         manifest.ProjectID,
 		AgentID:           manifest.AgentID,
 		AgentName:         manifest.AgentName,
 		BaseInstruction:   base.baseInstruction,
@@ -528,13 +520,6 @@ func (r *Resolver) resolveContextBase(
 	if err != nil {
 		return resolvedContextBase{}, fmt.Errorf("读取 Agent Profile 失败: %w", err)
 	}
-	project, err := r.projects.Get(ctx, session.ProjectID)
-	if err != nil {
-		return resolvedContextBase{}, fmt.Errorf("读取 Project 失败: %w", err)
-	}
-	if project.AgentID != agentInfo.Agent.ID {
-		return resolvedContextBase{}, errors.New("Session 的 Project/Agent 关联已失效")
-	}
 	modelRoles, err := r.resolveModelRoles(ctx, agentInfo.Agent, requirements)
 	if err != nil {
 		return resolvedContextBase{}, err
@@ -543,12 +528,12 @@ func (r *Resolver) resolveContextBase(
 
 	agentWorkspace, err := r.workspaces.Resolve(
 		ctx,
-		project.ID,
-		project.WorkspaceMode,
-		project.WorkspacePath,
+		agentInfo.Agent.ID,
+		agentInfo.Agent.WorkspaceMode,
+		agentInfo.Agent.WorkspacePath,
 	)
 	if err != nil {
-		return resolvedContextBase{}, fmt.Errorf("Project Workspace 当前不可使用: %w", err)
+		return resolvedContextBase{}, fmt.Errorf("Agent Workspace 当前不可使用: %w", err)
 	}
 	sandboxPolicy, err := r.sandbox.Resolve(ctx, agentWorkspace.RootDir, agentInfo.Agent.Sandbox)
 	if err != nil {
@@ -640,7 +625,6 @@ func (r *Resolver) resolveContextBase(
 	return resolvedContextBase{
 		session:           session,
 		agentInfo:         agentInfo,
-		project:           project,
 		model:             modelSnapshot,
 		modelRoles:        modelRoles,
 		workspace:         agentWorkspace,
@@ -664,8 +648,6 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 
 	visionModelID := base.modelRoles.visionModelID
 	return RuntimeManifest{
-		ProjectID:         base.project.ID,
-		ProjectName:       base.project.Name,
 		AgentID:           base.agentInfo.Agent.ID,
 		AgentName:         base.agentInfo.Agent.Name,
 		ModelID:           base.model.ModelConfigID,
@@ -772,9 +754,6 @@ func (r *Resolver) OperationTimeout() time.Duration {
 func (r *Resolver) Validate() error {
 	if r.agents == nil {
 		return errors.New("RuntimeResolver AgentService 不能为空")
-	}
-	if r.projects == nil {
-		return errors.New("RuntimeResolver ProjectService 不能为空")
 	}
 	if r.sessions == nil {
 		return errors.New("RuntimeResolver SessionService 不能为空")

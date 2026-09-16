@@ -19,7 +19,7 @@ import (
 
 const (
 	sessionConfigFileName      = "config.json"
-	sessionConfigSchemaVersion = 2
+	sessionConfigSchemaVersion = 3
 )
 
 // sessionDocument 是每个 Session 独立 config.json 的文件结构。
@@ -43,8 +43,6 @@ type sessionDocument struct {
 // Agent Message append 都不需要额外重写 JSON 配置文件，也不会制造高频第二写路径。
 type sessionConfig struct {
 	ID string `json:"id"`
-
-	ProjectID string `json:"project_id,omitempty"`
 
 	AgentID string `json:"agent_id"`
 
@@ -200,7 +198,6 @@ func (s *Store) CreateSession(ctx context.Context, value Session) error {
 		SchemaVersion: sessionConfigSchemaVersion,
 		Session: sessionConfig{
 			ID:        value.ID,
-			ProjectID: value.ProjectID,
 			AgentID:   value.AgentID,
 			Title:     value.Title,
 			CWD:       value.CWD,
@@ -513,15 +510,8 @@ func (s *Store) readSessionConfig(ctx context.Context, agentID string, sessionID
 		updatedAt = configInfo.ModTime().UTC()
 	}
 
-	projectID := strings.TrimSpace(document.Session.ProjectID)
-	if projectID == "" {
-		// v1 Session 属于升级前的一对一 Agent/Project，读取时透明映射。
-		projectID = document.Session.AgentID
-	}
-
 	return Session{
 		ID:        document.Session.ID,
-		ProjectID: projectID,
 		AgentID:   document.Session.AgentID,
 		Title:     document.Session.Title,
 		CWD:       document.Session.CWD,
@@ -551,7 +541,7 @@ func (s *Store) recoverMissingSessionConfig(ctx context.Context, path, agentID, 
 	document := sessionDocument{
 		SchemaVersion: sessionConfigSchemaVersion,
 		Session: sessionConfig{
-			ID: sessionID, ProjectID: agentID, AgentID: agentID, Title: "恢复的会话",
+			ID: sessionID, AgentID: agentID, Title: "恢复的会话",
 			CWD: loaded.Header.CWD, CreatedAt: createdAt.UTC(),
 		},
 	}
@@ -574,14 +564,11 @@ func (s *Store) readSessionDocument(
 		}
 		return sessionDocument{}, fmt.Errorf("读取 Session config.json 失败: %w", err)
 	}
-	if document.SchemaVersion != 1 && document.SchemaVersion != sessionConfigSchemaVersion {
+	if document.SchemaVersion != sessionConfigSchemaVersion {
 		return sessionDocument{}, fmt.Errorf(
 			"Session config.json schema_version 不支持: %d",
 			document.SchemaVersion,
 		)
-	}
-	if document.SchemaVersion == 1 && strings.TrimSpace(document.Session.ProjectID) == "" {
-		document.Session.ProjectID = document.Session.AgentID
 	}
 	if document.Session.ID != expectedSessionID {
 		return sessionDocument{}, fmt.Errorf(
@@ -603,6 +590,7 @@ func (s *Store) readSessionDocument(
 	if document.Session.CreatedAt.IsZero() {
 		return sessionDocument{}, errors.New("Session config.json created_at 不能为空")
 	}
+
 	return document, nil
 }
 

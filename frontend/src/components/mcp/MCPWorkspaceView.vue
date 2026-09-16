@@ -67,9 +67,9 @@ const selectedAgent = computed(() => (
     agentStore.items.find((item) => item.id === selectedAgentID.value) ?? null
 ));
 
-// selectedAgentID 是 Project 选择；MCP Tool 配置属于 Agent Domain。
+// UI 中的 Project ID 就是 Agent ID。
 const selectedAgentDomainID = computed(() => (
-    selectedAgent.value?.agentID || selectedAgent.value?.id || ""
+    selectedAgent.value?.id || ""
 ));
 
 const selectedToolCount = computed(() => (
@@ -643,7 +643,9 @@ onMounted(async () => {
             >
               <div class="mcp-tool-list__toolbar">
                 <span>
-                  已发现 {{ toolCatalog[server.id].length }} 个 · 当前 Agent 已启用 {{ selectedTools(server.id).length }} 个
+                  已发现 {{ toolCatalog[server.id].length }} 个 · 当前 Agent 已启用 {{
+                    selectedTools(server.id).length
+                  }} 个
                 </span>
 
                 <div class="mcp-tool-list__bulk-actions">

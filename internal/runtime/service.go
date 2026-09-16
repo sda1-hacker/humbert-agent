@@ -357,6 +357,67 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 	return s.sessions.Delete(ctx, sessionID)
 }
 
+// DeleteAgentSessions 删除指定 Agent 的全部 Session。
+//
+// 删除前会在同一把 Runtime 锁下预占全部 Session；只要其中任意一个正在运行、压缩或删除，
+// 整个操作立即失败且不会先删除部分 Session。Project 在 UI 中只是 Agent 的别名，因此
+// Agent 删除生命周期直接复用这个入口。
+func (s *Service) DeleteAgentSessions(ctx context.Context, agentID string) ([]string, error) {
+	ctx, finish, err := s.beginOperation(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("Agent ID 不能为空")
+	}
+
+	values, err := s.sessions.List(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		ids = append(ids, value.ID)
+	}
+	if len(ids) == 0 {
+		return ids, nil
+	}
+
+	requestID := "delete-agent:" + uuid.NewString()
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrClosed
+	}
+	for _, sessionID := range ids {
+		if existing, exists := s.activeBySession[sessionID]; exists {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: session_id=%s request_id=%s", ErrSessionBusy, sessionID, existing)
+		}
+	}
+	for _, sessionID := range ids {
+		s.activeBySession[sessionID] = requestID
+	}
+	s.mu.Unlock()
+
+	defer func() {
+		for _, sessionID := range ids {
+			s.releaseReservation(sessionID, requestID)
+		}
+	}()
+
+	var deleteErr error
+	for _, sessionID := range ids {
+		if err := s.sessions.Delete(ctx, sessionID); err != nil {
+			deleteErr = errors.Join(deleteErr, fmt.Errorf("删除 Session %s 失败: %w", sessionID, err))
+		}
+	}
+	return ids, deleteErr
+}
+
 // CancelTurn 请求取消一个运行或等待审批中的 Turn。
 //
 // 执行阶段只发送 Context cancel，由 Executor worker 负责统一终态；等待审批阶段没有执行

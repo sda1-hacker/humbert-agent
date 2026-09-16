@@ -27,10 +27,6 @@ func All(
 		),
 
 		application.NewService(
-			NewProjectService(core),
-		),
-
-		application.NewService(
 			NewSessionService(core),
 		),
 

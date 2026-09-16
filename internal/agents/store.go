@@ -32,9 +32,8 @@ type agentDocument struct {
 //	~/.humbert-agent/agents/<agent-id>/config.json
 //	~/.humbert-agent/agents/<agent-id>/sessions/<session-id>/{config.json,session.jsonl}
 //
-// Store 只管理 Agent Profile 文件，不校验 Model、不创建 Workspace；这些仍属于
-// Agent Service。Session 数量由 TranscriptStore 统计，因此 Agent 删除保护不再
-// 依赖数据库外键。
+// Store 管理 agents/<agent-id>/ 下的 Humbert 内部数据边界，但不校验 Model、
+// 不解析 Workspace；这些属于 Agent Service。Session 数量由 TranscriptStore 统计。
 //
 // Agent Profile 更新属于低频控制面操作，Store 使用一个 RWMutex 串行化配置目录
 // 的创建、更新和删除。这个锁不会覆盖 Session JSONL，多个 Agent Run 仍可以并行
@@ -206,8 +205,6 @@ func (s *Store) List(ctx context.Context) ([]AgentInfo, error) {
 
 		configPath := filepath.Join(s.agentsRoot, entry.Name(), agentConfigFileName)
 		if _, err := os.Lstat(configPath); errors.Is(err, os.ErrNotExist) {
-			// 允许未来 memory/desk 等内部目录在 Profile 删除后暂时保留；没有
-			// config.json 的目录不再代表一个有效 Agent。
 			continue
 		} else if err != nil {
 			return nil, fmt.Errorf("检查 Agent %s Profile 失败: %w", entry.Name(), err)
@@ -229,11 +226,11 @@ func (s *Store) List(ctx context.Context) ([]AgentInfo, error) {
 	return result, nil
 }
 
-// Delete 删除指定 Agent Profile。
+// Delete 删除指定 Agent 的 Humbert 内部数据目录。
 //
-// Workspace 和 Agent 目录都不会在这里递归删除。Service 会先确认 Session 数量为 0；
-// Store 只删除 config.json，使未来 memory/desk/skills 等 Agent 数据即使已经存在也不会
-// 因为删除 Profile 而被误删。没有 config.json 的目录不再被 List 识别为有效 Agent。
+// Service 会先确认 Session 数量为 0；这里随后删除 agents/<agent-id>/ 整个内部目录，
+// 包括 Profile、Session sidecar、Memory 等 Humbert 自有数据。Workspace 位于独立的
+// workspaces/ 根目录，由 Agent Service 根据 managed/custom 语义处理。
 func (s *Store) Delete(ctx context.Context, id string) error {
 	if err := validateStoreContext(ctx, "删除 Agent Profile"); err != nil {
 		return err
@@ -252,13 +249,15 @@ func (s *Store) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("验证 Agent 目录失败: %w", err)
 	}
 
-	if err := os.Remove(path); err != nil {
+	if _, err := os.Lstat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("删除 Agent Profile 失败: %w", err)
+		return fmt.Errorf("检查 Agent Profile 失败: %w", err)
 	}
-
+	if err := os.RemoveAll(directory); err != nil {
+		return fmt.Errorf("删除 Agent 数据目录失败: %w", err)
+	}
 	return nil
 }
 

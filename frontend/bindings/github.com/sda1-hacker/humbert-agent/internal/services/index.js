@@ -8,7 +8,6 @@ import * as ChatService from "./chatservice.js";
 import * as MCPService from "./mcpservice.js";
 import * as ModelService from "./modelservice.js";
 import * as PermissionService from "./permissionservice.js";
-import * as ProjectService from "./projectservice.js";
 import * as SessionService from "./sessionservice.js";
 import * as SkillService from "./skillservice.js";
 export {
@@ -18,7 +17,6 @@ export {
     MCPService,
     ModelService,
     PermissionService,
-    ProjectService,
     SessionService,
     SkillService
 };
@@ -37,7 +35,6 @@ export {
     AttachmentRequest,
     BuiltinToolDTO,
     CreateAgentRequest,
-    CreateProjectRequest,
     CreateProviderRequest,
     MCPConnectionTestDTO,
     MCPHTTPHeaderDTO,
@@ -55,7 +52,6 @@ export {
     ModelSettingsState,
     PermissionRuleDTO,
     PermissionStateDTO,
-    ProjectDTO,
     ProviderDTO,
     ResolveApprovalRequest,
     SandboxDiagnosticCheckDTO,
@@ -82,6 +78,5 @@ export {
     TestModelResponse,
     UpdateAgentRequest,
     UpdatePermissionSettingsRequest,
-    UpdateProjectRequest,
     UpdateProviderRequest
 } from "./models.js";

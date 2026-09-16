@@ -16,8 +16,6 @@ import (
 type Session struct {
 	ID string
 
-	ProjectID string
-
 	AgentID string
 
 	Title string
@@ -54,8 +52,6 @@ type Message struct {
 
 // CreateSessionInput 描述创建 Session 所需参数。
 type CreateSessionInput struct {
-	ProjectID string
-
 	AgentID string
 
 	Title string

@@ -523,3 +523,39 @@ func TestCustomWorkspaceMustBeAbsolute(
 		)
 	}
 }
+
+func TestDeleteManagedWorkspaceDoesNotTouchCustomDirectory(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	manager, err := NewManager(ctx, filepath.Join(base, "managed"), logging.NewBootstrap())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+
+	agentID := uuid.NewString()
+	managed, err := manager.Resolve(ctx, agentID, ModeManaged, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(managed.RootDir, "owned.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	custom := filepath.Join(base, "custom")
+	if err := os.MkdirAll(custom, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(custom, "keep.txt"), []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.DeleteManaged(ctx, agentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(managed.RootDir); !os.IsNotExist(err) {
+		t.Fatalf("managed workspace still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(custom, "keep.txt")); err != nil {
+		t.Fatalf("custom workspace changed: %v", err)
+	}
+}

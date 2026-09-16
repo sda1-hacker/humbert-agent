@@ -28,21 +28,21 @@ function loadBinding() {
 }
 
 export async function listSessions(
-    projectID,
+    agentID,
 ) {
     const binding = await loadBinding();
 
-    return binding.List(projectID);
+    return binding.List(agentID);
 }
 
 export async function createSession(
-    projectID,
+    agentID,
     title,
 ) {
     const binding = await loadBinding();
 
     return binding.Create(
-        projectID,
+        agentID,
         title,
     );
 }

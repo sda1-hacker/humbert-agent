@@ -67,9 +67,19 @@ export async function createAgent(
 }
 
 /**
- * 删除 Agent Profile。
+ * 保存 Agent 的完整“项目设置”表单。
+ * 局部操作（例如切换模型）仍使用独立窄命令。
+ */
+export async function updateAgent(id, request) {
+    const binding = await loadBinding();
+    return binding.UpdateAgent(id, request);
+}
+
+/**
+ * 删除 Agent（UI 中称为项目）。
  *
- * Workspace 文件不会因为这个操作自动删除。
+ * 后端会级联删除 Session 和 Humbert 管理的 Workspace；
+ * 用户选择的 Custom Workspace 不会被删除。
  */
 export async function deleteAgent(
     id,

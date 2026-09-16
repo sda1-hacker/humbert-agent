@@ -602,20 +602,6 @@ export class RuntimeManifest {
      * @param {Partial<RuntimeManifest>} [$$source = {}] - The source object to create the RuntimeManifest.
      */
     constructor($$source = {}) {
-        if (!("projectID" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["projectID"] = "";
-        }
-        if (!("projectName" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["projectName"] = "";
-        }
         if (!("agentID" in $$source)) {
             /**
              * @member
@@ -768,50 +754,50 @@ export class RuntimeManifest {
      * @returns {RuntimeManifest}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType15;
-        const $$createField9_0 = $$createType16;
+        const $$createField6_0 = $$createType15;
+        const $$createField7_0 = $$createType16;
+        const $$createField9_0 = $$createType7;
         const $$createField11_0 = $$createType7;
-        const $$createField13_0 = $$createType7;
-        const $$createField15_0 = $$createType9;
-        const $$createField16_0 = $$createType18;
-        const $$createField17_0 = $$createType11;
-        const $$createField18_0 = $$createType7;
-        const $$createField19_0 = $$createType7;
-        const $$createField20_0 = $$createType19;
-        const $$createField21_0 = $$createType20;
+        const $$createField13_0 = $$createType9;
+        const $$createField14_0 = $$createType18;
+        const $$createField15_0 = $$createType11;
+        const $$createField16_0 = $$createType7;
+        const $$createField17_0 = $$createType7;
+        const $$createField18_0 = $$createType19;
+        const $$createField19_0 = $$createType20;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("modelCapabilities" in $$parsedSource) {
-            $$parsedSource["modelCapabilities"] = $$createField8_0($$parsedSource["modelCapabilities"]);
+            $$parsedSource["modelCapabilities"] = $$createField6_0($$parsedSource["modelCapabilities"]);
         }
         if ("modelRoles" in $$parsedSource) {
-            $$parsedSource["modelRoles"] = $$createField9_0($$parsedSource["modelRoles"]);
+            $$parsedSource["modelRoles"] = $$createField7_0($$parsedSource["modelRoles"]);
         }
         if ("builtinToolNames" in $$parsedSource) {
-            $$parsedSource["builtinToolNames"] = $$createField11_0($$parsedSource["builtinToolNames"]);
+            $$parsedSource["builtinToolNames"] = $$createField9_0($$parsedSource["builtinToolNames"]);
         }
         if ("skillNames" in $$parsedSource) {
-            $$parsedSource["skillNames"] = $$createField13_0($$parsedSource["skillNames"]);
+            $$parsedSource["skillNames"] = $$createField11_0($$parsedSource["skillNames"]);
         }
         if ("mcpServers" in $$parsedSource) {
-            $$parsedSource["mcpServers"] = $$createField15_0($$parsedSource["mcpServers"]);
+            $$parsedSource["mcpServers"] = $$createField13_0($$parsedSource["mcpServers"]);
         }
         if ("mcpUnavailable" in $$parsedSource) {
-            $$parsedSource["mcpUnavailable"] = $$createField16_0($$parsedSource["mcpUnavailable"]);
+            $$parsedSource["mcpUnavailable"] = $$createField14_0($$parsedSource["mcpUnavailable"]);
         }
         if ("mcpTools" in $$parsedSource) {
-            $$parsedSource["mcpTools"] = $$createField17_0($$parsedSource["mcpTools"]);
+            $$parsedSource["mcpTools"] = $$createField15_0($$parsedSource["mcpTools"]);
         }
         if ("mcpToolNames" in $$parsedSource) {
-            $$parsedSource["mcpToolNames"] = $$createField18_0($$parsedSource["mcpToolNames"]);
+            $$parsedSource["mcpToolNames"] = $$createField16_0($$parsedSource["mcpToolNames"]);
         }
         if ("exposedToolNames" in $$parsedSource) {
-            $$parsedSource["exposedToolNames"] = $$createField19_0($$parsedSource["exposedToolNames"]);
+            $$parsedSource["exposedToolNames"] = $$createField17_0($$parsedSource["exposedToolNames"]);
         }
         if ("workspace" in $$parsedSource) {
-            $$parsedSource["workspace"] = $$createField20_0($$parsedSource["workspace"]);
+            $$parsedSource["workspace"] = $$createField18_0($$parsedSource["workspace"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField21_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField19_0($$parsedSource["sandbox"]);
         }
         return new RuntimeManifest(/** @type {Partial<RuntimeManifest>} */($$parsedSource));
     }

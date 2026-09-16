@@ -754,33 +754,26 @@ func (s *AgentService) SelectSandboxDirectory(currentPath string) (string, error
 	return selectDirectory("选择 Sandbox 目录", currentPath)
 }
 
-// DeleteAgent 删除 Agent Profile。
+// DeleteAgent 删除完整 Agent Aggregate。
 //
-// Workspace 文件不会被自动删除。
-func (s *AgentService) DeleteAgent(
-	id string,
-) error {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			agentServiceTimeout,
-		)
-
+// Project 只是 UI 名称。删除 Agent 会先删除它的全部 Session/附件/Session Memory，
+// 再删除 Agent Profile 与 managed workspace；Custom Workspace 只解除引用。
+func (s *AgentService) DeleteAgent(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
 
-	if err :=
-		s.core.Agents().
-			Delete(
-				ctx,
-				id,
-			); err != nil {
-
-		return fmt.Errorf(
-			"删除 Agent 失败: %w",
-			err,
-		)
+	deletedSessions, err := s.core.Runtime().DeleteAgentSessions(ctx, id)
+	if err != nil {
+		return fmt.Errorf("删除 Agent Sessions 失败: %w", err)
 	}
-
+	if err := s.core.Agents().Delete(ctx, id); err != nil {
+		return fmt.Errorf("删除 Agent 失败: %w", err)
+	}
+	if s.core.Permissions() != nil {
+		for _, sessionID := range deletedSessions {
+			s.core.Permissions().ClearSessionRules(sessionID)
+		}
+	}
 	return nil
 }
 

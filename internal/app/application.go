@@ -21,7 +21,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
-	"github.com/sda1-hacker/humbert-agent/internal/projects"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
@@ -101,8 +100,6 @@ type Application struct {
 	models *models.Registry
 
 	agents *agents.Service
-
-	projects *projects.Service
 
 	sessions *sessions.Service
 
@@ -261,15 +258,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	)
 	mcpManager.SetReferenceChecker(agentService)
 
-	projectStore, err := projects.NewStore(ctx, cfg.Paths.ProjectsDir)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Project Store 失败: %w", err)
-	}
-	projectService := projects.NewService(projectStore, agentService, workspaceManager, logger)
-	if err := projectService.EnsureLegacyAgentProjects(ctx); err != nil {
-		return nil, fmt.Errorf("迁移旧 Agent Project 失败: %w", err)
-	}
-
 	// ToolRegistry 在 AgentService 之后创建，是因为 install_skill Tool 可以在用户明确批准后
 	// 把刚安装的 Skill 写入当前 Agent Profile。该修改只影响下一 Turn；当前 Turn 的 Runtime
 	// Snapshot 已经冻结，不会因为安装动作在执行中途获得新的 Skill 能力。
@@ -303,7 +291,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	sessionService := sessions.NewService(
 		sessionStore,
 		agentService,
-		projectService,
 		workspaceManager,
 		logger,
 	)
@@ -366,7 +353,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 
 	runtimeResolver := agentruntime.NewResolver(
 		agentService,
-		projectService,
 		sessionService,
 		modelRegistry,
 		workspaceManager,
@@ -406,7 +392,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		mcp:           mcpManager,
 		models:        modelRegistry,
 		agents:        agentService,
-		projects:      projectService,
 		sessions:      sessionService,
 		contextEngine: contextEngine,
 		memory:        memoryManager,
@@ -504,11 +489,6 @@ func (a *Application) Agents() *agents.Service {
 	return a.agents
 }
 
-// Projects 返回 ProjectService。Workspace 的权威配置从这里读取。
-func (a *Application) Projects() *projects.Service {
-	return a.projects
-}
-
 // Sessions 返回 SessionService。
 func (a *Application) Sessions() *sessions.Service {
 	return a.sessions
@@ -548,9 +528,6 @@ func (a *Application) Status(ctx context.Context) (Status, error) {
 	}
 	if _, err := a.agents.List(ctx); err != nil {
 		return status, fmt.Errorf("Agent 文件存储健康检查失败: %w", err)
-	}
-	if _, err := a.projects.List(ctx); err != nil {
-		return status, fmt.Errorf("Project 文件存储健康检查失败: %w", err)
 	}
 	if _, err := a.skills.List(ctx); err != nil {
 		return status, fmt.Errorf("Skill 文件存储健康检查失败: %w", err)

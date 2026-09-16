@@ -12,7 +12,6 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
-	"github.com/sda1-hacker/humbert-agent/internal/projects"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
@@ -37,8 +36,6 @@ type Service struct {
 
 	agents *agents.Service
 
-	projects *projects.Service
-
 	workspaces *workspace.Manager
 
 	logger *logging.Logger
@@ -48,36 +45,27 @@ type Service struct {
 func NewService(
 	store *Store,
 	agentService *agents.Service,
-	projectService *projects.Service,
 	workspaceManager *workspace.Manager,
 	logger *logging.Logger,
 ) *Service {
 	return &Service{
 		store:      store,
 		agents:     agentService,
-		projects:   projectService,
 		workspaces: workspaceManager,
 		logger:     logger,
 	}
 }
 
-// List 返回指定 Project 的 Sessions。
-func (s *Service) List(ctx context.Context, projectID string) ([]Session, error) {
-	project, err := s.projects.Get(ctx, strings.TrimSpace(projectID))
-	if err != nil {
+// List 返回指定 Agent（UI 中也称为 Project）的全部 Session。
+func (s *Service) List(ctx context.Context, agentID string) ([]Session, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("Agent ID 不能为空")
+	}
+	if _, err := s.agents.Get(ctx, agentID); err != nil {
 		return nil, err
 	}
-	values, err := s.store.ListSessions(ctx, project.AgentID)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]Session, 0, len(values))
-	for _, value := range values {
-		if value.ProjectID == project.ID {
-			result = append(result, value)
-		}
-	}
-	return result, nil
+	return s.store.ListSessions(ctx, agentID)
 }
 
 // Get 返回指定 Session。
@@ -91,30 +79,19 @@ func (s *Service) Get(ctx context.Context, sessionID string) (Session, error) {
 
 // Create 创建新的独立 Session 目录。
 //
-// Project 决定 Workspace，Agent 决定模型/人格/能力。Session 同时记录两者，
-// 因而后续一个 Agent 可以服务多个 Project，而无需改变会话协议。
+// Humbert 当前产品约束是一 Agent 对应一个 Workspace/Project，因此 Session 只保存
+// AgentID。Workspace 在创建时由 Agent Profile 解析并冻结到 Session CWD。
 func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session, error) {
-	if s.store == nil || s.agents == nil || s.projects == nil || s.workspaces == nil || s.logger == nil {
+	if s.store == nil || s.agents == nil || s.workspaces == nil || s.logger == nil {
 		return Session{}, errors.New("SessionService 尚未正确初始化")
-	}
-
-	projectID := strings.TrimSpace(input.ProjectID)
-	if projectID == "" {
-		return Session{}, errors.New("Project ID 不能为空")
-	}
-	project, err := s.projects.Get(ctx, projectID)
-	if err != nil {
-		return Session{}, fmt.Errorf("读取 Project 失败: %w", err)
 	}
 
 	agentID := strings.TrimSpace(input.AgentID)
 	if agentID == "" {
-		agentID = project.AgentID
+		return Session{}, errors.New("Agent ID 不能为空")
 	}
-	if agentID != project.AgentID {
-		return Session{}, errors.New("当前版本 Project 只允许使用其默认 Agent")
-	}
-	if _, err := s.agents.Get(ctx, agentID); err != nil {
+	agentInfo, err := s.agents.Get(ctx, agentID)
+	if err != nil {
 		return Session{}, err
 	}
 
@@ -123,23 +100,22 @@ func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session
 		return Session{}, err
 	}
 
-	projectWorkspace, err := s.workspaces.Resolve(
+	agentWorkspace, err := s.workspaces.Resolve(
 		ctx,
-		project.ID,
-		project.WorkspaceMode,
-		project.WorkspacePath,
+		agentInfo.Agent.ID,
+		agentInfo.Agent.WorkspaceMode,
+		agentInfo.Agent.WorkspacePath,
 	)
 	if err != nil {
-		return Session{}, fmt.Errorf("解析 Project Workspace 失败: %w", err)
+		return Session{}, fmt.Errorf("解析 Agent Workspace 失败: %w", err)
 	}
 
 	now := time.Now().UTC()
 	value := Session{
 		ID:        uuid.NewString(),
-		ProjectID: project.ID,
 		AgentID:   agentID,
 		Title:     title,
-		CWD:       projectWorkspace.RootDir,
+		CWD:       agentWorkspace.RootDir,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -153,7 +129,6 @@ func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session
 		"Session 已创建",
 		"operation", "session.create",
 		"session_id", value.ID,
-		"project_id", value.ProjectID,
 		"agent_id", value.AgentID,
 	)
 	return value, nil

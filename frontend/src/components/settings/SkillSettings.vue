@@ -246,7 +246,7 @@ function normalizeState(state) {
                     skill?.source &&
                     typeof skill.source === "object"
                         ? skill.source
-                        : { known: false },
+                        : {known: false},
               }),
           )
           : [];
@@ -360,7 +360,6 @@ function syncAgentStore(agentID) {
   const index =
       agentStore.items.findIndex(
           (project) =>
-              project.agentID === agentID ||
               project.id === agentID,
       );
 
@@ -426,7 +425,6 @@ async function load() {
         );
 
     const activeAgentID =
-        agentStore.selectedProject?.agentID ||
         agentStore.selectedID;
 
     const activeExists =
@@ -621,7 +619,7 @@ onMounted(load);
               @click="load"
           >
             <template #icon>
-              <IconRefresh />
+              <IconRefresh/>
             </template>
             刷新
           </a-button>
@@ -631,7 +629,7 @@ onMounted(load);
               @click="emit('manage-packages')"
           >
             <template #icon>
-              <IconSettings />
+              <IconSettings/>
             </template>
             管理 Skill Packages
           </a-button>
@@ -738,7 +736,7 @@ onMounted(load);
             placeholder="搜索显示名称、Skill 名称或描述"
         >
           <template #prefix>
-            <IconSearch />
+            <IconSearch/>
           </template>
         </a-input>
 
@@ -824,8 +822,11 @@ onMounted(load);
             <span v-if="skill.hasScripts">scripts</span>
             <span v-if="skill.hasReferences">references</span>
             <span v-if="skill.hasAssets">assets</span>
-            <span v-if="skill.valid && ['unsupported', 'needs_setup'].includes(skill.runtimeStatus)" class="skill-row__runtime-warning">
-              {{ skill.runtimeMessage || (skill.runtimeStatus === 'needs_setup' ? "需要补充运行环境" : "当前 Runtime 暂不支持启用") }}
+            <span v-if="skill.valid && ['unsupported', 'needs_setup'].includes(skill.runtimeStatus)"
+                  class="skill-row__runtime-warning">
+              {{
+                skill.runtimeMessage || (skill.runtimeStatus === 'needs_setup' ? "需要补充运行环境" : "当前 Runtime 暂不支持启用")
+              }}
             </span>
             <span v-if="usedByAgents(skill).length > 0">
               {{ usedByAgents(skill).length }} 个 Agent 已启用
@@ -863,7 +864,7 @@ onMounted(load);
                   Boolean(updatingKey) ||
                   ((!skill.valid || skill.runtimeStatus === 'unsupporte') && !enabledForSelectedAgent(skill.name))
             "
-            @change="onSkillSwitchChange(skill, $event)"
+                @change="onSkillSwitchChange(skill, $event)"
             />
           </div>
         </div>

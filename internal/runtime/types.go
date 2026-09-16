@@ -139,9 +139,6 @@ type SessionWriter interface {
 // Manifest 与真正的 Turn Snapshot 由同一个 Resolver 生成；Settings 修改只会影响下一次
 // Resolve，正在执行的 Turn 仍然使用已经冻结的 Snapshot。
 type RuntimeManifest struct {
-	ProjectID   string `json:"projectID"`
-	ProjectName string `json:"projectName"`
-
 	AgentID   string `json:"agentID"`
 	AgentName string `json:"agentName"`
 
@@ -255,8 +252,6 @@ type Snapshot struct {
 	RunID string
 
 	SessionID string
-
-	ProjectID string
 
 	AgentID string
 

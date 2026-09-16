@@ -350,7 +350,6 @@ type Paths struct {
 
 	SecretsDir    string
 	AgentsDir     string
-	ProjectsDir   string
 	WorkspacesDir string
 	SkillsDir     string
 	MCPDir        string
@@ -466,7 +465,6 @@ func resolvePaths(home string) (Paths, error) {
 
 		SecretsDir:    filepath.Join(root, "secrets"),
 		AgentsDir:     filepath.Join(root, "agents"),
-		ProjectsDir:   filepath.Join(root, "projects"),
 		WorkspacesDir: filepath.Join(root, "workspaces"),
 		SkillsDir:     filepath.Join(root, "skills"),
 		MCPDir:        filepath.Join(root, "mcp"),
@@ -486,7 +484,6 @@ func ensureLayout(paths Paths) error {
 		paths.LogsDir,
 		paths.SecretsDir,
 		paths.AgentsDir,
-		paths.ProjectsDir,
 		paths.WorkspacesDir,
 		paths.SkillsDir,
 		paths.MCPDir,

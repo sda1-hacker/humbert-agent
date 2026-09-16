@@ -17,8 +17,6 @@ import (
 type SessionDTO struct {
 	ID string `json:"id"`
 
-	ProjectID string `json:"projectID"`
-
 	AgentID string `json:"agentID"`
 
 	Title string `json:"title"`
@@ -75,12 +73,12 @@ func NewSessionService(core *coreapp.Application) *SessionService {
 	return &SessionService{core: core}
 }
 
-// List 返回 Project 的 Sessions。
-func (s *SessionService) List(projectID string) ([]SessionDTO, error) {
+// List 返回 Agent（UI 中称为 Project）的 Sessions。
+func (s *SessionService) List(agentID string) ([]SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	values, err := s.core.Sessions().List(ctx, projectID)
+	values, err := s.core.Sessions().List(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("读取 Session 列表失败: %w", err)
 	}
@@ -93,13 +91,13 @@ func (s *SessionService) List(projectID string) ([]SessionDTO, error) {
 }
 
 // Create 创建新 Session。
-func (s *SessionService) Create(projectID string, title string) (SessionDTO, error) {
+func (s *SessionService) Create(agentID string, title string) (SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	value, err := s.core.Sessions().Create(ctx, sessions.CreateSessionInput{
-		ProjectID: projectID,
-		Title:     title,
+		AgentID: agentID,
+		Title:   title,
 	})
 	if err != nil {
 		return SessionDTO{}, fmt.Errorf("创建 Session 失败: %w", err)
@@ -175,7 +173,6 @@ func (s *SessionService) ReadAttachment(sessionID string, attachmentID string) (
 func sessionDTO(value sessions.Session) SessionDTO {
 	return SessionDTO{
 		ID:        value.ID,
-		ProjectID: value.ProjectID,
 		AgentID:   value.AgentID,
 		Title:     value.Title,
 		CreatedAt: value.CreatedAt.Format(time.RFC3339),

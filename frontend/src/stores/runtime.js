@@ -118,8 +118,6 @@ function normalizeRuntimeManifest(value) {
             : {};
 
     return {
-        projectID: value.projectID ?? "",
-        projectName: value.projectName ?? "",
         agentID: value.agentID ?? "",
         agentName: value.agentName ?? "",
         modelID: value.modelID ?? "",

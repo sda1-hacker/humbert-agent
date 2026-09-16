@@ -17,12 +17,12 @@ import * as $models from "./models.js";
 
 /**
  * Create 创建新 Session。
- * @param {string} projectID
+ * @param {string} agentID
  * @param {string} title
  * @returns {$CancellablePromise<$models.SessionDTO>}
  */
-export function Create(projectID, title) {
-    return $Call.ByID(1058013738, projectID, title).then(/** @type {($result: any) => any} */(($result) => {
+export function Create(agentID, title) {
+    return $Call.ByID(1058013738, agentID, title).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType0($result);
     }));
 }
@@ -37,12 +37,12 @@ export function Delete(id) {
 }
 
 /**
- * List 返回 Project 的 Sessions。
- * @param {string} projectID
+ * List 返回 Agent（UI 中称为 Project）的 Sessions。
+ * @param {string} agentID
  * @returns {$CancellablePromise<$models.SessionDTO[]>}
  */
-export function List(projectID) {
-    return $Call.ByID(3883780506, projectID).then(/** @type {($result: any) => any} */(($result) => {
+export function List(agentID) {
+    return $Call.ByID(3883780506, agentID).then(/** @type {($result: any) => any} */(($result) => {
         return $$createType1($result);
     }));
 }

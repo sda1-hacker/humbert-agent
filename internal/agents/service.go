@@ -574,7 +574,7 @@ func (s *Service) Update(
 	)
 }
 
-// UpdateProfile 只修改 Agent 的身份与系统指令，不触碰模型、能力、Sandbox 或 Project Workspace。
+// UpdateProfile 只修改 Agent 的身份与系统指令，不触碰模型、能力、Sandbox 或 Workspace。
 func (s *Service) UpdateProfile(ctx context.Context, id, name, instruction string) (AgentInfo, error) {
 	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
 	if err != nil {
@@ -673,61 +673,41 @@ func (s *Service) UpdateSecurity(ctx context.Context, id string, builtinTools []
 	return s.Get(ctx, existing.Agent.ID)
 }
 
-// Delete 删除没有 Session 的 Agent Profile。
+// Delete 删除没有 Session 的完整 Agent Aggregate。
 //
-// Workspace 不会被自动删除。
-//
-// 无论 Managed 还是 Custom，Workspace 中都可能存在用户的重要文件，
-// 因此删除 Agent Profile 与物理删除文件必须保持两个独立操作。
-func (s *Service) Delete(
-	ctx context.Context,
-	id string,
-) error {
-	if _, err :=
-		s.store.Get(
-			ctx,
-			id,
-		); err != nil {
-
-		return err
-	}
-
-	count, err :=
-		s.store.CountSessions(
-			ctx,
-			id,
-		)
-
+// Agent 内部目录（Profile、Session sidecar、Memory 等）属于 Humbert 自有数据；删除 Agent
+// 时一并删除。Managed Workspace 同样属于 Humbert 管理范围，会同步清理。Custom Workspace
+// 是用户自己的外部目录，只解除引用，绝不会递归删除。
+func (s *Service) Delete(ctx context.Context, id string) error {
+	existing, err := s.store.Get(ctx, id)
 	if err != nil {
 		return err
 	}
 
+	count, err := s.store.CountSessions(ctx, id)
+	if err != nil {
+		return err
+	}
 	if count > 0 {
-		return fmt.Errorf(
-			"%w: 当前 Agent 仍有 %d 个 Session",
-			ErrInUse,
-			count,
-		)
+		return fmt.Errorf("%w: 当前 Agent 仍有 %d 个 Session", ErrInUse, count)
 	}
 
-	if err :=
-		s.store.Delete(
-			ctx,
-			id,
-		); err != nil {
+	workspaceMode := existing.Agent.WorkspaceMode
+	if workspaceMode == "" {
+		workspaceMode = workspace.ModeManaged
+	}
+	if s.workspaces != nil && workspaceMode == workspace.ModeManaged {
+		if err := s.workspaces.DeleteManaged(ctx, id); err != nil {
+			return fmt.Errorf("删除 Agent Managed Workspace 失败: %w", err)
+		}
+	}
 
+	if err := s.store.Delete(ctx, id); err != nil {
 		return err
 	}
 
-	s.logger.Info(
-		ctx,
-		"Agent Profile 已删除，Workspace 文件保持不变",
-		"operation",
-		"agent.delete",
-		"agent_id",
-		id,
-	)
-
+	s.logger.Info(ctx, "Agent 已删除", "operation", "agent.delete", "agent_id", id,
+		"workspace_mode", string(workspaceMode))
 	return nil
 }
 

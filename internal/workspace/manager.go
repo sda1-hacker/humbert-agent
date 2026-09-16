@@ -555,6 +555,46 @@ func (m *Manager) OpenRoot(
 	return root, nil
 }
 
+// DeleteManaged 删除 Humbert 自己管理的 Agent Workspace。
+//
+// 该方法永远不会删除 Custom Workspace。调用方只能提供 Agent ID，最终路径必须严格
+// 位于 managedRoot/<agent-id>，并且目标本身不能是符号链接。
+func (m *Manager) DeleteManaged(ctx context.Context, agentID string) error {
+	if ctx == nil {
+		return errors.New("context.Context 不能为空")
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("删除 Managed Workspace 被取消: %w", err)
+	}
+	if err := m.ensureOpen(); err != nil {
+		return err
+	}
+
+	path, err := m.ManagedPath(agentID)
+	if err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("检查 Managed Workspace 失败: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: Managed Workspace 不允许是符号链接", ErrUnsafeWorkspace)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: Managed Workspace 不是目录", ErrUnsafeWorkspace)
+	}
+
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("删除 Managed Workspace 失败: %w", err)
+	}
+	m.logger.Info(ctx, "Managed Workspace 已删除", "operation", "workspace.delete_managed", "agent_id", agentID, "path", path)
+	return nil
+}
+
 // Close 让 Manager 进入关闭状态。
 //
 // Manager 本身没有长期文件句柄，因此这里只阻止后续 Resolve/OpenRoot。
