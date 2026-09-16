@@ -77,6 +77,8 @@ type Model struct {
 	// max_tokens/max_completion_tokens 参数。
 	MaxOutputTokens int `json:"max_output_tokens"`
 
+	Capabilities CapabilityConfig `json:"capabilities,omitempty"`
+
 	Enabled bool `json:"enabled"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -159,6 +161,8 @@ type CreateModelInput struct {
 
 	MaxOutputTokens int
 
+	Capabilities CapabilityConfig
+
 	Enabled bool
 }
 
@@ -175,6 +179,8 @@ type UpdateModelInput struct {
 	ContextWindow int
 
 	MaxOutputTokens int
+
+	Capabilities CapabilityConfig
 
 	Enabled bool
 }

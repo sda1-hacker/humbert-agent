@@ -271,7 +271,7 @@ func (s *Store) CountSessions(ctx context.Context, agentID string) (int, error) 
 	return len(values), nil
 }
 
-// CountAgentsByModel 返回当前 Agent Profile 中引用指定默认 Model 的数量。
+// CountAgentsByModel 返回当前 Agent Profile 中引用指定 Model（Chat 或任意 Model Role）的数量。
 //
 // 该方法由 models.Registry 在删除 Model 前调用。它只读取 Agent config.json，
 // 不调用 ModelRegistry，因此不会形成 Agent <-> Model 的运行时递归依赖。扫描发生
@@ -289,7 +289,11 @@ func (s *Store) CountAgentsByModel(ctx context.Context, modelID string) (int, er
 
 	count := 0
 	for _, value := range values {
-		if value.Agent.ModelID == modelID {
+		agent := value.Agent
+		if agent.ModelID == modelID ||
+			agent.ModelRoles.UtilityModelID == modelID ||
+			agent.ModelRoles.MemoryModelID == modelID ||
+			agent.ModelRoles.VisionModelID == modelID {
 			count++
 		}
 	}

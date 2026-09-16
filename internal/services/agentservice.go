@@ -45,6 +45,8 @@ type AgentDTO struct {
 
 	ModelDisplayName string `json:"modelDisplayName"`
 
+	ModelRoles AgentModelRolesDTO `json:"modelRoles"`
+
 	EnabledSkills []string `json:"enabledSkills"`
 
 	EnabledBuiltinTools    []string         `json:"enabledBuiltinTools"`
@@ -87,6 +89,20 @@ type AgentProfileRequest struct {
 // AgentModelRequest 只修改默认模型。
 type AgentModelRequest struct {
 	ModelID string `json:"modelID"`
+}
+
+// AgentModelRolesDTO 是 Agent 的可选辅助模型角色。Chat Model 仍由 ModelID 表示。
+type AgentModelRolesDTO struct {
+	UtilityModelID string `json:"utilityModelID"`
+	MemoryModelID  string `json:"memoryModelID"`
+	VisionModelID  string `json:"visionModelID"`
+}
+
+// AgentModelRolesRequest 只更新辅助模型角色。空字符串表示使用 Runtime 回退链。
+type AgentModelRolesRequest struct {
+	UtilityModelID string `json:"utilityModelID"`
+	MemoryModelID  string `json:"memoryModelID"`
+	VisionModelID  string `json:"visionModelID"`
 }
 
 // AgentSkillsRequest 只修改启用的 Skill 引用。
@@ -146,27 +162,30 @@ type SandboxDiagnosticsDTO struct {
 
 // CreateAgentRequest 是创建 Agent 的 Desktop DTO。
 type CreateAgentRequest struct {
-	Name                   string           `json:"name"`
-	Instruction            string           `json:"instruction"`
-	ModelID                string           `json:"modelID"`
-	EnabledSkills          []string         `json:"enabledSkills"`
-	WorkspaceMode          string           `json:"workspaceMode"`
-	WorkspacePath          string           `json:"workspacePath"`
-	BuiltinToolsConfigured bool             `json:"builtinToolsConfigured"`
-	EnabledBuiltinTools    []string         `json:"enabledBuiltinTools"`
-	Sandbox                SandboxPolicyDTO `json:"sandbox"`
+	Name                   string             `json:"name"`
+	Instruction            string             `json:"instruction"`
+	ModelID                string             `json:"modelID"`
+	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
+	EnabledSkills          []string           `json:"enabledSkills"`
+	WorkspaceMode          string             `json:"workspaceMode"`
+	WorkspacePath          string             `json:"workspacePath"`
+	BuiltinToolsConfigured bool               `json:"builtinToolsConfigured"`
+	EnabledBuiltinTools    []string           `json:"enabledBuiltinTools"`
+	Sandbox                SandboxPolicyDTO   `json:"sandbox"`
 }
 
 // UpdateAgentRequest 是修改 Agent 的 Desktop DTO。
 type UpdateAgentRequest struct {
-	Name                   string   `json:"name"`
-	Instruction            string   `json:"instruction"`
-	ModelID                string   `json:"modelID"`
-	EnabledSkills          []string `json:"enabledSkills"`
-	WorkspaceMode          string   `json:"workspaceMode"`
-	WorkspacePath          string   `json:"workspacePath"`
-	BuiltinToolsConfigured bool     `json:"builtinToolsConfigured"`
-	EnabledBuiltinTools    []string `json:"enabledBuiltinTools"`
+	Name                   string             `json:"name"`
+	Instruction            string             `json:"instruction"`
+	ModelID                string             `json:"modelID"`
+	ModelRolesConfigured   bool               `json:"modelRolesConfigured"`
+	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
+	EnabledSkills          []string           `json:"enabledSkills"`
+	WorkspaceMode          string             `json:"workspaceMode"`
+	WorkspacePath          string             `json:"workspacePath"`
+	BuiltinToolsConfigured bool               `json:"builtinToolsConfigured"`
+	EnabledBuiltinTools    []string           `json:"enabledBuiltinTools"`
 
 	// SandboxConfigured 区分“调用方没有修改 Sandbox”和“显式把 Sandbox
 	// 改回继承应用默认值”。这与 BuiltinToolsConfigured 的语义一致，避免
@@ -315,6 +334,8 @@ func (s *AgentService) CreateAgent(
 
 					ModelID: request.ModelID,
 
+					ModelRoles: modelRolesFromDTO(request.ModelRoles),
+
 					EnabledSkills:       append([]string(nil), request.EnabledSkills...),
 					EnabledBuiltinTools: createInput.EnabledBuiltinTools,
 					Sandbox:             createInput.Sandbox,
@@ -356,6 +377,11 @@ func (s *AgentService) UpdateAgent(
 
 	var enabledBuiltinTools *[]string
 	var sandboxPolicy *sandbox.AgentPolicy
+	var modelRoles *agents.ModelRoles
+	if request.ModelRolesConfigured {
+		roles := modelRolesFromDTO(request.ModelRoles)
+		modelRoles = &roles
+	}
 	if request.SandboxConfigured {
 		policy := sandboxPolicyFromDTO(request.Sandbox)
 		sandboxPolicy = &policy
@@ -379,6 +405,8 @@ func (s *AgentService) UpdateAgent(
 					Instruction: request.Instruction,
 
 					ModelID: request.ModelID,
+
+					ModelRoles: modelRoles,
 
 					EnabledSkills:       append([]string(nil), request.EnabledSkills...),
 					EnabledBuiltinTools: enabledBuiltinTools,
@@ -421,6 +449,21 @@ func (s *AgentService) SetAgentModel(id string, request AgentModelRequest) (Agen
 	value, err := s.core.Agents().SetModel(ctx, id, request.ModelID)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("切换 Agent Model 失败: %w", err)
+	}
+	return s.toDTO(value)
+}
+
+// SetAgentModelRoles 只修改 Utility/Memory/Vision 模型角色。
+func (s *AgentService) SetAgentModelRoles(id string, request AgentModelRolesRequest) (AgentDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
+	defer cancel()
+	value, err := s.core.Agents().SetModelRoles(ctx, id, agents.ModelRoles{
+		UtilityModelID: request.UtilityModelID,
+		MemoryModelID:  request.MemoryModelID,
+		VisionModelID:  request.VisionModelID,
+	})
+	if err != nil {
+		return AgentDTO{}, fmt.Errorf("更新 Agent Model Roles 失败: %w", err)
 	}
 	return s.toDTO(value)
 }
@@ -812,6 +855,8 @@ func (s *AgentService) toDTO(
 
 		ModelDisplayName: value.ModelDisplayName,
 
+		ModelRoles: modelRolesDTO(value.Agent.ModelRoles),
+
 		EnabledSkills: append([]string(nil), value.Agent.EnabledSkills...),
 
 		EnabledBuiltinTools:    append([]string{}, value.Agent.EnabledBuiltinTools...),
@@ -840,6 +885,22 @@ func (s *AgentService) toDTO(
 				time.RFC3339Nano,
 			),
 	}, nil
+}
+
+func modelRolesFromDTO(value AgentModelRolesDTO) agents.ModelRoles {
+	return agents.ModelRoles{
+		UtilityModelID: value.UtilityModelID,
+		MemoryModelID:  value.MemoryModelID,
+		VisionModelID:  value.VisionModelID,
+	}
+}
+
+func modelRolesDTO(value agents.ModelRoles) AgentModelRolesDTO {
+	return AgentModelRolesDTO{
+		UtilityModelID: value.UtilityModelID,
+		MemoryModelID:  value.MemoryModelID,
+		VisionModelID:  value.VisionModelID,
+	}
 }
 
 func sandboxPolicyFromDTO(value SandboxPolicyDTO) sandbox.AgentPolicy {

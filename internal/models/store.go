@@ -10,7 +10,6 @@ import (
 	"sync"
 
 	"github.com/sda1-hacker/humbert-agent/internal/atomicfile"
-	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
 const modelConfigSchemaVersion = 1
@@ -46,21 +45,17 @@ type Store struct {
 	providersFile string
 	modelsFile    string
 
-	transcripts *transcript.Store
-
 	mu sync.RWMutex
 }
 
 // NewStore 创建模型配置 Store，并确保 providers.json / models.json 已初始化。
 //
-// transcripts 用于实现“已被 Session 历史引用的模型不能物理删除”的既有语义。
-// JSONL v3 不再保存独立 Run Audit；删除模型时直接扫描 AssistantMessage 中真实记录的
-// provider/model 字段，不再依赖 runs 数据库表或 turn.started 事件。
+// Model Store 只维护当前 Provider/Model 配置，不依赖 Session/Transcript。历史消息会
+// 自己保存实际使用的 Provider/Model 元数据，因此模型配置的生命周期与历史记录解耦。
 func NewStore(
 	ctx context.Context,
 	providersFile string,
 	modelsFile string,
-	transcripts *transcript.Store,
 ) (*Store, error) {
 	if ctx == nil {
 		return nil, errors.New("context.Context 不能为空")
@@ -77,14 +72,9 @@ func NewStore(
 	if modelsFile == "" {
 		return nil, errors.New("models.json 路径不能为空")
 	}
-	if transcripts == nil {
-		return nil, errors.New("Model Store TranscriptStore 不能为空")
-	}
-
 	store := &Store{
 		providersFile: providersFile,
 		modelsFile:    modelsFile,
-		transcripts:   transcripts,
 	}
 
 	if err := store.ensureDocuments(ctx); err != nil {
@@ -363,70 +353,10 @@ func (s *Store) UpdateModel(ctx context.Context, value Model) error {
 	return s.writeModelsLocked(ctx, models)
 }
 
-// CountHistoricalMessagesByModel 返回 Session Transcript 中引用指定模型的 Assistant
-// Message 数量。
+// DeleteModel 删除模型配置。
 //
-// JSONL v3 不再保存 turn.started Run Audit，因此历史模型引用直接来自真正的
-// AssistantMessage.provider + AssistantMessage.model。这比额外 Run Store 更符合单一
-// Source of Truth。该扫描只发生在用户明确删除模型的低频控制面路径。
-func (s *Store) CountHistoricalMessagesByModel(ctx context.Context, modelID string) (int, error) {
-	if ctx == nil {
-		return 0, errors.New("context.Context 不能为空")
-	}
-	if err := ctx.Err(); err != nil {
-		return 0, fmt.Errorf("统计模型 Session 历史引用被取消: %w", err)
-	}
-
-	model, err := s.GetModel(ctx, modelID)
-	if err != nil {
-		return 0, err
-	}
-
-	root := s.transcripts.AgentsRoot()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return 0, fmt.Errorf("读取 Agent Transcript 根目录失败: %w", err)
-	}
-
-	count := 0
-	for _, entry := range entries {
-		if err := ctx.Err(); err != nil {
-			return 0, fmt.Errorf("统计模型 Session 历史引用被取消: %w", err)
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return 0, fmt.Errorf("Agent Transcript 目录不能是符号链接: %s", entry.Name())
-		}
-		if !entry.IsDir() {
-			continue
-		}
-
-		sessionValues, err := s.transcripts.ListSessionRefs(ctx, entry.Name())
-		if err != nil {
-			return 0, fmt.Errorf("读取 Agent %s Session 列表失败: %w", entry.Name(), err)
-		}
-		for _, session := range sessionValues {
-			document, err := s.transcripts.LoadSession(ctx, session.AgentID, session.ID)
-			if err != nil {
-				return 0, fmt.Errorf("读取 Session %s 模型历史失败: %w", session.ID, err)
-			}
-			for _, treeEntry := range document.Entries {
-				if treeEntry.Type != transcript.EntryMessage || treeEntry.Message == nil {
-					continue
-				}
-				message := treeEntry.Message
-				if message.Role == transcript.RoleAssistant &&
-					message.Provider == model.ProviderID &&
-					message.Model == model.ModelName {
-					count++
-				}
-			}
-		}
-	}
-
-	return count, nil
-}
-
-// DeleteModel 删除模型配置。历史引用检查由 Registry 在调用前完成。
+// Session 历史不依赖该配置继续存在。历史 AssistantMessage 会保存实际使用的
+// Provider/Model 元数据，因此历史引用检查属于展示数据与当前配置之间不必要的耦合。
 func (s *Store) DeleteModel(ctx context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

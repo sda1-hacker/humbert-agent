@@ -13,6 +13,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/memory"
+	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
@@ -21,10 +22,11 @@ import (
 const TopicEvent = "runtime.event"
 
 var (
-	ErrSessionBusy       = errors.New("当前 Session 已有正在执行的 Turn")
-	ErrRunNotFound       = errors.New("运行中的 Turn 不存在")
-	ErrClosed            = errors.New("RuntimeService 已关闭")
-	ErrAgentModelMissing = errors.New("Agent 尚未配置默认模型")
+	ErrSessionBusy                = errors.New("当前 Session 已有正在执行的 Turn")
+	ErrRunNotFound                = errors.New("运行中的 Turn 不存在")
+	ErrClosed                     = errors.New("RuntimeService 已关闭")
+	ErrAgentModelMissing          = errors.New("Agent 尚未配置默认模型")
+	ErrModelCapabilityUnsupported = errors.New("当前模型不支持本次请求所需能力")
 )
 
 // EventType 是 Runtime -> Desktop 的瞬时事件类型。
@@ -143,9 +145,12 @@ type RuntimeManifest struct {
 	AgentID   string `json:"agentID"`
 	AgentName string `json:"agentName"`
 
-	ModelID          string `json:"modelID"`
-	ModelDisplayName string `json:"modelDisplayName"`
-	ModelRevision    uint64 `json:"modelRevision"`
+	ModelID           string                    `json:"modelID"`
+	ModelDisplayName  string                    `json:"modelDisplayName"`
+	ModelRevision     uint64                    `json:"modelRevision"`
+	ModelRole         string                    `json:"modelRole"`
+	ModelCapabilities models.Capabilities       `json:"modelCapabilities"`
+	ModelRoles        RuntimeModelRolesManifest `json:"modelRoles"`
 
 	ToolRevision     uint64   `json:"toolRevision"`
 	BuiltinToolNames []string `json:"builtinToolNames"`
@@ -165,6 +170,17 @@ type RuntimeManifest struct {
 
 	Workspace RuntimeWorkspaceManifest `json:"workspace"`
 	Sandbox   RuntimeSandboxManifest   `json:"sandbox"`
+}
+
+// RuntimeModelRolesManifest 描述本次 Resolve 后各角色实际使用的模型。
+// Utility/Memory 字段已经应用回退链；VisionModelID 为空表示未显式配置 Vision Role。
+type RuntimeModelRolesManifest struct {
+	ChatModelID    string `json:"chatModelID"`
+	UtilityModelID string `json:"utilityModelID"`
+	MemoryModelID  string `json:"memoryModelID"`
+	VisionModelID  string `json:"visionModelID,omitempty"`
+	ActiveModelID  string `json:"activeModelID"`
+	ActiveRole     string `json:"activeRole"`
 }
 
 // RuntimeWorkspaceManifest 是 Runtime Snapshot 中 Workspace 的安全只读投影。
@@ -257,6 +273,14 @@ type Snapshot struct {
 	ModelID string
 
 	ModelRevision uint64
+
+	ModelRole string
+
+	ModelCapabilities models.Capabilities
+
+	CompactionModel einomodel.ToolCallingChatModel
+
+	MemoryModel einomodel.ToolCallingChatModel
 
 	ToolRevision uint64
 

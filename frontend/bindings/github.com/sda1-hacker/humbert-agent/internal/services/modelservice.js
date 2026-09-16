@@ -41,7 +41,8 @@ export function CreateProvider(request) {
 }
 
 /**
- * DeleteModel 删除尚未进入 Run Audit 的模型。
+ * DeleteModel 删除不再被当前 Agent 任一模型角色引用的模型。
+ * 历史 Session 不阻止删除模型配置。
  * @param {string} id
  * @returns {$CancellablePromise<void>}
  */

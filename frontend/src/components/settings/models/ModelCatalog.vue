@@ -26,6 +26,7 @@ import {
 
 import SectionCard from "../../ui/SectionCard.vue";
 import EmptyState from "../../ui/EmptyState.vue";
+import ModelCapabilityBadges from "../../models/ModelCapabilityBadges.vue";
 
 const store =
     useModelStore();
@@ -35,6 +36,19 @@ const saving =
 
 const testingID =
     ref("");
+
+const capabilityFields = [
+  { key: "tools", label: "Tool Calling", help: "模型是否支持函数/工具调用。Agent 暴露 Tool 时必须开启。" },
+  { key: "vision", label: "Vision", help: "模型是否支持图片输入。" },
+  { key: "files", label: "Files", help: "模型是否支持 PDF/文档等任意文件输入；Vision 不等于 Files。" },
+  { key: "reasoning", label: "Reasoning", help: "标记模型具备原生推理能力，供后续路由与 UI 使用。" },
+  { key: "json", label: "JSON", help: "模型是否支持可靠的结构化/JSON 输出模式。" },
+  { key: "audio", label: "Audio", help: "模型是否支持音频输入或多模态音频能力。" },
+];
+
+function defaultCapabilityConfig() {
+  return { tools: "auto", vision: "auto", files: "auto", reasoning: "auto", json: "auto", audio: "auto" };
+}
 
 const form =
     reactive({
@@ -51,6 +65,8 @@ const form =
       contextWindow: 131072,
 
       maxOutputTokens: 8192,
+
+      capabilityConfig: defaultCapabilityConfig(),
 
       enabled: true,
     });
@@ -86,6 +102,8 @@ function reset() {
 
         maxOutputTokens: 8192,
 
+        capabilityConfig: defaultCapabilityConfig(),
+
         enabled: true,
       },
   );
@@ -120,6 +138,11 @@ function edit(model) {
 
         maxOutputTokens:
         model.maxOutputTokens,
+
+        capabilityConfig: {
+          ...defaultCapabilityConfig(),
+          ...(model.capabilityConfig ?? {}),
+        },
 
         enabled:
         model.enabled,
@@ -201,6 +224,8 @@ async function save() {
       maxOutputTokens:
           Number(form.maxOutputTokens),
 
+      capabilityConfig: { ...form.capabilityConfig },
+
       enabled:
           Boolean(form.enabled),
     };
@@ -273,7 +298,7 @@ async function remove(model) {
         Title: "删除模型",
 
         Message:
-            `确定删除模型「${model.displayName}」吗？`,
+            `确定删除模型「${model.displayName}」吗？历史会话记录会保留；如果仍有 Agent 在 Chat、Utility、Memory 或 Vision 角色中使用它，需要先切换相关模型角色。`,
 
         Buttons: [
           {
@@ -385,6 +410,7 @@ watch(
           <div class="model-main">
             <div class="model-name">{{ model.displayName }}</div>
             <div class="model-meta">{{ model.providerName }} · {{ model.modelName }}</div>
+            <ModelCapabilityBadges class="model-capabilities" :capabilities="model.capabilities" compact />
           </div>
 
           <div class="model-actions">
@@ -460,6 +486,30 @@ watch(
                 class="field-help">为模型回复预留的最大输出预算。该值必须小于 Context Window，并参与安全 Reserve 计算。</span>
           </template>
         </a-form-item>
+
+        <div class="capability-editor">
+          <div class="capability-editor__header">
+            <div>
+              <div class="enabled-title">模型能力</div>
+              <div class="enabled-description">Auto 会根据 Provider 与模型名称做保守推断；不准确时请显式覆盖。</div>
+            </div>
+          </div>
+          <div class="capability-grid">
+            <a-form-item
+                v-for="field in capabilityFields"
+                :key="field.key"
+                :label="field.label"
+                class="capability-field"
+            >
+              <a-select v-model="form.capabilityConfig[field.key]">
+                <a-option value="auto">Auto</a-option>
+                <a-option value="enabled">支持</a-option>
+                <a-option value="disabled">不支持</a-option>
+              </a-select>
+              <template #extra><span class="field-help">{{ field.help }}</span></template>
+            </a-form-item>
+          </div>
+        </div>
 
         <div class="enabled-row">
           <div>
@@ -547,6 +597,29 @@ watch(
 .field-help {
   color: var(--h-text-muted);
   font-size: 10px;
+}
+
+.model-capabilities {
+  margin-top: 6px;
+}
+
+.capability-editor {
+  margin: 4px 0 18px;
+  padding: 12px;
+  border: 1px solid var(--h-border);
+  border-radius: 9px;
+  background: var(--h-surface-soft, var(--h-surface));
+}
+
+.capability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  margin-top: 12px;
+}
+
+.capability-field {
+  margin-bottom: 12px;
 }
 
 .enabled-row {

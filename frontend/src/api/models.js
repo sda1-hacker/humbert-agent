@@ -1,108 +1,42 @@
+import { Call } from "@wailsio/runtime";
+
 /**
  * Model Registry 前端 API Adapter。
  *
- * Vue Component 不直接 import Wails generated bindings，
- * 统一通过本模块访问 ModelService。
+ * 使用 ByName 而不是生成 Binding 的 ByID/DTO createFrom，这样模型 Capability DTO 在
+ * Go 侧演进时不要求提交生成物；wails3 generate bindings 仍可在开发机按需运行。
  */
+const serviceName =
+    "github.com/sda1-hacker/humbert-agent/internal/services.ModelService";
 
-let bindingPromise = null;
-
-/**
- * 延迟加载 Wails ModelService。
- *
- * 使用缓存 Promise 可以避免每一次 UI 操作都重新执行 dynamic import，
- * 同时 Binding 加载失败不会阻止 Vue SPA 本身完成 mount。
- */
-function loadBinding() {
-    if (!bindingPromise) {
-        bindingPromise = import(
-            "../../bindings/github.com/sda1-hacker/humbert-agent/internal/services/modelservice.js"
-            ).catch((error) => {
-            bindingPromise = null;
-
-            console.error(
-                "[Humbert] ModelService Binding 加载失败",
-                error,
-            );
-
-            throw new Error(
-                "无法加载 ModelService Binding，请重新执行 wails3 generate bindings",
-                {
-                    cause: error,
-                },
-            );
-        });
-    }
-
-    return bindingPromise;
+export function getModelState() {
+    return Call.ByName(`${serviceName}.State`);
 }
 
-export async function getModelState() {
-    const binding = await loadBinding();
-
-    return binding.State();
+export function createProvider(request) {
+    return Call.ByName(`${serviceName}.CreateProvider`, request);
 }
 
-export async function createProvider(
-    request,
-) {
-    const binding = await loadBinding();
-
-    return binding.CreateProvider(request);
+export function updateProvider(id, request) {
+    return Call.ByName(`${serviceName}.UpdateProvider`, id, request);
 }
 
-export async function updateProvider(
-    id,
-    request,
-) {
-    const binding = await loadBinding();
-
-    return binding.UpdateProvider(
-        id,
-        request,
-    );
+export function deleteProvider(id) {
+    return Call.ByName(`${serviceName}.DeleteProvider`, id);
 }
 
-export async function deleteProvider(
-    id,
-) {
-    const binding = await loadBinding();
-
-    return binding.DeleteProvider(id);
+export function createModel(request) {
+    return Call.ByName(`${serviceName}.CreateModel`, request);
 }
 
-export async function createModel(
-    request,
-) {
-    const binding = await loadBinding();
-
-    return binding.CreateModel(request);
+export function updateModel(id, request) {
+    return Call.ByName(`${serviceName}.UpdateModel`, id, request);
 }
 
-export async function updateModel(
-    id,
-    request,
-) {
-    const binding = await loadBinding();
-
-    return binding.UpdateModel(
-        id,
-        request,
-    );
+export function deleteModel(id) {
+    return Call.ByName(`${serviceName}.DeleteModel`, id);
 }
 
-export async function deleteModel(
-    id,
-) {
-    const binding = await loadBinding();
-
-    return binding.DeleteModel(id);
-}
-
-export async function testModel(
-    id,
-) {
-    const binding = await loadBinding();
-
-    return binding.TestModel(id);
+export function testModel(id) {
+    return Call.ByName(`${serviceName}.TestModel`, id);
 }

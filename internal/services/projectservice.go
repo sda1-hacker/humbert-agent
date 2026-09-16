@@ -16,46 +16,49 @@ import (
 // Project 自己拥有 Name/Workspace；Agent 子域拥有 Instruction/Model/Skills/Security。
 // 为了保持现有 Vue 组件简单，这里把两者投影成一个只读 DTO，但写操作在后端仍拆成窄命令。
 type ProjectDTO struct {
-	ID                     string           `json:"id"`
-	AgentID                string           `json:"agentID"`
-	Name                   string           `json:"name"`
-	Instruction            string           `json:"instruction"`
-	ModelID                string           `json:"modelID"`
-	ModelDisplayName       string           `json:"modelDisplayName"`
-	EnabledSkills          []string         `json:"enabledSkills"`
-	EnabledBuiltinTools    []string         `json:"enabledBuiltinTools"`
-	BuiltinToolsConfigured bool             `json:"builtinToolsConfigured"`
-	AvailableBuiltinTools  []BuiltinToolDTO `json:"availableBuiltinTools"`
-	Sandbox                SandboxPolicyDTO `json:"sandbox"`
-	SandboxStatus          SandboxStatusDTO `json:"sandboxStatus"`
-	WorkspaceMode          string           `json:"workspaceMode"`
-	WorkspacePath          string           `json:"workspacePath"`
-	WorkspaceDisplayPath   string           `json:"workspaceDisplayPath"`
-	CreatedAt              string           `json:"createdAt"`
-	UpdatedAt              string           `json:"updatedAt"`
+	ID                     string             `json:"id"`
+	AgentID                string             `json:"agentID"`
+	Name                   string             `json:"name"`
+	Instruction            string             `json:"instruction"`
+	ModelID                string             `json:"modelID"`
+	ModelDisplayName       string             `json:"modelDisplayName"`
+	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
+	EnabledSkills          []string           `json:"enabledSkills"`
+	EnabledBuiltinTools    []string           `json:"enabledBuiltinTools"`
+	BuiltinToolsConfigured bool               `json:"builtinToolsConfigured"`
+	AvailableBuiltinTools  []BuiltinToolDTO   `json:"availableBuiltinTools"`
+	Sandbox                SandboxPolicyDTO   `json:"sandbox"`
+	SandboxStatus          SandboxStatusDTO   `json:"sandboxStatus"`
+	WorkspaceMode          string             `json:"workspaceMode"`
+	WorkspacePath          string             `json:"workspacePath"`
+	WorkspaceDisplayPath   string             `json:"workspaceDisplayPath"`
+	CreatedAt              string             `json:"createdAt"`
+	UpdatedAt              string             `json:"updatedAt"`
 }
 
 type CreateProjectRequest struct {
-	Name                   string           `json:"name"`
-	Instruction            string           `json:"instruction"`
-	ModelID                string           `json:"modelID"`
-	EnabledSkills          []string         `json:"enabledSkills"`
-	WorkspaceMode          string           `json:"workspaceMode"`
-	WorkspacePath          string           `json:"workspacePath"`
-	BuiltinToolsConfigured bool             `json:"builtinToolsConfigured"`
-	EnabledBuiltinTools    []string         `json:"enabledBuiltinTools"`
-	Sandbox                SandboxPolicyDTO `json:"sandbox"`
+	Name                   string             `json:"name"`
+	Instruction            string             `json:"instruction"`
+	ModelID                string             `json:"modelID"`
+	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
+	EnabledSkills          []string           `json:"enabledSkills"`
+	WorkspaceMode          string             `json:"workspaceMode"`
+	WorkspacePath          string             `json:"workspacePath"`
+	BuiltinToolsConfigured bool               `json:"builtinToolsConfigured"`
+	EnabledBuiltinTools    []string           `json:"enabledBuiltinTools"`
+	Sandbox                SandboxPolicyDTO   `json:"sandbox"`
 }
 
 type UpdateProjectRequest struct {
-	Name                string           `json:"name"`
-	Instruction         string           `json:"instruction"`
-	ModelID             string           `json:"modelID"`
-	EnabledSkills       []string         `json:"enabledSkills"`
-	WorkspaceMode       string           `json:"workspaceMode"`
-	WorkspacePath       string           `json:"workspacePath"`
-	EnabledBuiltinTools []string         `json:"enabledBuiltinTools"`
-	Sandbox             SandboxPolicyDTO `json:"sandbox"`
+	Name                string             `json:"name"`
+	Instruction         string             `json:"instruction"`
+	ModelID             string             `json:"modelID"`
+	ModelRoles          AgentModelRolesDTO `json:"modelRoles"`
+	EnabledSkills       []string           `json:"enabledSkills"`
+	WorkspaceMode       string             `json:"workspaceMode"`
+	WorkspacePath       string             `json:"workspacePath"`
+	EnabledBuiltinTools []string           `json:"enabledBuiltinTools"`
+	Sandbox             SandboxPolicyDTO   `json:"sandbox"`
 }
 
 type ProjectService struct {
@@ -103,7 +106,7 @@ func (s *ProjectService) CreateProject(request CreateProjectRequest) (ProjectDTO
 	// Agent 的 Workspace 字段只保留给旧数据迁移；新 Project 从创建开始就是 Workspace 的
 	// 唯一权威来源，因此新 Agent 的 legacy workspace 固定为 managed/empty。
 	agent, err := s.agents.CreateAgent(CreateAgentRequest{
-		Name: request.Name, Instruction: request.Instruction, ModelID: request.ModelID, EnabledSkills: request.EnabledSkills,
+		Name: request.Name, Instruction: request.Instruction, ModelID: request.ModelID, ModelRoles: request.ModelRoles, EnabledSkills: request.EnabledSkills,
 		WorkspaceMode: string(workspace.ModeManaged), WorkspacePath: "",
 		BuiltinToolsConfigured: request.BuiltinToolsConfigured, EnabledBuiltinTools: request.EnabledBuiltinTools, Sandbox: request.Sandbox,
 	})
@@ -145,15 +148,19 @@ func (s *ProjectService) UpdateProject(id string, request UpdateProjectRequest) 
 		_, projectRollbackErr := s.core.Projects().Update(rollbackCtx, id, projects.UpdateInput{Name: previousProject.Name, WorkspaceMode: previousProject.WorkspaceMode, WorkspacePath: previousProject.WorkspacePath})
 		_, profileRollbackErr := s.core.Agents().UpdateProfile(rollbackCtx, project.AgentID, previousAgent.Agent.Name, previousAgent.Agent.Instruction)
 		_, modelRollbackErr := s.core.Agents().SetModel(rollbackCtx, project.AgentID, previousAgent.Agent.ModelID)
+		_, modelRolesRollbackErr := s.core.Agents().SetModelRoles(rollbackCtx, project.AgentID, previousAgent.Agent.ModelRoles)
 		_, skillsRollbackErr := s.core.Agents().SetSkills(rollbackCtx, project.AgentID, previousAgent.Agent.EnabledSkills)
 		_, securityRollbackErr := s.core.Agents().UpdateSecurity(rollbackCtx, project.AgentID, previousAgent.Agent.EnabledBuiltinTools, previousAgent.Agent.Sandbox)
-		return ProjectDTO{}, errors.Join(cause, projectRollbackErr, profileRollbackErr, modelRollbackErr, skillsRollbackErr, securityRollbackErr)
+		return ProjectDTO{}, errors.Join(cause, projectRollbackErr, profileRollbackErr, modelRollbackErr, modelRolesRollbackErr, skillsRollbackErr, securityRollbackErr)
 	}
 	if _, err = s.core.Agents().UpdateProfile(ctx, project.AgentID, request.Name, request.Instruction); err != nil {
 		return rollback(fmt.Errorf("更新 Agent Profile 失败: %w", err))
 	}
 	if _, err = s.core.Agents().SetModel(ctx, project.AgentID, request.ModelID); err != nil {
 		return rollback(fmt.Errorf("更新 Agent Model 失败: %w", err))
+	}
+	if _, err = s.core.Agents().SetModelRoles(ctx, project.AgentID, modelRolesFromDTO(request.ModelRoles)); err != nil {
+		return rollback(fmt.Errorf("更新 Agent Model Roles 失败: %w", err))
 	}
 	if _, err = s.core.Agents().SetSkills(ctx, project.AgentID, request.EnabledSkills); err != nil {
 		return rollback(fmt.Errorf("更新 Agent Skills 失败: %w", err))
@@ -237,5 +244,5 @@ func (s *ProjectService) toDTO(ctx context.Context, project projects.Project) (P
 	if created.IsZero() {
 		created = agent.Agent.CreatedAt
 	}
-	return ProjectDTO{ID: project.ID, AgentID: project.AgentID, Name: project.Name, Instruction: agentDTO.Instruction, ModelID: agentDTO.ModelID, ModelDisplayName: agentDTO.ModelDisplayName, EnabledSkills: agentDTO.EnabledSkills, EnabledBuiltinTools: agentDTO.EnabledBuiltinTools, BuiltinToolsConfigured: agentDTO.BuiltinToolsConfigured, AvailableBuiltinTools: agentDTO.AvailableBuiltinTools, Sandbox: agentDTO.Sandbox, SandboxStatus: agentDTO.SandboxStatus, WorkspaceMode: string(project.WorkspaceMode), WorkspacePath: project.WorkspacePath, WorkspaceDisplayPath: display, CreatedAt: created.UTC().Format(time.RFC3339Nano), UpdatedAt: updated.UTC().Format(time.RFC3339Nano)}, nil
+	return ProjectDTO{ID: project.ID, AgentID: project.AgentID, Name: project.Name, Instruction: agentDTO.Instruction, ModelID: agentDTO.ModelID, ModelDisplayName: agentDTO.ModelDisplayName, ModelRoles: agentDTO.ModelRoles, EnabledSkills: agentDTO.EnabledSkills, EnabledBuiltinTools: agentDTO.EnabledBuiltinTools, BuiltinToolsConfigured: agentDTO.BuiltinToolsConfigured, AvailableBuiltinTools: agentDTO.AvailableBuiltinTools, Sandbox: agentDTO.Sandbox, SandboxStatus: agentDTO.SandboxStatus, WorkspaceMode: string(project.WorkspaceMode), WorkspacePath: project.WorkspacePath, WorkspaceDisplayPath: display, CreatedAt: created.UTC().Format(time.RFC3339Nano), UpdatedAt: updated.UTC().Format(time.RFC3339Nano)}, nil
 }

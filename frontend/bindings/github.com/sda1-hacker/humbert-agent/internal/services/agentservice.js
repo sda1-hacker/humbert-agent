@@ -129,6 +129,18 @@ export function SetAgentModel(id, request) {
 }
 
 /**
+ * SetAgentModelRoles 只修改 Utility/Memory/Vision 模型角色。
+ * @param {string} id
+ * @param {$models.AgentModelRolesRequest} request
+ * @returns {$CancellablePromise<$models.AgentDTO>}
+ */
+export function SetAgentModelRoles(id, request) {
+    return $Call.ByID(702103468, id, request).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType0($result);
+    }));
+}
+
+/**
  * SetAgentSkills 只修改 Agent Skill 选择。
  * @param {string} id
  * @param {$models.AgentSkillsRequest} request

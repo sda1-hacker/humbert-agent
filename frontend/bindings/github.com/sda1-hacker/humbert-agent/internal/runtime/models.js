@@ -18,6 +18,9 @@ import * as mcp$0 from "../mcp/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as memory$0 from "../memory/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as models$0 from "../models/models.js";
 
 /**
  * ActiveRunStatus 是当前 Session 活动 Turn 的安全只读投影。
@@ -648,6 +651,27 @@ export class RuntimeManifest {
              */
             this["modelRevision"] = 0;
         }
+        if (!("modelRole" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["modelRole"] = "";
+        }
+        if (!("modelCapabilities" in $$source)) {
+            /**
+             * @member
+             * @type {models$0.Capabilities}
+             */
+            this["modelCapabilities"] = (new models$0.Capabilities());
+        }
+        if (!("modelRoles" in $$source)) {
+            /**
+             * @member
+             * @type {RuntimeModelRolesManifest}
+             */
+            this["modelRoles"] = (new RuntimeModelRolesManifest());
+        }
         if (!("toolRevision" in $$source)) {
             /**
              * @member
@@ -744,44 +768,119 @@ export class RuntimeManifest {
      * @returns {RuntimeManifest}
      */
     static createFrom($$source = {}) {
-        const $$createField8_0 = $$createType7;
-        const $$createField10_0 = $$createType7;
-        const $$createField12_0 = $$createType9;
-        const $$createField13_0 = $$createType16;
-        const $$createField14_0 = $$createType11;
-        const $$createField15_0 = $$createType7;
-        const $$createField16_0 = $$createType7;
-        const $$createField17_0 = $$createType17;
-        const $$createField18_0 = $$createType18;
+        const $$createField8_0 = $$createType15;
+        const $$createField9_0 = $$createType16;
+        const $$createField11_0 = $$createType7;
+        const $$createField13_0 = $$createType7;
+        const $$createField15_0 = $$createType9;
+        const $$createField16_0 = $$createType18;
+        const $$createField17_0 = $$createType11;
+        const $$createField18_0 = $$createType7;
+        const $$createField19_0 = $$createType7;
+        const $$createField20_0 = $$createType19;
+        const $$createField21_0 = $$createType20;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("modelCapabilities" in $$parsedSource) {
+            $$parsedSource["modelCapabilities"] = $$createField8_0($$parsedSource["modelCapabilities"]);
+        }
+        if ("modelRoles" in $$parsedSource) {
+            $$parsedSource["modelRoles"] = $$createField9_0($$parsedSource["modelRoles"]);
+        }
         if ("builtinToolNames" in $$parsedSource) {
-            $$parsedSource["builtinToolNames"] = $$createField8_0($$parsedSource["builtinToolNames"]);
+            $$parsedSource["builtinToolNames"] = $$createField11_0($$parsedSource["builtinToolNames"]);
         }
         if ("skillNames" in $$parsedSource) {
-            $$parsedSource["skillNames"] = $$createField10_0($$parsedSource["skillNames"]);
+            $$parsedSource["skillNames"] = $$createField13_0($$parsedSource["skillNames"]);
         }
         if ("mcpServers" in $$parsedSource) {
-            $$parsedSource["mcpServers"] = $$createField12_0($$parsedSource["mcpServers"]);
+            $$parsedSource["mcpServers"] = $$createField15_0($$parsedSource["mcpServers"]);
         }
         if ("mcpUnavailable" in $$parsedSource) {
-            $$parsedSource["mcpUnavailable"] = $$createField13_0($$parsedSource["mcpUnavailable"]);
+            $$parsedSource["mcpUnavailable"] = $$createField16_0($$parsedSource["mcpUnavailable"]);
         }
         if ("mcpTools" in $$parsedSource) {
-            $$parsedSource["mcpTools"] = $$createField14_0($$parsedSource["mcpTools"]);
+            $$parsedSource["mcpTools"] = $$createField17_0($$parsedSource["mcpTools"]);
         }
         if ("mcpToolNames" in $$parsedSource) {
-            $$parsedSource["mcpToolNames"] = $$createField15_0($$parsedSource["mcpToolNames"]);
+            $$parsedSource["mcpToolNames"] = $$createField18_0($$parsedSource["mcpToolNames"]);
         }
         if ("exposedToolNames" in $$parsedSource) {
-            $$parsedSource["exposedToolNames"] = $$createField16_0($$parsedSource["exposedToolNames"]);
+            $$parsedSource["exposedToolNames"] = $$createField19_0($$parsedSource["exposedToolNames"]);
         }
         if ("workspace" in $$parsedSource) {
-            $$parsedSource["workspace"] = $$createField17_0($$parsedSource["workspace"]);
+            $$parsedSource["workspace"] = $$createField20_0($$parsedSource["workspace"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField18_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField21_0($$parsedSource["sandbox"]);
         }
         return new RuntimeManifest(/** @type {Partial<RuntimeManifest>} */($$parsedSource));
+    }
+}
+
+/**
+ * RuntimeModelRolesManifest 描述本次 Resolve 后各角色实际使用的模型。
+ * Utility/Memory 字段已经应用回退链；VisionModelID 为空表示未显式配置 Vision Role。
+ */
+export class RuntimeModelRolesManifest {
+    /**
+     * Creates a new RuntimeModelRolesManifest instance.
+     * @param {Partial<RuntimeModelRolesManifest>} [$$source = {}] - The source object to create the RuntimeModelRolesManifest.
+     */
+    constructor($$source = {}) {
+        if (!("chatModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["chatModelID"] = "";
+        }
+        if (!("utilityModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["utilityModelID"] = "";
+        }
+        if (!("memoryModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["memoryModelID"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["visionModelID"] = undefined;
+        }
+        if (!("activeModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["activeModelID"] = "";
+        }
+        if (!("activeRole" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["activeRole"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new RuntimeModelRolesManifest instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {RuntimeModelRolesManifest}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new RuntimeModelRolesManifest(/** @type {Partial<RuntimeModelRolesManifest>} */($$parsedSource));
     }
 }
 
@@ -993,7 +1092,9 @@ const $$createType11 = $Create.Array($$createType10);
 const $$createType12 = $Create.Nullable($$createType2);
 const $$createType13 = contextengine$0.CompactResult.createFrom;
 const $$createType14 = memory$0.RefreshResult.createFrom;
-const $$createType15 = mcp$0.RuntimeServerFailure.createFrom;
-const $$createType16 = $Create.Array($$createType15);
-const $$createType17 = RuntimeWorkspaceManifest.createFrom;
-const $$createType18 = RuntimeSandboxManifest.createFrom;
+const $$createType15 = models$0.Capabilities.createFrom;
+const $$createType16 = RuntimeModelRolesManifest.createFrom;
+const $$createType17 = mcp$0.RuntimeServerFailure.createFrom;
+const $$createType18 = $Create.Array($$createType17);
+const $$createType19 = RuntimeWorkspaceManifest.createFrom;
+const $$createType20 = RuntimeSandboxManifest.createFrom;

@@ -186,6 +186,11 @@ func normalizeCreateModelInput(
 		)
 	}
 
+	capabilities, err := normalizeCapabilityConfig(input.Capabilities)
+	if err != nil {
+		return CreateModelInput{}, err
+	}
+
 	return CreateModelInput{
 		ProviderID: providerID,
 
@@ -198,6 +203,8 @@ func normalizeCreateModelInput(
 		ContextWindow: contextWindow,
 
 		MaxOutputTokens: maxOutputTokens,
+
+		Capabilities: capabilities,
 
 		Enabled: input.Enabled,
 	}, nil

@@ -463,6 +463,8 @@ func (r *Registry) CreateModel(
 
 		MaxOutputTokens: normalized.MaxOutputTokens,
 
+		Capabilities: normalized.Capabilities,
+
 		Enabled: normalized.Enabled,
 
 		CreatedAt: now,
@@ -540,6 +542,9 @@ func (r *Registry) UpdateModel(
 	existing.MaxOutputTokens =
 		normalized.MaxOutputTokens
 
+	existing.Capabilities =
+		normalized.Capabilities
+
 	existing.Enabled =
 		normalized.Enabled
 
@@ -565,7 +570,11 @@ func (r *Registry) UpdateModel(
 	return existing, nil
 }
 
-// DeleteModel 删除尚未被 Agent Profile 或 Session 历史引用的模型。
+// DeleteModel 删除不再被当前 Agent Profile 的 Chat/Utility/Memory/Vision 角色引用的模型配置。
+//
+// 历史 Session 不构成删除阻塞条件：AssistantMessage 已经持久化实际 Provider/Model
+// 元数据，删除 models.json 中的配置不会破坏历史记录。只有当前 Agent 的任一模型角色
+// 仍指向该模型时才拒绝删除，避免产生悬空配置引用。
 func (r *Registry) DeleteModel(
 	ctx context.Context,
 	id string,
@@ -587,28 +596,11 @@ func (r *Registry) DeleteModel(
 		}
 		if agentCount > 0 {
 			return fmt.Errorf(
-				"%w: 当前仍有 %d 个 Agent 使用该模型，请先切换 Agent 默认模型",
+				"%w: 当前仍有 %d 个 Agent 在 Chat/Utility/Memory/Vision 角色中使用该模型，请先切换相关模型角色",
 				ErrModelInUse,
 				agentCount,
 			)
 		}
-	}
-
-	historyCount, err :=
-		r.store.CountHistoricalMessagesByModel(
-			ctx,
-			id,
-		)
-	if err != nil {
-		return err
-	}
-
-	if historyCount > 0 {
-		return fmt.Errorf(
-			"%w: 已有 %d 条 Assistant 历史消息使用该模型，请禁用模型而不是删除",
-			ErrModelInUse,
-			historyCount,
-		)
 	}
 
 	if err := r.store.DeleteModel(

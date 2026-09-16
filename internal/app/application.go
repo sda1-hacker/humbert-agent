@@ -235,7 +235,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		ctx,
 		cfg.Paths.ProvidersFile,
 		cfg.Paths.ModelsFile,
-		transcriptStore,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Model Store 失败: %w", err)

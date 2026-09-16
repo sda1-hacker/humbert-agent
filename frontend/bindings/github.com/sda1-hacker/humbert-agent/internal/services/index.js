@@ -26,6 +26,8 @@ export {
 export {
     AgentDTO,
     AgentModelRequest,
+    AgentModelRolesDTO,
+    AgentModelRolesRequest,
     AgentProfileRequest,
     AgentSecurityRequest,
     AgentSkillsRequest,
@@ -47,6 +49,8 @@ export {
     MCPToolDTO,
     MCPToolSelectionDTO,
     MessageDTO,
+    ModelCapabilitiesDTO,
+    ModelCapabilityConfigDTO,
     ModelDTO,
     ModelSettingsState,
     PermissionRuleDTO,

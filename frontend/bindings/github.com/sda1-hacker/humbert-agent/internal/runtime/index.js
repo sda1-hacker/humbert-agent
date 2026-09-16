@@ -11,6 +11,7 @@ export {
     ResolveApprovalResult,
     RunPhase,
     RuntimeManifest,
+    RuntimeModelRolesManifest,
     RuntimeSandboxManifest,
     RuntimeWorkspaceManifest,
     StartTurnResult

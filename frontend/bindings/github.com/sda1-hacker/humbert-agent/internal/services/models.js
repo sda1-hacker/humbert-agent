@@ -64,6 +64,13 @@ export class AgentDTO {
              */
             this["modelDisplayName"] = "";
         }
+        if (!("modelRoles" in $$source)) {
+            /**
+             * @member
+             * @type {AgentModelRolesDTO}
+             */
+            this["modelRoles"] = (new AgentModelRolesDTO());
+        }
         if (!("enabledSkills" in $$source)) {
             /**
              * @member
@@ -152,25 +159,29 @@ export class AgentDTO {
      */
     static createFrom($$source = {}) {
         const $$createField5_0 = $$createType0;
-        const $$createField6_0 = $$createType0;
-        const $$createField8_0 = $$createType2;
+        const $$createField6_0 = $$createType1;
+        const $$createField7_0 = $$createType1;
         const $$createField9_0 = $$createType3;
         const $$createField10_0 = $$createType4;
+        const $$createField11_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("modelRoles" in $$parsedSource) {
+            $$parsedSource["modelRoles"] = $$createField5_0($$parsedSource["modelRoles"]);
+        }
         if ("enabledSkills" in $$parsedSource) {
-            $$parsedSource["enabledSkills"] = $$createField5_0($$parsedSource["enabledSkills"]);
+            $$parsedSource["enabledSkills"] = $$createField6_0($$parsedSource["enabledSkills"]);
         }
         if ("enabledBuiltinTools" in $$parsedSource) {
-            $$parsedSource["enabledBuiltinTools"] = $$createField6_0($$parsedSource["enabledBuiltinTools"]);
+            $$parsedSource["enabledBuiltinTools"] = $$createField7_0($$parsedSource["enabledBuiltinTools"]);
         }
         if ("availableBuiltinTools" in $$parsedSource) {
-            $$parsedSource["availableBuiltinTools"] = $$createField8_0($$parsedSource["availableBuiltinTools"]);
+            $$parsedSource["availableBuiltinTools"] = $$createField9_0($$parsedSource["availableBuiltinTools"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField9_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField10_0($$parsedSource["sandbox"]);
         }
         if ("sandboxStatus" in $$parsedSource) {
-            $$parsedSource["sandboxStatus"] = $$createField10_0($$parsedSource["sandboxStatus"]);
+            $$parsedSource["sandboxStatus"] = $$createField11_0($$parsedSource["sandboxStatus"]);
         }
         return new AgentDTO(/** @type {Partial<AgentDTO>} */($$parsedSource));
     }
@@ -204,6 +215,96 @@ export class AgentModelRequest {
     static createFrom($$source = {}) {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new AgentModelRequest(/** @type {Partial<AgentModelRequest>} */($$parsedSource));
+    }
+}
+
+/**
+ * AgentModelRolesDTO 是 Agent 的可选辅助模型角色。Chat Model 仍由 ModelID 表示。
+ */
+export class AgentModelRolesDTO {
+    /**
+     * Creates a new AgentModelRolesDTO instance.
+     * @param {Partial<AgentModelRolesDTO>} [$$source = {}] - The source object to create the AgentModelRolesDTO.
+     */
+    constructor($$source = {}) {
+        if (!("utilityModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["utilityModelID"] = "";
+        }
+        if (!("memoryModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["memoryModelID"] = "";
+        }
+        if (!("visionModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["visionModelID"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentModelRolesDTO instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AgentModelRolesDTO}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AgentModelRolesDTO(/** @type {Partial<AgentModelRolesDTO>} */($$parsedSource));
+    }
+}
+
+/**
+ * AgentModelRolesRequest 只更新辅助模型角色。空字符串表示使用 Runtime 回退链。
+ */
+export class AgentModelRolesRequest {
+    /**
+     * Creates a new AgentModelRolesRequest instance.
+     * @param {Partial<AgentModelRolesRequest>} [$$source = {}] - The source object to create the AgentModelRolesRequest.
+     */
+    constructor($$source = {}) {
+        if (!("utilityModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["utilityModelID"] = "";
+        }
+        if (!("memoryModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["memoryModelID"] = "";
+        }
+        if (!("visionModelID" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["visionModelID"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new AgentModelRolesRequest instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {AgentModelRolesRequest}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new AgentModelRolesRequest(/** @type {Partial<AgentModelRolesRequest>} */($$parsedSource));
     }
 }
 
@@ -278,8 +379,8 @@ export class AgentSecurityRequest {
      * @returns {AgentSecurityRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType0;
-        const $$createField1_0 = $$createType3;
+        const $$createField0_0 = $$createType1;
+        const $$createField1_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("enabledBuiltinTools" in $$parsedSource) {
             $$parsedSource["enabledBuiltinTools"] = $$createField0_0($$parsedSource["enabledBuiltinTools"]);
@@ -317,7 +418,7 @@ export class AgentSkillsRequest {
      * @returns {AgentSkillsRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType0;
+        const $$createField0_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("enabledSkills" in $$parsedSource) {
             $$parsedSource["enabledSkills"] = $$createField0_0($$parsedSource["enabledSkills"]);
@@ -648,6 +749,13 @@ export class CreateAgentRequest {
              */
             this["modelID"] = "";
         }
+        if (!("modelRoles" in $$source)) {
+            /**
+             * @member
+             * @type {AgentModelRolesDTO}
+             */
+            this["modelRoles"] = (new AgentModelRolesDTO());
+        }
         if (!("enabledSkills" in $$source)) {
             /**
              * @member
@@ -701,17 +809,21 @@ export class CreateAgentRequest {
      */
     static createFrom($$source = {}) {
         const $$createField3_0 = $$createType0;
-        const $$createField7_0 = $$createType0;
-        const $$createField8_0 = $$createType3;
+        const $$createField4_0 = $$createType1;
+        const $$createField8_0 = $$createType1;
+        const $$createField9_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("modelRoles" in $$parsedSource) {
+            $$parsedSource["modelRoles"] = $$createField3_0($$parsedSource["modelRoles"]);
+        }
         if ("enabledSkills" in $$parsedSource) {
-            $$parsedSource["enabledSkills"] = $$createField3_0($$parsedSource["enabledSkills"]);
+            $$parsedSource["enabledSkills"] = $$createField4_0($$parsedSource["enabledSkills"]);
         }
         if ("enabledBuiltinTools" in $$parsedSource) {
-            $$parsedSource["enabledBuiltinTools"] = $$createField7_0($$parsedSource["enabledBuiltinTools"]);
+            $$parsedSource["enabledBuiltinTools"] = $$createField8_0($$parsedSource["enabledBuiltinTools"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField8_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField9_0($$parsedSource["sandbox"]);
         }
         return new CreateAgentRequest(/** @type {Partial<CreateAgentRequest>} */($$parsedSource));
     }
@@ -743,6 +855,13 @@ export class CreateProjectRequest {
              * @type {string}
              */
             this["modelID"] = "";
+        }
+        if (!("modelRoles" in $$source)) {
+            /**
+             * @member
+             * @type {AgentModelRolesDTO}
+             */
+            this["modelRoles"] = (new AgentModelRolesDTO());
         }
         if (!("enabledSkills" in $$source)) {
             /**
@@ -797,17 +916,21 @@ export class CreateProjectRequest {
      */
     static createFrom($$source = {}) {
         const $$createField3_0 = $$createType0;
-        const $$createField7_0 = $$createType0;
-        const $$createField8_0 = $$createType3;
+        const $$createField4_0 = $$createType1;
+        const $$createField8_0 = $$createType1;
+        const $$createField9_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("modelRoles" in $$parsedSource) {
+            $$parsedSource["modelRoles"] = $$createField3_0($$parsedSource["modelRoles"]);
+        }
         if ("enabledSkills" in $$parsedSource) {
-            $$parsedSource["enabledSkills"] = $$createField3_0($$parsedSource["enabledSkills"]);
+            $$parsedSource["enabledSkills"] = $$createField4_0($$parsedSource["enabledSkills"]);
         }
         if ("enabledBuiltinTools" in $$parsedSource) {
-            $$parsedSource["enabledBuiltinTools"] = $$createField7_0($$parsedSource["enabledBuiltinTools"]);
+            $$parsedSource["enabledBuiltinTools"] = $$createField8_0($$parsedSource["enabledBuiltinTools"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField8_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField9_0($$parsedSource["sandbox"]);
         }
         return new CreateProjectRequest(/** @type {Partial<CreateProjectRequest>} */($$parsedSource));
     }
@@ -1162,9 +1285,9 @@ export class MCPServerDTO {
      * @returns {MCPServerDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType0;
-        const $$createField8_0 = $$createType6;
-        const $$createField11_0 = $$createType8;
+        const $$createField6_0 = $$createType1;
+        const $$createField8_0 = $$createType7;
+        const $$createField11_0 = $$createType9;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("args" in $$parsedSource) {
             $$parsedSource["args"] = $$createField6_0($$parsedSource["args"]);
@@ -1276,9 +1399,9 @@ export class MCPServerRequest {
      * @returns {MCPServerRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType0;
-        const $$createField6_0 = $$createType10;
-        const $$createField10_0 = $$createType12;
+        const $$createField4_0 = $$createType1;
+        const $$createField6_0 = $$createType11;
+        const $$createField10_0 = $$createType13;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("args" in $$parsedSource) {
             $$parsedSource["args"] = $$createField4_0($$parsedSource["args"]);
@@ -1439,8 +1562,8 @@ export class MCPToolDTO {
      * @returns {MCPToolDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType13;
-        const $$createField4_0 = $$createType13;
+        const $$createField3_0 = $$createType14;
+        const $$createField4_0 = $$createType14;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("inputSchema" in $$parsedSource) {
             $$parsedSource["inputSchema"] = $$createField3_0($$parsedSource["inputSchema"]);
@@ -1485,7 +1608,7 @@ export class MCPToolSelectionDTO {
      * @returns {MCPToolSelectionDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType0;
+        const $$createField1_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("tools" in $$parsedSource) {
             $$parsedSource["tools"] = $$createField1_0($$parsedSource["tools"]);
@@ -1572,8 +1695,8 @@ export class MessageDTO {
      * @returns {MessageDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType13;
-        const $$createField6_0 = $$createType15;
+        const $$createField5_0 = $$createType14;
+        const $$createField6_0 = $$createType16;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadata" in $$parsedSource) {
             $$parsedSource["metadata"] = $$createField5_0($$parsedSource["metadata"]);
@@ -1582,6 +1705,139 @@ export class MessageDTO {
             $$parsedSource["attachments"] = $$createField6_0($$parsedSource["attachments"]);
         }
         return new MessageDTO(/** @type {Partial<MessageDTO>} */($$parsedSource));
+    }
+}
+
+/**
+ * ModelCapabilitiesDTO 是 Runtime 经过 Auto 推断 + Override 后的有效能力。
+ */
+export class ModelCapabilitiesDTO {
+    /**
+     * Creates a new ModelCapabilitiesDTO instance.
+     * @param {Partial<ModelCapabilitiesDTO>} [$$source = {}] - The source object to create the ModelCapabilitiesDTO.
+     */
+    constructor($$source = {}) {
+        if (!("tools" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["tools"] = false;
+        }
+        if (!("vision" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["vision"] = false;
+        }
+        if (!("files" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["files"] = false;
+        }
+        if (!("reasoning" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["reasoning"] = false;
+        }
+        if (!("json" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["json"] = false;
+        }
+        if (!("audio" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["audio"] = false;
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ModelCapabilitiesDTO instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ModelCapabilitiesDTO}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ModelCapabilitiesDTO(/** @type {Partial<ModelCapabilitiesDTO>} */($$parsedSource));
+    }
+}
+
+/**
+ * ModelCapabilityConfigDTO 是用户对模型能力的三态覆盖配置。
+ * 空值在领域层按 auto 处理；Desktop 始终返回规范化后的 auto/enabled/disabled。
+ */
+export class ModelCapabilityConfigDTO {
+    /**
+     * Creates a new ModelCapabilityConfigDTO instance.
+     * @param {Partial<ModelCapabilityConfigDTO>} [$$source = {}] - The source object to create the ModelCapabilityConfigDTO.
+     */
+    constructor($$source = {}) {
+        if (!("tools" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["tools"] = "";
+        }
+        if (!("vision" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["vision"] = "";
+        }
+        if (!("files" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["files"] = "";
+        }
+        if (!("reasoning" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["reasoning"] = "";
+        }
+        if (!("json" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["json"] = "";
+        }
+        if (!("audio" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["audio"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new ModelCapabilityConfigDTO instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {ModelCapabilityConfigDTO}
+     */
+    static createFrom($$source = {}) {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new ModelCapabilityConfigDTO(/** @type {Partial<ModelCapabilityConfigDTO>} */($$parsedSource));
     }
 }
 
@@ -1657,6 +1913,20 @@ export class ModelDTO {
              */
             this["maxOutputTokens"] = 0;
         }
+        if (!("capabilityConfig" in $$source)) {
+            /**
+             * @member
+             * @type {ModelCapabilityConfigDTO}
+             */
+            this["capabilityConfig"] = (new ModelCapabilityConfigDTO());
+        }
+        if (!("capabilities" in $$source)) {
+            /**
+             * @member
+             * @type {ModelCapabilitiesDTO}
+             */
+            this["capabilities"] = (new ModelCapabilitiesDTO());
+        }
         if (!("enabled" in $$source)) {
             /**
              * @member
@@ -1688,7 +1958,15 @@ export class ModelDTO {
      * @returns {ModelDTO}
      */
     static createFrom($$source = {}) {
+        const $$createField9_0 = $$createType17;
+        const $$createField10_0 = $$createType18;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("capabilityConfig" in $$parsedSource) {
+            $$parsedSource["capabilityConfig"] = $$createField9_0($$parsedSource["capabilityConfig"]);
+        }
+        if ("capabilities" in $$parsedSource) {
+            $$parsedSource["capabilities"] = $$createField10_0($$parsedSource["capabilities"]);
+        }
         return new ModelDTO(/** @type {Partial<ModelDTO>} */($$parsedSource));
     }
 }
@@ -1733,8 +2011,8 @@ export class ModelSettingsState {
      * @returns {ModelSettingsState}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType17;
-        const $$createField2_0 = $$createType19;
+        const $$createField1_0 = $$createType20;
+        const $$createField2_0 = $$createType22;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("providers" in $$parsedSource) {
             $$parsedSource["providers"] = $$createField1_0($$parsedSource["providers"]);
@@ -1979,8 +2257,8 @@ export class PermissionStateDTO {
      * @returns {PermissionStateDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType21;
-        const $$createField6_0 = $$createType21;
+        const $$createField5_0 = $$createType24;
+        const $$createField6_0 = $$createType24;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("persistentRules" in $$parsedSource) {
             $$parsedSource["persistentRules"] = $$createField5_0($$parsedSource["persistentRules"]);
@@ -2044,6 +2322,13 @@ export class ProjectDTO {
              * @type {string}
              */
             this["modelDisplayName"] = "";
+        }
+        if (!("modelRoles" in $$source)) {
+            /**
+             * @member
+             * @type {AgentModelRolesDTO}
+             */
+            this["modelRoles"] = (new AgentModelRolesDTO());
         }
         if (!("enabledSkills" in $$source)) {
             /**
@@ -2133,25 +2418,29 @@ export class ProjectDTO {
      */
     static createFrom($$source = {}) {
         const $$createField6_0 = $$createType0;
-        const $$createField7_0 = $$createType0;
-        const $$createField9_0 = $$createType2;
+        const $$createField7_0 = $$createType1;
+        const $$createField8_0 = $$createType1;
         const $$createField10_0 = $$createType3;
         const $$createField11_0 = $$createType4;
+        const $$createField12_0 = $$createType5;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("modelRoles" in $$parsedSource) {
+            $$parsedSource["modelRoles"] = $$createField6_0($$parsedSource["modelRoles"]);
+        }
         if ("enabledSkills" in $$parsedSource) {
-            $$parsedSource["enabledSkills"] = $$createField6_0($$parsedSource["enabledSkills"]);
+            $$parsedSource["enabledSkills"] = $$createField7_0($$parsedSource["enabledSkills"]);
         }
         if ("enabledBuiltinTools" in $$parsedSource) {
-            $$parsedSource["enabledBuiltinTools"] = $$createField7_0($$parsedSource["enabledBuiltinTools"]);
+            $$parsedSource["enabledBuiltinTools"] = $$createField8_0($$parsedSource["enabledBuiltinTools"]);
         }
         if ("availableBuiltinTools" in $$parsedSource) {
-            $$parsedSource["availableBuiltinTools"] = $$createField9_0($$parsedSource["availableBuiltinTools"]);
+            $$parsedSource["availableBuiltinTools"] = $$createField10_0($$parsedSource["availableBuiltinTools"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField10_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField11_0($$parsedSource["sandbox"]);
         }
         if ("sandboxStatus" in $$parsedSource) {
-            $$parsedSource["sandboxStatus"] = $$createField11_0($$parsedSource["sandboxStatus"]);
+            $$parsedSource["sandboxStatus"] = $$createField12_0($$parsedSource["sandboxStatus"]);
         }
         return new ProjectDTO(/** @type {Partial<ProjectDTO>} */($$parsedSource));
     }
@@ -2358,7 +2647,7 @@ export class SandboxDiagnosticsDTO {
      * @returns {SandboxDiagnosticsDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType23;
+        const $$createField1_0 = $$createType26;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("checks" in $$parsedSource) {
             $$parsedSource["checks"] = $$createField1_0($$parsedSource["checks"]);
@@ -2414,7 +2703,7 @@ export class SandboxPolicyDTO {
      * @returns {SandboxPolicyDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType0;
+        const $$createField1_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("additionalWritePaths" in $$parsedSource) {
             $$parsedSource["additionalWritePaths"] = $$createField1_0($$parsedSource["additionalWritePaths"]);
@@ -2484,7 +2773,7 @@ export class SandboxSettingsRequest {
      * @returns {SandboxSettingsRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType0;
+        const $$createField5_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("shellAllowedCommands" in $$parsedSource) {
             $$parsedSource["shellAllowedCommands"] = $$createField5_0($$parsedSource["shellAllowedCommands"]);
@@ -2610,7 +2899,7 @@ export class SandboxStatusDTO {
      * @returns {SandboxStatusDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField12_0 = $$createType0;
+        const $$createField12_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("shellAllowedCommands" in $$parsedSource) {
             $$parsedSource["shellAllowedCommands"] = $$createField12_0($$parsedSource["shellAllowedCommands"]);
@@ -2670,6 +2959,13 @@ export class SaveModelRequest {
              */
             this["maxOutputTokens"] = 0;
         }
+        if (!("capabilityConfig" in $$source)) {
+            /**
+             * @member
+             * @type {ModelCapabilityConfigDTO}
+             */
+            this["capabilityConfig"] = (new ModelCapabilityConfigDTO());
+        }
         if (!("enabled" in $$source)) {
             /**
              * @member
@@ -2687,7 +2983,11 @@ export class SaveModelRequest {
      * @returns {SaveModelRequest}
      */
     static createFrom($$source = {}) {
+        const $$createField6_0 = $$createType17;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("capabilityConfig" in $$parsedSource) {
+            $$parsedSource["capabilityConfig"] = $$createField6_0($$parsedSource["capabilityConfig"]);
+        }
         return new SaveModelRequest(/** @type {Partial<SaveModelRequest>} */($$parsedSource));
     }
 }
@@ -2803,7 +3103,7 @@ export class SkillAgentDTO {
      * @returns {SkillAgentDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType0;
+        const $$createField2_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("enabledSkills" in $$parsedSource) {
             $$parsedSource["enabledSkills"] = $$createField2_0($$parsedSource["enabledSkills"]);
@@ -3019,11 +3319,11 @@ export class SkillDTO {
      * @returns {SkillDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType24;
-        const $$createField11_0 = $$createType26;
-        const $$createField12_0 = $$createType28;
-        const $$createField24_0 = $$createType29;
-        const $$createField25_0 = $$createType31;
+        const $$createField7_0 = $$createType27;
+        const $$createField11_0 = $$createType29;
+        const $$createField12_0 = $$createType31;
+        const $$createField24_0 = $$createType32;
+        const $$createField25_0 = $$createType34;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadata" in $$parsedSource) {
             $$parsedSource["metadata"] = $$createField7_0($$parsedSource["metadata"]);
@@ -3213,11 +3513,11 @@ export class SkillDetailDTO {
      * @returns {SkillDetailDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType24;
-        const $$createField11_0 = $$createType26;
-        const $$createField12_0 = $$createType28;
-        const $$createField19_0 = $$createType29;
-        const $$createField20_0 = $$createType33;
+        const $$createField7_0 = $$createType27;
+        const $$createField11_0 = $$createType29;
+        const $$createField12_0 = $$createType31;
+        const $$createField19_0 = $$createType32;
+        const $$createField20_0 = $$createType36;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadata" in $$parsedSource) {
             $$parsedSource["metadata"] = $$createField7_0($$parsedSource["metadata"]);
@@ -3421,8 +3721,8 @@ export class SkillDiscoveryCandidateDTO {
      * @returns {SkillDiscoveryCandidateDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField15_0 = $$createType26;
-        const $$createField16_0 = $$createType28;
+        const $$createField15_0 = $$createType29;
+        const $$createField16_0 = $$createType31;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("diagnostics" in $$parsedSource) {
             $$parsedSource["diagnostics"] = $$createField15_0($$parsedSource["diagnostics"]);
@@ -3481,7 +3781,7 @@ export class SkillDiscoveryDTO {
      * @returns {SkillDiscoveryDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType35;
+        const $$createField3_0 = $$createType38;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("candidates" in $$parsedSource) {
             $$parsedSource["candidates"] = $$createField3_0($$parsedSource["candidates"]);
@@ -3818,9 +4118,9 @@ export class SkillStateDTO {
      * @returns {SkillStateDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType0;
-        const $$createField3_0 = $$createType31;
-        const $$createField4_0 = $$createType37;
+        const $$createField2_0 = $$createType1;
+        const $$createField3_0 = $$createType34;
+        const $$createField4_0 = $$createType40;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("sourceResolvers" in $$parsedSource) {
             $$parsedSource["sourceResolvers"] = $$createField2_0($$parsedSource["sourceResolvers"]);
@@ -3955,7 +4255,7 @@ export class SkillUpdateResultDTO {
      * @returns {SkillUpdateResultDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType29;
+        const $$createField4_0 = $$createType32;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("source" in $$parsedSource) {
             $$parsedSource["source"] = $$createField4_0($$parsedSource["source"]);
@@ -4011,7 +4311,7 @@ export class StartTurnRequest {
      * @returns {StartTurnRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType39;
+        const $$createField2_0 = $$createType42;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("attachments" in $$parsedSource) {
             $$parsedSource["attachments"] = $$createField2_0($$parsedSource["attachments"]);
@@ -4095,6 +4395,20 @@ export class UpdateAgentRequest {
              */
             this["modelID"] = "";
         }
+        if (!("modelRolesConfigured" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["modelRolesConfigured"] = false;
+        }
+        if (!("modelRoles" in $$source)) {
+            /**
+             * @member
+             * @type {AgentModelRolesDTO}
+             */
+            this["modelRoles"] = (new AgentModelRolesDTO());
+        }
         if (!("enabledSkills" in $$source)) {
             /**
              * @member
@@ -4157,18 +4471,22 @@ export class UpdateAgentRequest {
      * @returns {UpdateAgentRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType0;
-        const $$createField7_0 = $$createType0;
-        const $$createField9_0 = $$createType3;
+        const $$createField4_0 = $$createType0;
+        const $$createField5_0 = $$createType1;
+        const $$createField9_0 = $$createType1;
+        const $$createField11_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("modelRoles" in $$parsedSource) {
+            $$parsedSource["modelRoles"] = $$createField4_0($$parsedSource["modelRoles"]);
+        }
         if ("enabledSkills" in $$parsedSource) {
-            $$parsedSource["enabledSkills"] = $$createField3_0($$parsedSource["enabledSkills"]);
+            $$parsedSource["enabledSkills"] = $$createField5_0($$parsedSource["enabledSkills"]);
         }
         if ("enabledBuiltinTools" in $$parsedSource) {
-            $$parsedSource["enabledBuiltinTools"] = $$createField7_0($$parsedSource["enabledBuiltinTools"]);
+            $$parsedSource["enabledBuiltinTools"] = $$createField9_0($$parsedSource["enabledBuiltinTools"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField9_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField11_0($$parsedSource["sandbox"]);
         }
         return new UpdateAgentRequest(/** @type {Partial<UpdateAgentRequest>} */($$parsedSource));
     }
@@ -4263,6 +4581,13 @@ export class UpdateProjectRequest {
              */
             this["modelID"] = "";
         }
+        if (!("modelRoles" in $$source)) {
+            /**
+             * @member
+             * @type {AgentModelRolesDTO}
+             */
+            this["modelRoles"] = (new AgentModelRolesDTO());
+        }
         if (!("enabledSkills" in $$source)) {
             /**
              * @member
@@ -4309,17 +4634,21 @@ export class UpdateProjectRequest {
      */
     static createFrom($$source = {}) {
         const $$createField3_0 = $$createType0;
-        const $$createField6_0 = $$createType0;
-        const $$createField7_0 = $$createType3;
+        const $$createField4_0 = $$createType1;
+        const $$createField7_0 = $$createType1;
+        const $$createField8_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("modelRoles" in $$parsedSource) {
+            $$parsedSource["modelRoles"] = $$createField3_0($$parsedSource["modelRoles"]);
+        }
         if ("enabledSkills" in $$parsedSource) {
-            $$parsedSource["enabledSkills"] = $$createField3_0($$parsedSource["enabledSkills"]);
+            $$parsedSource["enabledSkills"] = $$createField4_0($$parsedSource["enabledSkills"]);
         }
         if ("enabledBuiltinTools" in $$parsedSource) {
-            $$parsedSource["enabledBuiltinTools"] = $$createField6_0($$parsedSource["enabledBuiltinTools"]);
+            $$parsedSource["enabledBuiltinTools"] = $$createField7_0($$parsedSource["enabledBuiltinTools"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField7_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField8_0($$parsedSource["sandbox"]);
         }
         return new UpdateProjectRequest(/** @type {Partial<UpdateProjectRequest>} */($$parsedSource));
     }
@@ -4385,43 +4714,46 @@ export class UpdateProviderRequest {
 }
 
 // Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = BuiltinToolDTO.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = SandboxPolicyDTO.createFrom;
-const $$createType4 = SandboxStatusDTO.createFrom;
-const $$createType5 = MCPStdioEnvDTO.createFrom;
-const $$createType6 = $Create.Array($$createType5);
-const $$createType7 = MCPHTTPHeaderDTO.createFrom;
-const $$createType8 = $Create.Array($$createType7);
-const $$createType9 = MCPStdioEnvRequest.createFrom;
-const $$createType10 = $Create.Array($$createType9);
-const $$createType11 = MCPHTTPHeaderRequest.createFrom;
-const $$createType12 = $Create.Array($$createType11);
-const $$createType13 = $Create.Map($Create.Any, $Create.Any);
-const $$createType14 = AttachmentDTO.createFrom;
-const $$createType15 = $Create.Array($$createType14);
-const $$createType16 = ProviderDTO.createFrom;
-const $$createType17 = $Create.Array($$createType16);
-const $$createType18 = ModelDTO.createFrom;
-const $$createType19 = $Create.Array($$createType18);
-const $$createType20 = PermissionRuleDTO.createFrom;
-const $$createType21 = $Create.Array($$createType20);
-const $$createType22 = SandboxDiagnosticCheckDTO.createFrom;
-const $$createType23 = $Create.Array($$createType22);
-const $$createType24 = $Create.Map($Create.Any, $Create.Any);
-const $$createType25 = SkillDiagnosticDTO.createFrom;
+const $$createType0 = AgentModelRolesDTO.createFrom;
+const $$createType1 = $Create.Array($Create.Any);
+const $$createType2 = BuiltinToolDTO.createFrom;
+const $$createType3 = $Create.Array($$createType2);
+const $$createType4 = SandboxPolicyDTO.createFrom;
+const $$createType5 = SandboxStatusDTO.createFrom;
+const $$createType6 = MCPStdioEnvDTO.createFrom;
+const $$createType7 = $Create.Array($$createType6);
+const $$createType8 = MCPHTTPHeaderDTO.createFrom;
+const $$createType9 = $Create.Array($$createType8);
+const $$createType10 = MCPStdioEnvRequest.createFrom;
+const $$createType11 = $Create.Array($$createType10);
+const $$createType12 = MCPHTTPHeaderRequest.createFrom;
+const $$createType13 = $Create.Array($$createType12);
+const $$createType14 = $Create.Map($Create.Any, $Create.Any);
+const $$createType15 = AttachmentDTO.createFrom;
+const $$createType16 = $Create.Array($$createType15);
+const $$createType17 = ModelCapabilityConfigDTO.createFrom;
+const $$createType18 = ModelCapabilitiesDTO.createFrom;
+const $$createType19 = ProviderDTO.createFrom;
+const $$createType20 = $Create.Array($$createType19);
+const $$createType21 = ModelDTO.createFrom;
+const $$createType22 = $Create.Array($$createType21);
+const $$createType23 = PermissionRuleDTO.createFrom;
+const $$createType24 = $Create.Array($$createType23);
+const $$createType25 = SandboxDiagnosticCheckDTO.createFrom;
 const $$createType26 = $Create.Array($$createType25);
-const $$createType27 = SkillScriptRuntimeDTO.createFrom;
-const $$createType28 = $Create.Array($$createType27);
-const $$createType29 = SkillSourceDTO.createFrom;
-const $$createType30 = SkillAgentDTO.createFrom;
+const $$createType27 = $Create.Map($Create.Any, $Create.Any);
+const $$createType28 = SkillDiagnosticDTO.createFrom;
+const $$createType29 = $Create.Array($$createType28);
+const $$createType30 = SkillScriptRuntimeDTO.createFrom;
 const $$createType31 = $Create.Array($$createType30);
-const $$createType32 = SkillFileDTO.createFrom;
-const $$createType33 = $Create.Array($$createType32);
-const $$createType34 = SkillDiscoveryCandidateDTO.createFrom;
-const $$createType35 = $Create.Array($$createType34);
-const $$createType36 = SkillDTO.createFrom;
-const $$createType37 = $Create.Array($$createType36);
-const $$createType38 = AttachmentRequest.createFrom;
-const $$createType39 = $Create.Array($$createType38);
+const $$createType32 = SkillSourceDTO.createFrom;
+const $$createType33 = SkillAgentDTO.createFrom;
+const $$createType34 = $Create.Array($$createType33);
+const $$createType35 = SkillFileDTO.createFrom;
+const $$createType36 = $Create.Array($$createType35);
+const $$createType37 = SkillDiscoveryCandidateDTO.createFrom;
+const $$createType38 = $Create.Array($$createType37);
+const $$createType39 = SkillDTO.createFrom;
+const $$createType40 = $Create.Array($$createType39);
+const $$createType41 = AttachmentRequest.createFrom;
+const $$createType42 = $Create.Array($$createType41);

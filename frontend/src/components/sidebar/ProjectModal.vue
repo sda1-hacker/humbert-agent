@@ -47,6 +47,9 @@ import SkillSelector
 import AgentSecurityEditor
   from "../agents/AgentSecurityEditor.vue";
 
+import ModelCapabilityBadges
+  from "../models/ModelCapabilityBadges.vue";
+
 const props =
     defineProps({
       project: {
@@ -102,6 +105,12 @@ const form =
 
       modelID: "",
 
+      modelRoles: {
+        utilityModelID: "",
+        memoryModelID: "",
+        visionModelID: "",
+      },
+
       enabledSkills: [],
 
       workspaceMode:
@@ -142,6 +151,17 @@ const availableModels =
                 form.modelID,
         ),
     );
+
+function roleModelOptions(selectedID) {
+  return modelStore.models.filter((model) => model.enabled || model.id === selectedID);
+}
+
+function modelForID(id) {
+  if (!id) return null;
+  return modelStore.modelByID(id);
+}
+
+const selectedChatModel = computed(() => modelForID(form.modelID));
 
 const modalTitle =
     computed(() =>
@@ -198,6 +218,12 @@ function resetForm(project) {
                   .enabledModels[0]
                   ?.id ?? "",
 
+          modelRoles: {
+            utilityModelID: "",
+            memoryModelID: "",
+            visionModelID: "",
+          },
+
           enabledSkills: [],
 
           workspaceMode:
@@ -242,6 +268,12 @@ function resetForm(project) {
 
         modelID:
         project.modelID,
+
+        modelRoles: {
+          utilityModelID: project.modelRoles?.utilityModelID ?? "",
+          memoryModelID: project.modelRoles?.memoryModelID ?? "",
+          visionModelID: project.modelRoles?.visionModelID ?? "",
+        },
 
         enabledSkills:
             Array.isArray(project.enabledSkills)
@@ -451,6 +483,12 @@ async function save() {
 
       modelID:
       form.modelID,
+
+      modelRoles: {
+        utilityModelID: form.modelRoles.utilityModelID || "",
+        memoryModelID: form.modelRoles.memoryModelID || "",
+        visionModelID: form.modelRoles.visionModelID || "",
+      },
 
       enabledSkills:
           [...form.enabledSkills],
@@ -694,12 +732,12 @@ async function removeProject() {
             />
           </a-form-item>
 
-          <a-form-item label="默认模型">
+          <a-form-item label="Chat 模型">
             <a-select
                 v-model="form.modelID"
                 allow-clear
                 allow-search
-                placeholder="请选择模型"
+                placeholder="请选择主对话模型"
             >
               <a-option
                   v-for="model in availableModels"
@@ -710,10 +748,64 @@ async function removeProject() {
                 {{ model.displayName }} · {{ model.providerName }}{{ model.enabled ? "" : "（已禁用）" }}
               </a-option>
             </a-select>
+            <template #extra>
+              <div class="model-role-extra">
+                <span>普通对话和默认 Runtime 使用该模型。</span>
+                <ModelCapabilityBadges v-if="selectedChatModel" :capabilities="selectedChatModel.capabilities" compact/>
+              </div>
+            </template>
           </a-form-item>
 
+          <div class="model-role-panel">
+            <div class="model-role-panel__intro">
+              <strong>模型角色</strong>
+              <span>留空会自动回退：Utility → Chat，Memory → Utility → Chat；Vision 只在 Chat 无法处理当前图片/文件输入时使用。</span>
+            </div>
+            <div class="model-role-grid">
+              <a-form-item label="Utility 模型">
+                <a-select v-model="form.modelRoles.utilityModelID" allow-clear allow-search
+                          placeholder="回退 Chat 模型">
+                  <a-option
+                      v-for="model in roleModelOptions(form.modelRoles.utilityModelID)"
+                      :key="model.id" :value="model.id" :disabled="!model.enabled"
+                  >
+                    {{ model.displayName }} · {{ model.providerName }}{{ model.enabled ? "" : "（已禁用）" }}
+                  </a-option>
+                </a-select>
+                <template #extra>Context 压缩等辅助任务优先使用；窗口不足时 Runtime 会回退当前执行模型。</template>
+              </a-form-item>
+
+              <a-form-item label="Memory 模型">
+                <a-select v-model="form.modelRoles.memoryModelID" allow-clear allow-search
+                          placeholder="回退 Utility / Chat">
+                  <a-option
+                      v-for="model in roleModelOptions(form.modelRoles.memoryModelID)"
+                      :key="model.id" :value="model.id" :disabled="!model.enabled"
+                  >
+                    {{ model.displayName }} · {{ model.providerName }}{{ model.enabled ? "" : "（已禁用）" }}
+                  </a-option>
+                </a-select>
+                <template #extra>Session Memory 摘要与刷新使用该模型。</template>
+              </a-form-item>
+
+              <a-form-item label="Vision 模型">
+                <a-select v-model="form.modelRoles.visionModelID" allow-clear allow-search
+                          placeholder="仅 Chat 不满足附件能力时使用">
+                  <a-option
+                      v-for="model in roleModelOptions(form.modelRoles.visionModelID)"
+                      :key="model.id" :value="model.id" :disabled="!model.enabled"
+                  >
+                    {{ model.displayName }} · {{ model.providerName }}{{ model.enabled ? "" : "（已禁用）" }}
+                  </a-option>
+                </a-select>
+                <template #extra>用于补足 Chat 的 Vision / Files 能力；若 Agent 暴露工具，该模型也必须支持 Tools。
+                </template>
+              </a-form-item>
+            </div>
+          </div>
+
           <a-form-item label="Skills">
-            <SkillSelector v-model="form.enabledSkills" />
+            <SkillSelector v-model="form.enabledSkills"/>
           </a-form-item>
 
           <a-form-item label="项目目录">
@@ -734,7 +826,9 @@ async function removeProject() {
                     :loading="selectingWorkspace"
                     @click="chooseWorkspace"
                 >
-                  <template #icon><IconFolder /></template>
+                  <template #icon>
+                    <IconFolder/>
+                  </template>
                   {{ form.workspacePath ? "重新选择" : "选择目录" }}
                 </a-button>
               </div>
@@ -794,7 +888,9 @@ async function removeProject() {
             :disabled="saving"
             @click="removeProject"
         >
-          <template #icon><IconDelete /></template>
+          <template #icon>
+            <IconDelete/>
+          </template>
           删除项目
         </a-button>
         <span v-else></span>
@@ -847,6 +943,43 @@ async function removeProject() {
   line-height: 1.6;
 }
 
+.model-role-extra {
+  display: grid;
+  gap: 6px;
+}
+
+.model-role-panel {
+  margin-bottom: 18px;
+  padding: 12px;
+  border: 1px solid var(--h-border);
+  border-radius: 9px;
+  background: var(--h-surface-soft, var(--h-surface));
+}
+
+.model-role-panel__intro {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.model-role-panel__intro strong {
+  color: var(--h-text);
+  font-size: 12px;
+}
+
+.model-role-panel__intro span,
+.model-role-panel :deep(.arco-form-item-extra) {
+  color: var(--h-text-muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.model-role-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+
 .workspace-editor {
   width: 100%;
   padding: 12px;
@@ -897,6 +1030,10 @@ async function removeProject() {
 }
 
 @media (max-width: 760px) {
+  .model-role-grid {
+    grid-template-columns: 1fr;
+  }
+
   .project-settings-tabs {
     min-height: 360px;
   }

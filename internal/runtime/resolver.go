@@ -44,6 +44,8 @@ type resolvedContextBase struct {
 
 	model models.RuntimeSnapshot
 
+	modelRoles resolvedModelRoles
+
 	workspace workspace.Workspace
 
 	sandbox sandbox.EffectivePolicy
@@ -138,21 +140,27 @@ func (r *Resolver) ResolveTurn(
 	runID string,
 	sessionID string,
 ) (*Snapshot, error) {
-	base, err := r.resolveContextBase(ctx, requestID, runID, sessionID, false)
+	requirements, err := r.currentTurnRequirements(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	base, err := r.resolveContextBase(ctx, requestID, runID, sessionID, false, requirements)
 	if err != nil {
 		return nil, err
 	}
 
-	contextSnapshot, err := r.contextEngine.Build(ctx, contextengine.BuildRequest{
-		SessionID:         base.session.ID,
-		Instruction:       base.baseInstruction,
-		ContextWindow:     base.model.ContextWindow,
-		MaxOutputTokens:   base.model.MaxOutputTokens,
-		ToolTokenEstimate: base.toolTokenEstimate,
-		ReasoningPolicy:   contextengine.ReasoningReplayAuto,
-	})
+	contextSnapshot, err := r.buildContextSnapshot(ctx, base)
 	if err != nil {
 		return nil, fmt.Errorf("构建 Session Context 失败: %w", err)
+	}
+	contextSnapshot, err = r.alignModelToContext(ctx, &base, contextSnapshot)
+	if err != nil {
+		return nil, err
+	}
+
+	manifest := runtimeManifestFromBase(base)
+	if err := validateToolCapability(base.model, base.modelRoles.activeRole, manifest.ExposedToolNames); err != nil {
+		return nil, err
 	}
 
 	preRunCompacted := false
@@ -170,7 +178,7 @@ func (r *Resolver) ResolveTurn(
 	contextHandler, err := r.contextEngine.NewMidRunHandler(
 		base.session.ID,
 		contextSnapshot.Instruction,
-		base.model.Instance,
+		compactionModel(base.modelRoles).Instance,
 		budget,
 		base.toolTokenEstimate,
 	)
@@ -186,10 +194,6 @@ func (r *Resolver) ResolveTurn(
 		handlers = append(handlers, base.skills.Middleware())
 	}
 	handlers = append(handlers, contextHandler)
-
-	// Turn Snapshot 与 ContextOverview 共用同一个 Manifest 投影函数，保证 UI 看到的能力
-	// 身份、Revision 与真正执行时冻结的字段不会随着后续演进产生两套拼装逻辑。
-	manifest := runtimeManifestFromBase(base)
 
 	providerMessages, err := r.sessions.HydrateMessages(ctx, base.session.ID, contextSnapshot.Messages)
 	if err != nil {
@@ -208,6 +212,10 @@ func (r *Resolver) ResolveTurn(
 		Instruction:       contextSnapshot.Instruction,
 		ModelID:           manifest.ModelID,
 		ModelRevision:     manifest.ModelRevision,
+		ModelRole:         base.modelRoles.activeRole,
+		ModelCapabilities: base.model.Capabilities,
+		CompactionModel:   compactionModel(base.modelRoles).Instance,
+		MemoryModel:       base.modelRoles.memory.Instance,
 		ToolRevision:      manifest.ToolRevision,
 		BuiltinToolNames:  append([]string(nil), manifest.BuiltinToolNames...),
 		SkillRevision:     manifest.SkillRevision,
@@ -240,6 +248,55 @@ func (r *Resolver) ResolveTurn(
 	}, nil
 }
 
+// buildContextSnapshot 使用当前 base.model 的预算构建本次真实 Provider Context。
+func (r *Resolver) buildContextSnapshot(ctx context.Context, base resolvedContextBase) (contextengine.Snapshot, error) {
+	return r.contextEngine.Build(ctx, contextengine.BuildRequest{
+		SessionID:         base.session.ID,
+		Instruction:       base.baseInstruction,
+		ContextWindow:     base.model.ContextWindow,
+		MaxOutputTokens:   base.model.MaxOutputTokens,
+		ToolTokenEstimate: base.toolTokenEstimate,
+		ReasoningPolicy:   contextengine.ReasoningReplayAuto,
+	})
+}
+
+// alignModelToContext 让模型选择与 ContextEngine 最终会发送的消息保持一致。
+// 当前输入是纯文本时，历史图片/文件仍可能留在 Context 中；此时必须继续使用
+// 能处理这些历史多模态内容的 Vision Role。若切换模型改变了 Context Window，则重新
+// Build 一次，并对重建后新增进入窗口的历史消息再次做 fail-closed 能力校验。
+func (r *Resolver) alignModelToContext(
+	ctx context.Context,
+	base *resolvedContextBase,
+	snapshot contextengine.Snapshot,
+) (contextengine.Snapshot, error) {
+	if base == nil {
+		return contextengine.Snapshot{}, errors.New("Runtime Context Base 不能为空")
+	}
+
+	requirements := requirementsFromMessages(snapshot.Messages)
+	if missing := missingInputCapabilities(base.model.Capabilities, requirements); len(missing) > 0 {
+		roles, err := r.resolveModelRoles(ctx, base.agentInfo.Agent, requirements)
+		if err != nil {
+			return contextengine.Snapshot{}, err
+		}
+		if roles.active.ModelConfigID != base.model.ModelConfigID {
+			base.modelRoles = roles
+			base.model = roles.active
+
+			rebuilt, err := r.buildContextSnapshot(ctx, *base)
+			if err != nil {
+				return contextengine.Snapshot{}, fmt.Errorf("按 %s Model 重建 Session Context 失败: %w", roles.activeRole, err)
+			}
+			snapshot = rebuilt
+		}
+	}
+
+	if missing := missingInputCapabilities(base.model.Capabilities, requirementsFromMessages(snapshot.Messages)); len(missing) > 0 {
+		return contextengine.Snapshot{}, capabilityError(base.model, base.modelRoles.activeRole, missing)
+	}
+	return snapshot, nil
+}
+
 // compactUntilSafe 在首次 Provider 调用前把 Context 收敛到安全阈值以内。
 //
 // 单次 Compaction 会保留一段 Recent Tail；如果 Instruction/Tool Schema 较大，第一次压缩
@@ -258,7 +315,7 @@ func (r *Resolver) compactUntilSafe(
 	for pass := 0; pass < maxCompactionPasses && current.Usage.NeedsCompaction; pass++ {
 		result, err := r.contextEngine.Compact(ctx, contextengine.CompactRequest{
 			SessionID:         base.session.ID,
-			Model:             base.model.Instance,
+			Model:             compactionModel(base.modelRoles).Instance,
 			Instruction:       base.baseInstruction,
 			ContextWindow:     base.model.ContextWindow,
 			MaxOutputTokens:   base.model.MaxOutputTokens,
@@ -321,20 +378,17 @@ func (r *Resolver) compactUntilSafe(
 // Manifest 与 Usage 来自同一次 resolveContextBase，避免前端分别读取 Agent/Model/Tool 后
 // 得到互相不一致的瞬时状态。
 func (r *Resolver) ContextOverview(ctx context.Context, sessionID string) (ContextOverview, error) {
-	base, err := r.resolveContextBase(ctx, "context-overview", "", sessionID, true)
+	base, err := r.resolveContextBase(ctx, "context-overview", "", sessionID, true, turnInputRequirements{})
 	if err != nil {
 		return ContextOverview{}, err
 	}
-	snapshot, err := r.contextEngine.Build(ctx, contextengine.BuildRequest{
-		SessionID:         base.session.ID,
-		Instruction:       base.baseInstruction,
-		ContextWindow:     base.model.ContextWindow,
-		MaxOutputTokens:   base.model.MaxOutputTokens,
-		ToolTokenEstimate: base.toolTokenEstimate,
-		ReasoningPolicy:   contextengine.ReasoningReplayAuto,
-	})
+	snapshot, err := r.buildContextSnapshot(ctx, base)
 	if err != nil {
 		return ContextOverview{}, fmt.Errorf("读取 Context Usage 失败: %w", err)
+	}
+	snapshot, err = r.alignModelToContext(ctx, &base, snapshot)
+	if err != nil {
+		return ContextOverview{}, err
 	}
 
 	return ContextOverview{
@@ -363,14 +417,14 @@ func (r *Resolver) ManualCompact(
 	sessionID string,
 	updateMemory bool,
 ) (ManualCompactionResult, error) {
-	base, err := r.resolveContextBase(ctx, "manual-compaction", uuid.NewString(), sessionID, true)
+	base, err := r.resolveContextBase(ctx, "manual-compaction", uuid.NewString(), sessionID, true, turnInputRequirements{})
 	if err != nil {
 		return ManualCompactionResult{}, err
 	}
 
 	compactResult, compactErr := r.contextEngine.Compact(ctx, contextengine.CompactRequest{
 		SessionID:         base.session.ID,
-		Model:             base.model.Instance,
+		Model:             compactionModel(base.modelRoles).Instance,
 		Instruction:       base.baseInstruction,
 		ContextWindow:     base.model.ContextWindow,
 		MaxOutputTokens:   base.model.MaxOutputTokens,
@@ -384,7 +438,7 @@ func (r *Resolver) ManualCompact(
 
 	var memoryResult memory.RefreshResult
 	if updateMemory {
-		memoryResult, err = r.memory.Refresh(ctx, base.session.ID, base.model.Instance, true)
+		memoryResult, err = r.memory.Refresh(ctx, base.session.ID, base.modelRoles.memory.Instance, true)
 		if err != nil {
 			return ManualCompactionResult{}, fmt.Errorf("压缩后更新 Session Memory 失败: %w", err)
 		}
@@ -410,11 +464,19 @@ func (r *Resolver) MaintainAfterTurn(ctx context.Context, snapshot *Snapshot) er
 	if snapshot == nil {
 		return errors.New("Runtime Snapshot 不能为空")
 	}
+	compactionRuntimeModel := snapshot.CompactionModel
+	if compactionRuntimeModel == nil {
+		compactionRuntimeModel = snapshot.Model
+	}
+	memoryRuntimeModel := snapshot.MemoryModel
+	if memoryRuntimeModel == nil {
+		memoryRuntimeModel = snapshot.Model
+	}
 	postRunCompacted := false
 	if r.contextEngine.Config().AutoCompaction {
 		result, err := r.contextEngine.Compact(ctx, contextengine.CompactRequest{
 			SessionID:         snapshot.SessionID,
-			Model:             snapshot.Model,
+			Model:             compactionRuntimeModel,
 			Instruction:       snapshot.BaseInstruction,
 			ContextWindow:     snapshot.ContextWindow,
 			MaxOutputTokens:   snapshot.MaxOutputTokens,
@@ -428,7 +490,7 @@ func (r *Resolver) MaintainAfterTurn(ctx context.Context, snapshot *Snapshot) er
 	}
 
 	forceMemoryRefresh := shouldForceMemoryRefresh(snapshot.PreRunCompacted, postRunCompacted)
-	if _, err := r.memory.Refresh(ctx, snapshot.SessionID, snapshot.Model, forceMemoryRefresh); err != nil {
+	if _, err := r.memory.Refresh(ctx, snapshot.SessionID, memoryRuntimeModel, forceMemoryRefresh); err != nil {
 		return fmt.Errorf("Turn 完成后刷新 Session Memory 失败: %w", err)
 	}
 	return nil
@@ -449,6 +511,7 @@ func (r *Resolver) resolveContextBase(
 	runID string,
 	sessionID string,
 	bestEffortMCP bool,
+	requirements turnInputRequirements,
 ) (resolvedContextBase, error) {
 	if ctx == nil {
 		return resolvedContextBase{}, errors.New("context.Context 不能为空")
@@ -472,10 +535,11 @@ func (r *Resolver) resolveContextBase(
 	if project.AgentID != agentInfo.Agent.ID {
 		return resolvedContextBase{}, errors.New("Session 的 Project/Agent 关联已失效")
 	}
-	modelID := strings.TrimSpace(agentInfo.Agent.ModelID)
-	if modelID == "" {
-		return resolvedContextBase{}, ErrAgentModelMissing
+	modelRoles, err := r.resolveModelRoles(ctx, agentInfo.Agent, requirements)
+	if err != nil {
+		return resolvedContextBase{}, err
 	}
+	modelSnapshot := modelRoles.active
 
 	agentWorkspace, err := r.workspaces.Resolve(
 		ctx,
@@ -491,10 +555,6 @@ func (r *Resolver) resolveContextBase(
 		return resolvedContextBase{}, fmt.Errorf("解析 Agent Sandbox Policy 失败: %w", err)
 	}
 
-	modelSnapshot, err := r.models.ResolveSnapshot(ctx, modelID)
-	if err != nil {
-		return resolvedContextBase{}, fmt.Errorf("解析 Agent Model 失败: %w", err)
-	}
 	// Skill Snapshot 先于 Builtin Tool Resolve 冻结。run_skill_script 依赖当前 Turn 的
 	// enabled_skills + revision，必须与 Eino Skill Middleware 使用同一份内容身份。
 	skillSnapshot, err := r.skills.ResolveRuntimeSnapshot(ctx, agentInfo.Agent.EnabledSkills)
@@ -582,6 +642,7 @@ func (r *Resolver) resolveContextBase(
 		agentInfo:         agentInfo,
 		project:           project,
 		model:             modelSnapshot,
+		modelRoles:        modelRoles,
 		workspace:         agentWorkspace,
 		sandbox:           sandboxPolicy,
 		tools:             resolvedTools,
@@ -601,14 +662,25 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 	}
 	exposed = uniqueSortedStrings(exposed)
 
+	visionModelID := base.modelRoles.visionModelID
 	return RuntimeManifest{
-		ProjectID:        base.project.ID,
-		ProjectName:      base.project.Name,
-		AgentID:          base.agentInfo.Agent.ID,
-		AgentName:        base.agentInfo.Agent.Name,
-		ModelID:          base.model.ModelConfigID,
-		ModelDisplayName: base.model.ModelDisplayName,
-		ModelRevision:    base.model.Revision,
+		ProjectID:         base.project.ID,
+		ProjectName:       base.project.Name,
+		AgentID:           base.agentInfo.Agent.ID,
+		AgentName:         base.agentInfo.Agent.Name,
+		ModelID:           base.model.ModelConfigID,
+		ModelDisplayName:  base.model.ModelDisplayName,
+		ModelRevision:     base.model.Revision,
+		ModelRole:         base.modelRoles.activeRole,
+		ModelCapabilities: base.model.Capabilities,
+		ModelRoles: RuntimeModelRolesManifest{
+			ChatModelID:    base.modelRoles.chat.ModelConfigID,
+			UtilityModelID: base.modelRoles.utility.ModelConfigID,
+			MemoryModelID:  base.modelRoles.memory.ModelConfigID,
+			VisionModelID:  visionModelID,
+			ActiveModelID:  base.model.ModelConfigID,
+			ActiveRole:     base.modelRoles.activeRole,
+		},
 		ToolRevision:     base.tools.Revision,
 		BuiltinToolNames: append([]string(nil), base.tools.ToolNames...),
 		SkillRevision:    base.skills.Revision,

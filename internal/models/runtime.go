@@ -36,6 +36,8 @@ type RuntimeSnapshot struct {
 	ContextWindow int
 
 	MaxOutputTokens int
+
+	Capabilities Capabilities
 }
 
 // ResolveSnapshot 在同一个 Registry 锁范围内同时解析模型实例、配置描述与 Revision。
@@ -108,6 +110,7 @@ func runtimeSnapshotFromResolved(
 		ModelDisplayName: resolved.Model.DisplayName,
 		ContextWindow:    resolved.Model.ContextWindow,
 		MaxOutputTokens:  resolved.Model.MaxOutputTokens,
+		Capabilities:     EffectiveCapabilities(resolved.Provider.Type, resolved.Model.ModelName, resolved.Model.Capabilities),
 	}
 }
 

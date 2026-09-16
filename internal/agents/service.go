@@ -242,6 +242,11 @@ func (s *Service) Create(
 			err
 	}
 
+	modelRoles, err := s.normalizeAndValidateModelRoles(ctx, input.ModelRoles)
+	if err != nil {
+		return AgentInfo{}, err
+	}
+
 	if s.workspaces != nil {
 		if err :=
 			s.workspaces.Validate(
@@ -271,6 +276,8 @@ func (s *Service) Create(
 			Instruction: normalized.Instruction,
 
 			ModelID: normalized.ModelID,
+
+			ModelRoles: modelRoles,
 
 			EnabledSkills: append([]string(nil), normalized.EnabledSkills...),
 
@@ -450,6 +457,14 @@ func (s *Service) Update(
 		}
 	}
 
+	var normalizedModelRoles ModelRoles
+	if input.ModelRoles != nil {
+		normalizedModelRoles, err = s.normalizeAndValidateModelRoles(ctx, *input.ModelRoles)
+		if err != nil {
+			return AgentInfo{}, err
+		}
+	}
+
 	if err :=
 		s.ensureModelUsable(
 			ctx,
@@ -494,6 +509,10 @@ func (s *Service) Update(
 
 	existing.Agent.ModelID =
 		normalized.ModelID
+
+	if input.ModelRoles != nil {
+		existing.Agent.ModelRoles = normalizedModelRoles
+	}
 
 	existing.Agent.EnabledSkills = append([]string(nil), normalized.EnabledSkills...)
 
@@ -588,6 +607,24 @@ func (s *Service) SetModel(ctx context.Context, id, modelID string) (AgentInfo, 
 		return AgentInfo{}, err
 	}
 	existing.Agent.ModelID = modelID
+	existing.Agent.UpdatedAt = time.Now().UTC()
+	if err := s.store.Update(ctx, existing.Agent); err != nil {
+		return AgentInfo{}, err
+	}
+	return s.Get(ctx, existing.Agent.ID)
+}
+
+// SetModelRoles 只修改 Utility/Memory/Vision 模型角色，不触碰 Chat Model 或其它 Profile 字段。
+func (s *Service) SetModelRoles(ctx context.Context, id string, roles ModelRoles) (AgentInfo, error) {
+	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return AgentInfo{}, err
+	}
+	normalized, err := s.normalizeAndValidateModelRoles(ctx, roles)
+	if err != nil {
+		return AgentInfo{}, err
+	}
+	existing.Agent.ModelRoles = normalized
 	existing.Agent.UpdatedAt = time.Now().UTC()
 	if err := s.store.Update(ctx, existing.Agent); err != nil {
 		return AgentInfo{}, err
@@ -1235,6 +1272,27 @@ func (s *Service) AgentsUsingSkill(
 //
 // Agent 允许暂时没有默认模型。
 // 一旦指定 Model，则必须存在且处于 Enabled 状态。
+func (s *Service) normalizeAndValidateModelRoles(ctx context.Context, roles ModelRoles) (ModelRoles, error) {
+	roles = ModelRoles{
+		UtilityModelID: strings.TrimSpace(roles.UtilityModelID),
+		MemoryModelID:  strings.TrimSpace(roles.MemoryModelID),
+		VisionModelID:  strings.TrimSpace(roles.VisionModelID),
+	}
+	for label, modelID := range map[string]string{
+		"Utility": roles.UtilityModelID,
+		"Memory":  roles.MemoryModelID,
+		"Vision":  roles.VisionModelID,
+	} {
+		if modelID == "" {
+			continue
+		}
+		if err := s.ensureModelUsable(ctx, modelID); err != nil {
+			return ModelRoles{}, fmt.Errorf("%s Model 无效: %w", label, err)
+		}
+	}
+	return roles, nil
+}
+
 func (s *Service) ensureModelUsable(
 	ctx context.Context,
 	modelID string,

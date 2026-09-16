@@ -205,6 +205,41 @@ function formatRuntimeModel(manifest) {
   );
 }
 
+function formatRuntimeModelRole(manifest) {
+  const role = manifest?.modelRole || manifest?.modelRoles?.activeRole || "chat";
+  return role === "vision" ? "Vision" : "Chat";
+}
+
+function formatModelCapabilities(capabilities) {
+  if (!capabilities) return "--";
+  const labels = [
+    ["tools", "Tools"], ["vision", "Vision"], ["files", "Files"],
+    ["reasoning", "Reasoning"], ["json", "JSON"], ["audio", "Audio"],
+  ].filter(([key]) => Boolean(capabilities[key])).map(([, label]) => label);
+  return labels.length ? labels.join(" · ") : "无已声明能力";
+}
+
+function attachmentCapabilityError(items) {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  const project = agentStore.selectedAgent;
+  const chat = modelStore.modelByID(project?.modelID ?? "");
+  if (!chat) return ""; // Runtime 仍会做最终校验。
+
+  const needsVision = items.some((item) => String(item?.mimeType || "").toLowerCase().startsWith("image/"));
+  const needsFiles = items.some((item) => !String(item?.mimeType || "").toLowerCase().startsWith("image/"));
+  const supports = (model) => Boolean(model) && (!needsVision || model.capabilities?.vision) && (!needsFiles || model.capabilities?.files);
+  if (supports(chat)) return "";
+
+  const visionID = project?.modelRoles?.visionModelID || "";
+  const vision = modelStore.modelByID(visionID);
+  if (supports(vision)) return "";
+
+  const missing = [];
+  if (needsVision) missing.push("Vision");
+  if (needsFiles) missing.push("Files");
+  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的 Vision 模型角色。请先在项目设置或模型 Capability 中配置。`;
+}
+
 function formatSandbox(manifest) {
   const profile =
       manifest?.sandbox?.profile ||
@@ -392,6 +427,20 @@ async function selectAttachments(event) {
     return;
   }
 
+  const candidateMetadata = [
+    ...attachments.value,
+    ...files.map((file) => ({
+      name: file.name,
+      mimeType: file.type || "application/octet-stream",
+      sizeBytes: file.size
+    })),
+  ];
+  const capabilityError = attachmentCapabilityError(candidateMetadata);
+  if (capabilityError) {
+    Message.warning(capabilityError);
+    return;
+  }
+
   let total = attachments.value.reduce((sum, item) => sum + Number(item.sizeBytes || 0), 0);
   const next = [];
   try {
@@ -435,7 +484,12 @@ async function send() {
 
   const content =
       draft.value.trim();
-  const pendingAttachments = attachments.value.map((item) => ({ ...item }));
+  const pendingAttachments = attachments.value.map((item) => ({...item}));
+  const capabilityError = attachmentCapabilityError(pendingAttachments);
+  if (capabilityError) {
+    Message.warning(capabilityError);
+    return;
+  }
 
   draft.value = "";
   attachments.value = [];
@@ -446,7 +500,7 @@ async function send() {
     await runtimeStore.send(
         sessionStore.selectedID,
         content,
-        pendingAttachments.map(({ name, mimeType, base64Data }) => ({ name, mimeType, base64Data })),
+        pendingAttachments.map(({name, mimeType, base64Data}) => ({name, mimeType, base64Data})),
     );
   } catch (error) {
     /* 启动失败时恢复文字和附件，避免用户输入丢失。 */
@@ -609,7 +663,8 @@ watch(
               class="composer-attachment__remove"
               :aria-label="`移除 ${attachment.name}`"
               @click="removeAttachment(index)"
-          >×</button>
+          >×
+          </button>
         </div>
       </div>
 
@@ -714,7 +769,7 @@ watch(
                       </div>
                     </div>
 
-                    <div class="context-tooltip__divider" />
+                    <div class="context-tooltip__divider"/>
 
                     <div class="context-tooltip__breakdown">
                       <div class="context-tooltip__row">
@@ -744,33 +799,41 @@ watch(
                     </div>
 
                     <template v-if="contextAssembly">
-                      <div class="context-tooltip__divider" />
+                      <div class="context-tooltip__divider"/>
 
                       <div class="context-tooltip__breakdown context-tooltip__runtime">
                         <div class="context-tooltip__row">
                           <span>模型消息</span>
-                          <span class="context-tooltip__value">{{ contextAssembly.visibleMessageCount }} 条 · 近期 {{ contextAssembly.recentMessageCount }} 条</span>
+                          <span class="context-tooltip__value">{{
+                              contextAssembly.visibleMessageCount
+                            }} 条 · 近期 {{ contextAssembly.recentMessageCount }} 条</span>
                         </div>
 
                         <div class="context-tooltip__row">
                           <span>消息角色</span>
-                          <span class="context-tooltip__value">User {{ contextAssembly.userMessageCount }} · Assistant {{ contextAssembly.assistantMessageCount }} · Tool {{ contextAssembly.toolResultCount }}</span>
+                          <span class="context-tooltip__value">User {{ contextAssembly.userMessageCount }} · Assistant {{
+                              contextAssembly.assistantMessageCount
+                            }} · Tool {{ contextAssembly.toolResultCount }}</span>
                         </div>
 
                         <div class="context-tooltip__row">
                           <span>Tool 事务</span>
-                          <span class="context-tooltip__value">调用 {{ contextAssembly.toolCallCount }} · 结果 {{ contextAssembly.toolResultCount }}</span>
+                          <span class="context-tooltip__value">调用 {{
+                              contextAssembly.toolCallCount
+                            }} · 结果 {{ contextAssembly.toolResultCount }}</span>
                         </div>
 
                         <div class="context-tooltip__row">
                           <span>注入状态</span>
-                          <span class="context-tooltip__value">Memory {{ contextAssembly.memoryInjected ? "是" : "否" }} · Checkpoint {{ contextAssembly.checkpointInjected ? "是" : "否" }}</span>
+                          <span class="context-tooltip__value">Memory {{ contextAssembly.memoryInjected ? "是" : "否" }} · Checkpoint {{
+                              contextAssembly.checkpointInjected ? "是" : "否"
+                            }}</span>
                         </div>
                       </div>
                     </template>
 
                     <template v-if="contextManifest">
-                      <div class="context-tooltip__divider" />
+                      <div class="context-tooltip__divider"/>
 
                       <div class="context-tooltip__breakdown context-tooltip__runtime">
                         <div
@@ -783,12 +846,29 @@ watch(
 
                         <div class="context-tooltip__row">
                           <span>模型</span>
-                          <span class="context-tooltip__value">{{ formatRuntimeModel(contextManifest) }}</span>
+                          <span class="context-tooltip__value">{{
+                              formatRuntimeModel(contextManifest)
+                            }} · {{ formatRuntimeModelRole(contextManifest) }}</span>
                         </div>
 
                         <div class="context-tooltip__row">
-                          <span>能力</span>
+                          <span>模型能力</span>
+                          <span class="context-tooltip__value">{{
+                              formatModelCapabilities(contextManifest.modelCapabilities)
+                            }}</span>
+                        </div>
+
+                        <div class="context-tooltip__row">
+                          <span>Agent 能力</span>
                           <span class="context-tooltip__value">{{ formatCapabilitySummary(contextManifest) }}</span>
+                        </div>
+
+                        <div class="context-tooltip__row">
+                          <span>模型角色</span>
+                          <span class="context-tooltip__value"
+                                :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · Memory ${contextManifest.modelRoles?.memoryModelID || '--'} · Vision ${contextManifest.modelRoles?.visionModelID || '--'}`">Chat / Utility / Memory{{
+                              contextManifest.modelRoles?.visionModelID ? ' / Vision' : ''
+                            }}</span>
                         </div>
 
                         <div class="context-tooltip__row">
@@ -839,7 +919,7 @@ watch(
                       </div>
                     </template>
 
-                    <div class="context-tooltip__divider" />
+                    <div class="context-tooltip__divider"/>
 
                     <div class="context-tooltip__meta">
                       自动压缩阈值
@@ -934,7 +1014,7 @@ watch(
               @click="stop"
           >
             <template #icon>
-              <IconStop />
+              <IconStop/>
             </template>
           </a-button>
 
@@ -947,7 +1027,7 @@ watch(
               @click="send"
           >
             <template #icon>
-              <IconSend />
+              <IconSend/>
             </template>
           </a-button>
         </div>
@@ -958,22 +1038,15 @@ watch(
 
 <style scoped>
 .composer {
-  flex:
-      0 0 auto;
+  flex: 0 0 auto;
 
   width: 100%;
 
-  padding:
-      12px
-      32px
-      20px;
+  padding: 12px 32px 20px;
 
-  border-top:
-      1px solid
-      var(--h-border);
+  border-top: 1px solid var(--h-border);
 
-  background:
-      var(--h-bg);
+  background: var(--h-bg);
 }
 
 .composer-inner {
@@ -984,14 +1057,11 @@ watch(
 
   padding: 10px;
 
-  border:
-      1px solid
-      var(--h-border-strong);
+  border: 1px solid var(--h-border-strong);
 
   border-radius: 14px;
 
-  background:
-      var(--h-surface);
+  background: var(--h-surface);
 }
 
 
@@ -1082,8 +1152,7 @@ watch(
 }
 
 .composer-hint {
-  color:
-      var(--h-text-muted);
+  color: var(--h-text-muted);
 
   font-size: 10px;
 }
@@ -1111,10 +1180,9 @@ watch(
 
   cursor: pointer;
 
-  transition:
-      background 140ms ease,
-      color 140ms ease,
-      opacity 140ms ease;
+  transition: background 140ms ease,
+  color 140ms ease,
+  opacity 140ms ease;
 }
 
 .context-ring-button:hover:not(:disabled) {
@@ -1168,8 +1236,7 @@ watch(
 
   stroke-dasharray: 50.2655;
 
-  transition:
-      stroke-dashoffset 180ms ease;
+  transition: stroke-dashoffset 180ms ease;
 }
 
 .context-tooltip {
@@ -1261,11 +1328,9 @@ watch(
 ) {
   border: 0 !important;
 
-  background:
-      transparent !important;
+  background: transparent !important;
 
-  box-shadow:
-      none !important;
+  box-shadow: none !important;
 }
 
 :deep(
@@ -1275,11 +1340,9 @@ watch(
 
   resize: none;
 
-  background:
-      transparent;
+  background: transparent;
 
-  color:
-      var(--h-text);
+  color: var(--h-text);
 
   font-size: 14px;
 
@@ -1290,8 +1353,7 @@ watch(
   .composer-textarea
     textarea::placeholder
 ) {
-  color:
-      var(--h-text-muted);
+  color: var(--h-text-muted);
 }
 
 @keyframes context-ring-spin {

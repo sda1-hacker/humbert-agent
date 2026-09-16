@@ -28,6 +28,27 @@ type ProviderDTO struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+// ModelCapabilityConfigDTO 是用户对模型能力的三态覆盖配置。
+// 空值在领域层按 auto 处理；Desktop 始终返回规范化后的 auto/enabled/disabled。
+type ModelCapabilityConfigDTO struct {
+	Tools     string `json:"tools"`
+	Vision    string `json:"vision"`
+	Files     string `json:"files"`
+	Reasoning string `json:"reasoning"`
+	JSON      string `json:"json"`
+	Audio     string `json:"audio"`
+}
+
+// ModelCapabilitiesDTO 是 Runtime 经过 Auto 推断 + Override 后的有效能力。
+type ModelCapabilitiesDTO struct {
+	Tools     bool `json:"tools"`
+	Vision    bool `json:"vision"`
+	Files     bool `json:"files"`
+	Reasoning bool `json:"reasoning"`
+	JSON      bool `json:"json"`
+	Audio     bool `json:"audio"`
+}
+
 // ModelDTO 是返回给 Vue 的 Model 数据。
 type ModelDTO struct {
 	ID string `json:"id"`
@@ -47,6 +68,10 @@ type ModelDTO struct {
 	ContextWindow int `json:"contextWindow"`
 
 	MaxOutputTokens int `json:"maxOutputTokens"`
+
+	CapabilityConfig ModelCapabilityConfigDTO `json:"capabilityConfig"`
+
+	Capabilities ModelCapabilitiesDTO `json:"capabilities"`
 
 	Enabled bool `json:"enabled"`
 
@@ -101,6 +126,8 @@ type SaveModelRequest struct {
 	ContextWindow int `json:"contextWindow"`
 
 	MaxOutputTokens int `json:"maxOutputTokens"`
+
+	CapabilityConfig ModelCapabilityConfigDTO `json:"capabilityConfig"`
 
 	Enabled bool `json:"enabled"`
 }
@@ -314,6 +341,8 @@ func (s *ModelService) CreateModel(
 
 					MaxOutputTokens: request.MaxOutputTokens,
 
+					Capabilities: capabilityConfigFromDTO(request.CapabilityConfig),
+
 					Enabled: request.Enabled,
 				},
 			)
@@ -360,6 +389,8 @@ func (s *ModelService) UpdateModel(
 
 					MaxOutputTokens: request.MaxOutputTokens,
 
+					Capabilities: capabilityConfigFromDTO(request.CapabilityConfig),
+
 					Enabled: request.Enabled,
 				},
 			)
@@ -376,7 +407,8 @@ func (s *ModelService) UpdateModel(
 	)
 }
 
-// DeleteModel 删除尚未进入 Run Audit 的模型。
+// DeleteModel 删除不再被当前 Agent 任一模型角色引用的模型。
+// 历史 Session 不阻止删除模型配置。
 func (s *ModelService) DeleteModel(
 	id string,
 ) error {
@@ -549,6 +581,14 @@ func toModelDTO(
 
 		MaxOutputTokens: value.Model.MaxOutputTokens,
 
+		CapabilityConfig: capabilityConfigDTO(value.Model.Capabilities),
+
+		Capabilities: capabilitiesDTO(models.EffectiveCapabilities(
+			value.ProviderType,
+			value.Model.ModelName,
+			value.Model.Capabilities,
+		)),
+
 		Enabled: value.Model.Enabled,
 
 		CreatedAt: value.Model.CreatedAt.Format(
@@ -558,5 +598,33 @@ func toModelDTO(
 		UpdatedAt: value.Model.UpdatedAt.Format(
 			time.RFC3339,
 		),
+	}
+}
+
+func capabilityConfigFromDTO(value ModelCapabilityConfigDTO) models.CapabilityConfig {
+	return models.CapabilityConfig{
+		Tools: models.CapabilityMode(value.Tools), Vision: models.CapabilityMode(value.Vision),
+		Files: models.CapabilityMode(value.Files), Reasoning: models.CapabilityMode(value.Reasoning),
+		JSON: models.CapabilityMode(value.JSON), Audio: models.CapabilityMode(value.Audio),
+	}
+}
+
+func capabilityConfigDTO(value models.CapabilityConfig) ModelCapabilityConfigDTO {
+	normalize := func(mode models.CapabilityMode) string {
+		if mode == "" {
+			return string(models.CapabilityAuto)
+		}
+		return string(mode)
+	}
+	return ModelCapabilityConfigDTO{
+		Tools: normalize(value.Tools), Vision: normalize(value.Vision), Files: normalize(value.Files),
+		Reasoning: normalize(value.Reasoning), JSON: normalize(value.JSON), Audio: normalize(value.Audio),
+	}
+}
+
+func capabilitiesDTO(value models.Capabilities) ModelCapabilitiesDTO {
+	return ModelCapabilitiesDTO{
+		Tools: value.Tools, Vision: value.Vision, Files: value.Files,
+		Reasoning: value.Reasoning, JSON: value.JSON, Audio: value.Audio,
 	}
 }

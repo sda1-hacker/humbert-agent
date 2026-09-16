@@ -160,3 +160,18 @@ export function setAgentModel(id, modelID) {
         { modelID },
     );
 }
+
+/**
+ * 只更新 Utility / Memory / Vision Model Roles。
+ */
+export function setAgentModelRoles(id, roles) {
+    return Call.ByName(
+        "github.com/sda1-hacker/humbert-agent/internal/services.AgentService.SetAgentModelRoles",
+        id,
+        {
+            utilityModelID: roles?.utilityModelID ?? "",
+            memoryModelID: roles?.memoryModelID ?? "",
+            visionModelID: roles?.visionModelID ?? "",
+        },
+    );
+}

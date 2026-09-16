@@ -8,6 +8,14 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
+// ModelRoles 保存 Agent 的可选模型角色。Chat Model 继续使用 Agent.ModelID，
+// 以兼容已有 Profile 与 Composer 快速切换；其它角色为空时由 Runtime 按回退链解析。
+type ModelRoles struct {
+	UtilityModelID string `json:"utility_model_id,omitempty"`
+	MemoryModelID  string `json:"memory_model_id,omitempty"`
+	VisionModelID  string `json:"vision_model_id,omitempty"`
+}
+
 // Agent 是 Humbert Agent 的稳定 Profile。
 //
 // Agent 本身只是持久化配置实体，不代表一个长期驻留的 Eino Runtime。
@@ -22,6 +30,8 @@ type Agent struct {
 	Instruction string `json:"instruction"`
 
 	ModelID string `json:"model_id,omitempty"`
+
+	ModelRoles ModelRoles `json:"model_roles,omitempty"`
 
 	// EnabledSkills 保存这个 Agent 明确启用的 Skill 名称。Skill 包本身位于应用级
 	// ~/.humbert-agent/skills；Profile 只保存引用，不复制 Skill 内容。
@@ -67,6 +77,8 @@ type CreateInput struct {
 
 	ModelID string
 
+	ModelRoles ModelRoles
+
 	EnabledSkills []string
 
 	EnabledMCPTools []humbertmcp.ToolSelection
@@ -90,6 +102,9 @@ type UpdateInput struct {
 	Instruction string
 
 	ModelID string
+
+	// nil 保留现有角色；非 nil 显式替换 Utility/Memory/Vision。
+	ModelRoles *ModelRoles
 
 	EnabledSkills []string
 
