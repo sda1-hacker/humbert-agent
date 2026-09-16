@@ -49,7 +49,6 @@ type Agent struct {
 	Sandbox sandbox.AgentPolicy `json:"sandbox,omitempty"`
 
 	// WorkspaceMode/WorkspacePath 是 Agent 自己的 Workspace 配置。
-	// Humbert 当前产品语义中 Project 只是 Agent 的 UI 别名；不存在独立 Project Domain。
 	WorkspaceMode workspace.Mode `json:"workspace_mode"`
 	WorkspacePath string         `json:"workspace_path,omitempty"`
 
@@ -66,6 +65,20 @@ type AgentInfo struct {
 	Agent Agent
 
 	ModelDisplayName string
+}
+
+// DeletionState 是 Agent 删除状态机的持久化检查点。
+//
+// 标记写入后 Agent 会立即从 Get/List 中隐藏。应用异常退出时，Bootstrap 会依据
+// 这里冻结的 Workspace 所有权继续删除，而不需要重新读取可能已被部分清理的 Profile。
+type DeletionState struct {
+	AgentID string `json:"agent_id"`
+
+	WorkspaceMode workspace.Mode `json:"workspace_mode"`
+
+	WorkspacePath string `json:"workspace_path,omitempty"`
+
+	StartedAt time.Time `json:"started_at"`
 }
 
 // CreateInput 是创建 Agent 的领域输入。

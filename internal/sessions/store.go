@@ -71,6 +71,8 @@ type Store struct {
 
 	sessionAgents map[string]string
 
+	issues map[string]SessionIssue
+
 	configLocks *configLockRegistry
 }
 
@@ -98,6 +100,7 @@ func NewStore(ctx context.Context, transcripts *transcript.Store) (*Store, error
 	store := &Store{
 		transcripts:   transcripts,
 		sessionAgents: make(map[string]string),
+		issues:        make(map[string]SessionIssue),
 		configLocks: &configLockRegistry{
 			values: make(map[string]*configLockEntry),
 		},
@@ -123,10 +126,12 @@ func (s *Store) ListSessions(ctx context.Context, agentID string) ([]Session, er
 	for _, ref := range refs {
 		value, err := s.readSessionConfig(ctx, ref.AgentID, ref.ID)
 		if err != nil {
-			return nil, fmt.Errorf("读取 Session %s config.json 失败: %w", ref.ID, err)
+			s.recordIssue(ref.ID, ref.AgentID, err)
+			continue
 		}
 		result = append(result, value)
 		s.rememberSession(value.ID, value.AgentID)
+		s.clearIssue(value.ID)
 	}
 
 	sort.SliceStable(result, func(i, j int) bool {
@@ -135,6 +140,21 @@ func (s *Store) ListSessions(ctx context.Context, agentID string) ([]Session, er
 		}
 		return result[i].UpdatedAt.After(result[j].UpdatedAt)
 	})
+	return result, nil
+}
+
+// ListSessionIDs 返回指定 Agent 下所有存在 transcript 的 Session ID。
+//
+// 该清单不读取 config.json，因此 Agent 级删除仍能覆盖并清理已被隔离的损坏 Session。
+func (s *Store) ListSessionIDs(ctx context.Context, agentID string) ([]string, error) {
+	refs, err := s.transcripts.ListSessionRefs(ctx, agentID)
+	if err != nil {
+		return nil, translateTranscriptError(err)
+	}
+	result := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		result = append(result, ref.ID)
+	}
 	return result, nil
 }
 
@@ -152,6 +172,9 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 		}
 		agentID, exists = s.lookupAgent(id)
 		if !exists {
+			if issue, unavailable := s.lookupIssue(id); unavailable {
+				return Session{}, fmt.Errorf("%w: session_id=%s: %s", ErrSessionUnavailable, id, issue.Error)
+			}
 			return Session{}, fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 		}
 	}
@@ -160,10 +183,31 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	if err != nil {
 		if errors.Is(err, transcript.ErrSessionNotFound) || errors.Is(err, os.ErrNotExist) {
 			s.forgetSession(id)
+		} else {
+			s.recordIssue(id, agentID, err)
+			return Session{}, fmt.Errorf("%w: session_id=%s: %v", ErrSessionUnavailable, id, err)
 		}
 		return Session{}, err
 	}
+	s.clearIssue(id)
 	return value, nil
+}
+
+// Issues 返回当前被隔离的 Session，供启动日志与诊断界面使用。
+func (s *Store) Issues() []SessionIssue {
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+	result := make([]SessionIssue, 0, len(s.issues))
+	for _, issue := range s.issues {
+		result = append(result, issue)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].AgentID != result[j].AgentID {
+			return result[i].AgentID < result[j].AgentID
+		}
+		return result[i].SessionID < result[j].SessionID
+	})
+	return result
 }
 
 // CreateSession 创建独立 Session 目录中的 session.jsonl 与 config.json。
@@ -438,6 +482,7 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 	}
 
 	newAgents := make(map[string]string)
+	newIssues := make(map[string]SessionIssue)
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("重建 Session 索引被取消: %w", err)
@@ -454,10 +499,12 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			return err
 		}
 		for _, ref := range refs {
-			// 缺失配置可由合法 Transcript Header 恢复；损坏或不匹配的配置仍明确报错。
+			// 缺失配置可由合法 Transcript Header 恢复；损坏或不匹配的配置会被隔离，
+			// 不能让单个 Session 阻塞整个应用启动。
 			value, err := s.readSessionConfig(ctx, ref.AgentID, ref.ID)
 			if err != nil {
-				return fmt.Errorf("验证 Session %s config.json 失败: %w", ref.ID, err)
+				newIssues[ref.ID] = SessionIssue{SessionID: ref.ID, AgentID: ref.AgentID, Error: err.Error()}
+				continue
 			}
 			if existing, exists := newAgents[value.ID]; exists && existing != value.AgentID {
 				return fmt.Errorf(
@@ -473,6 +520,7 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 
 	s.indexMu.Lock()
 	s.sessionAgents = newAgents
+	s.issues = newIssues
 	s.indexMu.Unlock()
 	return nil
 }
@@ -612,13 +660,35 @@ func (s *Store) lookupAgent(sessionID string) (string, bool) {
 func (s *Store) rememberSession(sessionID string, agentID string) {
 	s.indexMu.Lock()
 	s.sessionAgents[sessionID] = agentID
+	delete(s.issues, sessionID)
 	s.indexMu.Unlock()
 }
 
 func (s *Store) forgetSession(sessionID string) {
 	s.indexMu.Lock()
 	delete(s.sessionAgents, sessionID)
+	delete(s.issues, sessionID)
 	s.indexMu.Unlock()
+}
+
+func (s *Store) recordIssue(sessionID string, agentID string, err error) {
+	s.indexMu.Lock()
+	delete(s.sessionAgents, sessionID)
+	s.issues[sessionID] = SessionIssue{SessionID: sessionID, AgentID: agentID, Error: err.Error()}
+	s.indexMu.Unlock()
+}
+
+func (s *Store) clearIssue(sessionID string) {
+	s.indexMu.Lock()
+	delete(s.issues, sessionID)
+	s.indexMu.Unlock()
+}
+
+func (s *Store) lookupIssue(sessionID string) (SessionIssue, bool) {
+	s.indexMu.RLock()
+	defer s.indexMu.RUnlock()
+	issue, exists := s.issues[sessionID]
+	return issue, exists
 }
 
 func translateTranscriptError(err error) error {

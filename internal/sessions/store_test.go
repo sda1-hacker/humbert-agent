@@ -3,6 +3,7 @@ package sessions
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,6 +115,15 @@ func TestStoreDoesNotOverwriteCorruptConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	initial, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initial.CreateSession(ctx, Session{
+		ID: "healthy", AgentID: "agent", Title: "healthy", CWD: t.TempDir(), CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := tr.CreateSession(ctx, transcript.CreateSessionInput{ID: "broken", AgentID: "agent"}); err != nil {
 		t.Fatal(err)
 	}
@@ -126,8 +136,20 @@ func TestStoreDoesNotOverwriteCorruptConfig(t *testing.T) {
 	if err := os.WriteFile(path, before, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NewStore(ctx, tr); err == nil {
-		t.Fatal("corrupt config silently replaced")
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatalf("corrupt session blocked startup: %v", err)
+	}
+	issues := store.Issues()
+	if len(issues) != 1 || issues[0].SessionID != "broken" || issues[0].AgentID != "agent" {
+		t.Fatalf("unexpected isolated session diagnostics: %#v", issues)
+	}
+	if _, err := store.GetSession(ctx, "broken"); !errors.Is(err, ErrSessionUnavailable) {
+		t.Fatalf("corrupt session did not return ErrSessionUnavailable: %v", err)
+	}
+	list, err := store.ListSessions(ctx, "agent")
+	if err != nil || len(list) != 1 || list[0].ID != "healthy" {
+		t.Fatalf("healthy session listing was not isolated: %#v, %v", list, err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {

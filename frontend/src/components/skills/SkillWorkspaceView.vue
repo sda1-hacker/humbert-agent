@@ -173,7 +173,7 @@ onMounted(() => {
             v-if="!selectedSkill"
             eyebrow="Agent Skills"
             title="技能"
-            description="选择 Agent / 项目，为它启用需要的 Skill。点击任意 Skill 可以进入独立详情页，查看 Package 内容并修改显示名称。"
+            description="选择 Agent，为它启用需要的 Skill。点击任意 Skill 可以进入独立详情页，查看 Package 内容并修改显示名称。"
         >
           <template #aside>
             <div class="skill-workspace__legend">

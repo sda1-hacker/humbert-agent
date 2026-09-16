@@ -27,6 +27,16 @@ type Session struct {
 	UpdatedAt time.Time
 }
 
+// SessionIssue 描述一个被 Store 隔离的损坏 Session。
+// Error 是面向诊断的稳定文本；Store 不会自动覆盖对应文件。
+type SessionIssue struct {
+	SessionID string
+
+	AgentID string
+
+	Error string
+}
+
 // Message 是 Active Branch 上一条已经持久化的 Runtime Message。
 //
 // Message 本体直接复用 Eino *schema.Message；Humbert 不再定义 sessions.AgentMessage

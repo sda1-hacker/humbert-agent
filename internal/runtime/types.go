@@ -23,6 +23,7 @@ const TopicEvent = "runtime.event"
 
 var (
 	ErrSessionBusy                = errors.New("当前 Session 已有正在执行的 Turn")
+	ErrAgentDeleting              = errors.New("当前 Agent 正在删除")
 	ErrRunNotFound                = errors.New("运行中的 Turn 不存在")
 	ErrClosed                     = errors.New("RuntimeService 已关闭")
 	ErrAgentModelMissing          = errors.New("Agent 尚未配置默认模型")

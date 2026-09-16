@@ -256,6 +256,14 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		agents.WithSkillCatalog(skillManager),
 		agents.WithMCPCatalog(mcpManager),
 	)
+	if err := agentService.RecoverDeletions(ctx); err != nil {
+		logger.Warn(
+			ctx,
+			"部分 Agent 删除恢复失败，将在下次启动或用户重试时继续",
+			"operation", "agent.delete.recover",
+			"error", err,
+		)
+	}
 	mcpManager.SetReferenceChecker(agentService)
 
 	// ToolRegistry 在 AgentService 之后创建，是因为 install_skill Tool 可以在用户明确批准后
@@ -287,6 +295,16 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	sessionStore, err := sessions.NewStore(ctx, transcriptStore)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Session Store 失败: %w", err)
+	}
+	for _, issue := range sessionStore.Issues() {
+		logger.Warn(
+			ctx,
+			"Session 数据损坏，已隔离且不影响应用启动",
+			"operation", "session.recovery.isolate",
+			"agent_id", issue.AgentID,
+			"session_id", issue.SessionID,
+			"error", issue.Error,
+		)
 	}
 	sessionService := sessions.NewService(
 		sessionStore,

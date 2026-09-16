@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -102,6 +103,10 @@ type Service struct {
 	mcp MCPSelectionValidator
 
 	logger *logging.Logger
+
+	// lifecycleMu 只协调 Agent 删除与依赖 Agent 的新资源创建。删除持有写锁，
+	// Session 创建通过 WithActiveAgent 持有读锁，避免在删除快照之后又落入新 Session。
+	lifecycleMu sync.RWMutex
 }
 
 // NewService 创建 AgentService。
@@ -175,6 +180,28 @@ func (s *Service) Get(
 	}
 
 	return values[0], nil
+}
+
+// WithActiveAgent 在 Agent 保持 active 的整个回调期间持有生命周期读锁。
+//
+// Session 创建等跨领域操作必须通过该入口完成“读取 Agent -> 创建依赖资源”，否则
+// 删除流程可能在两步之间推进，留下创建成功但立即失去所属 Agent 的孤儿数据。
+func (s *Service) WithActiveAgent(
+	ctx context.Context,
+	id string,
+	fn func(AgentInfo) error,
+) error {
+	if fn == nil {
+		return errors.New("Agent 生命周期回调不能为空")
+	}
+	s.lifecycleMu.RLock()
+	defer s.lifecycleMu.RUnlock()
+
+	value, err := s.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	return fn(value)
 }
 
 // Create 创建 Agent。
@@ -390,9 +417,9 @@ func (s *Service) Create(
 //
 // 例如：
 //
-//	/Projects/A
+//	/Workspaces/A
 //	    ↓
-//	/Projects/B
+//	/Workspaces/B
 //
 // 只表示下一 Turn 从 B 开始工作。
 // A 中所有文件保持原样。
@@ -673,41 +700,56 @@ func (s *Service) UpdateSecurity(ctx context.Context, id string, builtinTools []
 	return s.Get(ctx, existing.Agent.ID)
 }
 
-// Delete 删除没有 Session 的完整 Agent Aggregate。
+// Delete 通过持久化状态机删除完整 Agent Aggregate。
 //
 // Agent 内部目录（Profile、Session sidecar、Memory 等）属于 Humbert 自有数据；删除 Agent
 // 时一并删除。Managed Workspace 同样属于 Humbert 管理范围，会同步清理。Custom Workspace
-// 是用户自己的外部目录，只解除引用，绝不会递归删除。
+// 是用户自己的外部目录，只解除引用，绝不会递归删除。任一步失败都会保留 deleting 标记，
+// 后续重试或应用重启可以继续完成清理。
 func (s *Service) Delete(ctx context.Context, id string) error {
-	existing, err := s.store.Get(ctx, id)
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+
+	state, err := s.store.BeginDelete(ctx, strings.TrimSpace(id))
 	if err != nil {
 		return err
 	}
+	return s.resumeDeletion(ctx, state)
+}
 
-	count, err := s.store.CountSessions(ctx, id)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return fmt.Errorf("%w: 当前 Agent 仍有 %d 个 Session", ErrInUse, count)
-	}
+// RecoverDeletions 继续上次进程未完成的 Agent 删除。
+//
+// 返回聚合错误供 Bootstrap 记录；失败的 Agent 仍保持隐藏和可重试，不应因此阻塞应用启动。
+func (s *Service) RecoverDeletions(ctx context.Context) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 
-	workspaceMode := existing.Agent.WorkspaceMode
-	if workspaceMode == "" {
-		workspaceMode = workspace.ModeManaged
+	states, recoveryErr := s.store.ListDeleting(ctx)
+	for _, state := range states {
+		if err := s.resumeDeletion(ctx, state); err != nil {
+			recoveryErr = errors.Join(recoveryErr, fmt.Errorf("恢复删除 Agent %s 失败: %w", state.AgentID, err))
+		}
 	}
-	if s.workspaces != nil && workspaceMode == workspace.ModeManaged {
-		if err := s.workspaces.DeleteManaged(ctx, id); err != nil {
+	return recoveryErr
+}
+
+func (s *Service) resumeDeletion(ctx context.Context, state DeletionState) error {
+	mode := state.WorkspaceMode
+	if mode == "" {
+		mode = workspace.ModeManaged
+	}
+	if s.workspaces != nil && mode == workspace.ModeManaged {
+		if err := s.workspaces.DeleteManaged(ctx, state.AgentID); err != nil {
 			return fmt.Errorf("删除 Agent Managed Workspace 失败: %w", err)
 		}
 	}
-
-	if err := s.store.Delete(ctx, id); err != nil {
+	if err := s.store.DeleteMarked(ctx, state.AgentID); err != nil {
 		return err
 	}
-
-	s.logger.Info(ctx, "Agent 已删除", "operation", "agent.delete", "agent_id", id,
-		"workspace_mode", string(workspaceMode))
+	if s.logger != nil {
+		s.logger.Info(ctx, "Agent 已删除", "operation", "agent.delete", "agent_id", state.AgentID,
+			"workspace_mode", string(mode))
+	}
 	return nil
 }
 
@@ -1341,8 +1383,9 @@ func (s *Service) rollbackCreatedAgent(
 
 	defer cancel()
 
-	return s.store.Delete(
-		ctx,
-		id,
-	)
+	state, err := s.store.BeginDelete(ctx, id)
+	if err != nil {
+		return err
+	}
+	return s.resumeDeletion(ctx, state)
 }

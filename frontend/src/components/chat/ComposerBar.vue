@@ -221,8 +221,8 @@ function formatModelCapabilities(capabilities) {
 
 function attachmentCapabilityError(items) {
   if (!Array.isArray(items) || items.length === 0) return "";
-  const project = agentStore.selectedAgent;
-  const chat = modelStore.modelByID(project?.modelID ?? "");
+  const agent = agentStore.selectedAgent;
+  const chat = modelStore.modelByID(agent?.modelID ?? "");
   if (!chat) return ""; // Runtime 仍会做最终校验。
 
   const needsVision = items.some((item) => String(item?.mimeType || "").toLowerCase().startsWith("image/"));
@@ -230,14 +230,14 @@ function attachmentCapabilityError(items) {
   const supports = (model) => Boolean(model) && (!needsVision || model.capabilities?.vision) && (!needsFiles || model.capabilities?.files);
   if (supports(chat)) return "";
 
-  const visionID = project?.modelRoles?.visionModelID || "";
+  const visionID = agent?.modelRoles?.visionModelID || "";
   const vision = modelStore.modelByID(visionID);
   if (supports(vision)) return "";
 
   const missing = [];
   if (needsVision) missing.push("Vision");
   if (needsFiles) missing.push("Files");
-  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的 Vision 模型角色。请先在项目设置或模型 Capability 中配置。`;
+  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的 Vision 模型角色。请先在 Agent 设置或模型 Capability 中配置。`;
 }
 
 function formatSandbox(manifest) {

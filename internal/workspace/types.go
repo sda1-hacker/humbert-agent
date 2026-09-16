@@ -17,7 +17,7 @@ const (
 	//
 	// 例如：
 	//
-	//	/Users/alice/Projects/humbert
+	//	/Users/alice/workspaces/humbert
 	//
 	// Humbert 不会在目录外增加 files/ 等额外层级。
 	ModeCustom Mode = "custom"

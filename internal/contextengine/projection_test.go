@@ -30,7 +30,7 @@ func projectionAssistant(id, text, thinking string, calls ...transcript.ContentB
 	}}
 }
 
-func TestProjectActiveBranchUsesLatestCheckpointAndRecentRawMessages(t *testing.T) {
+func TestProjectionActiveBranchUsesLatestCheckpointAndRecentRawMessages(t *testing.T) {
 	t.Parallel()
 
 	branch := []transcript.Entry{
@@ -63,7 +63,7 @@ func TestProjectActiveBranchUsesLatestCheckpointAndRecentRawMessages(t *testing.
 	}
 }
 
-func TestProjectActiveBranchCanOmitReasoning(t *testing.T) {
+func TestProjectionActiveBranchCanOmitReasoning(t *testing.T) {
 	t.Parallel()
 
 	branch := []transcript.Entry{projectionAssistant("a1", "answer", "private-reasoning")}

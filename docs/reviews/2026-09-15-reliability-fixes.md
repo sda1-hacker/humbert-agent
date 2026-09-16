@@ -2,6 +2,10 @@
 
 本次修改基于同目录的代码审查报告，优先修复会话、工具事务和运行生命周期，保持 Eino/Wails/Vue 与文件存储架构。
 
+2026-09-16 后续又完成了 Agent 删除状态机、删除/Session 创建并发协调、Custom
+Workspace 保留测试、损坏 Session 隔离，以及 UI/文档中的旧工作容器概念清理。当前领域
+边界以 `docs/architecture/domain-boundaries.md` 为准。
+
 ## 已实现
 
 ### 1. 中断工具历史恢复
@@ -17,7 +21,16 @@
 - 创建与恢复使用同一把会话配置锁，避免并发读取抢先恢复正在创建的会话。
 - 不覆盖已有、损坏或符号链接配置；原有消息文件保留。
 
-选择了兼容现有目录的恢复策略，本轮没有切换到暂存目录发布协议。格式损坏的已有配置仍明确报错，尚未实现通用的损坏会话隔离/修复界面。
+选择了兼容现有目录的恢复策略，本轮没有切换到暂存目录发布协议。后续实现已将格式损坏
+的 Session 隔离：原文件不被覆盖，健康 Session 继续加载，直接访问损坏项会返回
+`ErrSessionUnavailable`。目前仍没有面向用户的修复/导出界面。
+
+### 2.1 Agent 删除恢复
+
+- 删除前原子写入 `.deleting.json`，Agent 随即从 Get/List 隐藏。
+- Managed Workspace 和 Agent 内部数据分阶段清理；Custom Workspace 永不递归删除。
+- 中途失败保留检查点，Bootstrap 会继续未完成删除且不会因此阻塞应用启动。
+- Runtime 删除门闩与 Session reservation 协调 Turn、压缩、Session 创建和删除。
 
 ### 3. 发送失败与重试
 
@@ -50,7 +63,8 @@
 ## 回归测试
 
 - contextengine：未完成事务、重复调用/结果、部分工具成功后中断、后续用户消息、恢复幂等性、原始历史不变。
-- sessions：缺失 config 的重启恢复、保留 Transcript、恢复后改名再重启、拒绝覆盖损坏配置、连续重试不重复追加、拒绝重试已回复消息。
+- sessions：缺失 config 的重启恢复、保留 Transcript、恢复后改名再重启、损坏 Session 隔离且健康 Session 可用、连续重试不重复追加、拒绝重试已回复消息。
+- agents：删除中断后重启续作、并发 Session 创建/Agent 删除无孤儿、Custom Workspace 保留。
 - runtime：关闭取消并等待初始化、多次关闭等待、拒绝删除被占用会话、已完成工具结果在取消后仍保存、取消记忆维护并发出正确终态。
 - sandbox：测试目录与生产路径一样先解析真实路径，修复 macOS `/var` 与 `/private/var` 别名导致的夹具错误，没有放宽沙盒规则。
 
@@ -60,17 +74,18 @@
 go test ./...
 go test -race ./internal/runtime ./internal/sessions ./internal/contextengine ./internal/sandbox
 go vet ./...
-wails3 generate bindings -clean=false -time-type=string ./cmd/desktop
 cd frontend
 npm run build
 ```
 
-以上测试、静态检查、绑定生成和构建已执行通过。前端仍有约 1.09 MB 主 JS 的大包提示，npm 仍提示现有 minimum-release-age 配置不受支持。未运行真实 Provider/工具外部副作用或完整桌面 GUI 验收。
+以上 Go 测试、静态检查和前端构建已执行通过。Wails bindings 是生成产物，本轮未手工修改
+或重新生成。前端仍有约 1.11 MB 主 JS 的大包提示，npm 仍提示现有
+minimum-release-age 配置不受支持。未运行真实 Provider/工具外部副作用或完整桌面 GUI 验收。
 
 ## 下一批工作
 
 1. JSONL 增量读取/可重建索引与历史分页，解决长会话扫描成本。
-2. 损坏会话隔离界面、持久化运行状态和更完整的重试协议。
-3. Markdown/代码块、附件与工作区产物预览。
+2. 损坏会话修复/导出界面、持久化运行状态和更完整的重试协议。
+3. 工作区产物预览。
 4. 跨会话个人记忆的编辑、来源与遗忘。
 5. 再按真实使用频率缩减搜索来源、Skills 管理和大型设置页；自主任务、浏览器控制、多 Agent 协作另行规划。

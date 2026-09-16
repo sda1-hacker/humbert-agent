@@ -45,7 +45,7 @@ import ModelCapabilityBadges
 
 const props =
     defineProps({
-      project: {
+      agent: {
         type: Object,
         default: null,
       },
@@ -132,7 +132,7 @@ const creating =
     );
 
 /**
- * 已禁用但当前 Project 正在使用的 Model
+ * 已禁用但当前 Agent 正在使用的 Model
  * 仍然必须展示出来。
  */
 const availableModels =
@@ -159,8 +159,8 @@ const selectedChatModel = computed(() => modelForID(form.modelID));
 const modalTitle =
     computed(() =>
         creating.value
-            ? "新建项目"
-            : "项目设置",
+            ? "新建 Agent"
+            : "Agent 设置",
     );
 
 const workspaceDisplay =
@@ -189,14 +189,14 @@ const workspaceDisplay =
     });
 
 /**
- * 根据当前 Project 重置表单。
+ * 根据当前 Agent 重置表单。
  *
- * project=null 表示创建。
+ * agent=null 表示创建。
  */
-function resetForm(project) {
+function resetForm(agent) {
   activeTab.value = "basic";
 
-  if (!project) {
+  if (!agent) {
     Object.assign(
         form,
         {
@@ -251,64 +251,64 @@ function resetForm(project) {
       form,
       {
         id:
-        project.id,
+        agent.id,
 
         name:
-        project.name,
+        agent.name,
 
         instruction:
-        project.instruction,
+        agent.instruction,
 
         modelID:
-        project.modelID,
+        agent.modelID,
 
         modelRoles: {
-          utilityModelID: project.modelRoles?.utilityModelID ?? "",
-          memoryModelID: project.modelRoles?.memoryModelID ?? "",
-          visionModelID: project.modelRoles?.visionModelID ?? "",
+          utilityModelID: agent.modelRoles?.utilityModelID ?? "",
+          memoryModelID: agent.modelRoles?.memoryModelID ?? "",
+          visionModelID: agent.modelRoles?.visionModelID ?? "",
         },
 
         enabledSkills:
-            Array.isArray(project.enabledSkills)
-                ? [...project.enabledSkills]
+            Array.isArray(agent.enabledSkills)
+                ? [...agent.enabledSkills]
                 : [],
 
         workspaceMode:
-            project.workspaceMode ||
+            agent.workspaceMode ||
             "managed",
 
         workspacePath:
-            project.workspacePath ||
+            agent.workspacePath ||
             "",
 
         workspaceDisplayPath:
-            project.workspaceDisplayPath ||
+            agent.workspaceDisplayPath ||
             "",
 
         availableBuiltinTools:
-            Array.isArray(project.availableBuiltinTools) &&
-            project.availableBuiltinTools.length > 0
-                ? [...project.availableBuiltinTools]
+            Array.isArray(agent.availableBuiltinTools) &&
+            agent.availableBuiltinTools.length > 0
+                ? [...agent.availableBuiltinTools]
                 : [...builtinCatalog.value],
         enabledBuiltinTools:
-            project.builtinToolsConfigured
-                ? [...(project.enabledBuiltinTools ?? [])]
+            agent.builtinToolsConfigured
+                ? [...(agent.enabledBuiltinTools ?? [])]
                 : (
-                    Array.isArray(project.availableBuiltinTools) &&
-                    project.availableBuiltinTools.length > 0
-                        ? project.availableBuiltinTools
+                    Array.isArray(agent.availableBuiltinTools) &&
+                    agent.availableBuiltinTools.length > 0
+                        ? agent.availableBuiltinTools
                         : builtinCatalog.value
                 ).map((tool) => tool.name),
         builtinToolsConfigured:
-            Boolean(project.builtinToolsConfigured),
+            Boolean(agent.builtinToolsConfigured),
         sandbox: {
-          profile: project.sandbox?.profile ?? "",
-          additionalWritePaths: [...(project.sandbox?.additionalWritePaths ?? [])],
-          networkMode: project.sandbox?.networkMode ?? "",
-          nativeMode: project.sandbox?.nativeMode ?? "",
+          profile: agent.sandbox?.profile ?? "",
+          additionalWritePaths: [...(agent.sandbox?.additionalWritePaths ?? [])],
+          networkMode: agent.sandbox?.networkMode ?? "",
+          nativeMode: agent.sandbox?.nativeMode ?? "",
         },
         sandboxStatus:
-            project.sandboxStatus ?? platformSandboxStatus.value,
+            agent.sandboxStatus ?? platformSandboxStatus.value,
       },
   );
 }
@@ -323,7 +323,7 @@ onMounted(async () => {
     platformSandboxStatus.value = sandboxStatus ?? null;
 
     if (visible.value) {
-      resetForm(props.project);
+      resetForm(props.agent);
     }
   } catch (error) {
     Message.warning(error?.message ?? "无法加载 Agent 安全配置");
@@ -331,13 +331,13 @@ onMounted(async () => {
 });
 
 /**
- * 每次打开都重新读取 Project，
+ * 每次打开都重新读取 Agent，
  * 防止 Modal 保存旧表单状态。
  */
 watch(
     [
       () => visible.value,
-      () => props.project?.id,
+      () => props.agent?.id,
     ],
 
     ([opened]) => {
@@ -346,7 +346,7 @@ watch(
       }
 
       resetForm(
-          props.project,
+          props.agent,
       );
     },
 
@@ -356,7 +356,7 @@ watch(
 );
 
 /**
- * Model 后加载完成时，新建 Project 自动选择第一个可用模型。
+ * Model 后加载完成时，新建 Agent 自动选择第一个可用模型。
  */
 watch(
     () =>
@@ -432,9 +432,9 @@ async function chooseWorkspace() {
 }
 
 /**
- * 创建或更新 Project。
+ * 创建或更新 Agent。
  *
- * UI 中的 Project 就是 Agent；Agent 自己拥有 Workspace、模型、Skills 与安全能力。
+ * Agent 自己拥有 Workspace、模型、Skills 与安全能力。
  */
 async function save() {
   if (saving.value) {
@@ -446,7 +446,7 @@ async function save() {
 
   if (!name) {
     Message.warning(
-        "请输入项目名称",
+        "请输入 Agent 名称",
     );
 
     return;
@@ -458,7 +458,7 @@ async function save() {
       !form.workspacePath.trim()
   ) {
     Message.warning(
-        "请选择项目目录",
+        "请选择 Agent 目录",
     );
 
     return;
@@ -523,7 +523,7 @@ async function save() {
       );
 
       Message.success(
-          "项目已创建",
+          "Agent 已创建",
       );
 
       return;
@@ -553,7 +553,7 @@ async function save() {
       const answer =
           await Dialogs.Question({
             Title:
-                "更换项目目录",
+                "更换 Agent 目录",
 
             Message:
                 "更换 Workspace 只影响之后的 Agent Turn，不会移动或删除原目录中的文件。是否继续？",
@@ -598,7 +598,7 @@ async function save() {
     );
 
     Message.success(
-        "项目设置已保存",
+        "Agent 设置已保存",
     );
   } catch (error) {
     Message.error(
@@ -612,12 +612,12 @@ async function save() {
 }
 
 /**
- * 删除 Project（即删除对应 Agent Aggregate）。
+ * 删除 Agent Aggregate。
  *
  * 后端会级联删除全部 Session、附件、Session Memory、Agent Profile，以及 Humbert 管理的
  * managed workspace。Custom Workspace 属于用户外部目录，只解除引用，不会删除真实文件。
  */
-async function removeProject() {
+async function removeAgent() {
   if (!form.id) {
     return;
   }
@@ -626,10 +626,10 @@ async function removeProject() {
     const answer =
         await Dialogs.Question({
           Title:
-              "删除项目",
+              "删除 Agent",
 
           Message:
-              `确定删除项目「${form.name}」吗？该项目的全部对话、附件、记忆和 Humbert 管理的 Workspace 会一并删除；如果使用的是自定义外部 Workspace，外部文件不会被删除。`,
+              `确定删除 Agent「${form.name}」吗？该 Agent 的全部对话、附件、记忆和 Humbert 管理的 Workspace 会一并删除；如果使用的是自定义外部 Workspace，外部文件不会被删除。`,
 
           Buttons: [
             {
@@ -670,7 +670,7 @@ async function removeProject() {
     );
 
     Message.success(
-        "项目已删除",
+        "Agent 已删除",
     );
   } catch (error) {
     Message.error(
@@ -688,15 +688,15 @@ async function removeProject() {
       :width="700"
       :mask-closable="!saving"
       :esc-to-close="!saving"
-      modal-class="project-settings-modal"
+      modal-class="agent-settings-modal"
   >
     <a-tabs
         v-model:active-key="activeTab"
-        class="project-settings-tabs"
+        class="agent-settings-tabs"
     >
       <a-tab-pane key="basic" title="基本设置">
-        <a-form :model="form" layout="vertical" class="project-tab-form">
-          <a-form-item label="项目名称">
+        <a-form :model="form" layout="vertical" class="agent-tab-form">
+          <a-form-item label="Agent 名称">
             <a-input
                 v-model="form.name"
                 maxlength="100"
@@ -776,7 +776,7 @@ async function removeProject() {
             <SkillSelector v-model="form.enabledSkills" />
           </a-form-item>
 
-          <a-form-item label="项目目录">
+          <a-form-item label="Agent 目录">
             <div class="workspace-editor">
               <a-radio-group v-model="form.workspaceMode">
                 <a-radio value="managed">Humbert 管理</a-radio>
@@ -801,7 +801,7 @@ async function removeProject() {
 
               <div class="workspace-help">
                 <template v-if="form.workspaceMode === 'managed'">
-                  Humbert 会为这个项目创建独立工作目录。
+                  Humbert 会为这个 Agent 创建独立工作目录。
                 </template>
                 <template v-else>
                   这是 Agent 的主要工作目录，可正常读写。普通用户文件是否可读由全局“设置 → 安全”决定。
@@ -813,11 +813,11 @@ async function removeProject() {
       </a-tab-pane>
 
       <a-tab-pane key="config" title="Agent 配置">
-        <div class="project-config-pane">
-          <div class="project-config-intro">
+        <div class="agent-config-pane">
+          <div class="agent-config-intro">
             <strong>文件访问与工具</strong>
             <span>
-              这里保存的是这个项目自己的 Agent 配置。额外可读取目录会写入 Agent Profile，并在之后的对话中继续生效。
+              这里保存的是这个 Agent 自己的配置。额外可读取目录会写入 Agent Profile，并在之后的对话中继续生效。
             </span>
           </div>
 
@@ -832,37 +832,37 @@ async function removeProject() {
 
       <a-tab-pane key="instruction" title="Agent 指令">
         <div class="instruction-pane">
-          <div class="project-config-intro">
+          <div class="agent-config-intro">
             <strong>Agent Instruction</strong>
-            <span>定义这个项目中 Agent 的角色、原则、约束和工作方式。</span>
+            <span>定义这个 Agent 的角色、原则、约束和工作方式。</span>
           </div>
           <a-textarea
               v-model="form.instruction"
               :auto-size="{ minRows: 12, maxRows: 18 }"
-              placeholder="定义这个项目中 Agent 的角色、原则与行为方式。"
+              placeholder="定义这个 Agent 的角色、原则与行为方式。"
           />
         </div>
       </a-tab-pane>
     </a-tabs>
 
     <template #footer>
-      <div class="project-modal-footer">
+      <div class="agent-modal-footer">
         <a-button
             v-if="!creating"
             type="text"
             status="danger"
             :disabled="saving"
-            @click="removeProject"
+            @click="removeAgent"
         >
           <template #icon><IconDelete /></template>
-          删除项目
+          删除 Agent
         </a-button>
         <span v-else></span>
 
         <a-space>
           <a-button :disabled="saving" @click="visible = false">取消</a-button>
           <a-button type="primary" :loading="saving" @click="save">
-            {{ creating ? "创建项目" : "保存" }}
+            {{ creating ? "创建 Agent" : "保存" }}
           </a-button>
         </a-space>
       </div>
@@ -871,23 +871,23 @@ async function removeProject() {
 </template>
 
 <style scoped>
-.project-settings-tabs {
+.agent-settings-tabs {
   min-height: 420px;
 }
 
-.project-tab-form,
-.project-config-pane,
+.agent-tab-form,
+.agent-config-pane,
 .instruction-pane {
   padding: 4px 2px 8px;
 }
 
-.project-config-pane,
+.agent-config-pane,
 .instruction-pane {
   display: grid;
   gap: 16px;
 }
 
-.project-config-intro {
+.agent-config-intro {
   display: grid;
   gap: 5px;
   padding: 10px 12px;
@@ -896,12 +896,12 @@ async function removeProject() {
   background: var(--h-surface-soft, var(--h-surface));
 }
 
-.project-config-intro strong {
+.agent-config-intro strong {
   color: var(--h-text);
   font-size: 12px;
 }
 
-.project-config-intro span {
+.agent-config-intro span {
   color: var(--h-text-muted);
   font-size: 10px;
   line-height: 1.6;
@@ -981,14 +981,14 @@ async function removeProject() {
   line-height: 1.6;
 }
 
-.project-modal-footer {
+.agent-modal-footer {
   display: flex;
   width: 100%;
   align-items: center;
   justify-content: space-between;
 }
 
-:deep(.project-settings-modal .arco-modal-body) {
+:deep(.agent-settings-modal .arco-modal-body) {
   max-height: 72vh;
   overflow-y: auto;
 }
@@ -998,7 +998,7 @@ async function removeProject() {
     grid-template-columns: 1fr;
   }
 
-  .project-settings-tabs {
+  .agent-settings-tabs {
     min-height: 360px;
   }
 }

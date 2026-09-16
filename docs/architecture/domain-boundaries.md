@@ -1,71 +1,64 @@
 # Humbert Domain Boundaries
 
-This document records the ownership rules introduced by the 2026-09 refactor. New code should follow these boundaries even while legacy fields remain for data compatibility.
+本文档描述当前开发版本的领域边界。数据可以在开发阶段重建，因此各 Store 只支持最新
+schema，不维护旧版本迁移或双协议读取。
 
 ## Agent
 
-Agent owns reusable assistant identity and capabilities:
+Agent 是顶层 Aggregate，拥有：
 
-- name / instruction
-- default model
-- enabled Skills
-- enabled built-in tools and MCP selections
-- sandbox/security overrides
+- 名称、系统指令与模型角色；
+- Skills、内置工具与 MCP Tool 选择；
+- Sandbox/安全覆盖；
+- Workspace 模式与路径；
+- 该 Agent 下的全部 Sessions、附件与 Session Memory。
 
-Agent does **not** own the active project workspace in new code. The legacy Agent workspace fields are retained only so existing installations can be migrated without moving user files.
+局部修改优先使用 `UpdateProfile`、`SetModel`、`SetModelRoles`、`SetSkills`、
+`UpdateSecurity` 等窄命令，避免无关字段被旧快照覆盖。
 
-Agent writes should use narrow commands (`UpdateProfile`, `SetModel`, `SetSkills`, `UpdateSecurity`) instead of a read-modify-write of the entire Agent record.
-
-## Project
-
-Project is a first-class domain object and owns work context:
-
-- project name
-- Agent reference
-- workspace mode
-- workspace path
-
-The desktop UI may expose a Project + Agent aggregate DTO for convenience, but persistence and writes remain split by domain ownership.
-
-On upgrade, every legacy Agent receives a same-ID Project. This preserves the existing physical session/workspace layout while establishing a migration path to multiple Projects per Agent later.
+删除 Agent 使用持久化状态机：`active -> deleting -> removed`。进入 `deleting` 后，Agent
+立即从读取和列表中隐藏；应用重启会继续清理。Managed Workspace 属于 Humbert，会随
+Agent 删除；Custom Workspace 是用户外部数据，只解除引用。
 
 ## Workspace
 
-Workspace is resolved from Project configuration. Runtime code must resolve:
+Workspace 配置直接属于 Agent：
 
-`Session -> Project -> Workspace`
+`Agent -> Workspace`
 
-and must not treat Agent workspace fields as authoritative.
+Session 创建时解析当前 Agent Workspace，并把实际绝对路径冻结到 Session 的 `CWD`。
+修改 Agent Workspace 只影响之后创建的 Session 和 Turn，不搬迁或删除原 Custom
+Workspace 中的文件。
 
 ## Session
 
-Session records both `ProjectID` and `AgentID`.
+Session 只记录 `AgentID`，物理布局为：
 
-- `ProjectID` determines work context/workspace.
-- `AgentID` determines assistant identity and capabilities.
+```text
+agents/<agent-id>/sessions/<session-id>/
+├── config.json
+├── session.jsonl
+└── attachments/
+```
 
-Schema-v1 sessions that do not contain `project_id` are read as `ProjectID == AgentID`. The compatibility mapping is intentionally non-destructive.
+`config.json` 是低频控制面；`session.jsonl` 是 Message、Thinking、ToolCall、ToolResult
+与 Conversation Tree 的唯一事实来源。Store 只接受当前 schema。
 
-The physical session path remains under the Agent directory for now so this refactor does not move historical JSONL data. Storage layout can be migrated independently in a later version.
+一个 Session 的配置损坏时，Store 会隔离该 Session、保留原文件并记录诊断；其它健康
+Session 仍可加载，应用启动不会被单个损坏会话阻塞。仅当 `config.json` 缺失且 transcript
+header 合法时，Store 才会重建当前版本配置。
 
 ## Runtime
 
-A Runtime turn freezes an immutable snapshot from:
+每个 Turn 冻结不可变快照：
 
-`Session + Project + Agent + Model + Tools + Skills + MCP + Sandbox + Context`
+`Session + Agent + Workspace + Model + Tools + Skills + MCP + Sandbox + Context`
 
-Changing Project or Agent configuration affects future turns only.
+同一 Session 同时最多有一个 Turn/压缩/删除操作。删除 Agent 时，Runtime 在同一并发
+边界内拒绝新操作并检查已有 Session reservation；随后由 Agent 删除状态机级联清理。
 
-## Chat input and attachments
+## Chat Input 与附件
 
-User input is structured as text plus zero or more attachments. Attachment binary data is stored in a per-session `attachments/` sidecar directory. Transcript JSONL stores only stable attachment metadata/reference IDs.
-
-Before a provider call, runtime hydrates those references into Eino multimodal `UserInputMultiContent`. Base64 payloads therefore do not pollute the transcript, memory, or context-compaction records.
-
-## Compatibility rule
-
-Compatibility code may read legacy fields, but new features must not create new dependencies on them. In particular:
-
-- do not add new callers of full `UpdateAgent` for partial edits;
-- do not resolve Workspace from Agent in Runtime;
-- do not assume `ProjectID == AgentID` even though migration currently creates that relationship by default.
+用户输入由文本和零个或多个附件组成。附件字节保存在 Session 的 `attachments/` sidecar，
+JSONL 只保存稳定引用与元数据。Provider 调用前才把引用恢复为 Eino 多模态内容，因此
+Base64 不进入 transcript、memory 或 compaction 记录。

@@ -396,7 +396,7 @@ onMounted(load);
 
           <SectionCard
               title="安全自检"
-              description="在系统临时目录中验证文件边界和本地程序隔离，不会读取或修改你的项目文件。"
+              description="在系统临时目录中验证文件边界和本地程序隔离，不会读取或修改你的工作区文件。"
           >
             <div class="diagnostic-header">
               <a-button type="secondary" :loading="diagnosing" @click="diagnose">

@@ -34,14 +34,14 @@ import {
   useSessionStore,
 } from "../../stores/sessions.js";
 
-import ProjectModal
-  from "./ProjectModal.vue";
+import AgentModal
+  from "./AgentModal.vue";
 
 import RenameSessionModal
   from "./RenameSessionModal.vue";
 
 const expandedStorageKey =
-    "humbert.sidebar.expanded-projects.v1";
+    "humbert.sidebar.expanded-agents.v1";
 
 const props =
     defineProps({
@@ -74,26 +74,26 @@ const renameVisible =
 const renameTarget =
     ref(null);
 
-const projectModalVisible =
+const agentModalVisible =
     ref(false);
 
-const projectTarget =
+const agentTarget =
     ref(null);
 
 /**
- * Project 展开状态属于纯 UI State。
+ * Agent 展开状态属于纯 UI State。
  *
  * 存 localStorage，不进入后端配置。
  */
-const expandedProjectIDs =
+const expandedAgentIDs =
     ref(
-        readExpandedProjects(),
+        readExpandedAgents(),
     );
 
 /**
- * 从 localStorage 恢复 Project 展开状态。
+ * 从 localStorage 恢复 Agent 展开状态。
  */
-function readExpandedProjects() {
+function readExpandedAgents() {
   if (
       typeof window ===
       "undefined"
@@ -133,9 +133,9 @@ function readExpandedProjects() {
 }
 
 /**
- * 保存 Project 展开状态。
+ * 保存 Agent 展开状态。
  */
-function persistExpandedProjects() {
+function persistExpandedAgents() {
   if (
       typeof window ===
       "undefined"
@@ -148,7 +148,7 @@ function persistExpandedProjects() {
         expandedStorageKey,
         JSON.stringify(
             Array.from(
-                expandedProjectIDs
+                expandedAgentIDs
                     .value,
             ),
         ),
@@ -162,40 +162,40 @@ function persistExpandedProjects() {
   }
 }
 
-function isProjectExpanded(
-    projectID,
+function isAgentExpanded(
+    agentID,
 ) {
   return (
-      expandedProjectIDs
+      expandedAgentIDs
           .value
-          .has(projectID)
+          .has(agentID)
   );
 }
 
 /**
- * 展开一个 Project。
+ * 展开一个 Agent。
  *
- * Project 展开后需要确保对应 Session Metadata 已加载。
+ * Agent 展开后需要确保对应 Session Metadata 已加载。
  */
-async function expandProject(
-    projectID,
+async function expandAgent(
+    agentID,
 ) {
   const next =
       new Set(
-          expandedProjectIDs.value,
+          expandedAgentIDs.value,
       );
 
-  next.add(projectID);
+  next.add(agentID);
 
-  expandedProjectIDs.value =
+  expandedAgentIDs.value =
       next;
 
-  persistExpandedProjects();
+  persistExpandedAgents();
 
   try {
     await sessionStore
         .loadAgentSessions(
-            projectID,
+            agentID,
         );
   } catch (error) {
     Message.error(
@@ -205,81 +205,80 @@ async function expandProject(
   }
 }
 
-function collapseProject(
-    projectID,
+function collapseAgent(
+    agentID,
 ) {
   const next =
       new Set(
-          expandedProjectIDs.value,
+          expandedAgentIDs.value,
       );
 
-  next.delete(projectID);
+  next.delete(agentID);
 
-  expandedProjectIDs.value =
+  expandedAgentIDs.value =
       next;
 
-  persistExpandedProjects();
+  persistExpandedAgents();
 }
 
-async function toggleProject(
-    project,
+async function toggleAgent(
+    agent,
 ) {
   if (
-      isProjectExpanded(
-          project.id,
+      isAgentExpanded(
+          agent.id,
       )
   ) {
-    collapseProject(
-        project.id,
+    collapseAgent(
+        agent.id,
     );
 
     return;
   }
 
-  await expandProject(
-      project.id,
+  await expandAgent(
+      agent.id,
   );
 }
 
 /**
- * 选择 Project。
+ * 选择 Agent。
  *
- * UI 中称为 Project，
- * Domain / Store 中仍然是 Agent。
+ * 选择后同步加载该 Agent 的 Session。
  */
-async function selectProject(
-    project,
+async function selectAgent(
+    agent,
 ) {
   try {
-    await expandProject(
-        project.id,
+    await expandAgent(
+        agent.id,
     );
 
     if (
         agentStore.selectedID ===
-        project.id &&
+        agent.id &&
         sessionStore.agentID ===
-        project.id
+        agent.id
     ) {
       emit("open-chat");
       return;
     }
 
     agentStore.select(
-        project.id,
+        agent.id,
     );
 
     /**
      * AppShell 原有 watch 仍然可以继续存在。
      *
-     * Sidebar 主动 loadForAgent 是为了确保用户点击 Project 后
+     * Sidebar 主动 loadForAgent 是为了确保用户点击 Agent 后
      * 当前视图立即具有确定状态。
      *
      * 重复读取只是 Session Metadata 查询，不会产生副作用。
      */
     await sessionStore
         .loadForAgent(
-            project.id,
+            agent.id,
         );
 
     emit("open-chat");
@@ -292,23 +291,23 @@ async function selectProject(
 }
 
 /**
- * 为指定 Project 创建 Conversation。
+ * 为指定 Agent 创建 Conversation。
  */
 async function createConversation(
-    project,
+    agent,
 ) {
   try {
     agentStore.select(
-        project.id,
+        agent.id,
     );
 
-    await expandProject(
-        project.id,
+    await expandAgent(
+        agent.id,
     );
 
     await sessionStore
         .createForAgent(
-            project.id,
+            agent.id,
         );
 
     emit("open-chat");
@@ -323,27 +322,27 @@ async function createConversation(
 /**
  * 选择二级 Session。
  *
- * 如果目标 Session 属于另一个 Project，
- * 先切换 Project，再加载对应 Session。
+ * 如果目标 Session 属于另一个 Agent，
+ * 先切换 Agent，再加载对应 Session。
  */
 async function selectSession(
-    project,
+    agent,
     session,
 ) {
   try {
     if (
         agentStore.selectedID !==
-        project.id ||
+        agent.id ||
         sessionStore.agentID !==
-        project.id
+        agent.id
     ) {
       agentStore.select(
-          project.id,
+          agent.id,
       );
 
       await sessionStore
           .loadForAgent(
-              project.id,
+              agent.id,
           );
     }
 
@@ -434,60 +433,60 @@ async function removeSession(
 }
 
 /**
- * 打开创建 Project Modal。
+ * 打开创建 Agent Modal。
  */
-function openCreateProject() {
-  projectTarget.value =
+function openCreateAgent() {
+  agentTarget.value =
       null;
 
-  projectModalVisible.value =
+  agentModalVisible.value =
       true;
 }
 
 /**
- * 编辑已有 Project。
+ * 编辑已有 Agent。
  */
-function openEditProject(
-    project,
+function openEditAgent(
+    agent,
 ) {
-  projectTarget.value =
-      project;
+  agentTarget.value =
+      agent;
 
-  projectModalVisible.value =
+  agentModalVisible.value =
       true;
 }
 
-async function handleProjectCreated(
-    project,
+async function handleAgentCreated(
+    agent,
 ) {
-  if (!project?.id) {
+  if (!agent?.id) {
     return;
   }
 
-  await expandProject(
-      project.id,
+  await expandAgent(
+      agent.id,
   );
 
   /**
-   * AgentStore.create 已经把新 Project 设为 selected。
+   * AgentStore.create 已经把新 Agent 设为 selected。
    */
   await sessionStore
       .loadForAgent(
-          project.id,
+          agent.id,
       );
 
   emit("open-chat");
 }
 
-function handleProjectDeleted(
-    projectID,
+function handleAgentDeleted(
+    agentID,
 ) {
   sessionStore.forgetAgent(
-      projectID,
+      agentID,
   );
 
-  collapseProject(
-      projectID,
+  collapseAgent(
+      agentID,
   );
 }
 
@@ -502,18 +501,18 @@ const searchKeyword =
     );
 
 /**
- * 返回 Project 下需要显示的 Session。
+ * 返回 Agent 下需要显示的 Session。
  *
- * Project Name 自身命中搜索时显示它的全部 Session；
+ * Agent Name 自身命中搜索时显示它的全部 Session；
  * 否则只显示标题命中的 Session。
  */
-function sessionsForProject(
-    project,
+function sessionsForAgent(
+    agent,
 ) {
   const sessions =
       sessionStore
           .sessionsForAgent(
-              project.id,
+              agent.id,
           );
 
   const keyword =
@@ -524,7 +523,7 @@ function sessionsForProject(
   }
 
   if (
-      project.name
+      agent.name
           .toLowerCase()
           .includes(keyword)
   ) {
@@ -540,12 +539,12 @@ function sessionsForProject(
 }
 
 /**
- * Project Search 同时匹配：
+ * Agent Search 同时匹配：
  *
- *   Project Name
+ *   Agent Name
  *   Session Title
  */
-const visibleProjects =
+const visibleAgents =
     computed(() => {
       const keyword =
           searchKeyword.value;
@@ -555,9 +554,9 @@ const visibleProjects =
       }
 
       return agentStore.items.filter(
-          (project) => {
+          (agent) => {
             if (
-                project.name
+                agent.name
                     .toLowerCase()
                     .includes(
                         keyword,
@@ -567,8 +566,8 @@ const visibleProjects =
             }
 
             return (
-                sessionsForProject(
-                    project,
+                sessionsForAgent(
+                    agent,
                 ).length > 0
             );
           },
@@ -576,15 +575,15 @@ const visibleProjects =
     });
 
 /**
- * Project 是否有正在运行中的 Turn。
+ * Agent 是否有正在运行中的 Turn。
  */
-function projectIsRunning(
-    project,
+function agentIsRunning(
+    agent,
 ) {
   return (
       sessionStore
           .sessionsForAgent(
-              project.id,
+              agent.id,
           )
           .some(
               (session) =>
@@ -598,19 +597,19 @@ function projectIsRunning(
 
 /**
  * 搜索时需要展示匹配的二级 Session，
- * 因此搜索状态下临时认为 Project 是展开的。
+ * 因此搜索状态下临时认为 Agent 是展开的。
  *
  * 不修改真实 expanded state。
  */
-function shouldShowProjectSessions(
-    project,
+function shouldShowAgentSessions(
+    agent,
 ) {
   return (
       Boolean(
           searchKeyword.value,
       ) ||
-      isProjectExpanded(
-          project.id,
+      isAgentExpanded(
+          agent.id,
       )
   );
 }
@@ -619,15 +618,15 @@ function shouldShowProjectSessions(
  * Agent List 变化时把 Session Metadata 缓存起来。
  *
  * 只加载 Session List，不读取 Message Body，
- * 所以即使一个 Project 有很多历史聊天，
+ * 所以即使一个 Agent 有很多历史聊天，
  * Sidebar 也不会一次性加载完整聊天内容。
  */
 watch(
     () =>
         agentStore.items
             .map(
-                (project) =>
-                    project.id,
+                (agent) =>
+                    agent.id,
             )
             .join("|"),
 
@@ -635,13 +634,13 @@ watch(
       const failures = [];
 
       for (
-          const project of
+          const agent of
           agentStore.items
           ) {
         if (
             sessionStore
                 .isAgentSessionsLoaded(
-                    project.id,
+                    agent.id,
                 )
         ) {
           continue;
@@ -650,7 +649,7 @@ watch(
         try {
           await sessionStore
               .loadAgentSessions(
-                  project.id,
+                  agent.id,
               );
         } catch (error) {
           failures.push(error);
@@ -661,7 +660,7 @@ watch(
           failures.length > 0
       ) {
         Message.error(
-            "部分项目的对话列表加载失败",
+            "部分 Agent 的对话列表加载失败",
         );
       }
     },
@@ -672,7 +671,7 @@ watch(
 );
 
 /**
- * 当前 Project 始终自动展开。
+ * 当前 Agent 始终自动展开。
  *
  * 用户仍然可以之后手动折叠。
  */
@@ -680,13 +679,13 @@ watch(
     () =>
         agentStore.selectedID,
 
-    (projectID) => {
-      if (!projectID) {
+    (agentID) => {
+      if (!agentID) {
         return;
       }
 
-      void expandProject(
-          projectID,
+      void expandAgent(
+          agentID,
       );
     },
 
@@ -701,17 +700,17 @@ watch(
     <!-- 固定顶部 -->
     <header class="sidebar-header">
       <span class="sidebar-title">
-        项目
+        Agent
       </span>
 
       <a-tooltip
-          content="新建项目"
+          content="新建 Agent"
       >
         <a-button
             type="text"
             shape="circle"
             @click="
-            openCreateProject
+            openCreateAgent
           "
         >
           <template #icon>
@@ -782,7 +781,7 @@ watch(
           sessionStore.search
         "
           allow-clear
-          placeholder="搜索项目或对话"
+          placeholder="搜索 Agent 或对话"
       >
         <template #prefix>
           <IconSearch/>
@@ -790,8 +789,8 @@ watch(
       </a-input>
     </div>
 
-    <!-- Project -> Session Tree -->
-    <div class="project-tree">
+    <!-- Agent -> Session Tree -->
+    <div class="agent-tree">
       <div
           v-if="
           agentStore.items.length ===
@@ -800,7 +799,7 @@ watch(
           class="sidebar-empty"
       >
         <div>
-          还没有项目
+          还没有 Agent
         </div>
 
         <a-button
@@ -809,67 +808,67 @@ watch(
           "
             type="text"
             @click="
-            openCreateProject
+            openCreateAgent
           "
         >
           <template #icon>
             <IconPlus/>
           </template>
 
-          创建第一个项目
+          创建第一个 Agent
         </a-button>
       </div>
 
       <div
           v-else-if="
-          visibleProjects.length ===
+          visibleAgents.length ===
           0
         "
           class="sidebar-empty"
       >
-        没有找到匹配的项目或对话
+        没有找到匹配的 Agent 或对话
       </div>
 
       <section
           v-for="
-          project in
-          visibleProjects
+          agent in
+          visibleAgents
         "
-          :key="project.id"
-          class="project-group"
+          :key="agent.id"
+          class="agent-group"
       >
         <div
-            class="project-row"
+            class="agent-row"
             :class="{
-            'project-row--active':
+            'agent-row--active':
               props.activeView === 'chat' &&
               agentStore.selectedID ===
-              project.id,
+              agent.id,
           }"
         >
           <!-- 展开/折叠 -->
           <button
               type="button"
-              class="project-toggle"
+              class="agent-toggle"
               :aria-label="
-              isProjectExpanded(
-                project.id,
+              isAgentExpanded(
+                agent.id,
               )
-                ? '折叠项目'
-                : '展开项目'
+                ? '折叠 Agent'
+                : '展开 Agent'
             "
               @click.stop="
-              toggleProject(
-                project,
+              toggleAgent(
+                agent,
               )
             "
           >
             <span
-                class="project-chevron"
+                class="agent-chevron"
                 :class="{
-                'project-chevron--open':
-                  isProjectExpanded(
-                    project.id,
+                'agent-chevron--open':
+                  isAgentExpanded(
+                    agent.id,
                   ) ||
                   Boolean(
                     searchKeyword,
@@ -880,40 +879,40 @@ watch(
             </span>
           </button>
 
-          <!-- 选择 Project -->
+          <!-- 选择 Agent -->
           <button
               type="button"
-              class="project-main"
+              class="agent-main"
               @click="
-              selectProject(
-                project,
+              selectAgent(
+                agent,
               )
             "
           >
             <IconFolder
-                class="project-icon"
+                class="agent-icon"
             />
 
             <span
                 class="
-                project-text
+                agent-text
               "
             >
               <span
                   class="
-                  project-name
+                  agent-name
                 "
               >
-                {{ project.name }}
+                {{ agent.name }}
               </span>
 
               <span
                   class="
-                  project-model
+                  agent-model
                 "
               >
                 {{
-                  project
+                  agent
                       .modelDisplayName ||
                   "未配置模型"
                 }}
@@ -922,19 +921,19 @@ watch(
 
             <span
                 v-if="
-                projectIsRunning(
-                  project,
+                agentIsRunning(
+                  agent,
                 )
               "
                 class="
-                project-running
+                agent-running
               "
-                title="项目中有正在运行的对话"
+                title="Agent 中有正在运行的对话"
             ></span>
           </button>
 
-          <!-- Project Actions -->
-          <div class="project-actions">
+          <!-- Agent Actions -->
+          <div class="agent-actions">
             <a-tooltip
                 content="新建对话"
             >
@@ -943,7 +942,7 @@ watch(
                   size="mini"
                   @click.stop="
                   createConversation(
-                    project,
+                    agent,
                   )
                 "
               >
@@ -954,14 +953,14 @@ watch(
             </a-tooltip>
 
             <a-tooltip
-                content="项目设置"
+                content="Agent 设置"
             >
               <a-button
                   type="text"
                   size="mini"
                   @click.stop="
-                  openEditProject(
-                    project,
+                  openEditAgent(
+                    agent,
                   )
                 "
               >
@@ -976,11 +975,11 @@ watch(
         <!-- 二级 Session -->
         <div
             v-if="
-            shouldShowProjectSessions(
-              project,
+            shouldShowAgentSessions(
+              agent,
             )
           "
-            class="project-sessions"
+            class="agent-sessions"
         >
           <button
               type="button"
@@ -989,7 +988,7 @@ watch(
             "
               @click="
               createConversation(
-                project,
+                agent,
               )
             "
           >
@@ -1004,7 +1003,7 @@ watch(
               v-if="
               sessionStore
                 .loadingAgents[
-                  project.id
+                  agent.id
                 ]
             "
               class="
@@ -1016,8 +1015,8 @@ watch(
 
           <div
               v-else-if="
-              sessionsForProject(
-                project,
+              sessionsForAgent(
+                agent,
               ).length === 0
             "
               class="
@@ -1034,8 +1033,8 @@ watch(
           <div
               v-for="
               session in
-              sessionsForProject(
-                project,
+              sessionsForAgent(
+                agent,
               )
             "
               :key="session.id"
@@ -1045,7 +1044,7 @@ watch(
                 props.activeView === 'chat' &&
                 agentStore
                   .selectedID ===
-                  project.id &&
+                  agent.id &&
                 sessionStore
                   .selectedID ===
                   session.id,
@@ -1056,7 +1055,7 @@ watch(
                 class="session-main"
                 @click="
                 selectSession(
-                  project,
+                  agent,
                   session,
                 )
               "
@@ -1149,18 +1148,18 @@ watch(
       "
     />
 
-    <ProjectModal
+    <AgentModal
         v-model:visible="
-        projectModalVisible
+        agentModalVisible
       "
-        :project="
-        projectTarget
+        :agent="
+        agentTarget
       "
         @created="
-        handleProjectCreated
+        handleAgentCreated
       "
         @deleted="
-        handleProjectDeleted
+        handleAgentDeleted
       "
     />
   </aside>
@@ -1293,7 +1292,7 @@ watch(
 
 /*
  * =========================================================
- * Project Tree
+ * Agent Tree
  * =========================================================
  *
  * 只有这一块滚动。
@@ -1301,7 +1300,7 @@ watch(
  * Header / Search / Settings 永远固定。
  */
 
-.project-tree {
+.agent-tree {
   min-height: 0;
 
   flex: 1;
@@ -1312,12 +1311,12 @@ watch(
   padding: 10px 8px 14px;
 }
 
-.project-group +
-.project-group {
+.agent-group +
+.agent-group {
   margin-top: 3px;
 }
 
-.project-row {
+.agent-row {
   display: flex;
 
   width: 100%;
@@ -1335,17 +1334,17 @@ watch(
   background: transparent;
 }
 
-.project-row:hover {
+.agent-row:hover {
   background: var(--h-surface-hover);
 }
 
-.project-row--active {
+.agent-row--active {
   border-color: var(--h-border);
 
   background: var(--h-surface);
 }
 
-.project-toggle {
+.agent-toggle {
   display: grid;
 
   width: 24px;
@@ -1368,7 +1367,7 @@ watch(
   color: var(--h-text-muted);
 }
 
-.project-chevron {
+.agent-chevron {
   display: inline-block;
 
   font-size: 17px;
@@ -1378,11 +1377,11 @@ watch(
   transition: transform 120ms ease;
 }
 
-.project-chevron--open {
+.agent-chevron--open {
   transform: rotate(90deg);
 }
 
-.project-main {
+.agent-main {
   display: flex;
 
   min-width: 0;
@@ -1408,7 +1407,7 @@ watch(
   text-align: left;
 }
 
-.project-icon {
+.agent-icon {
   flex: 0 0 auto;
 
   color: var(--h-text-muted);
@@ -1416,7 +1415,7 @@ watch(
   font-size: 14px;
 }
 
-.project-text {
+.agent-text {
   display: flex;
 
   min-width: 0;
@@ -1428,7 +1427,7 @@ watch(
   gap: 1px;
 }
 
-.project-name {
+.agent-name {
   overflow: hidden;
 
   color: var(--h-text);
@@ -1442,7 +1441,7 @@ watch(
   white-space: nowrap;
 }
 
-.project-model {
+.agent-model {
   overflow: hidden;
 
   color: var(--h-text-muted);
@@ -1454,7 +1453,7 @@ watch(
   white-space: nowrap;
 }
 
-.project-running {
+.agent-running {
   width: 6px;
   height: 6px;
 
@@ -1467,7 +1466,7 @@ watch(
   background: var(--h-success);
 }
 
-.project-actions {
+.agent-actions {
   display: none;
 
   flex: 0 0 auto;
@@ -1477,10 +1476,10 @@ watch(
   padding-right: 3px;
 }
 
-.project-row:hover
-.project-actions,
-.project-row--active
-.project-actions {
+.agent-row:hover
+.agent-actions,
+.agent-row--active
+.agent-actions {
   display: flex;
 }
 
@@ -1490,7 +1489,7 @@ watch(
  * =========================================================
  */
 
-.project-sessions {
+.agent-sessions {
   position: relative;
 
   margin: 2px 0 6px 23px;

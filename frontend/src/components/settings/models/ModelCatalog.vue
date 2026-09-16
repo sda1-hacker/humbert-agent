@@ -514,7 +514,7 @@ watch(
         <div class="enabled-row">
           <div>
             <div class="enabled-title">启用模型</div>
-            <div class="enabled-description">停用后不会出现在项目默认模型选择中。</div>
+            <div class="enabled-description">停用后不会出现在 Agent 默认模型选择中。</div>
           </div>
           <a-switch v-model="form.enabled"/>
         </div>

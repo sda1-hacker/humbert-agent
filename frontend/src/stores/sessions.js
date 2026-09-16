@@ -11,15 +11,15 @@ import {
 } from "../api/sessions.js";
 
 /**
- * loadForAgentSequence 用于防止快速切换 Project 时出现旧请求覆盖新状态。
+ * loadForAgentSequence 用于防止快速切换 Agent 时出现旧请求覆盖新状态。
  *
  * 例如：
  *
- * Project A
+ * Agent A
  *    ↓ 请求尚未返回
- * Project B
+ * Agent B
  *    ↓ 请求先返回
- * Project A
+ * Agent A
  *    ↓ 旧请求最后才返回
  *
  * 如果不做序列保护，A 的 Session List 有可能覆盖 B。
@@ -29,9 +29,9 @@ let loadForAgentSequence = 0;
 /**
  * SessionStore 管理：
  *
- * 1. 当前选中 Project 的 Session；
+ * 1. 当前选中 Agent 的 Session；
  * 2. 当前选中 Session 的 Message History；
- * 3. Sidebar 中各 Project 的 Session Metadata Cache；
+ * 3. Sidebar 中各 Agent 的 Session Metadata Cache；
  * 4. Session Search。
  *
  * 重要约束：
@@ -46,7 +46,7 @@ export const useSessionStore =
         {
             state: () => ({
                 /**
-                 * 当前聊天区所属 Agent / Project。
+                 * 当前聊天区所属 Agent。
                  */
                 agentID: "",
 
@@ -81,7 +81,7 @@ export const useSessionStore =
                 /**
                  * agentID -> boolean
                  *
-                 * Sidebar 可以据此展示 Project Session
+                 * Sidebar 可以据此展示 Agent Session
                  * Metadata 的加载状态。
                  */
                 loadingAgents: {},
@@ -110,11 +110,11 @@ export const useSessionStore =
                 },
 
                 /**
-                 * 返回指定 Project 的 Session Cache。
+                 * 返回指定 Agent 的 Session Cache。
                  *
                  * Sidebar 使用这个 Getter 构造：
                  *
-                 * Project
+                 * Agent
                  *   ├── Session A
                  *   └── Session B
                  */
@@ -150,7 +150,7 @@ export const useSessionStore =
                         },
 
                 /**
-                 * 判断 Project 的 Session Metadata
+                 * 判断 Agent 的 Session Metadata
                  * 是否已经读取过。
                  */
                 isAgentSessionsLoaded:
@@ -191,9 +191,9 @@ export const useSessionStore =
 
             actions: {
                 /**
-                 * 把某个 Project 的 Session List 写入 Sidebar Cache。
+                 * 把某个 Agent 的 Session List 写入 Sidebar Cache。
                  *
-                 * 如果这个 Project 同时也是当前聊天 Project，
+                 * 如果这个 Agent 同时也是当前聊天 Agent，
                  * 会同步更新传统 items 字段。
                  */
                 cacheAgentSessions(
@@ -227,17 +227,17 @@ export const useSessionStore =
                 },
 
                 /**
-                 * 只读取某个 Project 的 Session Metadata。
+                 * 只读取某个 Agent 的 Session Metadata。
                  *
                  * 与 loadForAgent() 不同：
                  *
                  * 本方法不会：
                  *
-                 *   - 切换当前 Project；
+                 *   - 切换当前 Agent；
                  *   - 清空 Message History；
                  *   - 修改 selectedID。
                  *
-                 * 因此特别适合 Sidebar 加载折叠 Project。
+                 * 因此特别适合 Sidebar 加载折叠 Agent。
                  */
                 async loadAgentSessions(
                     agentID,
@@ -295,13 +295,13 @@ export const useSessionStore =
                 },
 
                 /**
-                 * 切换当前 Agent / Project。
+                 * 切换当前 Agent。
                  *
                  * 这个 API 保持原来的行为：
                  *
-                 *   Project 切换
+                 *   Agent 切换
                  *       ↓
-                 *   加载该 Project Sessions
+                 *   加载该 Agent Sessions
                  *       ↓
                  *   如果旧 selectedID 不属于它
                  *       ↓
@@ -345,7 +345,7 @@ export const useSessionStore =
                                 );
 
                         /**
-                         * 如果请求期间用户已经切换到了另外一个 Project，
+                         * 如果请求期间用户已经切换到了另外一个 Agent，
                          * 当前结果只允许留在 Cache，
                          * 不允许覆盖主聊天区。
                          */
@@ -395,14 +395,14 @@ export const useSessionStore =
                 },
 
                 /**
-                 * 为当前 Project 创建 Conversation。
+                 * 为当前 Agent 创建 Conversation。
                  *
                  * 保留原 API。
                  */
                 async create() {
                     if (!this.agentID) {
                         throw new Error(
-                            "请先选择项目",
+                            "请先选择 Agent",
                         );
                     }
 
@@ -413,16 +413,16 @@ export const useSessionStore =
                 },
 
                 /**
-                 * 为明确指定的 Project 创建 Conversation。
+                 * 为明确指定的 Agent 创建 Conversation。
                  *
                  * Sidebar 的：
                  *
-                 * Project
+                 * Agent
                  *   └── + 新建对话
                  *
                  * 使用这个方法。
                  *
-                 * 创建成功后该 Project 会成为当前 Project，
+                 * 创建成功后该 Agent 会成为当前 Agent，
                  * 新 Session 会成为当前 Session。
                  */
                 async createForAgent(
@@ -430,7 +430,7 @@ export const useSessionStore =
                 ) {
                     if (!agentID) {
                         throw new Error(
-                            "Project ID 不能为空",
+                            "Agent ID 不能为空",
                         );
                     }
 
@@ -470,7 +470,7 @@ export const useSessionStore =
                 },
 
                 /**
-                 * 选择当前 Project 中的 Session。
+                 * 选择当前 Agent 中的 Session。
                  */
                 async select(id) {
                     if (
@@ -535,7 +535,7 @@ export const useSessionStore =
                  * 还会同步更新 itemsByAgent Cache。
                  *
                  * 因此即使用户在 Sidebar 中重命名的是另一个
-                 * 展开 Project 下的 Session，也能立即反映到 UI。
+                 * 展开 Agent 下的 Session，也能立即反映到 UI。
                  */
                 async rename(
                     id,
@@ -602,10 +602,10 @@ export const useSessionStore =
                 /**
                  * 删除 Session。
                  *
-                 * 删除以后同步清理所有 Project Cache。
+                 * 删除以后同步清理所有 Agent Cache。
                  *
                  * 如果删除的是当前 Session，则自动选择当前
-                 * Project 中剩余的第一条 Session。
+                 * Agent 中剩余的第一条 Session。
                  */
                 async remove(id) {
                     await deleteSession(id);
@@ -671,7 +671,7 @@ export const useSessionStore =
                 },
 
                 /**
-                 * Agent / Project 被删除以后清理前端 Cache。
+                 * Agent 被删除以后清理前端 Cache。
                  *
                  * Workspace 文件不在这里处理。
                  */

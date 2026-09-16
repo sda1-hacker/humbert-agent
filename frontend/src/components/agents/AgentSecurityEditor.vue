@@ -73,7 +73,7 @@ const fileProtectionLabel = computed(() => ({
 const fileProtectionDescription = computed(() => {
   switch (effectiveProfile.value) {
     case "workspace_only":
-      return "仅工作目录可访问，适合处理不需要读取其他本机资料的项目。";
+      return "仅工作目录可访问，适合不需要读取其他本机资料的 Agent。";
     case "full_access":
       return "文件访问退回当前系统用户权限。仅在你明确需要时使用。";
     default:
@@ -126,11 +126,11 @@ function followGlobalSettings() {
   });
 }
 
-function setProjectProtection(value) {
+function setAgentProtection(value) {
   patchSandbox({profile: value});
 }
 
-function setProjectNetwork(enabled) {
+function setAgentNetwork(enabled) {
   patchSandbox({networkMode: enabled ? "public" : "none"});
 }
 
@@ -185,7 +185,7 @@ function removeWritablePath(index) {
       <div class="advanced-panel__body">
         <div class="security-row">
           <div>
-            <div class="security-label">这个项目的文件保护</div>
+            <div class="security-label">这个 Agent 的文件保护</div>
             <div class="security-help">
               通常保持“跟随全局设置”即可。严格保护只允许访问工作目录；不受限制会显著扩大文件访问范围。
             </div>
@@ -193,7 +193,7 @@ function removeWritablePath(index) {
           <a-select
               :model-value="sandbox.profile || ''"
               class="security-select"
-              @update:model-value="setProjectProtection"
+              @update:model-value="setAgentProtection"
           >
             <a-option value="">跟随全局设置</a-option>
             <a-option value="standard">标准保护</a-option>
@@ -204,7 +204,7 @@ function removeWritablePath(index) {
 
         <div class="security-row">
           <div>
-            <div class="security-label">这个项目允许联网</div>
+            <div class="security-label">这个 Agent 允许联网</div>
             <div class="security-help">
               默认跟随全局安全设置。关闭后，Humbert 的网络型工具会被禁止；本地子进程的网络限制仍取决于当前平台能力。
             </div>
@@ -213,7 +213,7 @@ function removeWritablePath(index) {
             <span>{{ effectiveNetwork === 'none' ? '关闭' : '开启' }}</span>
             <a-switch
                 :model-value="effectiveNetwork !== 'none'"
-                @change="setProjectNetwork"
+                @change="setAgentNetwork"
             />
           </div>
         </div>
@@ -223,7 +223,7 @@ function removeWritablePath(index) {
             <div>
               <div class="security-label">允许修改其他目录</div>
               <div class="security-help">
-                Agent 可以读取、创建和修改这些目录中的文件，但不会获得删除或移动权限。普通项目通常不需要添加。
+                Agent 可以读取、创建和修改这些目录中的文件，但不会获得删除或移动权限。一般 Agent 通常不需要添加。
               </div>
             </div>
           </div>

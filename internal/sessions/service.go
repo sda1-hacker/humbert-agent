@@ -56,7 +56,7 @@ func NewService(
 	}
 }
 
-// List 返回指定 Agent（UI 中也称为 Project）的全部 Session。
+// List 返回指定 Agent 的全部 Session。
 func (s *Service) List(ctx context.Context, agentID string) ([]Session, error) {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
@@ -68,18 +68,37 @@ func (s *Service) List(ctx context.Context, agentID string) ([]Session, error) {
 	return s.store.ListSessions(ctx, agentID)
 }
 
+// ListIDs 返回 Agent 下包括已隔离损坏项在内的 Session ID，用于 Aggregate 删除清理。
+//
+// 这里刻意不要求 Agent 仍为 active：上一次删除在写入 deleting 标记后中断时，重试仍需
+// 取得完整 ID 清单并清理 Session 级权限规则。
+func (s *Service) ListIDs(ctx context.Context, agentID string) ([]string, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("Agent ID 不能为空")
+	}
+	return s.store.ListSessionIDs(ctx, agentID)
+}
+
 // Get 返回指定 Session。
 func (s *Service) Get(ctx context.Context, sessionID string) (Session, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return Session{}, errors.New("Session ID 不能为空")
 	}
-	return s.store.GetSession(ctx, sessionID)
+	value, err := s.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return Session{}, err
+	}
+	if _, err := s.agents.Get(ctx, value.AgentID); err != nil {
+		return Session{}, err
+	}
+	return value, nil
 }
 
 // Create 创建新的独立 Session 目录。
 //
-// Humbert 当前产品约束是一 Agent 对应一个 Workspace/Project，因此 Session 只保存
+// Humbert 当前产品约束是一 Agent 对应一个 Workspace，因此 Session 只保存
 // AgentID。Workspace 在创建时由 Agent Profile 解析并冻结到 Session CWD。
 func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session, error) {
 	if s.store == nil || s.agents == nil || s.workspaces == nil || s.logger == nil {
@@ -90,37 +109,35 @@ func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session
 	if agentID == "" {
 		return Session{}, errors.New("Agent ID 不能为空")
 	}
-	agentInfo, err := s.agents.Get(ctx, agentID)
-	if err != nil {
-		return Session{}, err
-	}
-
 	title, err := normalizeTitle(input.Title)
 	if err != nil {
 		return Session{}, err
 	}
 
-	agentWorkspace, err := s.workspaces.Resolve(
-		ctx,
-		agentInfo.Agent.ID,
-		agentInfo.Agent.WorkspaceMode,
-		agentInfo.Agent.WorkspacePath,
-	)
+	var value Session
+	err = s.agents.WithActiveAgent(ctx, agentID, func(agentInfo agents.AgentInfo) error {
+		agentWorkspace, resolveErr := s.workspaces.Resolve(
+			ctx,
+			agentInfo.Agent.ID,
+			agentInfo.Agent.WorkspaceMode,
+			agentInfo.Agent.WorkspacePath,
+		)
+		if resolveErr != nil {
+			return fmt.Errorf("解析 Agent Workspace 失败: %w", resolveErr)
+		}
+
+		now := time.Now().UTC()
+		value = Session{
+			ID:        uuid.NewString(),
+			AgentID:   agentID,
+			Title:     title,
+			CWD:       agentWorkspace.RootDir,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		return s.store.CreateSession(ctx, value)
+	})
 	if err != nil {
-		return Session{}, fmt.Errorf("解析 Agent Workspace 失败: %w", err)
-	}
-
-	now := time.Now().UTC()
-	value := Session{
-		ID:        uuid.NewString(),
-		AgentID:   agentID,
-		Title:     title,
-		CWD:       agentWorkspace.RootDir,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	if err := s.store.CreateSession(ctx, value); err != nil {
 		return Session{}, err
 	}
 

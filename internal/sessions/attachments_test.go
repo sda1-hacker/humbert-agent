@@ -28,7 +28,7 @@ func TestAttachmentSidecarPersistsMetadataAndHydratesRuntime(t *testing.T) {
 	}
 	service := &Service{store: store, logger: logging.NewBootstrap()}
 
-	session := Session{ID: "session-attachment", ProjectID: "project-a", AgentID: "agent-a", Title: "test", CWD: root, CreatedAt: time.Now().UTC()}
+	session := Session{ID: "session-attachment", AgentID: "agent-a", Title: "test", CWD: root, CreatedAt: time.Now().UTC()}
 	if err := store.CreateSession(ctx, session); err != nil {
 		t.Fatal(err)
 	}

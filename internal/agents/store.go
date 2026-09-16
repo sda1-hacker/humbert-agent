@@ -9,20 +9,30 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/atomicfile"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
+	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
 const (
-	agentConfigFileName      = "config.json"
-	agentConfigSchemaVersion = 1
+	agentConfigFileName        = "config.json"
+	agentConfigSchemaVersion   = 1
+	agentDeletionFileName      = ".deleting.json"
+	agentDeletionSchemaVersion = 1
 )
 
 type agentDocument struct {
 	SchemaVersion int `json:"schema_version"`
 
 	Agent Agent `json:"agent"`
+}
+
+type agentDeletionDocument struct {
+	SchemaVersion int `json:"schema_version"`
+
+	Deletion DeletionState `json:"deletion"`
 }
 
 // Store 负责 Agent Profile 的文件持久化。
@@ -104,6 +114,12 @@ func (s *Store) Create(ctx context.Context, value Agent) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("检查 Agent Profile 是否存在失败: %w", err)
 	}
+	deletionPath := filepath.Join(directory, agentDeletionFileName)
+	if _, err := os.Lstat(deletionPath); err == nil {
+		return fmt.Errorf("%w: %s", ErrDeleting, value.ID)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("检查 Agent 删除状态失败: %w", err)
+	}
 
 	if err := ensureRealDirectory(directory); err != nil {
 		return fmt.Errorf("准备 Agent 目录失败: %w", err)
@@ -140,6 +156,11 @@ func (s *Store) Update(ctx context.Context, value Agent) error {
 		}
 		return fmt.Errorf("验证 Agent 目录失败: %w", err)
 	}
+	if deleting, err := deletionMarkerExists(directory); err != nil {
+		return fmt.Errorf("检查 Agent 删除状态失败: %w", err)
+	} else if deleting {
+		return fmt.Errorf("%w: %s", ErrDeleting, value.ID)
+	}
 	if _, err := os.Lstat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrNotFound
@@ -166,6 +187,16 @@ func (s *Store) Get(ctx context.Context, id string) (AgentInfo, error) {
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	_, directory, err := s.configPath(id)
+	if err != nil {
+		return AgentInfo{}, err
+	}
+	if deleting, markerErr := deletionMarkerExists(directory); markerErr != nil {
+		return AgentInfo{}, fmt.Errorf("检查 Agent 删除状态失败: %w", markerErr)
+	} else if deleting {
+		return AgentInfo{}, fmt.Errorf("%w: %s", ErrDeleting, id)
+	}
 
 	value, err := s.readAgentLocked(ctx, id)
 	if err != nil {
@@ -202,8 +233,14 @@ func (s *Store) List(ctx context.Context) ([]AgentInfo, error) {
 		if !entry.IsDir() {
 			continue
 		}
+		directory := filepath.Join(s.agentsRoot, entry.Name())
+		if deleting, markerErr := deletionMarkerExists(directory); markerErr != nil {
+			return nil, fmt.Errorf("检查 Agent %s 删除状态失败: %w", entry.Name(), markerErr)
+		} else if deleting {
+			continue
+		}
 
-		configPath := filepath.Join(s.agentsRoot, entry.Name(), agentConfigFileName)
+		configPath := filepath.Join(directory, agentConfigFileName)
 		if _, err := os.Lstat(configPath); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
@@ -226,48 +263,115 @@ func (s *Store) List(ctx context.Context) ([]AgentInfo, error) {
 	return result, nil
 }
 
-// Delete 删除指定 Agent 的 Humbert 内部数据目录。
+// BeginDelete 把 Agent 从 active 原子推进到 deleting。
 //
-// Service 会先确认 Session 数量为 0；这里随后删除 agents/<agent-id>/ 整个内部目录，
-// 包括 Profile、Session sidecar、Memory 等 Humbert 自有数据。Workspace 位于独立的
-// workspaces/ 根目录，由 Agent Service 根据 managed/custom 语义处理。
-func (s *Store) Delete(ctx context.Context, id string) error {
-	if err := validateStoreContext(ctx, "删除 Agent Profile"); err != nil {
+// 重复调用会返回既有检查点，因此删除流程可以安全重试。标记冻结 Workspace 所有权，
+// 后续即使 Profile 已被部分清理，也不会误删 Custom Workspace。
+func (s *Store) BeginDelete(ctx context.Context, id string) (DeletionState, error) {
+	if err := validateStoreContext(ctx, "标记 Agent 删除状态"); err != nil {
+		return DeletionState{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id = strings.TrimSpace(id)
+	_, directory, err := s.configPath(id)
+	if err != nil {
+		return DeletionState{}, err
+	}
+	markerPath := filepath.Join(directory, agentDeletionFileName)
+	if _, err := os.Lstat(markerPath); err == nil {
+		return s.readDeletionLocked(ctx, id, markerPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return DeletionState{}, fmt.Errorf("检查 Agent 删除标记失败: %w", err)
+	}
+
+	value, err := s.readAgentLocked(ctx, id)
+	if err != nil {
+		return DeletionState{}, err
+	}
+	mode := value.WorkspaceMode
+	if mode == "" {
+		mode = workspace.ModeManaged
+	}
+	state := DeletionState{
+		AgentID:       value.ID,
+		WorkspaceMode: mode,
+		WorkspacePath: value.WorkspacePath,
+		StartedAt:     time.Now().UTC(),
+	}
+	if err := atomicfile.WriteJSON(ctx, markerPath, 0o600, agentDeletionDocument{
+		SchemaVersion: agentDeletionSchemaVersion,
+		Deletion:      state,
+	}); err != nil {
+		return DeletionState{}, fmt.Errorf("写入 Agent 删除标记失败: %w", err)
+	}
+	return state, nil
+}
+
+// ListDeleting 返回全部未完成的 Agent 删除检查点。
+func (s *Store) ListDeleting(ctx context.Context) ([]DeletionState, error) {
+	if err := validateStoreContext(ctx, "读取 Agent 删除状态"); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entries, err := os.ReadDir(s.agentsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("读取 Agent Root 失败: %w", err)
+	}
+	result := make([]DeletionState, 0)
+	var listErr error
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			continue
+		}
+		markerPath := filepath.Join(s.agentsRoot, entry.Name(), agentDeletionFileName)
+		if _, err := os.Lstat(markerPath); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			listErr = errors.Join(listErr, fmt.Errorf("检查 Agent %s 删除标记失败: %w", entry.Name(), err))
+			continue
+		}
+		state, err := s.readDeletionLocked(ctx, entry.Name(), markerPath)
+		if err != nil {
+			listErr = errors.Join(listErr, err)
+			continue
+		}
+		result = append(result, state)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].AgentID < result[j].AgentID })
+	return result, listErr
+}
+
+// DeleteMarked 完成 deleting -> removed；未持有删除标记时拒绝物理删除。
+func (s *Store) DeleteMarked(ctx context.Context, id string) error {
+	if err := validateStoreContext(ctx, "删除 Agent 数据"); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	path, directory, err := s.configPath(id)
+	id = strings.TrimSpace(id)
+	_, directory, err := s.configPath(id)
 	if err != nil {
 		return err
 	}
 	if err := validateRealDirectory(directory); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return ErrNotFound
+			return nil
 		}
 		return fmt.Errorf("验证 Agent 目录失败: %w", err)
 	}
-
-	if _, err := os.Lstat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("检查 Agent Profile 失败: %w", err)
+	markerPath := filepath.Join(directory, agentDeletionFileName)
+	if _, err := s.readDeletionLocked(ctx, id, markerPath); err != nil {
+		return fmt.Errorf("验证 Agent 删除标记失败: %w", err)
 	}
 	if err := os.RemoveAll(directory); err != nil {
 		return fmt.Errorf("删除 Agent 数据目录失败: %w", err)
 	}
 	return nil
-}
-
-// CountSessions 返回指定 Agent 当前拥有的 Session 数量。
-func (s *Store) CountSessions(ctx context.Context, agentID string) (int, error) {
-	values, err := s.transcripts.ListSessionRefs(ctx, agentID)
-	if err != nil {
-		return 0, fmt.Errorf("统计 Agent Session 数量失败: %w", err)
-	}
-	return len(values), nil
 }
 
 // CountAgentsByModel 返回当前 Agent Profile 中引用指定 Model（Chat 或任意 Model Role）的数量。
@@ -329,6 +433,40 @@ func (s *Store) readAgentLocked(ctx context.Context, id string) (Agent, error) {
 	}
 
 	return document.Agent, nil
+}
+
+func (s *Store) readDeletionLocked(ctx context.Context, id string, path string) (DeletionState, error) {
+	var document agentDeletionDocument
+	if err := atomicfile.ReadJSON(ctx, path, &document); err != nil {
+		return DeletionState{}, fmt.Errorf("读取 Agent 删除标记失败: %w", err)
+	}
+	if document.SchemaVersion != agentDeletionSchemaVersion {
+		return DeletionState{}, fmt.Errorf("Agent %s 删除标记 schema_version 不支持: %d", id, document.SchemaVersion)
+	}
+	if document.Deletion.AgentID != id {
+		return DeletionState{}, fmt.Errorf("Agent 删除标记 ID 与目录不一致: directory=%s marker=%s", id, document.Deletion.AgentID)
+	}
+	if document.Deletion.WorkspaceMode != workspace.ModeManaged && document.Deletion.WorkspaceMode != workspace.ModeCustom {
+		return DeletionState{}, fmt.Errorf("Agent %s 删除标记 WorkspaceMode 无效: %q", id, document.Deletion.WorkspaceMode)
+	}
+	if document.Deletion.StartedAt.IsZero() {
+		return DeletionState{}, fmt.Errorf("Agent %s 删除标记 started_at 不能为空", id)
+	}
+	return document.Deletion, nil
+}
+
+func deletionMarkerExists(directory string) (bool, error) {
+	info, err := os.Lstat(filepath.Join(directory, agentDeletionFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, errors.New("Agent 删除标记不是安全普通文件")
+	}
+	return true, nil
 }
 
 func (s *Store) configPath(id string) (string, string, error) {

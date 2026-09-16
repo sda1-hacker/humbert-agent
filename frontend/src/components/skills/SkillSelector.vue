@@ -16,7 +16,7 @@ const props =
       },
     });
 
-// 保留 v-model 契约，避免既有 Agent/Project 表单产生未知属性警告；本组件现在只读，不再在
+// 保留 v-model 契约，避免既有 Agent 表单产生未知属性警告；本组件现在只读，不再在
 // Agent 配置表单里维护第二套 Skill 选择 UI。
 defineEmits([
   "update:modelValue",
@@ -123,7 +123,7 @@ onMounted(async () => {
 
     <div class="skill-selector-summary__hint">
       <span>
-        已启用 {{ selectedSummary.length }} 个。技能开关统一在左侧「技能」入口中按 Agent / 项目管理。
+        已启用 {{ selectedSummary.length }} 个。技能开关统一在左侧「技能」入口中按 Agent 管理。
       </span>
       <span v-if="selectedSummary.some((item) => !item.valid)">
         当前配置包含失效 Skill，请到左侧「技能」入口清理。

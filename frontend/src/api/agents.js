@@ -67,7 +67,7 @@ export async function createAgent(
 }
 
 /**
- * 保存 Agent 的完整“项目设置”表单。
+ * 保存 Agent 的完整“Agent 设置”表单。
  * 局部操作（例如切换模型）仍使用独立窄命令。
  */
 export async function updateAgent(id, request) {
@@ -76,7 +76,7 @@ export async function updateAgent(id, request) {
 }
 
 /**
- * 删除 Agent（UI 中称为项目）。
+ * 删除 Agent 及其 Humbert 内部数据。
  *
  * 后端会级联删除 Session 和 Humbert 管理的 Workspace；
  * 用户选择的 Custom Workspace 不会被删除。
@@ -95,7 +95,7 @@ export async function deleteAgent(
  *
  * 返回：
  *
- *   "/Users/alice/Projects/foo"
+ *   "/Users/alice/workspaces/foo"
  *
  * 用户取消时返回空字符串。
  */

@@ -73,7 +73,7 @@ func NewSessionService(core *coreapp.Application) *SessionService {
 	return &SessionService{core: core}
 }
 
-// List 返回 Agent（UI 中称为 Project）的 Sessions。
+// List 返回 Agent 的 Sessions。
 func (s *SessionService) List(agentID string) ([]SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

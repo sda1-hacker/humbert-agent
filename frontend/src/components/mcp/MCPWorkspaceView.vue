@@ -67,7 +67,7 @@ const selectedAgent = computed(() => (
     agentStore.items.find((item) => item.id === selectedAgentID.value) ?? null
 ));
 
-// UI 中的 Project ID 就是 Agent ID。
+// 当前选择直接使用 Agent ID。
 const selectedAgentDomainID = computed(() => (
     selectedAgent.value?.id || ""
 ));
@@ -435,7 +435,7 @@ onMounted(async () => {
         <AppPageHeader
             eyebrow="Agent Connectors"
             title="连接器"
-            description="选择 Agent / 项目，为它启用 MCP Server 提供的 Tool。Server 的安装与连接参数统一放在设置中管理。"
+            description="选择 Agent，为它启用 MCP Server 提供的 Tool。Server 的安装与连接参数统一放在设置中管理。"
         >
           <template #aside>
             <div class="mcp-workspace__legend">
@@ -478,7 +478,7 @@ onMounted(async () => {
               </span>
 
               <div class="agent-picker__copy">
-                <span>当前 Agent / 项目</span>
+                <span>当前 Agent</span>
                 <small>
                   {{ selectedAgent ? `已启用 ${selectedToolCount} 个 MCP Tool` : "创建 Agent 后即可在这里配置" }}
                 </small>
@@ -489,7 +489,7 @@ onMounted(async () => {
                 v-model="selectedAgentID"
                 class="agent-picker__select"
                 :disabled="agentStore.items.length === 0"
-                placeholder="选择 Agent / 项目"
+                placeholder="选择 Agent"
             >
               <a-option
                   v-for="agent in agentStore.items"

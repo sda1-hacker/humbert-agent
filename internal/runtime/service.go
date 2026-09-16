@@ -83,6 +83,11 @@ type Service struct {
 	// activeByRequest 支持 CancelTurn(requestID)。
 	activeByRequest map[string]*activeRun
 
+	// reservationAgents 记录 Session 占用所属 Agent，使删除 Agent 可以在同一把锁下
+	// 拒绝已有操作。deletingAgents 则阻止删除期间启动新的 Turn、压缩或 Session 删除。
+	reservationAgents map[string]string
+	deletingAgents    map[string]string
+
 	wg        sync.WaitGroup
 	closeDone chan struct{}
 }
@@ -98,17 +103,19 @@ func NewService(
 ) *Service {
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	return &Service{
-		resolver:        resolver,
-		executor:        executor,
-		sessions:        sessionService,
-		events:          events,
-		logger:          logger,
-		approvals:       approvalManager,
-		rootCtx:         rootCtx,
-		rootCancel:      rootCancel,
-		activeBySession: make(map[string]string),
-		activeByRequest: make(map[string]*activeRun),
-		closeDone:       make(chan struct{}),
+		resolver:          resolver,
+		executor:          executor,
+		sessions:          sessionService,
+		events:            events,
+		logger:            logger,
+		approvals:         approvalManager,
+		rootCtx:           rootCtx,
+		rootCancel:        rootCancel,
+		activeBySession:   make(map[string]string),
+		activeByRequest:   make(map[string]*activeRun),
+		reservationAgents: make(map[string]string),
+		deletingAgents:    make(map[string]string),
+		closeDone:         make(chan struct{}),
 	}
 }
 
@@ -141,7 +148,11 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 	requestID := uuid.NewString()
 	runID := uuid.NewString()
 
-	if err := s.reserveSession(sessionID, requestID); err != nil {
+	session, err := s.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return StartTurnResult{}, err
+	}
+	if err := s.reserveAgentSession(sessionID, session.AgentID, requestID); err != nil {
 		return StartTurnResult{}, err
 	}
 	reserved := true
@@ -314,7 +325,11 @@ func (s *Service) ManualCompact(
 		return ManualCompactionResult{}, err
 	}
 	defer finish()
-	if err := s.reserveSession(sessionID, requestID); err != nil {
+	session, err := s.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return ManualCompactionResult{}, err
+	}
+	if err := s.reserveAgentSession(sessionID, session.AgentID, requestID); err != nil {
 		return ManualCompactionResult{}, err
 	}
 	defer s.releaseReservation(sessionID, requestID)
@@ -350,19 +365,29 @@ func (s *Service) DeleteSession(ctx context.Context, sessionID string) error {
 		return errors.New("Session ID 不能为空")
 	}
 	requestID := "delete:" + uuid.NewString()
-	if err := s.reserveSession(sessionID, requestID); err != nil {
+	if err := s.ensureSessionUnreserved(sessionID); err != nil {
+		return err
+	}
+	session, err := s.sessions.Get(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if err := s.reserveAgentSession(sessionID, session.AgentID, requestID); err != nil {
 		return err
 	}
 	defer s.releaseReservation(sessionID, requestID)
 	return s.sessions.Delete(ctx, sessionID)
 }
 
-// DeleteAgentSessions 删除指定 Agent 的全部 Session。
+// DeleteAgent 协调 Runtime 占用与 Agent 的可恢复删除状态机。
 //
-// 删除前会在同一把 Runtime 锁下预占全部 Session；只要其中任意一个正在运行、压缩或删除，
-// 整个操作立即失败且不会先删除部分 Session。Project 在 UI 中只是 Agent 的别名，因此
-// Agent 删除生命周期直接复用这个入口。
-func (s *Service) DeleteAgentSessions(ctx context.Context, agentID string) ([]string, error) {
+// 删除标记设置与 Session reservation 使用同一把锁：已有操作会阻止删除，删除中的 Agent
+// 也不会接受新操作。真正的持久化删除由 deleteAgent 回调完成。
+func (s *Service) DeleteAgent(
+	ctx context.Context,
+	agentID string,
+	deleteAgent func(context.Context) error,
+) ([]string, error) {
 	ctx, finish, err := s.beginOperation(ctx)
 	if err != nil {
 		return nil, err
@@ -373,17 +398,8 @@ func (s *Service) DeleteAgentSessions(ctx context.Context, agentID string) ([]st
 	if agentID == "" {
 		return nil, errors.New("Agent ID 不能为空")
 	}
-
-	values, err := s.sessions.List(ctx, agentID)
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]string, 0, len(values))
-	for _, value := range values {
-		ids = append(ids, value.ID)
-	}
-	if len(ids) == 0 {
-		return ids, nil
+	if deleteAgent == nil {
+		return nil, errors.New("Agent 删除回调不能为空")
 	}
 
 	requestID := "delete-agent:" + uuid.NewString()
@@ -392,30 +408,35 @@ func (s *Service) DeleteAgentSessions(ctx context.Context, agentID string) ([]st
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	for _, sessionID := range ids {
-		if existing, exists := s.activeBySession[sessionID]; exists {
+	if existing, exists := s.deletingAgents[agentID]; exists {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("%w: request_id=%s", ErrAgentDeleting, existing)
+	}
+	for sessionID, reservedAgentID := range s.reservationAgents {
+		if reservedAgentID == agentID {
+			existing := s.activeBySession[sessionID]
 			s.mu.Unlock()
 			return nil, fmt.Errorf("%w: session_id=%s request_id=%s", ErrSessionBusy, sessionID, existing)
 		}
 	}
-	for _, sessionID := range ids {
-		s.activeBySession[sessionID] = requestID
-	}
+	s.deletingAgents[agentID] = requestID
 	s.mu.Unlock()
-
 	defer func() {
-		for _, sessionID := range ids {
-			s.releaseReservation(sessionID, requestID)
+		s.mu.Lock()
+		if current := s.deletingAgents[agentID]; current == requestID {
+			delete(s.deletingAgents, agentID)
 		}
+		s.mu.Unlock()
 	}()
 
-	var deleteErr error
-	for _, sessionID := range ids {
-		if err := s.sessions.Delete(ctx, sessionID); err != nil {
-			deleteErr = errors.Join(deleteErr, fmt.Errorf("删除 Session %s 失败: %w", sessionID, err))
-		}
+	ids, err := s.sessions.ListIDs(ctx, agentID)
+	if err != nil {
+		return nil, err
 	}
-	return ids, deleteErr
+	if err := deleteAgent(ctx); err != nil {
+		return ids, err
+	}
+	return ids, nil
 }
 
 // CancelTurn 请求取消一个运行或等待审批中的 Turn。
@@ -1058,6 +1079,22 @@ func (s *Service) beginOperation(ctx context.Context) (context.Context, func(), 
 }
 
 func (s *Service) reserveSession(sessionID string, requestID string) error {
+	return s.reserveAgentSession(sessionID, "", requestID)
+}
+
+func (s *Service) ensureSessionUnreserved(sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	if existing, exists := s.activeBySession[sessionID]; exists {
+		return fmt.Errorf("%w: request_id=%s", ErrSessionBusy, existing)
+	}
+	return nil
+}
+
+func (s *Service) reserveAgentSession(sessionID string, agentID string, requestID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -1067,7 +1104,15 @@ func (s *Service) reserveSession(sessionID string, requestID string) error {
 	if existing, exists := s.activeBySession[sessionID]; exists {
 		return fmt.Errorf("%w: request_id=%s", ErrSessionBusy, existing)
 	}
+	if agentID != "" {
+		if existing, exists := s.deletingAgents[agentID]; exists {
+			return fmt.Errorf("%w: request_id=%s", ErrAgentDeleting, existing)
+		}
+	}
 	s.activeBySession[sessionID] = requestID
+	if agentID != "" {
+		s.reservationAgents[sessionID] = agentID
+	}
 	return nil
 }
 
@@ -1080,6 +1125,7 @@ func (s *Service) releaseReservation(sessionID string, requestID string) {
 		return
 	}
 	delete(s.activeBySession, sessionID)
+	delete(s.reservationAgents, sessionID)
 }
 
 func (s *Service) cleanupRun(active *activeRun) {
@@ -1099,6 +1145,7 @@ func (s *Service) cleanupRun(active *activeRun) {
 	s.mu.Lock()
 	if current, exists := s.activeBySession[active.SessionID]; exists && current == active.RequestID {
 		delete(s.activeBySession, active.SessionID)
+		delete(s.reservationAgents, active.SessionID)
 	}
 	s.mu.Unlock()
 }

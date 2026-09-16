@@ -1,5 +1,10 @@
 # humbert-agent 代码审查与后续规划
 
+> 状态：历史审查基线，已归档，不代表当前实现。后续已经完成工具事务恢复、缺失/损坏
+> Session 隔离、运行关闭与删除并发、发送重试、Markdown、附件，以及 Agent 删除状态机；
+> 当前边界与验证结果以 `docs/architecture/domain-boundaries.md`、
+> `docs/reviews/2026-09-15-reliability-fixes.md` 和 `REFACTOR_REPORT.md` 为准。
+
 日期：2026-09-15。范围：当前工作区源码、README、DEVELOPMENT、REFACTOR_REPORT、Go 测试和前端构建。
 
 本次按 humbert-agent 自身的个人助理目标审查，不以完整复制 openhanako 为验收标准。未修改业务代码，未运行真实模型请求或完整桌面端交互测试。下文区分临时测试复现、静态代码判断和产品建议。
@@ -22,7 +27,7 @@
 
 主要维护面：tools 9,658 行、skills 6,095 行、services 4,321 行、MCP 3,988 行、runtime 3,147 行。前端 runtime store 约 1,505 行，多处设置页超过 1,000 行。源码大量展开换行和空行也放大了行数，不能通过压缩格式代替结构治理。
 
-## 二、优先修复的逻辑问题
+## 二、当时识别的逻辑问题
 
 P1 表示应在继续扩展能力前修复；P2 表示需要安排处理的正确性或扩展性问题。
 
@@ -132,7 +137,7 @@ Goal 工具即使保留，也不能直接注册：它使用普通文本 Interrup
 - Session 与 Transcript 分工、JSONL 事实记录、每会话并发控制。
 - contextengine 与 memory 的职责边界；调整调度和记忆作用域，不必全部重写。
 
-## 四、功能现状与缺口
+## 四、当时的功能现状与缺口
 
 | 模块 | 当前状态 | 建议下一步 |
 | --- | --- | --- |
@@ -157,7 +162,7 @@ Goal 工具即使保留，也不能直接注册：它使用普通文本 Interrup
 
 注意：模型配置中的 MaxOutputTokens 当前注释明确定位为上下文预留预算，不能据此认定它已经限制了真实输出或费用。Windows 平台隔离能力也需要按已有 capability 声明分别验收，不能从接口存在推断所有平台等价。
 
-## 五、测试与文档基线
+## 五、当时的测试与文档基线
 
 ### 本次执行结果
 
@@ -183,7 +188,7 @@ Goal 工具即使保留，也不能直接注册：它使用普通文本 Interrup
 
 README、REFACTOR_REPORT 中仍有旧持久化目录、运行审计协议和已不存在测试的描述。当前实际布局为 `agents/<agent>/sessions/<session>/{config.json,session.jsonl,memory.json}`，运行审计主要走日志。应按实际实现更新文档，明确协议版本和未完成项。
 
-## 六、建议实施顺序
+## 六、当时建议的实施顺序
 
 ### 第一阶段：可靠运行
 

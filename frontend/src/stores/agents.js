@@ -9,10 +9,7 @@ import {
 } from "../api/agents.js";
 
 /**
- * Agent Store。
- *
- * UI 中仍把 Agent 展示为“项目”，但领域层只有 Agent：Agent 自己拥有 Workspace、
- * Model Roles、Skills 与安全配置，不存在独立 Project 实体。
+ * Agent Store。Agent 自己拥有 Workspace、Model Roles、Skills 与安全配置。
  */
 export const useAgentStore = defineStore("agents", {
     state: () => ({
@@ -22,11 +19,6 @@ export const useAgentStore = defineStore("agents", {
     }),
 
     getters: {
-        // UI 兼容名称：Project 就是 Agent 的产品称呼。
-        selectedProject(state) {
-            return state.items.find((agent) => agent.id === state.selectedID) ?? null;
-        },
-
         selectedAgent(state) {
             return state.items.find((agent) => agent.id === state.selectedID) ?? null;
         },
@@ -82,7 +74,7 @@ export const useAgentStore = defineStore("agents", {
          */
         async switchSelectedModel(modelID) {
             const agent = this.selectedAgent;
-            if (!agent) throw new Error("当前没有选择项目");
+            if (!agent) throw new Error("当前没有选择 Agent");
             if (agent.modelID === modelID) return agent;
 
             const updated = await setAgentModel(agent.id, modelID);

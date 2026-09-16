@@ -675,7 +675,7 @@ function appendAssistantToolCalls(
     /**
      * 某些模型会在 ToolCall 前公开输出：
      *
-     * “我先查看一下项目文件。”
+     * “我先查看一下工作区文件。”
      *
      * 这是模型主动提供给用户的 Assistant Content，
      * 可以作为过程说明展示。

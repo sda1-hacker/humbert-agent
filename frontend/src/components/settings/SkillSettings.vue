@@ -359,8 +359,8 @@ function syncAgentStore(agentID) {
 
   const index =
       agentStore.items.findIndex(
-          (project) =>
-              project.id === agentID,
+          (agent) =>
+              agent.id === agentID,
       );
 
   if (index < 0) {
@@ -609,7 +609,7 @@ onMounted(load);
         <div class="skill-control-panel__copy">
           <h2>为 Agent 配置技能</h2>
           <p>
-            先选择 Agent / 项目，再用右侧开关决定它可以使用哪些 Skill。安装、更新与修复 Package 请进入「设置 → 技能」。
+            先选择 Agent，再用右侧开关决定它可以使用哪些 Skill。安装、更新与修复 Package 请进入「设置 → 技能」。
           </p>
         </div>
 
@@ -668,7 +668,7 @@ onMounted(load);
           </span>
 
           <div class="agent-picker__copy">
-            <span>当前 Agent / 项目</span>
+            <span>当前 Agent</span>
             <small>
               {{ selectedAgent ? `已启用 ${selectedEnabledCount} 个 Skill` : "创建 Agent 后即可在这里配置" }}
             </small>
@@ -679,7 +679,7 @@ onMounted(load);
             v-model="selectedAgentID"
             class="agent-picker__select"
             :disabled="agents.length === 0"
-            placeholder="选择 Agent / 项目"
+            placeholder="选择 Agent"
         >
           <a-option
               v-for="agent in agents"

@@ -58,7 +58,7 @@ type WriteFileOutput struct {
 // WriteFileFactory 为每个 RuntimeSnapshot 创建绑定 Workspace 的 write_file。
 //
 // Factory 只持有长期、线程安全依赖。真正的 AgentID / Workspace Root 由 Build
-// 时传入的不可变 Scope 冻结，因此用户在 Turn 执行期间切换项目不会改变本 Tool
+// 时传入的不可变 Scope 冻结，因此用户在 Turn 执行期间切换 Agent 不会改变本 Tool
 // 的写入目录。
 type WriteFileFactory struct {
 	workspaces *workspace.Manager
