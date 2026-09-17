@@ -128,19 +128,24 @@ func (s *SessionService) Rename(id string, title string) (SessionDTO, error) {
 
 // Delete 删除 Session 与完整消息历史。
 func (s *SessionService) Delete(id string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// TaskRun 持有其专用 Session 的审计生命周期。若允许从普通会话侧栏直接删除，
-	// 运行历史中的“查看对话”会变成永久失效的悬空引用。用户需要从任务运行历史删除
-	// 对应记录；Task Manager 会同时清理 Run 与 Session。
+	// TaskRun 持有其专用 Session 的审计生命周期。从普通会话侧栏删除任务会话时，
+	// 必须由 Task Manager 删除对应 Run 和 Session，避免留下无法查看对话的悬空历史。
 	if manager := s.core.Tasks(); manager != nil {
 		run, referenced, err := manager.RunBySession(ctx, id)
 		if err != nil {
 			return fmt.Errorf("检查任务会话引用失败: %w", err)
 		}
 		if referenced {
-			return fmt.Errorf("该会话属于任务运行记录，不能单独删除；请先在任务的运行历史中删除对应记录（run_id=%s）", run.ID)
+			if err := manager.DeleteRun(ctx, run.ID); err != nil {
+				return fmt.Errorf("删除任务会话及对应运行历史失败: %w", err)
+			}
+			if s.core.Permissions() != nil {
+				s.core.Permissions().ClearSessionRules(id)
+			}
+			return nil
 		}
 	}
 

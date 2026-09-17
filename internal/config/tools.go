@@ -106,8 +106,8 @@ type FileToolConfig struct {
 
 // WebSearchToolConfig 是 web_search 的运行参数。
 //
-// Provider 默认使用 auto。auto 会像 OpenHanako 一样把“搜索 Provider 选择与
-// fallback”封装在一次 Tool 调用内部：优先使用已配置的 API Provider，然后使用
+// Provider 默认使用 auto。auto 会把“搜索 Provider 选择与fallback”
+// 封装在一次 Tool 调用内部：优先使用已配置的 API Provider，然后使用
 // AnySearch 匿名免费 API，最后才回退到 Bing / DuckDuckGo HTML 搜索。
 //
 // 这样模型无需为了同一个查询连续调用多个搜索工具，也不会因为某一个免费搜索页

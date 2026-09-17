@@ -237,7 +237,7 @@ const canSend =
 /**
  * 把 Token 数转换为 Composer 中短而稳定的显示文本。
  *
- * OpenHanako 风格的 Context 提示更适合使用 k 单位；这里保留整数 token 在小值时的可读性，
+ * Context 提示更适合使用 k 单位；这里保留整数 token 在小值时的可读性，
  * 并避免前端用模型名称猜测 Context Window。所有数值都来自后端 ContextEngine Usage。
  */
 function formatTokens(value) {

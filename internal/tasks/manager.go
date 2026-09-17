@@ -646,7 +646,7 @@ func taskSessionTitle(task Task, startedAt time.Time) string {
 		}
 	}
 	localTime := startedAt.In(location)
-	return fmt.Sprintf("任务·%d月%d日%s", localTime.Month(), localTime.Day(), task.Name)
+	return fmt.Sprintf("任务·%d月%d日%s·", localTime.Month(), localTime.Day(), task.Name)
 }
 
 func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {

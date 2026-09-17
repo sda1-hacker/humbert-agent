@@ -13,8 +13,8 @@ import (
 
 // buildRuntimeInstruction 构造一次 Turn 的完整系统指令。
 //
-// Humbert 不再把 Agent Profile 中的一段 instruction 原样交给模型，而是像
-// OpenHanako 一样在 Agent 人格之上增加稳定的 Platform / Environment / Tool
+// Humbert 不再把 Agent Profile 中的一段 instruction 原样交给模型，
+// 而是在 Agent 人格之上增加稳定的 Platform / Environment / Tool
 // Policy。这样可以解决两个实际问题：
 //
 //  1. 模型知道“今天是什么时间、当前 Workspace 在哪里、实际有哪些 Tool”；

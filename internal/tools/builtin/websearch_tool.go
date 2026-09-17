@@ -92,8 +92,8 @@ type WebSearchResult struct {
 // WebSearchAttempt 描述 auto Provider Chain 中一次内部尝试。
 //
 // 一次模型 ToolCall 内部可能自动尝试多个 Provider，但 UI 仍然只显示一次
-// web_search。这正是与 OpenHanako 对齐的重要行为：Provider fallback 是 Tool
-// 内部可靠性职责，而不是让模型不断重复调用搜索工具。
+// web_search。Provider fallback 是 Tool 内部可靠性职责，
+// 而不是让模型不断重复调用搜索工具。
 type WebSearchAttempt struct {
 	Provider string `json:"provider"`
 
@@ -161,8 +161,7 @@ type WebSearchFactory struct {
 //	DuckDuckGo HTML
 //
 // 每一层出现 error、empty 或明显 low_quality 时才继续下一层。这样比“固定 Bing
-// 一次失败后让模型自己重新换关键词调用多次”更稳定，也更接近 OpenHanako 当前
-// web_search 的职责边界。
+// 一次失败后让模型自己重新换关键词调用多次”更稳定。
 func NewWebSearchFactory(
 	provider string,
 	timeout time.Duration,
@@ -651,7 +650,7 @@ func (
 			)
 	}
 
-	// 无 Key 时优先走 OpenHanako 当前同样采用的 AnySearch anonymous tier。
+	// 无 Key 时优先走 AnySearch anonymous tier。
 	backends =
 		append(
 			backends,
@@ -925,7 +924,7 @@ func classifySearchError(
 	}
 }
 
-// isLikelyLowQualityResults 参考 OpenHanako 当前搜索链的质量门槛。
+// isLikelyLowQualityResults 当前搜索链的质量门槛。
 //
 // 中文搜索引擎偶尔会把一个多词查询错误拆成字典/百科解释。若前三条结果大多是
 // “汉典/词典/基本解释”类页面，且几乎没有覆盖查询中的中文词组，就把本 Provider

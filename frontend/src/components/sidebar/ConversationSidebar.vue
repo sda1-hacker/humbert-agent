@@ -395,7 +395,7 @@ async function removeSession(
             "删除对话",
 
         Message:
-            `确定删除「${session.title}」以及其中的全部消息吗？`,
+            `确定删除「${session.title}」以及其中的全部消息吗？如果这是任务生成的对话，对应的运行历史也会一并永久删除。`,
 
         Buttons: [
           {

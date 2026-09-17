@@ -42,8 +42,8 @@ type searchBackend interface {
 
 // anySearchBackend 使用 AnySearch API。
 //
-// anonymous=true 时不发送 Authorization Header，对齐 OpenHanako 当前使用的
-// anysearch_free Provider。这样 Humbert 即使没有额外搜索 API Key，也可以先使用
+// anonymous=true 时不发送 Authorization Header，
+// 这样 Humbert 即使没有额外搜索 API Key，也可以先使用
 // 结构化实时搜索 API，而不是一开始就依赖容易被页面结构/反爬影响的 HTML 搜索页。
 type anySearchBackend struct {
 	apiKey string

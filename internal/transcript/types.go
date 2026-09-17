@@ -15,8 +15,8 @@ const (
 
 // EntryType 表示 Session Tree 中一条 Entry 的持久化语义。
 //
-// message 是当前 Agent 对话协议的核心 Entry。其他类型对齐 OpenHanako/Pi 的
-// Session Tree 思路，为模型切换、Thinking Level、Compaction 等后续能力保留稳定
+// message 是当前 Agent 对话协议的核心 Entry。其他类型对齐 Pi 的Session
+// Tree 思路，为模型切换、Thinking Level、Compaction 等后续能力保留稳定
 // 协议位置，避免未来重新发明 sidecar metadata 或第二份 Session 状态数据库。
 type EntryType string
 
@@ -146,7 +146,7 @@ type UsageCost struct {
 
 // Usage 保存一次 Assistant Completion 的 Token 使用量。
 //
-// 字段命名与 OpenHanako/Pi 风格 Session 保持接近。Codec 负责与 Eino
+// 字段命名与 Pi 风格 Session 保持接近。Codec 负责与 Eino
 // schema.TokenUsage 双向映射。
 type Usage struct {
 	Input int `json:"input"`

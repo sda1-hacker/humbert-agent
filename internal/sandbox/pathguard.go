@@ -175,7 +175,6 @@ func filesystemRoot(path string) string {
 }
 
 // normalizePlatformPath 同时识别 Windows 原生路径与 MSYS/Git-Bash 的 /c/... 表达，
-// 避免只靠字符串前缀造成 OpenHanako 曾出现过的绕过类型。
 func normalizePlatformPath(value string) string {
 	if runtime.GOOS != "windows" {
 		return value

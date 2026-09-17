@@ -426,7 +426,7 @@ func (s *Store) DeleteRuns(ctx context.Context, taskID string) ([]Run, error) {
 }
 
 // RunBySession 返回引用指定会话的运行记录。TaskRun 是任务会话的生命周期所有者；
-// SessionService 用它阻止用户从普通会话入口误删仍可审计的任务结果。
+// SessionService 用它保证从普通会话入口删除时同步清理对应的运行历史。
 func (s *Store) RunBySession(ctx context.Context, sessionID string) (Run, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
