@@ -21,6 +21,10 @@ export function updateTask(id, request) {
     return Call.ByName(`${taskServiceName}.Update`, id, request);
 }
 
+export function setTaskStatus(id, status) {
+    return Call.ByName(`${taskServiceName}.SetStatus`, id, { status });
+}
+
 export function archiveTask(id) {
     return Call.ByName(`${taskServiceName}.Archive`, id);
 }

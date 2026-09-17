@@ -94,6 +94,10 @@ type SaveTaskRequest struct {
 	Limits   TaskLimitsDTO   `json:"limits"`
 }
 
+type TaskStatusRequest struct {
+	Status string `json:"status"`
+}
+
 type TaskService struct {
 	core        *coreapp.Application
 	mu          sync.Mutex
@@ -192,6 +196,17 @@ func (s *TaskService) Update(id string, request SaveTaskRequest) (TaskDTO, error
 	value, err := s.core.Tasks().Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("更新任务失败: %w", err)
+	}
+	return taskDTO(value), nil
+}
+
+// SetStatus 立即暂停或恢复任务计划，不会覆盖其它尚未保存的编辑字段。
+func (s *TaskService) SetStatus(id string, request TaskStatusRequest) (TaskDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	value, err := s.core.Tasks().SetStatus(ctx, id, tasks.TaskStatus(request.Status))
+	if err != nil {
+		return TaskDTO{}, fmt.Errorf("切换任务状态失败: %w", err)
 	}
 	return taskDTO(value), nil
 }

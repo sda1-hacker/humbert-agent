@@ -16,6 +16,7 @@ import {
     listTaskRuns,
     listTasks,
     runTaskNow,
+    setTaskStatus,
     updateTask,
 } from "../api/tasks.js";
 
@@ -157,7 +158,17 @@ export const useTaskStore = defineStore("tasks", {
         async update(id, request) {
             const value = await updateTask(id, request);
             await this.load();
-            this.selectedID = value.id;
+            return value;
+        },
+
+        async setStatus(id, status) {
+            const value = await setTaskStatus(id, status);
+            const index = this.items.findIndex((item) => item.id === id);
+            if (index >= 0) {
+                this.items[index] = value;
+            } else {
+                await this.load();
+            }
             return value;
         },
 

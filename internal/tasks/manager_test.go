@@ -85,6 +85,98 @@ func TestEnqueueDueQueueOneDoesNotAccumulateCandidates(t *testing.T) {
 
 func timePointer(value time.Time) *time.Time { return &value }
 
+func TestSetStatusPausesPlanAndCancelsAutomaticQueue(t *testing.T) {
+	store, agentID := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	task := createScheduledTestTask(t, store, agentID, Schedule{
+		Type: ScheduleInterval, TimeZone: "UTC", IntervalMinutes: 5,
+		MisfirePolicy: MisfireRunOnce, OverlapPolicy: OverlapQueueOne,
+	}, now.Add(5*time.Minute))
+	for _, trigger := range []RunTrigger{TriggerManual, TriggerSchedule} {
+		if _, _, err := store.CreateRun(context.Background(), Run{
+			ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+			Trigger: trigger, ScheduledFor: now, Attempt: 1, Status: RunQueued, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manager := testManagerForSchedule(store)
+	paused, err := manager.SetStatus(context.Background(), task.ID, TaskStatusPaused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paused.Status != TaskStatusPaused || paused.NextRunAt != nil {
+		t.Fatalf("paused task = %+v", paused)
+	}
+	runs, err := store.ListRuns(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, run := range runs {
+		if run.Trigger == TriggerSchedule && run.Status != RunCancelled {
+			t.Fatalf("scheduled run was not cancelled: %+v", run)
+		}
+		if run.Trigger == TriggerManual && run.Status != RunQueued {
+			t.Fatalf("manual run should remain queued: %+v", run)
+		}
+	}
+}
+
+func TestDispatchCancelsAutomaticRunWhenTaskIsPaused(t *testing.T) {
+	store, agentID := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	task := createScheduledTestTask(t, store, agentID, Schedule{
+		Type: ScheduleInterval, TimeZone: "UTC", IntervalMinutes: 5,
+		MisfirePolicy: MisfireRunOnce, OverlapPolicy: OverlapSkip,
+	}, now.Add(5*time.Minute))
+	task.Status = TaskStatusPaused
+	task.NextRunAt = nil
+	if err := store.UpdateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	run, _, err := store.CreateRun(context.Background(), Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+		Trigger: TriggerSchedule, ScheduledFor: now, Attempt: 1, Status: RunQueued, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := testManagerForSchedule(store).dispatchLocked(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := store.GetRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != RunCancelled || updated.FinishedAt == nil {
+		t.Fatalf("stale automatic run was not cancelled: %+v", updated)
+	}
+}
+
+func TestSetStatusResumeRecomputesNextRun(t *testing.T) {
+	store, agentID := newTestStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	task := createScheduledTestTask(t, store, agentID, Schedule{
+		Type: ScheduleInterval, TimeZone: "UTC", IntervalMinutes: 5,
+		MisfirePolicy: MisfireRunOnce, OverlapPolicy: OverlapSkip,
+	}, now.Add(5*time.Minute))
+	task.Status = TaskStatusPaused
+	task.NextRunAt = nil
+	if err := store.UpdateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	resumed, err := testManagerForSchedule(store).SetStatus(context.Background(), task.ID, TaskStatusActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Status != TaskStatusActive || resumed.NextRunAt == nil || !resumed.NextRunAt.After(now) {
+		t.Fatalf("resumed task = %+v", resumed)
+	}
+}
+
 func TestEnqueueDueMisfireSkipCreatesAuditableTerminalRun(t *testing.T) {
 	store, agentID := newTestStore(t)
 	now := time.Now().UTC().Truncate(time.Second)

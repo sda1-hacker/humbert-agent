@@ -174,6 +174,9 @@ func (m *Manager) Create(ctx context.Context, input CreateInput) (Task, error) {
 }
 
 func (m *Manager) Update(ctx context.Context, id string, input UpdateInput) (Task, error) {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+
 	existing, err := m.store.GetTask(ctx, id)
 	if err != nil {
 		return Task{}, err
@@ -207,6 +210,54 @@ func (m *Manager) Update(ctx context.Context, id string, input UpdateInput) (Tas
 	}
 	m.publish(Event{Type: "task.updated", TaskID: existing.ID, Task: &existing})
 	return existing, nil
+}
+
+// SetStatus 只切换计划启用状态，不会用页面里的未保存表单覆盖任务配置。
+// 状态切换与调度周期共用 cycleMu，确保调度器不能用暂停前读取的旧 Task 快照
+// 在暂停完成后继续入队并把 active 状态写回。
+func (m *Manager) SetStatus(ctx context.Context, id string, status TaskStatus) (Task, error) {
+	if status != TaskStatusActive && status != TaskStatusPaused {
+		return Task{}, fmt.Errorf("无效任务状态: %s", status)
+	}
+
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+
+	value, err := m.store.GetTask(ctx, id)
+	if err != nil {
+		return Task{}, err
+	}
+	if value.Status == TaskStatusArchived {
+		return Task{}, errors.New("已归档任务不能暂停或恢复")
+	}
+
+	now := time.Now().UTC()
+	value.Status = status
+	value.UpdatedAt = now
+	if status == TaskStatusPaused {
+		value.NextRunAt = nil
+	} else {
+		value.NextRunAt, err = initialNextRun(value.Schedule, now)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+	if err := m.store.UpdateTask(ctx, value); err != nil {
+		return Task{}, err
+	}
+
+	if status == TaskStatusPaused {
+		cancelled, cancelErr := m.store.CancelQueuedAutomaticRuns(ctx, value.ID, now)
+		if cancelErr != nil {
+			return Task{}, cancelErr
+		}
+		for _, run := range cancelled {
+			m.publish(Event{Type: "run.cancelled", TaskID: run.TaskID, RunID: run.ID, Run: &run})
+		}
+	}
+
+	m.publish(Event{Type: "task.updated", TaskID: value.ID, Task: &value})
+	return value, nil
 }
 
 func (m *Manager) Archive(ctx context.Context, id string) (Task, error) {
@@ -474,6 +525,20 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 	for _, run := range runs {
 		task, taskErr := m.store.GetTask(ctx, run.TaskID)
 		if taskErr != nil {
+			continue
+		}
+		// 手动 RunNow 是用户的显式操作，允许在计划暂停时执行；计划运行和重试
+		// 则必须在真正启动前再次确认 Task 仍为 active。该校验是暂停时取消队列
+		// 之外的第二道防线，避免旧队列或异常数据绕过暂停状态。
+		if task.Status == TaskStatusArchived || (task.Status != TaskStatusActive && run.Trigger != TriggerManual) {
+			now := time.Now().UTC()
+			run.Status = RunCancelled
+			run.Error = "任务计划已暂停，排队中的自动运行不再启动。"
+			run.FinishedAt = &now
+			if updateErr := m.store.UpdateRun(ctx, run); updateErr != nil {
+				return updateErr
+			}
+			m.publish(Event{Type: "run.cancelled", TaskID: run.TaskID, RunID: run.ID, Run: &run})
 			continue
 		}
 		m.mu.Lock()

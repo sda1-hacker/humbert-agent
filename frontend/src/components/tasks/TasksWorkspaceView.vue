@@ -37,6 +37,7 @@ const agentStore = useAgentStore();
 
 const creating = ref(false);
 const saving = ref(false);
+const statusSaving = ref(false);
 const running = ref(false);
 const deletingTask = ref(false);
 const deletingRunID = ref("");
@@ -137,11 +138,19 @@ function applyTask(task) {
   });
 }
 
-watch(selectedTask, (task) => {
+// 切换任务时加载完整表单；同一任务的后台状态刷新只同步 enabled，避免任务事件
+// 或暂停 API 返回时覆盖用户尚未保存的名称、提示词和计划编辑。
+watch(() => selectedTask.value?.id, () => {
   if (!creating.value) {
-    applyTask(task);
+    applyTask(selectedTask.value);
   }
 }, { immediate: true });
+
+watch(() => selectedTask.value?.status, (status) => {
+  if (!creating.value && status) {
+    form.enabled = status === "active";
+  }
+});
 
 function startCreating() {
   creating.value = true;
@@ -222,13 +231,48 @@ async function save() {
       creating.value = false;
       Message.success("任务已创建");
     } else if (selectedTask.value) {
-      await taskStore.update(selectedTask.value.id, requestFromForm());
+      const taskID = selectedTask.value.id;
+      const updated = await taskStore.update(taskID, requestFromForm());
+      if (taskStore.selectedID === taskID) {
+        applyTask(updated);
+      }
       Message.success("任务已保存");
     }
   } catch (error) {
     Message.error(error?.message ?? String(error));
   } finally {
     saving.value = false;
+  }
+}
+
+async function changeTaskEnabled(enabled) {
+  if (creating.value || !selectedTask.value || statusSaving.value) {
+    return;
+  }
+  const taskID = selectedTask.value.id;
+  const previous = selectedTask.value.status === "active";
+  const hadActiveRun = selectedRuns.value.some((run) => canCancel(run));
+  if (Boolean(enabled) === previous) {
+    return;
+  }
+
+  statusSaving.value = true;
+  try {
+    await taskStore.setStatus(taskID, enabled ? "active" : "paused");
+    if (enabled) {
+      Message.success("任务计划已恢复");
+    } else {
+      Message.success(hadActiveRun
+        ? "任务计划已暂停；当前运行不会自动中止"
+        : "任务计划已暂停");
+    }
+  } catch (error) {
+    if (taskStore.selectedID === taskID) {
+      form.enabled = previous;
+    }
+    Message.error(error?.message ?? String(error));
+  } finally {
+    statusSaving.value = false;
   }
 }
 
@@ -456,7 +500,7 @@ onMounted(async () => {
           <span class="task-list__topline">
             <strong>{{ task.name }}</strong>
             <span :class="['task-state', `task-state--${task.status}`]">
-              {{ task.status === "active" ? "启用" : "暂停" }}
+              {{ task.status === "active" ? "计划启用" : "已暂停" }}
             </span>
           </span>
           <small>{{ agentName(task.agentID) }}</small>
@@ -472,9 +516,14 @@ onMounted(async () => {
             <h2>{{ creating ? "新建任务" : "任务配置" }}</h2>
             <p>计划只决定何时入队；工具权限仍沿用 Agent 的安全策略。</p>
           </div>
-          <a-switch v-model="form.enabled">
-            <template #checked>启用</template>
-            <template #unchecked>暂停</template>
+          <a-switch
+              v-model="form.enabled"
+              :loading="statusSaving"
+                :disabled="saving || deletingTask || statusSaving"
+              @change="changeTaskEnabled"
+          >
+            <template #checked>计划启用</template>
+            <template #unchecked>计划暂停</template>
           </a-switch>
         </div>
 
@@ -580,7 +629,7 @@ onMounted(async () => {
           <a-button v-else status="danger" :loading="deletingTask" @click="deleteSelected">删除任务</a-button>
           <span class="editor-actions__spacer"></span>
           <a-button v-if="!creating" :loading="running" @click="runNow">立即运行</a-button>
-          <a-button type="primary" :loading="saving" @click="save">保存</a-button>
+          <a-button type="primary" :loading="saving" :disabled="statusSaving" @click="save">保存</a-button>
         </div>
       </section>
 
