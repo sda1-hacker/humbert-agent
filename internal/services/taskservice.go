@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -220,46 +221,65 @@ func (s *TaskService) Archive(id string) error {
 	return nil
 }
 
-func (s *TaskService) Delete(id string) error {
+func (s *TaskService) Delete(id string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	runs, err := s.core.Tasks().Runs(ctx, id)
 	if err != nil {
-		return fmt.Errorf("读取待删除任务的运行历史失败: %w", err)
+		return nil, fmt.Errorf("读取待删除任务的运行历史失败: %w", err)
 	}
 	if err := s.core.Tasks().Delete(ctx, id); err != nil {
-		return fmt.Errorf("删除任务失败: %w", err)
+		return nil, fmt.Errorf("删除任务失败: %w", err)
 	}
 	s.clearSessionRules(runs)
-	return nil
+	return taskRunSessionIDs(runs), nil
 }
 
-func (s *TaskService) DeleteRun(id string) error {
+func (s *TaskService) DeleteRun(id string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	run, err := s.core.Tasks().Run(ctx, id)
 	if err != nil {
-		return fmt.Errorf("读取待删除运行记录失败: %w", err)
+		return nil, fmt.Errorf("读取待删除运行记录失败: %w", err)
 	}
 	if err := s.core.Tasks().DeleteRun(ctx, id); err != nil {
-		return fmt.Errorf("删除运行记录失败: %w", err)
+		return nil, fmt.Errorf("删除运行记录失败: %w", err)
 	}
 	s.clearSessionRules([]tasks.Run{run})
-	return nil
+	return taskRunSessionIDs([]tasks.Run{run}), nil
 }
 
-func (s *TaskService) ClearRuns(taskID string) error {
+func (s *TaskService) ClearRuns(taskID string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	runs, err := s.core.Tasks().Runs(ctx, taskID)
 	if err != nil {
-		return fmt.Errorf("读取待清空运行历史失败: %w", err)
+		return nil, fmt.Errorf("读取待清空运行历史失败: %w", err)
 	}
 	if err := s.core.Tasks().ClearRuns(ctx, taskID); err != nil {
-		return fmt.Errorf("清空运行历史失败: %w", err)
+		return nil, fmt.Errorf("清空运行历史失败: %w", err)
 	}
 	s.clearSessionRules(runs)
-	return nil
+	return taskRunSessionIDs(runs), nil
+}
+
+// taskRunSessionIDs 把后端已经删除的任务会话显式返回给桌面端。Session 列表在
+// 前端是缓存；如果只删除磁盘目录而不返回失效 ID，左侧会话会一直显示到应用重启。
+func taskRunSessionIDs(runs []tasks.Run) []string {
+	seen := make(map[string]struct{}, len(runs))
+	result := make([]string, 0, len(runs))
+	for _, run := range runs {
+		sessionID := strings.TrimSpace(run.SessionID)
+		if sessionID == "" {
+			continue
+		}
+		if _, exists := seen[sessionID]; exists {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		result = append(result, sessionID)
+	}
+	return result
 }
 
 func (s *TaskService) clearSessionRules(runs []tasks.Run) {

@@ -19,6 +19,9 @@ import {
     setTaskStatus,
     updateTask,
 } from "../api/tasks.js";
+import {
+    useSessionStore,
+} from "./sessions.js";
 
 const taskEventName = "humbert:task:event";
 
@@ -181,7 +184,8 @@ export const useTaskStore = defineStore("tasks", {
         },
 
         async remove(id) {
-            await deleteTask(id);
+            const deletedSessionIDs = await deleteTask(id);
+            await useSessionStore().forgetSessions(deletedSessionIDs);
             const nextRuns = { ...this.runsByTask };
             delete nextRuns[id];
             this.runsByTask = nextRuns;
@@ -189,12 +193,14 @@ export const useTaskStore = defineStore("tasks", {
         },
 
         async removeRun(taskID, runID) {
-            await deleteTaskRun(runID);
+            const deletedSessionIDs = await deleteTaskRun(runID);
+            await useSessionStore().forgetSessions(deletedSessionIDs);
             await this.loadRuns(taskID);
         },
 
         async clearRuns(taskID) {
-            await clearTaskRuns(taskID);
+            const deletedSessionIDs = await clearTaskRuns(taskID);
+            await useSessionStore().forgetSessions(deletedSessionIDs);
             this.runsByTask = {
                 ...this.runsByTask,
                 [taskID]: [],

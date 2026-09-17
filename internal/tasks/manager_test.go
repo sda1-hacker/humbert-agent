@@ -85,6 +85,19 @@ func TestEnqueueDueQueueOneDoesNotAccumulateCandidates(t *testing.T) {
 
 func timePointer(value time.Time) *time.Time { return &value }
 
+func TestTaskSessionTitleUsesConfiguredTimeZone(t *testing.T) {
+	task := Task{
+		Name: "测试任务",
+		Schedule: Schedule{
+			TimeZone: "Asia/Shanghai",
+		},
+	}
+	startedAt := time.Date(2026, time.September, 17, 16, 30, 0, 0, time.UTC)
+	if got, want := taskSessionTitle(task, startedAt), "任务·9月18日测试任务"; got != want {
+		t.Fatalf("taskSessionTitle() = %q, want %q", got, want)
+	}
+}
+
 func TestSetStatusPausesPlanAndCancelsAutomaticQueue(t *testing.T) {
 	store, agentID := newTestStore(t)
 	now := time.Now().UTC().Truncate(time.Second)

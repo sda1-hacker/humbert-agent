@@ -914,25 +914,34 @@ export const useSessionStore =
                 },
 
                 /**
-                 * 删除 Session。
+                 * 清理由其他领域已经删除的 Session 前端缓存。
                  *
-                 * 删除以后同步清理所有 Agent Cache。
-                 *
-                 * 如果删除的是当前 Session，则自动选择当前
-                 * Agent 中剩余的第一条 Session。
+                 * TaskRun 删除会话文件以后调用这里，不能再次请求
+                 * SessionService.Delete，否则会因为文件已经不存在而失败。
                  */
-                async remove(id) {
-                    await deleteSession(id);
+                async forgetSessions(ids) {
+                    const forgotten =
+                        new Set(
+                            (Array.isArray(ids)
+                                ? ids
+                                : [ids]
+                            ).filter(Boolean),
+                        );
+                    if (forgotten.size === 0) {
+                        return;
+                    }
 
                     const wasSelected =
-                        this.selectedID ===
-                        id;
+                        forgotten.has(
+                            this.selectedID,
+                        );
 
                     this.items =
                         this.items.filter(
                             (session) =>
-                                session.id !==
-                                id,
+                                !forgotten.has(
+                                    session.id,
+                                ),
                         );
 
                     for (
@@ -946,11 +955,7 @@ export const useSessionStore =
                                 agentID
                                 ];
 
-                        if (
-                            !Array.isArray(
-                                sessions,
-                            )
-                        ) {
+                        if (!Array.isArray(sessions)) {
                             continue;
                         }
 
@@ -959,16 +964,16 @@ export const useSessionStore =
                             ] =
                             sessions.filter(
                                 (session) =>
-                                    session.id !==
-                                    id,
+                                    !forgotten.has(
+                                        session.id,
+                                    ),
                             );
                     }
 
-                    this.clearDraft(id);
-
-                    automaticTitleRefreshes.delete(
-                        id,
-                    );
+                    for (const id of forgotten) {
+                        this.clearDraft(id);
+                        automaticTitleRefreshes.delete(id);
+                    }
 
                     if (!wasSelected) {
                         return;
@@ -977,19 +982,27 @@ export const useSessionStore =
                     this.selectedID =
                         this.items[0]?.id ??
                         "";
-
                     this.messages = [];
-
                     this.resetMessagePage();
 
-                    if (
-                        this.selectedID
-                    ) {
-                        await this
-                            .refreshMessages(
-                                this.selectedID,
-                            );
+                    if (this.selectedID) {
+                        await this.refreshMessages(
+                            this.selectedID,
+                        );
                     }
+                },
+
+                /**
+                 * 删除 Session。
+                 *
+                 * 删除以后同步清理所有 Agent Cache。
+                 *
+                 * 如果删除的是当前 Session，则自动选择当前
+                 * Agent 中剩余的第一条 Session。
+                 */
+                async remove(id) {
+                    await deleteSession(id);
+                    await this.forgetSessions([id]);
                 },
 
                 /**

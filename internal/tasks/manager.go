@@ -561,7 +561,10 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 
 func (m *Manager) startRun(ctx context.Context, task Task, run Run) error {
 	now := time.Now().UTC()
-	session, err := m.sessions.Create(ctx, sessions.CreateSessionInput{AgentID: task.AgentID, Title: "任务 · " + task.Name})
+	session, err := m.sessions.Create(ctx, sessions.CreateSessionInput{
+		AgentID: task.AgentID,
+		Title:   taskSessionTitle(task, now),
+	})
 	if err != nil {
 		return err
 	}
@@ -631,6 +634,19 @@ func (m *Manager) startRun(ctx context.Context, task Task, run Run) error {
 	}
 	m.publish(Event{Type: "run.started", TaskID: run.TaskID, RunID: run.ID, Run: &current})
 	return nil
+}
+
+// taskSessionTitle 使用任务配置的时区展示实际启动日期。手动任务没有计划时区时使用
+// 应用所在系统时区，标题示例：任务·9月18日测试任务。
+func taskSessionTitle(task Task, startedAt time.Time) string {
+	location := time.Local
+	if timeZone := strings.TrimSpace(task.Schedule.TimeZone); timeZone != "" {
+		if configured, err := time.LoadLocation(timeZone); err == nil {
+			location = configured
+		}
+	}
+	localTime := startedAt.In(location)
+	return fmt.Sprintf("任务·%d月%d日%s", localTime.Month(), localTime.Day(), task.Name)
 }
 
 func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
