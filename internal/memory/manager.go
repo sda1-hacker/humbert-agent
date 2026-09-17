@@ -285,7 +285,7 @@ func (m *Manager) prepareAndGenerate(
 	var prompt strings.Builder
 	if strings.TrimSpace(previousSummary) != "" && !rebuilt {
 		prompt.WriteString("[已有 Session Memory]\n")
-		prompt.WriteString(previousSummary)
+		prompt.WriteString(truncate(previousSummary, m.config.SerializerMaxChars*2))
 		prompt.WriteString("\n\n[新增会话片段]\n")
 	} else {
 		prompt.WriteString("[当前 Session 会话片段]\n")
@@ -294,9 +294,10 @@ func (m *Manager) prepareAndGenerate(
 
 	operationCtx, cancel := context.WithTimeout(ctx, time.Duration(m.config.OperationTimeoutMS)*time.Millisecond)
 	defer cancel()
+	promptText := truncateMiddle(prompt.String(), m.config.SerializerMaxChars*8)
 	response, err := model.Generate(operationCtx, []*schema.Message{
 		schema.SystemMessage(memorySystemPrompt),
-		schema.UserMessage(prompt.String()),
+		schema.UserMessage(promptText),
 	})
 	if err != nil {
 		return RefreshResult{}, Document{}, false, fmt.Errorf("调用模型更新 Session Memory 失败: %w", err)
@@ -397,6 +398,19 @@ func serializeSegment(entries []transcript.Entry, maxChars int) (string, Artifac
 		case transcript.RoleUser:
 			builder.WriteString("\n[User]\n")
 			builder.WriteString(truncate(visibleText(message.Content), maxChars))
+			for _, block := range message.Content {
+				switch block.Type {
+				case transcript.ContentImage:
+					builder.WriteString("\n[Image attachment: ")
+					builder.WriteString(memoryAttachmentLabel(block))
+					builder.WriteString("]")
+				case transcript.ContentFile:
+					builder.WriteString("\n[File attachment: ")
+					builder.WriteString(memoryAttachmentLabel(block))
+					builder.WriteString("]\n")
+					builder.WriteString(truncate(block.ExtractedText, maxChars))
+				}
+			}
 			builder.WriteByte('\n')
 		case transcript.RoleAssistant:
 			text := visibleText(message.Content)
@@ -428,7 +442,35 @@ func serializeSegment(entries []transcript.Entry, maxChars int) (string, Artifac
 			}
 		}
 	}
-	return strings.TrimSpace(builder.String()), normalizeArtifacts(artifacts)
+	return truncateMiddle(strings.TrimSpace(builder.String()), maxChars*8), normalizeArtifacts(artifacts)
+}
+
+func memoryAttachmentLabel(block transcript.ContentBlock) string {
+	name := strings.TrimSpace(block.Name)
+	if name == "" {
+		name = "attachment"
+	}
+	if mimeType := strings.TrimSpace(block.MIMEType); mimeType != "" {
+		return name + "; MIME: " + mimeType
+	}
+	return name
+}
+
+func truncateMiddle(value string, maxRunes int) string {
+	value = strings.TrimSpace(value)
+	if maxRunes <= 0 || utf8.RuneCountInString(value) <= maxRunes {
+		return value
+	}
+	marker := "\n\n...[middle history omitted for memory budget]...\n\n"
+	markerRunes := []rune(marker)
+	if maxRunes <= len(markerRunes)+2 {
+		return truncate(value, maxRunes)
+	}
+	runes := []rune(value)
+	available := maxRunes - len(markerRunes)
+	prefix := available / 3
+	suffix := available - prefix
+	return string(runes[:prefix]) + marker + string(runes[len(runes)-suffix:])
 }
 
 func countUserTurns(entries []transcript.Entry) int {

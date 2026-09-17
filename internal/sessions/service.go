@@ -311,9 +311,8 @@ func (s *Service) MessagePage(
 }
 
 // BuildContext 返回当前 Active Branch 对应的 Eino Runtime Messages。
-//
-// 这是 Runtime Resolver 获取历史的唯一入口。JSONL Wire -> schema.Message 的恢复只在
-// transcript.DecodeMessage 中实现，Resolver 不再知道 Thinking/ToolCall 的磁盘字段。
+// JSONL Wire -> schema.Message 的恢复只在 transcript.DecodeMessage 中实现；附件统一在完整
+// Message 列表上水合，以便应用与 Runtime Provider 请求相同的历史图片重放窗口。
 func (s *Service) BuildContext(
 	ctx context.Context,
 	sessionID string,
@@ -329,13 +328,9 @@ func (s *Service) BuildContext(
 		if stored.Message == nil {
 			return nil, fmt.Errorf("Session Entry %s 恢复得到空 Eino Message", stored.EntryID)
 		}
-		hydrated, err := s.hydrateUserAttachments(ctx, sessionID, stored.Message)
-		if err != nil {
-			return nil, fmt.Errorf("恢复 Session Entry %s 附件失败: %w", stored.EntryID, err)
-		}
-		result = append(result, hydrated)
+		result = append(result, stored.Message)
 	}
-	return result, nil
+	return s.HydrateMessages(ctx, sessionID, result)
 }
 
 // LoadTranscript 返回当前 Session 的完整 Tree 投影，供 ContextEngine 与 Session Memory 使用。

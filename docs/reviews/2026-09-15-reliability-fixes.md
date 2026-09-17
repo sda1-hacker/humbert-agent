@@ -56,7 +56,24 @@ Workspace 保留测试、损坏 Session 隔离，以及 UI/文档中的旧工作
 - 用户消息支持复制、再次填入输入框；Assistant 回复支持复制。
 - 第一条用户输入会为默认标题生成短标题；命名失败不回滚已经成功落盘的消息。
 
-分页 API 当前会先在 Wire Entry 上确定窗口，只把本页恢复成 Eino Message；Transcript Store 仍需加载、校验完整 Active Branch，尚未解决超长 JSONL 的全量扫描成本。
+分页 API 当前会先在 Wire Entry 上确定窗口，只把本页恢复成 Eino Message。完整尾行不再
+重复扫描，Compaction Prepare 复用同一次 Transcript 读取。Transcript 首次访问或文件变化
+时严格校验完整 JSONL，随后使用容量受限、可重建的 Document LRU；正常追加只增量推进
+Leaf/Active Branch，并同步维护 Message ID/序号到 Active Branch 位置的索引。分页现在只
+复制、恢复当前窗口，不再克隆或筛选完整 Document。
+
+### 4.2 前端首屏加载
+
+- Settings、Skills 和 Connectors 改为异步一级视图，不再随聊天首屏同步加载。
+- Arco Vue 从整包注册和整包样式改为只注册模板实际使用的组件及其样式；子组件仍由对应插件统一注册。
+- 生产构建的主 JS 从约 1.11 MB（gzip 326 KB）降至约 301 KB（gzip 87.5 KB），主 CSS 从约 505 KB 降至约 255 KB；低频页面形成独立 chunk，Vite 不再报告超过 500 KB 的 chunk。
+
+### 4.3 附件与多媒体模型路由
+
+- 图片附件校验真实 MIME 后保存到 Session sidecar，请求时按上下文重放策略水合为 Base64；Base64 不进入 transcript、Memory 或压缩记录。
+- UTF-8 文本、源码及 JSON/YAML/XML 等附件提取为普通 text part；PDF/Office、音频和视频在可靠解析链路落地前明确拒绝。
+- Agent Profile 不再保存 Vision Model。用户在“设置 → 模型”声明 Capability，并在“设置 → 多媒体”选择全局图片回退模型；保存、更新和删除都会校验引用完整性。
+- 前端业务 API 统一使用 Wails `Call.ByName`，源码和生产构建不再依赖提交或手工维护生成 bindings。
 
 ### 5. 清理与文档
 
@@ -67,7 +84,7 @@ Workspace 保留测试、损坏 Session 隔离，以及 UI/文档中的旧工作
 - frontend/src/components/settings/AgentSettings.vue：旧界面无导入。
 - frontend/src/components/settings/SkillAgentReferences.vue：无导入。
 
-保留当前实际使用的 Agent 表单、Skills、MCP、权限审批和沙盒。同步 README/DEVELOPMENT 的实际数据目录，更新 Wails 绑定；绑定生成使用 string 时间字段，与现有前端数据约定一致。
+保留当前实际使用的 Agent 表单、Skills、MCP、权限审批和沙盒。同步 README/DEVELOPMENT 的实际数据目录；Wails bindings 继续视为生成物，不在业务修改中手工维护。
 
 ## 回归测试
 
@@ -75,6 +92,7 @@ Workspace 保留测试、损坏 Session 隔离，以及 UI/文档中的旧工作
 - sessions：缺失 config 的重启恢复、保留 Transcript、恢复后改名再重启、损坏 Session 隔离且健康 Session 可用、连续重试不重复追加、拒绝重试已回复消息、分页游标与 Tool 事务边界、首条输入自动命名。
 - agents：删除中断后重启续作、并发 Session 创建/Agent 删除无孤儿、Custom Workspace 保留。
 - runtime：关闭取消并等待初始化、多次关闭等待、拒绝删除被占用会话、已完成工具结果在取消后仍保存、取消记忆维护并发出正确终态。
+- models/runtime：多媒体配置在模型增删改后保持、拒绝无 Vision/已禁用模型、保护正在使用的图片模型，以及 Chat Vision/全局图片回退路由选择。
 - sandbox：测试目录与生产路径一样先解析真实路径，修复 macOS `/var` 与 `/private/var` 别名导致的夹具错误，没有放宽沙盒规则。
 
 验证命令：
@@ -88,13 +106,12 @@ npm run build
 ```
 
 以上 Go 测试、静态检查和前端构建已执行通过。Wails bindings 只通过
-`cmd/desktop/main.go` 入口生成，不作为手工维护的源码。前端仍有约 1.11 MB 主 JS 的大包提示，npm 仍提示现有
-minimum-release-age 配置不受支持。未运行真实 Provider/工具外部副作用或完整桌面 GUI 验收。
+`cmd/desktop/main.go` 入口生成，不作为手工维护的源码。已经删除 npm 不支持且实际不会生效的
+`minimum-release-age` 项；未运行真实 Provider/工具外部副作用或完整桌面 GUI 验收。
 
 ## 下一批工作
 
-1. JSONL 增量读取/可重建索引，让现有界面分页不再需要全量扫描长会话。
-2. 损坏会话修复/导出界面、持久化运行状态和更完整的重试协议。
-3. 工作区产物预览。
-4. 跨会话个人记忆的编辑、来源与遗忘。
-5. 再按真实使用频率缩减搜索来源、Skills 管理和大型设置页；自主任务、浏览器控制、多 Agent 协作另行规划。
+1. 损坏会话修复/导出界面、持久化运行状态和更完整的重试协议。
+2. 工作区产物预览。
+3. 跨会话个人记忆的编辑、来源与遗忘。
+4. 再按真实使用频率缩减搜索来源、Skills 管理和大型设置页；自主任务、浏览器控制、多 Agent 协作另行规划。

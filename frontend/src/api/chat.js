@@ -2,38 +2,8 @@ import {
     Call,
 } from "@wailsio/runtime";
 
-let bindingPromise = null;
-
 const chatServiceName =
     "github.com/sda1-hacker/humbert-agent/internal/services.ChatService";
-
-/**
- * 延迟加载 Wails ChatService Binding。
- *
- * 已存在的 StartTurn/CancelTurn 继续使用生成的 ByID binding；Context/Compaction 是本次
- * 新增方法，在补丁环境无法可靠重新运行 wails3 generator，因此先通过 Wails v3 的
- * Call.ByName 调用。用户本地重新生成 bindings 后也无需修改这里，ByName 与生成 binding
- * 可以并存，避免手写不稳定的 Method ID。
- */
-function loadBinding() {
-    if (!bindingPromise) {
-        bindingPromise = import(
-            "../../bindings/github.com/sda1-hacker/humbert-agent/internal/services/chatservice.js"
-            ).catch((error) => {
-            bindingPromise = null;
-
-
-            throw new Error(
-                "无法加载 ChatService Binding，请重新生成 Wails bindings",
-                {
-                    cause: error,
-                },
-            );
-        });
-    }
-
-    return bindingPromise;
-}
 
 /**
  * 发起一个异步 User Turn。
@@ -60,15 +30,10 @@ export function startTurn(
 /**
  * 取消一个正在运行的 User Turn。
  */
-export async function cancelTurn(
+export function cancelTurn(
     requestID,
 ) {
-    const binding =
-        await loadBinding();
-
-    return binding.CancelTurn(
-        requestID,
-    );
+    return Call.ByName(`${chatServiceName}.CancelTurn`, requestID);
 }
 
 /**

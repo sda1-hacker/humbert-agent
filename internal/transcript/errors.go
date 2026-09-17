@@ -16,6 +16,9 @@ var (
 	// ErrSessionNotFound 表示目标 Session Transcript 不存在。
 	ErrSessionNotFound = errors.New("Session Transcript 不存在")
 
+	// ErrMessageCursorNotFound 表示分页游标不属于当前 Active Branch 的 Message 序列。
+	ErrMessageCursorNotFound = errors.New("Transcript Message 分页游标不存在")
+
 	// ErrCompactionStale 表示 Compaction 摘要生成期间 ActiveBranch 已经发生变化。
 	// 调用方必须丢弃旧摘要并基于新的分支重新准备，不能把过期切点强行写入 JSONL。
 	ErrCompactionStale = errors.New("Session Compaction 已过期")

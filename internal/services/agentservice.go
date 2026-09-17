@@ -95,14 +95,12 @@ type AgentModelRequest struct {
 type AgentModelRolesDTO struct {
 	UtilityModelID string `json:"utilityModelID"`
 	MemoryModelID  string `json:"memoryModelID"`
-	VisionModelID  string `json:"visionModelID"`
 }
 
 // AgentModelRolesRequest 只更新辅助模型角色。空字符串表示使用 Runtime 回退链。
 type AgentModelRolesRequest struct {
 	UtilityModelID string `json:"utilityModelID"`
 	MemoryModelID  string `json:"memoryModelID"`
-	VisionModelID  string `json:"visionModelID"`
 }
 
 // AgentSkillsRequest 只修改启用的 Skill 引用。
@@ -453,14 +451,13 @@ func (s *AgentService) SetAgentModel(id string, request AgentModelRequest) (Agen
 	return s.toDTO(value)
 }
 
-// SetAgentModelRoles 只修改 Utility/Memory/Vision 模型角色。
+// SetAgentModelRoles 只修改 Utility/Memory 模型角色。
 func (s *AgentService) SetAgentModelRoles(id string, request AgentModelRolesRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
 	value, err := s.core.Agents().SetModelRoles(ctx, id, agents.ModelRoles{
 		UtilityModelID: request.UtilityModelID,
 		MemoryModelID:  request.MemoryModelID,
-		VisionModelID:  request.VisionModelID,
 	})
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent Model Roles 失败: %w", err)
@@ -883,7 +880,6 @@ func modelRolesFromDTO(value AgentModelRolesDTO) agents.ModelRoles {
 	return agents.ModelRoles{
 		UtilityModelID: value.UtilityModelID,
 		MemoryModelID:  value.MemoryModelID,
-		VisionModelID:  value.VisionModelID,
 	}
 }
 
@@ -891,7 +887,6 @@ func modelRolesDTO(value agents.ModelRoles) AgentModelRolesDTO {
 	return AgentModelRolesDTO{
 		UtilityModelID: value.UtilityModelID,
 		MemoryModelID:  value.MemoryModelID,
-		VisionModelID:  value.VisionModelID,
 	}
 }
 

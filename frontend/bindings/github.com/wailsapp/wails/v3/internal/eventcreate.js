@@ -6,17 +6,4 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as runtime$0 from "../../../../sda1-hacker/humbert-agent/internal/runtime/models.js";
-
-function configure() {
-    Object.freeze(Object.assign($Create.Events, {
-        "humbert:runtime:event": $$createType0,
-    }));
-}
-
-// Private type creation functions
-const $$createType0 = runtime$0.Event.createFrom;
-
-configure();
+Object.freeze($Create.Events);

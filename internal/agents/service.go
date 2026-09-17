@@ -641,7 +641,7 @@ func (s *Service) SetModel(ctx context.Context, id, modelID string) (AgentInfo, 
 	return s.Get(ctx, existing.Agent.ID)
 }
 
-// SetModelRoles 只修改 Utility/Memory/Vision 模型角色，不触碰 Chat Model 或其它 Profile 字段。
+// SetModelRoles 只修改 Utility/Memory 模型角色，不触碰 Chat Model 或其它 Profile 字段。
 func (s *Service) SetModelRoles(ctx context.Context, id string, roles ModelRoles) (AgentInfo, error) {
 	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
 	if err != nil {
@@ -1298,12 +1298,10 @@ func (s *Service) normalizeAndValidateModelRoles(ctx context.Context, roles Mode
 	roles = ModelRoles{
 		UtilityModelID: strings.TrimSpace(roles.UtilityModelID),
 		MemoryModelID:  strings.TrimSpace(roles.MemoryModelID),
-		VisionModelID:  strings.TrimSpace(roles.VisionModelID),
 	}
 	for label, modelID := range map[string]string{
 		"Utility": roles.UtilityModelID,
 		"Memory":  roles.MemoryModelID,
-		"Vision":  roles.VisionModelID,
 	} {
 		if modelID == "" {
 			continue

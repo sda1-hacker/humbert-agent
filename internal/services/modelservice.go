@@ -80,6 +80,11 @@ type ModelDTO struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
+// MultimediaConfigDTO 是设置页维护的应用级多媒体模型路由。
+type MultimediaConfigDTO struct {
+	ImageModelID string `json:"imageModelID"`
+}
+
 // ModelSettingsState 用一次 Bridge 调用返回完整模型设置状态。
 type ModelSettingsState struct {
 	Revision uint64 `json:"revision"`
@@ -87,6 +92,8 @@ type ModelSettingsState struct {
 	Providers []ProviderDTO `json:"providers"`
 
 	Models []ModelDTO `json:"models"`
+
+	Multimedia MultimediaConfigDTO `json:"multimedia"`
 }
 
 // CreateProviderRequest 描述前端创建 Provider 请求。
@@ -190,6 +197,11 @@ func (s *ModelService) State() (
 		)
 	}
 
+	multimedia, err := s.core.Models().MultimediaConfig(ctx)
+	if err != nil {
+		return ModelSettingsState{}, fmt.Errorf("读取多媒体模型配置失败: %w", err)
+	}
+
 	return ModelSettingsState{
 		Revision: s.core.Models().
 			Revision(),
@@ -201,7 +213,23 @@ func (s *ModelService) State() (
 		Models: toModelDTOs(
 			modelList,
 		),
+
+		Multimedia: multimediaConfigDTO(multimedia),
 	}, nil
+}
+
+// UpdateMultimediaConfig 修改应用级多媒体模型路由。
+func (s *ModelService) UpdateMultimediaConfig(request MultimediaConfigDTO) (MultimediaConfigDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	value, err := s.core.Models().SetMultimediaConfig(ctx, models.MultimediaConfig{
+		ImageModelID: request.ImageModelID,
+	})
+	if err != nil {
+		return MultimediaConfigDTO{}, fmt.Errorf("更新多媒体模型配置失败: %w", err)
+	}
+	return multimediaConfigDTO(value), nil
 }
 
 // CreateProvider 创建 Provider。
@@ -627,4 +655,8 @@ func capabilitiesDTO(value models.Capabilities) ModelCapabilitiesDTO {
 		Tools: value.Tools, Vision: value.Vision, Files: value.Files,
 		Reasoning: value.Reasoning, JSON: value.JSON, Audio: value.Audio,
 	}
+}
+
+func multimediaConfigDTO(value models.MultimediaConfig) MultimediaConfigDTO {
+	return MultimediaConfigDTO{ImageModelID: value.ImageModelID}
 }

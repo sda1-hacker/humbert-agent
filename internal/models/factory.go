@@ -53,6 +53,7 @@ func (f *Factory) Create(
 	error,
 ) {
 	responseTimeout := time.Duration(resolved.Model.TimeoutMS) * time.Millisecond
+	maxOutputTokens := resolved.Model.MaxOutputTokens
 	httpClient, err := newStreamingHTTPClient(responseTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("创建 Streaming HTTP Client 失败: %w", err)
@@ -68,9 +69,10 @@ func (f *Factory) Create(
 		value, err := openai.NewChatModel(
 			ctx,
 			&openai.ChatModelConfig{
-				APIKey:  apiKey,
-				BaseURL: resolved.Provider.BaseURL,
-				Model:   resolved.Model.ModelName,
+				APIKey:              apiKey,
+				BaseURL:             resolved.Provider.BaseURL,
+				Model:               resolved.Model.ModelName,
+				MaxCompletionTokens: &maxOutputTokens,
 
 				// HTTPClient 一旦显式设置，Eino OpenAI Adapter 不再使用
 				// ChatModelConfig.Timeout，也就不会创建带总请求 Timeout 的 Client。
@@ -101,6 +103,7 @@ func (f *Factory) Create(
 				APIKey:     apiKey,
 				BaseURL:    resolved.Provider.BaseURL,
 				Model:      resolved.Model.ModelName,
+				MaxTokens:  &maxOutputTokens,
 				HTTPClient: httpClient,
 			},
 		)
@@ -117,6 +120,7 @@ func (f *Factory) Create(
 				BaseURL:    resolved.Provider.BaseURL,
 				Model:      resolved.Model.ModelName,
 				HTTPClient: httpClient,
+				Options:    &ollama.Options{NumPredict: maxOutputTokens},
 			},
 		)
 		if err != nil {

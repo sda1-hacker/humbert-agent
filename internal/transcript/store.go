@@ -44,6 +44,8 @@ type Store struct {
 	agentsRoot string
 
 	locks *lockRegistry
+
+	cache *documentCache
 }
 
 type lockEntry struct {
@@ -91,6 +93,7 @@ func NewStore(agentsRoot string) (*Store, error) {
 		locks: &lockRegistry{
 			values: make(map[string]*lockEntry),
 		},
+		cache: newDocumentCache(),
 	}, nil
 }
 
@@ -179,6 +182,9 @@ func (s *Store) CreateSession(ctx context.Context, input CreateSessionInput) err
 		return fmt.Errorf("关闭 Session Transcript 失败: %w", err)
 	}
 	closed = true
+	if info, statErr := os.Stat(path); statErr == nil {
+		s.cache.putOwned(path, Document{Header: header, Entries: []Entry{}, ActiveBranch: []Entry{}}, info)
+	}
 	return nil
 }
 
@@ -257,17 +263,71 @@ func (s *Store) LoadSession(
 		return Document{}, err
 	}
 
-	repair, err := repairTailLocked(ctx, path)
+	document, _, repair, err := s.documentForReadLocked(ctx, path, sessionID)
 	if err != nil {
 		return Document{}, err
 	}
-
-	document, err := loadLocked(ctx, path, sessionID)
-	if err != nil {
-		return Document{}, err
-	}
+	document = cloneDocument(document)
 	document.Repair = repair
 	return document, nil
+}
+
+// LoadMessagePage 从 Active Branch 的 Message 索引读取一页 Wire Entry。
+// 缓存命中时工作量与页大小相关，不需要克隆或筛选完整 Document。
+func (s *Store) LoadMessagePage(
+	ctx context.Context,
+	agentID string,
+	sessionID string,
+	beforeEntryID string,
+	limit int,
+) (MessageEntryPage, error) {
+	path, err := s.sessionPath(agentID, sessionID)
+	if err != nil {
+		return MessageEntryPage{}, err
+	}
+	unlock := s.locks.lock(path)
+	defer unlock()
+	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
+		return MessageEntryPage{}, err
+	}
+
+	document, info, _, err := s.documentForReadLocked(ctx, path, sessionID)
+	if err != nil {
+		return MessageEntryPage{}, err
+	}
+	beforeEntryID = strings.TrimSpace(beforeEntryID)
+	if page, cached, pageErr := s.cache.messagePage(path, info, beforeEntryID, limit); cached {
+		return page, pageErr
+	}
+	indexes, positions := indexMessages(document.ActiveBranch)
+	return messageEntryPageFromIndex(document.ActiveBranch, indexes, positions, beforeEntryID, limit)
+}
+
+func (s *Store) documentForReadLocked(
+	ctx context.Context,
+	path string,
+	sessionID string,
+) (Document, os.FileInfo, RepairResult, error) {
+	repair, err := repairTailLocked(ctx, path)
+	if err != nil {
+		return Document{}, nil, RepairResult{}, err
+	}
+	if repair.Repaired {
+		s.cache.invalidate(path)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return Document{}, nil, RepairResult{}, fmt.Errorf("读取 Session Transcript 状态失败: %w", err)
+	}
+	if document, ok := s.cache.readOnly(path, info); ok {
+		return document, info, repair, nil
+	}
+	document, err := loadLocked(ctx, path, sessionID)
+	if err != nil {
+		return Document{}, nil, RepairResult{}, err
+	}
+	s.cache.putOwned(path, document, info)
+	return document, info, repair, nil
 }
 
 // ListSessionRefs 返回指定 Agent 下存在有效 session.jsonl 的物理 Session 引用。
@@ -401,6 +461,7 @@ func (s *Store) DeleteSession(ctx context.Context, agentID string, sessionID str
 	if err := os.RemoveAll(directory); err != nil {
 		return fmt.Errorf("删除 Session 数据目录失败: %w", err)
 	}
+	s.cache.invalidate(path)
 	return nil
 }
 
@@ -421,7 +482,11 @@ func (s *Store) RepairSession(
 	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
 		return RepairResult{}, err
 	}
-	return repairTailLocked(ctx, path)
+	result, err := repairTailLocked(ctx, path)
+	if result.Repaired {
+		s.cache.invalidate(path)
+	}
+	return result, err
 }
 
 // appendEntry 将新节点挂到当前 Leaf 后追加。
@@ -459,11 +524,7 @@ func (s *Store) appendEntry(
 	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
 		return Entry{}, err
 	}
-	if _, err := repairTailLocked(ctx, path); err != nil {
-		return Entry{}, err
-	}
-
-	document, err := loadLocked(ctx, path, sessionID)
+	document, info, _, err := s.documentForReadLocked(ctx, path, sessionID)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -520,7 +581,66 @@ func (s *Store) appendEntry(
 		return Entry{}, fmt.Errorf("关闭 Session Transcript 失败: %w", err)
 	}
 	closed = true
+
+	if updatedInfo, statErr := os.Stat(path); statErr == nil {
+		if !s.cache.advance(path, info, updatedInfo, entry) {
+			s.cache.invalidate(path)
+		}
+	} else {
+		s.cache.invalidate(path)
+	}
 	return entry, nil
+}
+
+func messageEntryPageFromIndex(
+	activeBranch []Entry,
+	messageIndexes []int,
+	messagePositions map[string]int,
+	beforeEntryID string,
+	limit int,
+) (MessageEntryPage, error) {
+	end := len(messageIndexes)
+	if beforeEntryID != "" {
+		position, exists := messagePositions[beforeEntryID]
+		if !exists {
+			return MessageEntryPage{}, fmt.Errorf("%w: %s", ErrMessageCursorNotFound, beforeEntryID)
+		}
+		end = position
+	}
+
+	start := 0
+	if limit > 0 && end > limit {
+		start = end - limit
+		// 保持 Assistant ToolCall -> ToolResult(s) -> 最终 Assistant 的事务边界。
+		for start > 0 {
+			current := activeBranch[messageIndexes[start]].Message
+			if current == nil {
+				break
+			}
+			if current.Role == RoleToolResult {
+				start--
+				continue
+			}
+			previous := activeBranch[messageIndexes[start-1]].Message
+			if current.Role == RoleAssistant && previous != nil && previous.Role == RoleToolResult {
+				start--
+				continue
+			}
+			break
+		}
+	}
+
+	entries := make([]Entry, 0, end-start)
+	for _, branchIndex := range messageIndexes[start:end] {
+		entries = append(entries, cloneEntry(activeBranch[branchIndex]))
+	}
+	nextBeforeID := ""
+	if start > 0 && len(entries) > 0 {
+		nextBeforeID = entries[0].ID
+	}
+	return MessageEntryPage{
+		Entries: entries, StartIndex: start, HasMore: start > 0, NextBeforeID: nextBeforeID,
+	}, nil
 }
 
 // validateCompactionAgainstDocument 在真正 append 前验证压缩切点仍然属于当前分支。
@@ -775,6 +895,12 @@ func validateContentBlock(block ContentBlock) error {
 		if block.SizeBytes < 0 {
 			return errors.New("attachment sizeBytes 非法")
 		}
+		if block.Type == ContentFile && strings.TrimSpace(block.ExtractedText) == "" {
+			return errors.New("file attachment 缺少 extractedText")
+		}
+		if block.Type == ContentImage && block.ExtractedText != "" {
+			return errors.New("image attachment 不允许 extractedText")
+		}
 
 	case ContentThinking:
 		if block.Thinking == "" && !block.Redacted {
@@ -910,6 +1036,17 @@ func repairTailLocked(ctx context.Context, path string) (RepairResult, error) {
 	}
 	if info.Size() == 0 {
 		return RepairResult{}, &CorruptionError{Line: 1, Offset: 0, Reason: "缺少 Session Header"}
+	}
+
+	// 正常关闭的每条 JSONL 写入都以换行结束。绝大多数读取/追加无需为了确认“没有 crash
+	// tail”先完整扫描一次；后续 loadLocked 仍会逐行严格校验全部 JSON 和 Tree 关系，因此
+	// 这里的 O(1) 快路径不会掩盖中间损坏。只有末字节不是换行时才进入下面的修复扫描。
+	lastByte := []byte{0}
+	if _, err := file.ReadAt(lastByte, info.Size()-1); err != nil {
+		return RepairResult{}, fmt.Errorf("读取 Transcript 尾字节失败: %w", err)
+	}
+	if lastByte[0] == '\n' {
+		return RepairResult{}, nil
 	}
 
 	reader := bufio.NewReaderSize(file, 64*1024)

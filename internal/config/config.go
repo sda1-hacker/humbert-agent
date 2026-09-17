@@ -89,7 +89,7 @@ runtime:
 
 security:
   max_file_bytes: 1048576
-  shell_enabled: false
+  shell_enabled: true
   sandbox:
     default_profile: standard
     default_network_mode: public
@@ -109,6 +109,7 @@ security:
     - npx
     - python
     - python3
+	- bash
 `
 
 const defaultPreferencesJSON = `{
@@ -191,8 +192,8 @@ type ContextConfig struct {
 	KeepRecentMinTokens int     `mapstructure:"keep_recent_min_tokens"`
 	KeepRecentMaxTokens int     `mapstructure:"keep_recent_max_tokens"`
 
-	// SerializerMaxChars 限制单条 Thinking/ToolResult 送给压缩模型的字符数。原始
-	// Transcript 不会被截断；这里只限制摘要请求，防止一个巨大 ToolResult 挤掉全部历史。
+	// SerializerMaxChars 限制单条消息块送给压缩/Memory 模型的字符数；实现还会基于
+	// 该值和模型 Context Window 施加全局输入上限。原始 Transcript 不会被截断。
 	SerializerMaxChars int `mapstructure:"serializer_max_chars"`
 
 	// MemoryTurnInterval/MemoryTokenInterval 控制 Session Memory 的增量刷新节奏。

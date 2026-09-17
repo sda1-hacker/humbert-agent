@@ -36,7 +36,7 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 
 - `config.yaml`：通过 Viper 加载的启动级配置；支持 `HUMBERT_*` 环境变量覆盖。
 - `config/providers.json`：Provider 非敏感元数据；API Key 不写入该文件。
-- `config/models.json`：Model Registry 持久化数据。
+- `config/models.json`：Model Registry 与应用级多媒体模型路由的持久化数据。
 - `config/preferences.json`：用户偏好预留入口。
 - `secrets/`：本地 Credential 文件，Unix 下目录权限收紧为 `0700`、文件为 `0600`。
 - `agents/<id>/config.json`：Agent Profile。
@@ -64,7 +64,18 @@ Provider、Model、Agent 等低频配置使用“临时文件 + `fsync` + `renam
 - 用户消息支持复制和再次填入输入框，Assistant 回复支持整段复制。
 - 默认“新会话”会在第一条用户输入落盘后自动生成短标题；用户手工命名的会话不会被覆盖。
 
-当前分页只把选中窗口恢复成 Eino Message，限制了恢复、IPC 与前端渲染量；底层仍会加载并校验完整 JSONL Tree。长历史的增量索引/读取仍是后续性能工作，不能把界面分页等同于存储层随机读取。
+### 多媒体输入
+
+- 图片会校验真实文件格式并存入 Session 附件目录；调用 Provider 前才按需恢复为 Base64，二进制内容不会进入 transcript、Memory 或压缩摘要。
+- 文本、源码、JSON/YAML/XML 等 UTF-8 文件会提取为普通文本内容，因此不依赖 Provider 原生 Files API。
+- Agent 只保存 Chat、Utility 与 Memory 模型。全局图片回退模型在“设置 → 多媒体”中配置；Chat 模型缺少 Vision 时才会使用该模型。
+- PDF、Office、音频和视频当前不支持。模型设置中的 Files/Audio 是 Provider 能力元数据，不代表 Humbert 已经实现对应附件入口。
+
+当前分页只把选中窗口恢复成 Eino Message，限制了恢复、IPC 与前端渲染量。Transcript
+首次访问或文件变化时仍会严格加载、校验完整 JSONL Tree；随后使用容量受限、可重建的
+Document LRU，并在追加时增量推进 Leaf/Active Branch，避免同一进程内反复解析整份历史。
+缓存同时维护 Message ID/序号到 Active Branch 位置的页级索引；历史分页只复制和解码当前
+窗口，并继续保证 Assistant ToolCall、ToolResult 与最终 Assistant 回答不会被拆到两页。
 
 本轮修复、测试和剩余工作见 [可靠性修复记录](docs/reviews/2026-09-15-reliability-fixes.md)。
 
@@ -73,7 +84,7 @@ Provider、Model、Agent 等低频配置使用“临时文件 + `fsync` + `renam
 项目 `go.mod` 当前要求：
 
 ```text
-Go 1.26.1+
+Go 1.27.1+
 ```
 
 桌面端使用 Wails 3，前端位于 `frontend/`，采用 Vue + JavaScript。

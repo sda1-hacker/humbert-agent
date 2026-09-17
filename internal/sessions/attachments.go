@@ -6,21 +6,27 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
 const (
-	maxAttachmentsPerMessage       = 8
-	maxAttachmentBytes       int64 = 12 * 1024 * 1024
-	maxAttachmentTotalBytes  int64 = 24 * 1024 * 1024
-	attachmentURLPrefix            = "humbert-attachment://"
+	maxAttachmentsPerMessage        = 8
+	maxAttachmentBytes        int64 = 12 * 1024 * 1024
+	maxAttachmentTotalBytes   int64 = 24 * 1024 * 1024
+	maxTextAttachmentBytes    int64 = 512 * 1024
+	maxRuntimeAttachmentBytes int64 = 32 * 1024 * 1024
+	attachmentURLPrefix             = "humbert-attachment://"
 )
 
 func (s *Service) appendUserInput(ctx context.Context, sessionID string, input UserInput) (Message, error) {
@@ -68,9 +74,9 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 			cleanup()
 			return Message{}, errors.New("附件名称过长")
 		}
-		mime := strings.TrimSpace(raw.MIMEType)
-		if mime == "" {
-			mime = "application/octet-stream"
+		mimeType := normalizeAttachmentMIME(raw.MIMEType)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
 		}
 		data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw.Base64Data))
 		if err != nil {
@@ -91,6 +97,27 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 			cleanup()
 			return Message{}, errors.New("单条消息附件总大小不能超过 24 MiB")
 		}
+		if mimeType == "application/octet-stream" {
+			if detected := normalizeAttachmentMIME(http.DetectContentType(data)); strings.HasPrefix(detected, "image/") {
+				mimeType = detected
+			}
+		}
+
+		extractedText := ""
+		if strings.HasPrefix(mimeType, "image/") {
+			if err := validateImageAttachment(name, mimeType, data); err != nil {
+				cleanup()
+				return Message{}, err
+			}
+		} else {
+			var extractErr error
+			extractedText, mimeType, extractErr = extractTextAttachment(name, mimeType, data)
+			if extractErr != nil {
+				cleanup()
+				return Message{}, extractErr
+			}
+		}
+
 		id := uuid.NewString()
 		path := filepath.Join(attachmentDir, id)
 		if err := writeAttachmentFile(path, data); err != nil {
@@ -100,10 +127,11 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 		created = append(created, path)
 		url := attachmentURLPrefix + id
 		extra := map[string]any{"name": name, "size_bytes": size, "attachment_id": id}
-		if strings.HasPrefix(strings.ToLower(mime), "image/") {
-			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeImageURL, Image: &schema.MessageInputImage{MessagePartCommon: schema.MessagePartCommon{URL: &url, MIMEType: mime}}, Extra: extra})
+		if strings.HasPrefix(mimeType, "image/") {
+			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeImageURL, Image: &schema.MessageInputImage{MessagePartCommon: schema.MessagePartCommon{URL: &url, MIMEType: mimeType}}, Extra: extra})
 		} else {
-			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeFileURL, File: &schema.MessageInputFile{MessagePartCommon: schema.MessagePartCommon{URL: &url, MIMEType: mime}, Name: name}, Extra: extra})
+			extra["extracted_text"] = extractedText
+			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeFileURL, File: &schema.MessageInputFile{MessagePartCommon: schema.MessagePartCommon{URL: &url, MIMEType: mimeType}, Name: name}, Extra: extra})
 		}
 	}
 	message := &schema.Message{Role: schema.User, UserInputMultiContent: parts}
@@ -190,9 +218,25 @@ func (s *Service) userInputMatchesStoredMessage(ctx context.Context, sessionID s
 	for index, raw := range input.Attachments {
 		part := storedAttachments[index]
 		name := strings.TrimSpace(raw.Name)
-		mime := strings.TrimSpace(raw.MIMEType)
-		if mime == "" {
-			mime = "application/octet-stream"
+		mimeType := normalizeAttachmentMIME(raw.MIMEType)
+		if mimeType == "" {
+			mimeType = "application/octet-stream"
+		}
+		provided, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw.Base64Data))
+		if err != nil {
+			return false, nil
+		}
+		if mimeType == "application/octet-stream" {
+			if detected := normalizeAttachmentMIME(http.DetectContentType(provided)); strings.HasPrefix(detected, "image/") {
+				mimeType = detected
+			}
+		}
+		if !strings.HasPrefix(mimeType, "image/") {
+			_, normalizedMIME, extractErr := extractTextAttachment(name, mimeType, provided)
+			if extractErr != nil {
+				return false, nil
+			}
+			mimeType = normalizedMIME
 		}
 		id := stringExtra(part.Extra, "attachment_id")
 		storedName := stringExtra(part.Extra, "name")
@@ -212,11 +256,7 @@ func (s *Service) userInputMatchesStoredMessage(ctx context.Context, sessionID s
 				storedName = part.File.Name
 			}
 		}
-		if id == "" || storedName != name || storedMIME != mime {
-			return false, nil
-		}
-		provided, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw.Base64Data))
-		if err != nil {
+		if id == "" || storedName != name || storedMIME != mimeType {
 			return false, nil
 		}
 		stored, err := s.readAttachmentBytes(ctx, sessionID, id)
@@ -230,12 +270,22 @@ func (s *Service) userInputMatchesStoredMessage(ctx context.Context, sessionID s
 	return true, nil
 }
 
-// HydrateMessages 在真正调用 Provider 前把 Session 附件引用恢复为 Eino multimodal 内容。
-// ContextEngine/Transcript 始终保留轻量 sidecar 引用，避免 Base64 进入 JSONL、摘要与压缩。
+// HydrateMessages 在真正调用 Provider 前恢复 Session 附件。近期图片转成 Base64 多模态
+// 输入；较早图片转成元数据占位，避免每个后续 Turn 都重复读取和上传同一二进制；文本文件
+// 转成普通 text part，避免把当前 Eino Adapter 不支持的 file_url 发给 Provider。
+// ContextEngine/Transcript 始终保留 sidecar 引用和确定性提取文本。
 func (s *Service) HydrateMessages(ctx context.Context, sessionID string, messages []*schema.Message) ([]*schema.Message, error) {
 	result := make([]*schema.Message, 0, len(messages))
+	var hydratedBytes int64
+	imageReplayMask := multimodal.ImageReplayMask(messages)
 	for index, message := range messages {
-		hydrated, err := s.hydrateUserAttachments(ctx, sessionID, message)
+		hydrated, err := s.hydrateUserAttachmentsWithBudget(
+			ctx,
+			sessionID,
+			message,
+			&hydratedBytes,
+			imageReplayMask[index],
+		)
 		if err != nil {
 			return nil, fmt.Errorf("恢复第 %d 条 Runtime Message 附件失败: %w", index+1, err)
 		}
@@ -244,8 +294,19 @@ func (s *Service) HydrateMessages(ctx context.Context, sessionID string, message
 	return result, nil
 }
 
-// hydrateUserAttachments 把 JSONL 中的 sidecar URL 恢复为 Eino Base64Data，仅存在于模型请求内存中。
+// hydrateUserAttachments 构造单条 Provider Message；附件二进制只在请求内存中存在。
 func (s *Service) hydrateUserAttachments(ctx context.Context, sessionID string, message *schema.Message) (*schema.Message, error) {
+	var hydratedBytes int64
+	return s.hydrateUserAttachmentsWithBudget(ctx, sessionID, message, &hydratedBytes, true)
+}
+
+func (s *Service) hydrateUserAttachmentsWithBudget(
+	ctx context.Context,
+	sessionID string,
+	message *schema.Message,
+	hydratedBytes *int64,
+	replayImages bool,
+) (*schema.Message, error) {
 	if message == nil || message.Role != schema.User || len(message.UserInputMultiContent) == 0 {
 		return message, nil
 	}
@@ -258,7 +319,14 @@ func (s *Service) hydrateUserAttachments(ctx context.Context, sessionID string, 
 			if part.Image == nil {
 				return nil, errors.New("历史图片附件结构无效")
 			}
-			common, err := s.hydrateCommon(ctx, sessionID, part.Image.MessagePartCommon)
+			if !replayImages {
+				next = schema.MessageInputPart{
+					Type: schema.ChatMessagePartTypeText,
+					Text: multimodal.HistoricalImagePlaceholder(part),
+				}
+				break
+			}
+			common, err := s.hydrateCommon(ctx, sessionID, part.Image.MessagePartCommon, hydratedBytes)
 			if err != nil {
 				return nil, err
 			}
@@ -269,20 +337,26 @@ func (s *Service) hydrateUserAttachments(ctx context.Context, sessionID string, 
 			if part.File == nil {
 				return nil, errors.New("历史文件附件结构无效")
 			}
-			common, err := s.hydrateCommon(ctx, sessionID, part.File.MessagePartCommon)
-			if err != nil {
-				return nil, err
+			extractedText := stringExtra(part.Extra, "extracted_text")
+			if extractedText == "" {
+				return nil, fmt.Errorf("文件附件 %q 缺少可发送给模型的提取文本", part.File.Name)
 			}
-			file := *part.File
-			file.MessagePartCommon = common
-			next.File = &file
+			next = schema.MessageInputPart{
+				Type: schema.ChatMessagePartTypeText,
+				Text: formatExtractedFileForModel(part.File.Name, part.File.MIMEType, extractedText),
+			}
 		}
 		copyMessage.UserInputMultiContent = append(copyMessage.UserInputMultiContent, next)
 	}
 	return &copyMessage, nil
 }
 
-func (s *Service) hydrateCommon(ctx context.Context, sessionID string, common schema.MessagePartCommon) (schema.MessagePartCommon, error) {
+func (s *Service) hydrateCommon(
+	ctx context.Context,
+	sessionID string,
+	common schema.MessagePartCommon,
+	hydratedBytes *int64,
+) (schema.MessagePartCommon, error) {
 	if common.URL == nil || !strings.HasPrefix(*common.URL, attachmentURLPrefix) {
 		return common, nil
 	}
@@ -290,6 +364,15 @@ func (s *Service) hydrateCommon(ctx context.Context, sessionID string, common sc
 	data, err := s.readAttachmentBytes(ctx, sessionID, id)
 	if err != nil {
 		return schema.MessagePartCommon{}, err
+	}
+	if hydratedBytes != nil {
+		*hydratedBytes += int64(len(data))
+		if *hydratedBytes > maxRuntimeAttachmentBytes {
+			return schema.MessagePartCommon{}, fmt.Errorf(
+				"本次模型上下文中的图片附件超过 %d MiB，请开启新会话或先压缩旧上下文",
+				maxRuntimeAttachmentBytes/(1024*1024),
+			)
+		}
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)
 	common.URL = nil
@@ -324,7 +407,98 @@ func (s *Service) readAttachmentBytes(ctx context.Context, sessionID, id string)
 	if info.Size() > maxAttachmentBytes {
 		return nil, errors.New("附件超过安全大小限制")
 	}
-	return os.ReadFile(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("打开附件失败: %w", err)
+	}
+	defer file.Close()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("读取附件状态失败: %w", err)
+	}
+	if !openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		return nil, errors.New("附件在安全校验期间发生变化")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxAttachmentBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("读取附件失败: %w", err)
+	}
+	if int64(len(data)) > maxAttachmentBytes {
+		return nil, errors.New("附件超过安全大小限制")
+	}
+	return data, nil
+}
+
+func normalizeAttachmentMIME(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if index := strings.IndexByte(value, ';'); index >= 0 {
+		value = strings.TrimSpace(value[:index])
+	}
+	if value == "image/jpg" {
+		return "image/jpeg"
+	}
+	return value
+}
+
+func validateImageAttachment(name string, claimedMIME string, data []byte) error {
+	detected := normalizeAttachmentMIME(http.DetectContentType(data))
+	if !strings.HasPrefix(detected, "image/") {
+		return fmt.Errorf("附件 %s 声明为图片，但内容不是受支持的图片格式", name)
+	}
+	// 要求声明与内容一致，避免把任意二进制伪装成 data URI 交给 Provider。
+	if detected != claimedMIME {
+		return fmt.Errorf("附件 %s 的图片类型不匹配: declared=%s detected=%s", name, claimedMIME, detected)
+	}
+	return nil
+}
+
+func extractTextAttachment(name string, mimeType string, data []byte) (string, string, error) {
+	if int64(len(data)) > maxTextAttachmentBytes {
+		return "", "", fmt.Errorf("文本附件 %s 超过 512 KiB 限制", name)
+	}
+	extension := strings.ToLower(filepath.Ext(name))
+	if !textAttachmentTypeSupported(mimeType, extension) {
+		return "", "", fmt.Errorf("附件 %s 的格式 %s 暂不支持；当前文件附件仅支持 UTF-8 文本、源码和 JSON/YAML/XML 等文本格式", name, mimeType)
+	}
+	if !utf8.Valid(data) || bytes.IndexByte(data, 0) >= 0 {
+		return "", "", fmt.Errorf("附件 %s 不是有效 UTF-8 文本", name)
+	}
+	text := strings.TrimPrefix(string(data), "\ufeff")
+	if strings.TrimSpace(text) == "" {
+		return "", "", fmt.Errorf("附件 %s 没有可读取的文本内容", name)
+	}
+	if mimeType == "application/octet-stream" || mimeType == "" {
+		mimeType = "text/plain"
+	}
+	return text, mimeType, nil
+}
+
+func textAttachmentTypeSupported(mimeType string, extension string) bool {
+	if strings.HasPrefix(mimeType, "text/") {
+		return true
+	}
+	switch mimeType {
+	case "application/json", "application/ld+json", "application/xml", "application/javascript",
+		"application/x-javascript", "application/yaml", "application/x-yaml", "application/toml",
+		"application/sql", "application/graphql":
+		return true
+	}
+	if mimeType != "" && mimeType != "application/octet-stream" {
+		return false
+	}
+	switch extension {
+	case ".txt", ".md", ".markdown", ".json", ".jsonl", ".yaml", ".yml", ".xml", ".csv", ".tsv",
+		".go", ".js", ".jsx", ".ts", ".tsx", ".vue", ".py", ".rb", ".rs", ".java", ".kt",
+		".c", ".h", ".cc", ".cpp", ".cs", ".swift", ".sh", ".zsh", ".fish", ".ps1", ".sql",
+		".html", ".css", ".scss", ".less", ".toml", ".ini", ".conf", ".env", ".graphql":
+		return true
+	default:
+		return false
+	}
+}
+
+func formatExtractedFileForModel(name string, mimeType string, content string) string {
+	return fmt.Sprintf("[Attached file: %s; MIME: %s]\n%s", strings.TrimSpace(name), strings.TrimSpace(mimeType), content)
 }
 
 func ensureAttachmentDirectory(path string) error {

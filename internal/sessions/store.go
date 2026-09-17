@@ -384,56 +384,12 @@ func (s *Store) ListMessagePage(
 		return MessagePage{}, err
 	}
 
-	document, err := s.transcripts.LoadSession(ctx, session.AgentID, sessionID)
+	entryPage, err := s.transcripts.LoadMessagePage(ctx, session.AgentID, sessionID, beforeEntryID, limit)
 	if err != nil {
 		return MessagePage{}, translateTranscriptError(err)
 	}
-
-	messageEntries := make([]transcript.Entry, 0, len(document.ActiveBranch))
-	for _, entry := range document.ActiveBranch {
-		if entry.Type != transcript.EntryMessage || entry.Message == nil {
-			continue
-		}
-		messageEntries = append(messageEntries, entry)
-	}
-
-	end := len(messageEntries)
-	beforeEntryID = strings.TrimSpace(beforeEntryID)
-	if beforeEntryID != "" {
-		end = -1
-		for index := range messageEntries {
-			if messageEntries[index].ID == beforeEntryID {
-				end = index
-				break
-			}
-		}
-		if end < 0 {
-			return MessagePage{}, fmt.Errorf("%w: %s", ErrMessageCursorNotFound, beforeEntryID)
-		}
-	}
-
-	start := 0
-	if limit > 0 && end > limit {
-		start = end - limit
-		// Tool Result 不能脱离触发它的 Assistant ToolCall 单独进入历史；最终 Assistant
-		// 回答也不应与紧邻它之前的 Tool 事务拆到两页。必要时向前扩展到发起 ToolCall 的
-		// Assistant Message，但不把更早的 User Message 强行并入本页。
-		for start > 0 && messageEntries[start].Message != nil {
-			if messageEntries[start].Message.Role == transcript.RoleToolResult {
-				start--
-				continue
-			}
-			previous := messageEntries[start-1].Message
-			if messageEntries[start].Message.Role == transcript.RoleAssistant && previous != nil && previous.Role == transcript.RoleToolResult {
-				start--
-				continue
-			}
-			break
-		}
-	}
-
-	pageMessages := make([]Message, 0, end-start)
-	for _, entry := range messageEntries[start:end] {
+	pageMessages := make([]Message, 0, len(entryPage.Entries))
+	for _, entry := range entryPage.Entries {
 		decoded, err := transcript.DecodeMessage(entry.Message)
 		if err != nil {
 			return MessagePage{}, fmt.Errorf("恢复 Message Entry %s 失败: %w", entry.ID, err)
@@ -453,15 +409,11 @@ func (s *Store) ListMessagePage(
 			CreatedAt:   createdAt.UTC(),
 		})
 	}
-	nextBeforeID := ""
-	if start > 0 && len(pageMessages) > 0 {
-		nextBeforeID = messageEntries[start].ID
-	}
 	return MessagePage{
 		Messages:     pageMessages,
-		StartIndex:   start,
-		HasMore:      start > 0,
-		NextBeforeID: nextBeforeID,
+		StartIndex:   entryPage.StartIndex,
+		HasMore:      entryPage.HasMore,
+		NextBeforeID: entryPage.NextBeforeID,
 	}, nil
 }
 
@@ -748,6 +700,9 @@ func (s *Store) lookupIssue(sessionID string) (SessionIssue, bool) {
 func translateTranscriptError(err error) error {
 	if errors.Is(err, transcript.ErrSessionNotFound) {
 		return fmt.Errorf("%w: %v", ErrSessionNotFound, err)
+	}
+	if errors.Is(err, transcript.ErrMessageCursorNotFound) {
+		return fmt.Errorf("%w: %v", ErrMessageCursorNotFound, err)
 	}
 	return err
 }

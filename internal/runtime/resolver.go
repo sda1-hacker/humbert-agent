@@ -27,6 +27,7 @@ import (
 // modelSnapshotResolver 是 Runtime 与 ModelRegistry 的边界。
 type modelSnapshotResolver interface {
 	ResolveSnapshot(ctx context.Context, id string) (models.RuntimeSnapshot, error)
+	MultimediaConfig(ctx context.Context) (models.MultimediaConfig, error)
 }
 
 // resolvedContextBase 保存构建 Context 所需但尚未投影 Session Transcript 的依赖。
@@ -253,9 +254,9 @@ func (r *Resolver) buildContextSnapshot(ctx context.Context, base resolvedContex
 }
 
 // alignModelToContext 让模型选择与 ContextEngine 最终会发送的消息保持一致。
-// 当前输入是纯文本时，历史图片/文件仍可能留在 Context 中；此时必须继续使用
-// 能处理这些历史多模态内容的 Vision Role。若切换模型改变了 Context Window，则重新
-// Build 一次，并对重建后新增进入窗口的历史消息再次做 fail-closed 能力校验。
+// 图片紧邻追问仍携带二进制并按需使用全局图片模型；更早图片会在水合时变成文本占位。
+// 若切换模型改变了 Context Window，则重新 Build 一次，并对重建后新增进入窗口的消息
+// 再次做 fail-closed 能力校验。
 func (r *Resolver) alignModelToContext(
 	ctx context.Context,
 	base *resolvedContextBase,
@@ -646,7 +647,7 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 	}
 	exposed = uniqueSortedStrings(exposed)
 
-	visionModelID := base.modelRoles.visionModelID
+	imageModelID := base.modelRoles.imageModelID
 	return RuntimeManifest{
 		AgentID:           base.agentInfo.Agent.ID,
 		AgentName:         base.agentInfo.Agent.Name,
@@ -659,7 +660,7 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 			ChatModelID:    base.modelRoles.chat.ModelConfigID,
 			UtilityModelID: base.modelRoles.utility.ModelConfigID,
 			MemoryModelID:  base.modelRoles.memory.ModelConfigID,
-			VisionModelID:  visionModelID,
+			ImageModelID:   imageModelID,
 			ActiveModelID:  base.model.ModelConfigID,
 			ActiveRole:     base.modelRoles.activeRole,
 		},

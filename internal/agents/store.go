@@ -395,8 +395,7 @@ func (s *Store) CountAgentsByModel(ctx context.Context, modelID string) (int, er
 		agent := value.Agent
 		if agent.ModelID == modelID ||
 			agent.ModelRoles.UtilityModelID == modelID ||
-			agent.ModelRoles.MemoryModelID == modelID ||
-			agent.ModelRoles.VisionModelID == modelID {
+			agent.ModelRoles.MemoryModelID == modelID {
 			count++
 		}
 	}

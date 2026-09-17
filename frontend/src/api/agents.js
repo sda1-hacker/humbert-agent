@@ -1,78 +1,37 @@
 import { Call } from "@wailsio/runtime";
 
-let bindingPromise = null;
-
-/**
- * 延迟加载 Wails AgentService Binding。
- *
- * 开发环境重新生成 bindings 后如果 import 失败，
- * 会清除缓存，允许下一次调用再次尝试加载。
- */
-function loadBinding() {
-    if (!bindingPromise) {
-        bindingPromise = import(
-            "../../bindings/github.com/sda1-hacker/humbert-agent/internal/services/agentservice.js"
-            ).catch((error) => {
-            bindingPromise = null;
-
-            console.error(
-                "[Humbert] AgentService Binding 加载失败",
-                error,
-            );
-
-            throw new Error(
-                "无法加载 AgentService Binding，请重新执行 wails3 generate bindings",
-                {
-                    cause: error,
-                },
-            );
-        });
-    }
-
-    return bindingPromise;
-}
+const agentServiceName =
+    "github.com/sda1-hacker/humbert-agent/internal/services.AgentService";
 
 /**
  * 返回全部 Agent。
  */
-export async function listAgents() {
-    const binding =
-        await loadBinding();
-
-    return binding.ListAgents();
+export function listAgents() {
+    return Call.ByName(`${agentServiceName}.ListAgents`);
 }
 
 /**
  * 返回一个 Agent。
  */
-export async function getAgent(id) {
-    const binding =
-        await loadBinding();
-
-    return binding.GetAgent(id);
+export function getAgent(id) {
+    return Call.ByName(`${agentServiceName}.GetAgent`, id);
 }
 
 /**
  * 创建 Agent。
  */
-export async function createAgent(
+export function createAgent(
     request,
 ) {
-    const binding =
-        await loadBinding();
-
-    return binding.CreateAgent(
-        request,
-    );
+    return Call.ByName(`${agentServiceName}.CreateAgent`, request);
 }
 
 /**
  * 保存 Agent 的完整“Agent 设置”表单。
  * 局部操作（例如切换模型）仍使用独立窄命令。
  */
-export async function updateAgent(id, request) {
-    const binding = await loadBinding();
-    return binding.UpdateAgent(id, request);
+export function updateAgent(id, request) {
+    return Call.ByName(`${agentServiceName}.UpdateAgent`, id, request);
 }
 
 /**
@@ -81,13 +40,10 @@ export async function updateAgent(id, request) {
  * 后端会级联删除 Session 和 Humbert 管理的 Workspace；
  * 用户选择的 Custom Workspace 不会被删除。
  */
-export async function deleteAgent(
+export function deleteAgent(
     id,
 ) {
-    const binding =
-        await loadBinding();
-
-    return binding.DeleteAgent(id);
+    return Call.ByName(`${agentServiceName}.DeleteAgent`, id);
 }
 
 /**
@@ -99,63 +55,52 @@ export async function deleteAgent(
  *
  * 用户取消时返回空字符串。
  */
-export async function selectWorkspaceDirectory(
+export function selectWorkspaceDirectory(
     currentPath = "",
 ) {
-    const binding =
-        await loadBinding();
-
-    return binding.SelectWorkspaceDirectory(
-        currentPath,
-    );
+    return Call.ByName(`${agentServiceName}.SelectWorkspaceDirectory`, currentPath);
 }
 
 /**
  * 返回 Humbert 内置 Tool Catalog。
  */
-export async function listBuiltinTools() {
-    const binding = await loadBinding();
-    return binding.ListBuiltinTools();
+export function listBuiltinTools() {
+    return Call.ByName(`${agentServiceName}.ListBuiltinTools`);
 }
 
 /**
  * 返回当前平台 Sandbox 能力与默认策略。
  */
-export async function getSandboxStatus() {
-    const binding = await loadBinding();
-    return binding.GetSandboxStatus();
+export function getSandboxStatus() {
+    return Call.ByName(`${agentServiceName}.GetSandboxStatus`);
 }
 
 /**
  * 只更新 Agent 的安全配置。
  */
-export async function updateAgentSecurity(id, request) {
-    const binding = await loadBinding();
-    return binding.UpdateAgentSecurity(id, request);
+export function updateAgentSecurity(id, request) {
+    return Call.ByName(`${agentServiceName}.UpdateAgentSecurity`, id, request);
 }
 
 /**
  * 打开用于 Sandbox 额外目录的原生目录选择器。
  */
-export async function selectSandboxDirectory(currentPath = "") {
-    const binding = await loadBinding();
-    return binding.SelectSandboxDirectory(currentPath);
+export function selectSandboxDirectory(currentPath = "") {
+    return Call.ByName(`${agentServiceName}.SelectSandboxDirectory`, currentPath);
 }
 
 /**
  * 更新应用级 Sandbox 默认策略。
  */
-export async function updateSandboxSettings(request) {
-    const binding = await loadBinding();
-    return binding.UpdateSandboxSettings(request);
+export function updateSandboxSettings(request) {
+    return Call.ByName(`${agentServiceName}.UpdateSandboxSettings`, request);
 }
 
 /**
  * 在临时目录中运行 PathGuard + Native Sandbox 安全自检。
  */
-export async function runSandboxDiagnostics() {
-    const binding = await loadBinding();
-    return binding.RunSandboxDiagnostics();
+export function runSandboxDiagnostics() {
+    return Call.ByName(`${agentServiceName}.RunSandboxDiagnostics`);
 }
 
 /**
@@ -165,23 +110,22 @@ export async function runSandboxDiagnostics() {
  */
 export function setAgentModel(id, modelID) {
     return Call.ByName(
-        "github.com/sda1-hacker/humbert-agent/internal/services.AgentService.SetAgentModel",
+        `${agentServiceName}.SetAgentModel`,
         id,
         { modelID },
     );
 }
 
 /**
- * 只更新 Utility / Memory / Vision Model Roles。
+ * 只更新 Utility / Memory Model Roles。
  */
 export function setAgentModelRoles(id, roles) {
     return Call.ByName(
-        "github.com/sda1-hacker/humbert-agent/internal/services.AgentService.SetAgentModelRoles",
+        `${agentServiceName}.SetAgentModelRoles`,
         id,
         {
             utilityModelID: roles?.utilityModelID ?? "",
             memoryModelID: roles?.memoryModelID ?? "",
-            visionModelID: roles?.visionModelID ?? "",
         },
     );
 }

@@ -11,6 +11,7 @@ import {
 } from "@arco-design/web-vue/es/icon";
 
 import ModelCatalog from "./models/ModelCatalog.vue";
+import MultimediaSettings from "./models/MultimediaSettings.vue";
 import ProviderSettings from "./models/ProviderSettings.vue";
 import PermissionSettings from "./PermissionSettings.vue";
 import SandboxSettings from "./SandboxSettings.vue";
@@ -48,6 +49,13 @@ const navigationGroups = [
         description: "配置 OpenAI、兼容服务与 Ollama 等模型供应商。",
         keywords: ["供应商", "provider", "openai", "ollama", "api"],
         glyph: "P",
+      },
+      {
+        key: "multimedia",
+        title: "多媒体",
+        description: "配置图片理解模型，并查看当前真正支持的附件类型。",
+        keywords: ["多媒体", "图片", "vision", "image", "附件", "pdf", "audio"],
+        glyph: "图",
       },
     ],
   },
@@ -219,6 +227,7 @@ function selectItem(key) {
           <section class="settings-content__body">
             <ModelCatalog v-if="activeKey === 'models'"/>
             <ProviderSettings v-else-if="activeKey === 'providers'"/>
+            <MultimediaSettings v-else-if="activeKey === 'multimedia'"/>
             <PermissionSettings v-else-if="activeKey === 'permissions'"/>
             <SandboxSettings v-else-if="activeKey === 'sandbox'"/>
 

@@ -9,6 +9,7 @@ import {
     testModel as apiTestModel,
     updateModel as apiUpdateModel,
     updateProvider as apiUpdateProvider,
+    updateMultimediaConfig as apiUpdateMultimediaConfig,
 } from "../api/models.js";
 
 /**
@@ -35,6 +36,10 @@ export const useModelStore =
                 providers: [],
 
                 models: [],
+
+                multimedia: {
+                    imageModelID: "",
+                },
 
                 loading: false,
             }),
@@ -93,6 +98,10 @@ export const useModelStore =
                             )
                                 ? result.models
                                 : [];
+
+                        this.multimedia = {
+                            imageModelID: result.multimedia?.imageModelID ?? "",
+                        };
                     } finally {
                         this.loading = false;
                     }
@@ -166,6 +175,15 @@ export const useModelStore =
 
                 async testModel(id) {
                     return apiTestModel(id);
+                },
+
+                async updateMultimediaConfig(request) {
+                    const result = await apiUpdateMultimediaConfig(request);
+                    this.multimedia = {
+                        imageModelID: result?.imageModelID ?? "",
+                    };
+                    this.revision += 1;
+                    return result;
                 },
             },
         },

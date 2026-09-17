@@ -13,7 +13,6 @@ import (
 type ModelRoles struct {
 	UtilityModelID string `json:"utility_model_id,omitempty"`
 	MemoryModelID  string `json:"memory_model_id,omitempty"`
-	VisionModelID  string `json:"vision_model_id,omitempty"`
 }
 
 // Agent 是 Humbert Agent 的稳定 Profile。
@@ -115,7 +114,7 @@ type UpdateInput struct {
 
 	ModelID string
 
-	// nil 保留现有角色；非 nil 显式替换 Utility/Memory/Vision。
+	// nil 保留现有角色；非 nil 显式替换 Utility/Memory。
 	ModelRoles *ModelRoles
 
 	EnabledSkills []string

@@ -25,8 +25,7 @@ const (
 	// 128k 是当前主流长上下文模型较常见的能力档位；用户仍应按实际部署值修改。
 	defaultModelContextWindow = 128 * 1024
 
-	// defaultModelMaxOutputTokens 是默认输出预算。它只参与 ContextEngine 的安全余量，
-	// 不会直接覆盖 Provider 自己的输出参数。
+	// defaultModelMaxOutputTokens 是默认输出预算，同时作为 Provider 请求的输出硬上限。
 	defaultModelMaxOutputTokens = 8 * 1024
 
 	minModelContextWindow = 4 * 1024

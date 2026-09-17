@@ -40,10 +40,10 @@ const testingID =
 const capabilityFields = [
   { key: "tools", label: "Tool Calling", help: "模型是否支持函数/工具调用。Agent 暴露 Tool 时必须开启。" },
   { key: "vision", label: "Vision", help: "模型是否支持图片输入。" },
-  { key: "files", label: "Files", help: "模型是否支持 PDF/文档等任意文件输入；Vision 不等于 Files。" },
+  { key: "files", label: "Files", help: "Provider 的原生文件输入能力元数据；当前 Humbert 附件入口尚不接收 PDF/Office。" },
   { key: "reasoning", label: "Reasoning", help: "标记模型具备原生推理能力，供后续路由与 UI 使用。" },
   { key: "json", label: "JSON", help: "模型是否支持可靠的结构化/JSON 输出模式。" },
-  { key: "audio", label: "Audio", help: "模型是否支持音频输入或多模态音频能力。" },
+  { key: "audio", label: "Audio", help: "模型的音频能力元数据；当前 Humbert 尚未实现音频附件链路。" },
 ];
 
 function defaultCapabilityConfig() {
@@ -298,7 +298,7 @@ async function remove(model) {
         Title: "删除模型",
 
         Message:
-            `确定删除模型「${model.displayName}」吗？历史会话记录会保留；如果仍有 Agent 在 Chat、Utility、Memory 或 Vision 角色中使用它，需要先切换相关模型角色。`,
+            `确定删除模型「${model.displayName}」吗？历史会话记录会保留；如果仍有 Agent 在 Chat、Utility、Memory 角色中使用，或被多媒体设置选中，需要先切换相关配置。`,
 
         Buttons: [
           {

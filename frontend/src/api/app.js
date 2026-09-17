@@ -1,6 +1,7 @@
-import {
-    AppService,
-} from "../../bindings/github.com/sda1-hacker/humbert-agent/internal/services";
+import { Call } from "@wailsio/runtime";
+
+const appServiceName =
+    "github.com/sda1-hacker/humbert-agent/internal/services.AppService";
 
 /**
  * 获取 Humbert Core 当前状态。
@@ -16,6 +17,6 @@ import {
  *
  * @returns {Promise<object>}
  */
-export async function getAppStatus() {
-    return AppService.Status();
+export function getAppStatus() {
+    return Call.ByName(`${appServiceName}.Status`);
 }

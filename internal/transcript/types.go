@@ -121,6 +121,11 @@ type ContentBlock struct {
 	AttachmentID string `json:"attachmentId,omitempty"`
 	MIMEType     string `json:"mimeType,omitempty"`
 	SizeBytes    int64  `json:"sizeBytes,omitempty"`
+
+	// ExtractedText 是 Humbert 在接收文本类文件时确定性提取的 UTF-8 内容。
+	// 原始文件仍保存在 sidecar；Runtime 使用该字段构造普通文本输入，不把 Eino
+	// Adapter 当前不支持的 file_url 发送给 Provider。图片保持为空。
+	ExtractedText string `json:"extractedText,omitempty"`
 }
 
 // UsageCost 保存 Provider 明确返回的货币成本。
@@ -314,6 +319,18 @@ type RepairResult struct {
 	TruncatedBytes int64
 
 	AddedFinalNewline bool
+}
+
+// MessageEntryPage 是 Active Branch 上的一页 Wire Message Entry。
+// Entries 只包含当前页，StartIndex 是它在完整 Message 序列中的零基位置。
+type MessageEntryPage struct {
+	Entries []Entry
+
+	StartIndex int
+
+	HasMore bool
+
+	NextBeforeID string
 }
 
 // Document 是完整 Session JSONL 的内存投影。

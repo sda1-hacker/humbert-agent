@@ -101,7 +101,6 @@ const form =
       modelRoles: {
         utilityModelID: "",
         memoryModelID: "",
-        visionModelID: "",
       },
 
       enabledSkills: [],
@@ -214,7 +213,6 @@ function resetForm(agent) {
           modelRoles: {
             utilityModelID: "",
             memoryModelID: "",
-            visionModelID: "",
           },
 
           enabledSkills: [],
@@ -265,7 +263,6 @@ function resetForm(agent) {
         modelRoles: {
           utilityModelID: agent.modelRoles?.utilityModelID ?? "",
           memoryModelID: agent.modelRoles?.memoryModelID ?? "",
-          visionModelID: agent.modelRoles?.visionModelID ?? "",
         },
 
         enabledSkills:
@@ -479,7 +476,6 @@ async function save() {
       modelRoles: {
         utilityModelID: form.modelRoles.utilityModelID || "",
         memoryModelID: form.modelRoles.memoryModelID || "",
-        visionModelID: form.modelRoles.visionModelID || "",
       },
 
       enabledSkills:
@@ -758,17 +754,6 @@ async function removeAgent() {
                 <template #extra>Session Memory 摘要与刷新使用该模型。</template>
               </a-form-item>
 
-              <a-form-item label="Vision 模型">
-                <a-select v-model="form.modelRoles.visionModelID" allow-clear allow-search placeholder="仅 Chat 不满足附件能力时使用">
-                  <a-option
-                      v-for="model in roleModelOptions(form.modelRoles.visionModelID)"
-                      :key="model.id" :value="model.id" :disabled="!model.enabled"
-                  >
-                    {{ model.displayName }} · {{ model.providerName }}{{ model.enabled ? "" : "（已禁用）" }}
-                  </a-option>
-                </a-select>
-                <template #extra>用于补足 Chat 的 Vision / Files 能力；若 Agent 暴露工具，该模型也必须支持 Tools。</template>
-              </a-form-item>
             </div>
           </div>
 

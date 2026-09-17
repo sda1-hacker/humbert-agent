@@ -23,7 +23,8 @@ runtime:
     keep_recent_min_tokens: 8192
     keep_recent_max_tokens: 32768
 
-    # 单条 Thinking/ToolResult 送给内部摘要模型的最大字符数。原始 JSONL 不会截断。
+    # 单条消息块送给内部摘要/Memory 模型的最大字符数；同时会派生全局输入上限。
+    # 原始 JSONL 不会截断。
     serializer_max_chars: 4000
 
     # 单 Session Memory 自动刷新阈值，满足任一条件即可刷新。
@@ -77,7 +78,7 @@ security:
   #
   # 但本地程序仍具有当前用户真实系统权限，
   # 所以在 OS Sandbox / Approval UI 完成前不要默认打开。
-  shell_enabled: false
+  shell_enabled: true
 
   # Permission + Approval 默认策略。read 通常自动允许；写文件和本地程序执行默认需要
   # 用户确认。配置只决定没有用户规则命中时的默认动作，不保存批准结果。
@@ -111,6 +112,7 @@ security:
     - npx
     - python
     - python3
+    - bash
 
 tools:
   files:

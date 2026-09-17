@@ -36,6 +36,22 @@ const fileInput =
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
 const MAX_ATTACHMENT_TOTAL_BYTES = 24 * 1024 * 1024;
+const MAX_TEXT_ATTACHMENT_BYTES = 512 * 1024;
+
+const TEXT_ATTACHMENT_MIME_TYPES = new Set([
+  "application/json", "application/ld+json", "application/xml", "application/javascript",
+  "application/x-javascript", "application/yaml", "application/x-yaml", "application/toml",
+  "application/sql", "application/graphql",
+]);
+
+const TEXT_ATTACHMENT_EXTENSIONS = new Set([
+  ".txt", ".md", ".markdown", ".json", ".jsonl", ".yaml", ".yml", ".xml", ".csv", ".tsv",
+  ".go", ".js", ".jsx", ".ts", ".tsx", ".vue", ".py", ".rb", ".rs", ".java", ".kt",
+  ".c", ".h", ".cc", ".cpp", ".cs", ".swift", ".sh", ".zsh", ".fish", ".ps1", ".sql",
+  ".html", ".css", ".scss", ".less", ".toml", ".ini", ".conf", ".env", ".graphql",
+]);
+
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
 const sending =
     ref(false);
@@ -243,7 +259,7 @@ function formatRuntimeModel(manifest) {
 
 function formatRuntimeModelRole(manifest) {
   const role = manifest?.modelRole || manifest?.modelRoles?.activeRole || "chat";
-  return role === "vision" ? "Vision" : "Chat";
+  return role === "image" ? "图片" : "Chat";
 }
 
 function formatModelCapabilities(capabilities) {
@@ -261,19 +277,35 @@ function attachmentCapabilityError(items) {
   const chat = modelStore.modelByID(agent?.modelID ?? "");
   if (!chat) return ""; // Runtime 仍会做最终校验。
 
-  const needsVision = items.some((item) => String(item?.mimeType || "").toLowerCase().startsWith("image/"));
-  const needsFiles = items.some((item) => !String(item?.mimeType || "").toLowerCase().startsWith("image/"));
-  const supports = (model) => Boolean(model) && (!needsVision || model.capabilities?.vision) && (!needsFiles || model.capabilities?.files);
+  const needsVision = items.some((item) => isImageAttachment(item));
+  // 文本类文件由后端确定性提取后作为普通 text part 发送，不依赖 Provider 的原生 Files 能力。
+  const supports = (model) => Boolean(model) && (!needsVision || model.capabilities?.vision);
   if (supports(chat)) return "";
 
-  const visionID = agent?.modelRoles?.visionModelID || "";
-  const vision = modelStore.modelByID(visionID);
-  if (supports(vision)) return "";
+  const imageID = modelStore.multimedia.imageModelID || "";
+  const imageModel = modelStore.modelByID(imageID);
+  if (supports(imageModel)) return "";
 
   const missing = [];
   if (needsVision) missing.push("Vision");
-  if (needsFiles) missing.push("Files");
-  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的 Vision 模型角色。请先在 Agent 设置或模型 Capability 中配置。`;
+  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的图片理解模型。请先在“设置 → 多媒体”中配置。`;
+}
+
+function isImageAttachment(file) {
+  const mimeType = String(file?.mimeType || file?.type || "").toLowerCase().split(";", 1)[0].trim();
+  if (mimeType.startsWith("image/")) return true;
+  const name = String(file?.name || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 && IMAGE_ATTACHMENT_EXTENSIONS.has(name.slice(dot));
+}
+
+function isTextAttachment(file) {
+  const mimeType = String(file?.type || "").toLowerCase().split(";", 1)[0].trim();
+  if (mimeType.startsWith("text/") || TEXT_ATTACHMENT_MIME_TYPES.has(mimeType)) return true;
+  if (mimeType && mimeType !== "application/octet-stream") return false;
+  const name = String(file?.name || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 && TEXT_ATTACHMENT_EXTENSIONS.has(name.slice(dot));
 }
 
 function formatSandbox(manifest) {
@@ -483,6 +515,13 @@ async function selectAttachments(event) {
     for (const file of files) {
       if (file.size <= 0) throw new Error(`${file.name} 是空文件`);
       if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${file.name} 超过 12 MiB 限制`);
+      const image = isImageAttachment(file);
+      if (!image && !isTextAttachment(file)) {
+        throw new Error(`${file.name} 暂不支持；当前文件附件仅支持图片、UTF-8 文本、源码和 JSON/YAML/XML 等文本格式`);
+      }
+      if (!image && file.size > MAX_TEXT_ATTACHMENT_BYTES) {
+        throw new Error(`${file.name} 超过文本附件 512 KiB 限制`);
+      }
       total += file.size;
       if (total > MAX_ATTACHMENT_TOTAL_BYTES) throw new Error("单条消息附件总大小不能超过 24 MiB");
       next.push({
@@ -919,8 +958,8 @@ watch(
                         <div class="context-tooltip__row">
                           <span>模型角色</span>
                           <span class="context-tooltip__value"
-                                :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · Memory ${contextManifest.modelRoles?.memoryModelID || '--'} · Vision ${contextManifest.modelRoles?.visionModelID || '--'}`">Chat / Utility / Memory{{
-                              contextManifest.modelRoles?.visionModelID ? ' / Vision' : ''
+                                :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · Memory ${contextManifest.modelRoles?.memoryModelID || '--'} · 图片 ${contextManifest.modelRoles?.imageModelID || '--'}`">Chat / Utility / Memory{{
+                              contextManifest.modelRoles?.imageModelID ? ' / 图片' : ''
                             }}</span>
                         </div>
 

@@ -73,8 +73,8 @@ type Model struct {
 	// MaxOutputTokens 是单次模型响应预留的最大输出 Token 数。
 	//
 	// ContextEngine 会把它纳入安全余量，避免输入上下文已经占满窗口后 Provider
-	// 无法为 Assistant 输出保留空间。它描述预算，不强制改变 Provider 自身的
-	// max_tokens/max_completion_tokens 参数。
+	// 无法为 Assistant 输出保留空间；Factory 也会把同一值映射为 Provider 的
+	// max_tokens/max_completion_tokens/num_predict，保证预算与实际请求一致。
 	MaxOutputTokens int `json:"max_output_tokens"`
 
 	Capabilities CapabilityConfig `json:"capabilities,omitempty"`
@@ -84,6 +84,15 @@ type Model struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// MultimediaConfig 保存应用级的多媒体模型路由。
+//
+// 当前 Humbert 只实现图片输入，因此这里只暴露 ImageModelID。PDF、音频和视频在
+// 拥有可靠的解析/Provider 适配之前不会以“可配置但不可用”的字段进入持久化协议。
+// ImageModelID 是 Chat Model 缺少 Vision 能力时使用的全局回退模型。
+type MultimediaConfig struct {
+	ImageModelID string `json:"image_model_id,omitempty"`
 }
 
 // ModelInfo 是 UI 和 Registry 查询列表时使用的完整模型信息。

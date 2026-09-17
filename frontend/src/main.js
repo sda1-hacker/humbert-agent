@@ -1,10 +1,6 @@
 import { createApp } from "vue";
 import { createPinia } from "pinia";
 
-import ArcoVue from "@arco-design/web-vue";
-
-import "@arco-design/web-vue/dist/arco.css";
-
 /**
  * 初始化 Wails Frontend Runtime。
  *
@@ -22,13 +18,17 @@ import "@wailsio/runtime";
 
 import App from "./App.vue";
 
+import {
+    installArco,
+} from "./arco.js";
+
 import "./assets/main.css";
 
 const app = createApp(App);
 
 app.use(createPinia());
 
-app.use(ArcoVue);
+installArco(app);
 
 /**
  * 开发阶段捕获遗漏的 Vue 异常。

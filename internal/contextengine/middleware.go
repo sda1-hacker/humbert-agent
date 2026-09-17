@@ -226,7 +226,11 @@ func (m *MidRunCompactor) compactMessages(ctx context.Context, messages []*schem
 		return nil, ErrNothingToCompact
 	}
 
-	serialized := serializeRuntimeMessages(messages[firstConversation:boundary], m.config.SerializerMaxChars)
+	serialized := serializeRuntimeMessagesWithLimit(
+		messages[firstConversation:boundary],
+		m.config.SerializerMaxChars,
+		compactionSerializationLimit(m.config.SerializerMaxChars, m.config.Budget.ContextWindow),
+	)
 	if strings.TrimSpace(serialized) == "" {
 		return nil, ErrNothingToCompact
 	}
@@ -287,6 +291,10 @@ func runtimeToolTransactionStart(messages []*schema.Message, first int, toolInde
 }
 
 func serializeRuntimeMessages(messages []*schema.Message, maxChars int) string {
+	return serializeRuntimeMessagesWithLimit(messages, maxChars, maxChars*8)
+}
+
+func serializeRuntimeMessagesWithLimit(messages []*schema.Message, maxChars int, maxTotalChars int) string {
 	var builder strings.Builder
 	for _, message := range messages {
 		if message == nil {
@@ -335,7 +343,7 @@ func serializeRuntimeMessages(messages []*schema.Message, maxChars int) string {
 		}
 		builder.WriteByte('\n')
 	}
-	return strings.TrimSpace(builder.String())
+	return truncateCompactionPayload(strings.TrimSpace(builder.String()), maxTotalChars)
 }
 
 func messageVisibleText(message *schema.Message) string {

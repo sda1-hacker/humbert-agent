@@ -145,6 +145,36 @@ func (r *Registry) ListModels(
 	return r.store.ListModels(ctx)
 }
 
+// MultimediaConfig 返回应用级多媒体模型路由。
+func (r *Registry) MultimediaConfig(ctx context.Context) (MultimediaConfig, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.store.MultimediaConfig(ctx)
+}
+
+// SetMultimediaConfig 更新应用级多媒体模型路由。
+//
+// 当前只支持图片路由。被选中的模型必须启用且具有有效 Vision 能力，避免把错误
+// 延迟到用户真正发送图片时才暴露。
+func (r *Registry) SetMultimediaConfig(ctx context.Context, config MultimediaConfig) (MultimediaConfig, error) {
+	config.ImageModelID = strings.TrimSpace(config.ImageModelID)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err := r.validateImageModelLocked(ctx, config.ImageModelID, nil, nil); err != nil {
+		return MultimediaConfig{}, err
+	}
+	if err := r.store.SetMultimediaConfig(ctx, config); err != nil {
+		return MultimediaConfig{}, err
+	}
+
+	r.configurationChangedLocked()
+	r.logger.Info(ctx, "多媒体模型配置已更新", "image_model_id", config.ImageModelID)
+	return config, nil
+}
+
 // CreateProvider 创建 Provider，并安全保存 Credential。
 func (r *Registry) CreateProvider(
 	ctx context.Context,
@@ -265,6 +295,22 @@ func (r *Registry) UpdateProvider(
 
 	updated.UpdatedAt =
 		time.Now().UTC()
+
+	multimedia, err := r.store.MultimediaConfig(ctx)
+	if err != nil {
+		return Provider{}, err
+	}
+	if multimedia.ImageModelID != "" {
+		selected, selectedErr := r.store.GetModel(ctx, multimedia.ImageModelID)
+		if selectedErr != nil {
+			return Provider{}, fmt.Errorf("多媒体图片模型配置无效: %w", selectedErr)
+		}
+		if selected.ProviderID == updated.ID {
+			if err := r.validateImageModelLocked(ctx, multimedia.ImageModelID, &selected, &updated); err != nil {
+				return Provider{}, err
+			}
+		}
+	}
 
 	var backup credentialBackup
 
@@ -551,6 +597,16 @@ func (r *Registry) UpdateModel(
 	existing.UpdatedAt =
 		time.Now().UTC()
 
+	multimedia, err := r.store.MultimediaConfig(ctx)
+	if err != nil {
+		return Model{}, err
+	}
+	if multimedia.ImageModelID == existing.ID {
+		if err := r.validateImageModelLocked(ctx, existing.ID, &existing, nil); err != nil {
+			return Model{}, err
+		}
+	}
+
 	if err := r.store.UpdateModel(
 		ctx,
 		existing,
@@ -570,7 +626,7 @@ func (r *Registry) UpdateModel(
 	return existing, nil
 }
 
-// DeleteModel 删除不再被当前 Agent Profile 的 Chat/Utility/Memory/Vision 角色引用的模型配置。
+// DeleteModel 删除不再被当前 Agent Profile 或多媒体路由引用的模型配置。
 //
 // 历史 Session 不构成删除阻塞条件：AssistantMessage 已经持久化实际 Provider/Model
 // 元数据，删除 models.json 中的配置不会破坏历史记录。只有当前 Agent 的任一模型角色
@@ -596,11 +652,19 @@ func (r *Registry) DeleteModel(
 		}
 		if agentCount > 0 {
 			return fmt.Errorf(
-				"%w: 当前仍有 %d 个 Agent 在 Chat/Utility/Memory/Vision 角色中使用该模型，请先切换相关模型角色",
+				"%w: 当前仍有 %d 个 Agent 在 Chat/Utility/Memory 角色中使用该模型，请先切换相关模型角色",
 				ErrModelInUse,
 				agentCount,
 			)
 		}
+	}
+
+	multimedia, err := r.store.MultimediaConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if multimedia.ImageModelID == id {
+		return fmt.Errorf("%w: 当前模型是设置中的图片理解模型，请先在多媒体设置中切换或清除", ErrModelInUse)
 	}
 
 	if err := r.store.DeleteModel(
@@ -809,6 +873,47 @@ func (r *Registry) configurationChangedLocked() {
 	clear(r.cache)
 
 	r.revision.Add(1)
+}
+
+func (r *Registry) validateImageModelLocked(
+	ctx context.Context,
+	id string,
+	modelOverride *Model,
+	providerOverride *Provider,
+) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+
+	var model Model
+	if modelOverride != nil && modelOverride.ID == id {
+		model = *modelOverride
+	} else {
+		value, err := r.store.GetModel(ctx, id)
+		if err != nil {
+			return fmt.Errorf("图片理解模型不存在: %w", err)
+		}
+		model = value
+	}
+	if !model.Enabled {
+		return fmt.Errorf("图片理解模型必须处于启用状态: %s", id)
+	}
+
+	var provider Provider
+	if providerOverride != nil && providerOverride.ID == model.ProviderID {
+		provider = *providerOverride
+	} else {
+		value, err := r.store.GetProvider(ctx, model.ProviderID)
+		if err != nil {
+			return fmt.Errorf("读取图片理解模型 Provider 失败: %w", err)
+		}
+		provider = value
+	}
+	if !EffectiveCapabilities(provider.Type, model.ModelName, model.Capabilities).Vision {
+		return fmt.Errorf("模型 %s 未启用 Vision Capability，不能设为图片理解模型", id)
+	}
+	return nil
 }
 
 type credentialBackup struct {

@@ -9,6 +9,8 @@ import (
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
+
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 )
 
 // Estimator 为 ContextEngine 提供可替换的 Token 估算边界。
@@ -69,6 +71,10 @@ func (e *ApproxEstimator) EstimateText(text string) int {
 
 // EstimateMessage 估算一条 Eino Message 的协议占用。
 func (e *ApproxEstimator) EstimateMessage(message *schema.Message) int {
+	return e.estimateMessageWithImages(message, true)
+}
+
+func (e *ApproxEstimator) estimateMessageWithImages(message *schema.Message, includeImages bool) int {
 	if message == nil {
 		return 0
 	}
@@ -94,13 +100,22 @@ func (e *ApproxEstimator) EstimateMessage(message *schema.Message) int {
 				tokens += e.EstimateText(part.Text)
 			}
 		case schema.ChatMessagePartTypeImageURL:
-			// Vision tokenization varies by provider. Reserve a conservative fixed budget
-			// without ever counting Base64 characters as prompt text.
-			tokens += 1024
+			if includeImages {
+				// Vision tokenization varies by provider. Reserve a conservative fixed budget
+				// without ever counting Base64 characters as prompt text.
+				tokens += 1024
+			} else {
+				tokens += e.EstimateText(multimodal.HistoricalImagePlaceholder(part))
+			}
 		case schema.ChatMessagePartTypeFileURL:
-			// Native file handling differs by provider. Keep a meaningful protocol reserve;
-			// actual provider limits are still enforced by the provider/model itself.
-			tokens += 2048
+			// Humbert 把受支持的文本文件确定性提取后再交给 Provider。预算必须按真实
+			// 提取文本计算，不能继续使用固定常量，否则一个较大的源码文件会严重低估。
+			if extracted := extraStringValue(part.Extra, "extracted_text"); extracted != "" {
+				tokens += 12 + e.EstimateText(extracted)
+			} else {
+				// 仅为损坏/手工构造消息保留 fail-safe 预算；正常 v3 数据要求文件包含提取文本。
+				tokens += 2048
+			}
 		}
 	}
 
@@ -121,11 +136,20 @@ func (e *ApproxEstimator) EstimateMessage(message *schema.Message) int {
 	return tokens
 }
 
+func extraStringValue(extra map[string]any, key string) string {
+	if extra == nil {
+		return ""
+	}
+	value, _ := extra[key].(string)
+	return value
+}
+
 // EstimateMessages 估算完整消息序列。
 func (e *ApproxEstimator) EstimateMessages(messages []*schema.Message) int {
 	total := 0
-	for _, message := range messages {
-		total += e.EstimateMessage(message)
+	imageReplayMask := multimodal.ImageReplayMask(messages)
+	for index, message := range messages {
+		total += e.estimateMessageWithImages(message, imageReplayMask[index])
 	}
 	return total
 }

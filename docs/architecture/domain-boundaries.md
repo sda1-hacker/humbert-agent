@@ -44,6 +44,12 @@ agents/<agent-id>/sessions/<session-id>/
 `config.json` 是低频控制面；`session.jsonl` 是 Message、Thinking、ToolCall、ToolResult
 与 Conversation Tree 的唯一事实来源。Store 只接受当前 schema。
 
+Transcript 首次访问或文件变化时严格解析并校验完整 JSONL；成功后保存容量受限、可丢弃
+的进程内 Document LRU。缓存用文件身份、大小和修改时间校验，Tail Repair、外部变化、
+删除或 LRU 淘汰都会触发重建。正常追加在 Session 文件锁内增量推进 Leaf 与 Active
+Branch，并同步维护 Message ID/序号到分支位置的分页索引。历史分页只复制当前窗口；缓存
+不是第二份持久化事实源，也不改变 JSONL 的崩溃恢复语义。
+
 一个 Session 的配置损坏时，Store 会隔离该 Session、保留原文件并记录诊断；其它健康
 Session 仍可加载，应用启动不会被单个损坏会话阻塞。仅当 `config.json` 缺失且 transcript
 header 合法时，Store 才会重建当前版本配置。
@@ -60,5 +66,16 @@ header 合法时，Store 才会重建当前版本配置。
 ## Chat Input 与附件
 
 用户输入由文本和零个或多个附件组成。附件字节保存在 Session 的 `attachments/` sidecar，
-JSONL 只保存稳定引用与元数据。Provider 调用前才把引用恢复为 Eino 多模态内容，因此
-Base64 不进入 transcript、memory 或 compaction 记录。
+JSONL 保存稳定引用、元数据，以及文本类文件的确定性 UTF-8 提取结果。Provider 调用前，
+近期图片引用恢复为 Eino Base64 多模态内容，并保留到紧邻的一次用户追问；再早的图片在
+Provider 请求中变为包含名称、MIME 和 Attachment ID 的文本占位，避免每轮重复读取、
+Base64 膨胀及上传同一二进制。文本、源码和 JSON/YAML/XML 等文件转换为普通 text part，
+从而不依赖 OpenAI Chat Completions/Ollama Adapter 尚未实现的原生 `file_url`。PDF、Office
+和其他二进制文件在写入 Session 前拒绝。Base64 不进入 transcript、memory 或 compaction
+记录，压缩与 Memory 会保留附件名称、类型和文本提取结果。
+
+模型自身的 Vision/Files/Audio 等 Capability 在“设置 → 模型”维护。应用级图片路由保存在
+`config/models.json.multimedia.image_model_id`，只允许引用已启用且有效 Vision Capability
+为 true 的模型。Agent Profile 不再保存 Vision Model；当前 Chat 模型缺少 Vision 时，Runtime
+才切换到全局图片模型，并再次校验当前附件能力和 Tool Calling 能力。PDF/Office、音频与视频
+在完整解析链路落地前不提供虚假的应用级模型选择器。

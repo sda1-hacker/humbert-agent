@@ -20,8 +20,9 @@ type providersDocument struct {
 }
 
 type modelsDocument struct {
-	SchemaVersion int     `json:"schema_version"`
-	Models        []Model `json:"models"`
+	SchemaVersion int              `json:"schema_version"`
+	Models        []Model          `json:"models"`
+	Multimedia    MultimediaConfig `json:"multimedia"`
 }
 
 // Store 负责 Provider 与 Model 的文件持久化。
@@ -265,6 +266,31 @@ func (s *Store) GetModel(ctx context.Context, id string) (Model, error) {
 	return s.getModelLocked(ctx, id)
 }
 
+// MultimediaConfig 返回应用级多媒体路由配置。
+func (s *Store) MultimediaConfig(ctx context.Context) (MultimediaConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	document, err := s.readModelsDocumentLocked(ctx)
+	if err != nil {
+		return MultimediaConfig{}, err
+	}
+	return document.Multimedia, nil
+}
+
+// SetMultimediaConfig 原子更新多媒体路由，同时保留已有模型列表。
+func (s *Store) SetMultimediaConfig(ctx context.Context, config MultimediaConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	document, err := s.readModelsDocumentLocked(ctx)
+	if err != nil {
+		return err
+	}
+	document.Multimedia = config
+	return s.writeModelsDocumentLocked(ctx, document)
+}
+
 // ResolveModel 在同一个读锁快照内读取 Model + Provider。
 //
 // 文件存储没有 SQL JOIN，但在一个 Store RWMutex 读临界区内读取两份配置文件，
@@ -428,12 +454,20 @@ func (s *Store) listProvidersLocked(ctx context.Context) ([]Provider, error) {
 }
 
 func (s *Store) listModelsRawLocked(ctx context.Context) ([]Model, error) {
+	document, err := s.readModelsDocumentLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return append([]Model(nil), document.Models...), nil
+}
+
+func (s *Store) readModelsDocumentLocked(ctx context.Context) (modelsDocument, error) {
 	var document modelsDocument
 	if err := atomicfile.ReadJSON(ctx, s.modelsFile, &document); err != nil {
-		return nil, fmt.Errorf("读取 Model 配置失败: %w", err)
+		return modelsDocument{}, fmt.Errorf("读取 Model 配置失败: %w", err)
 	}
 	if document.SchemaVersion != modelConfigSchemaVersion {
-		return nil, fmt.Errorf(
+		return modelsDocument{}, fmt.Errorf(
 			"不支持的 models.json schema_version: %d",
 			document.SchemaVersion,
 		)
@@ -449,7 +483,8 @@ func (s *Store) listModelsRawLocked(ctx context.Context) ([]Model, error) {
 		document.Models[index] = applyModelDefaults(document.Models[index])
 	}
 
-	return append([]Model(nil), document.Models...), nil
+	document.Multimedia.ImageModelID = strings.TrimSpace(document.Multimedia.ImageModelID)
+	return document, nil
 }
 
 // applyModelDefaults 为旧配置补齐 ContextEngine 所需的模型预算元数据。
@@ -511,6 +546,16 @@ func (s *Store) writeProvidersLocked(ctx context.Context, values []Provider) err
 }
 
 func (s *Store) writeModelsLocked(ctx context.Context, values []Model) error {
+	document, err := s.readModelsDocumentLocked(ctx)
+	if err != nil {
+		return err
+	}
+	document.Models = values
+	return s.writeModelsDocumentLocked(ctx, document)
+}
+
+func (s *Store) writeModelsDocumentLocked(ctx context.Context, document modelsDocument) error {
+	values := document.Models
 	sort.SliceStable(values, func(i, j int) bool {
 		if values[i].DisplayName != values[j].DisplayName {
 			return values[i].DisplayName < values[j].DisplayName
@@ -520,6 +565,7 @@ func (s *Store) writeModelsLocked(ctx context.Context, values []Model) error {
 	if err := atomicfile.WriteJSON(ctx, s.modelsFile, 0o600, modelsDocument{
 		SchemaVersion: modelConfigSchemaVersion,
 		Models:        values,
+		Multimedia:    document.Multimedia,
 	}); err != nil {
 		return fmt.Errorf("写入 models.json 失败: %w", err)
 	}

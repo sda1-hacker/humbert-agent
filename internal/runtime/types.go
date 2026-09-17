@@ -171,12 +171,12 @@ type RuntimeManifest struct {
 }
 
 // RuntimeModelRolesManifest 描述本次 Resolve 后各角色实际使用的模型。
-// Utility/Memory 字段已经应用回退链；VisionModelID 为空表示未显式配置 Vision Role。
+// Utility/Memory 字段已经应用回退链；ImageModelID 来自应用级多媒体设置。
 type RuntimeModelRolesManifest struct {
 	ChatModelID    string `json:"chatModelID"`
 	UtilityModelID string `json:"utilityModelID"`
 	MemoryModelID  string `json:"memoryModelID"`
-	VisionModelID  string `json:"visionModelID,omitempty"`
+	ImageModelID   string `json:"imageModelID,omitempty"`
 	ActiveModelID  string `json:"activeModelID"`
 	ActiveRole     string `json:"activeRole"`
 }

@@ -1,6 +1,6 @@
 module github.com/sda1-hacker/humbert-agent
 
-go 1.26.1
+go 1.27.1
 
 require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2

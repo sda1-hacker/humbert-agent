@@ -10,13 +10,14 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 )
 
 const (
 	modelRoleChat    = "chat"
 	modelRoleUtility = "utility"
 	modelRoleMemory  = "memory"
-	modelRoleVision  = "vision"
+	modelRoleImage   = "image"
 )
 
 type turnInputRequirements struct {
@@ -25,11 +26,11 @@ type turnInputRequirements struct {
 }
 
 type resolvedModelRoles struct {
-	chat          models.RuntimeSnapshot
-	utility       models.RuntimeSnapshot
-	memory        models.RuntimeSnapshot
-	visionModelID string
-	vision        *models.RuntimeSnapshot
+	chat         models.RuntimeSnapshot
+	utility      models.RuntimeSnapshot
+	memory       models.RuntimeSnapshot
+	imageModelID string
+	image        *models.RuntimeSnapshot
 
 	active     models.RuntimeSnapshot
 	activeRole string
@@ -49,12 +50,20 @@ func (e *ModelCapabilityError) Error() string {
 	if name == "" {
 		name = e.ModelID
 	}
+	hint := "请在模型设置中启用对应 Capability，或在“设置 → 多媒体”中配置图片理解模型"
+	for _, capability := range e.Capabilities {
+		if capability == "Files" {
+			hint = "当前消息要求 Provider 原生 Files 能力；Humbert 目前只正式支持图片和可提取的 UTF-8 文本附件"
+			break
+		}
+	}
 	return fmt.Sprintf(
-		"%v：模型「%s」(%s) 缺少能力 %s，请在模型设置中启用对应 Capability，或为 Agent 配置合适的模型角色",
+		"%v：模型「%s」(%s) 缺少能力 %s，%s",
 		ErrModelCapabilityUnsupported,
 		name,
 		e.Role,
 		strings.Join(e.Capabilities, "/"),
+		hint,
 	)
 }
 
@@ -95,18 +104,22 @@ func (r *Resolver) resolveModelRoles(
 		}
 	}
 
-	visionModelID := strings.TrimSpace(agent.ModelRoles.VisionModelID)
-	var vision *models.RuntimeSnapshot
+	multimedia, err := r.models.MultimediaConfig(ctx)
+	if err != nil {
+		return resolvedModelRoles{}, fmt.Errorf("读取多媒体模型配置失败: %w", err)
+	}
+	imageModelID := strings.TrimSpace(multimedia.ImageModelID)
+	var image *models.RuntimeSnapshot
 
 	active := chat
 	activeRole := modelRoleChat
 	if missing := missingInputCapabilities(chat.Capabilities, requirements); len(missing) > 0 {
-		if visionModelID == "" {
+		if imageModelID == "" {
 			return resolvedModelRoles{}, capabilityError(chat, modelRoleChat, missing)
 		}
 
 		var snapshot models.RuntimeSnapshot
-		switch visionModelID {
+		switch imageModelID {
 		case chat.ModelConfigID:
 			snapshot = chat
 		case utility.ModelConfigID:
@@ -114,22 +127,22 @@ func (r *Resolver) resolveModelRoles(
 		case memoryModel.ModelConfigID:
 			snapshot = memoryModel
 		default:
-			snapshot, err = r.models.ResolveSnapshot(ctx, visionModelID)
+			snapshot, err = r.models.ResolveSnapshot(ctx, imageModelID)
 			if err != nil {
-				return resolvedModelRoles{}, fmt.Errorf("解析 Vision Model 失败: %w", err)
+				return resolvedModelRoles{}, fmt.Errorf("解析图片理解模型失败: %w", err)
 			}
 		}
-		vision = &snapshot
+		image = &snapshot
 
-		if visionMissing := missingInputCapabilities(snapshot.Capabilities, requirements); len(visionMissing) > 0 {
-			return resolvedModelRoles{}, capabilityError(snapshot, modelRoleVision, visionMissing)
+		if imageMissing := missingInputCapabilities(snapshot.Capabilities, requirements); len(imageMissing) > 0 {
+			return resolvedModelRoles{}, capabilityError(snapshot, modelRoleImage, imageMissing)
 		}
 		active = snapshot
-		activeRole = modelRoleVision
+		activeRole = modelRoleImage
 	}
 
 	return resolvedModelRoles{
-		chat: chat, utility: utility, memory: memoryModel, visionModelID: visionModelID, vision: vision,
+		chat: chat, utility: utility, memory: memoryModel, imageModelID: imageModelID, image: image,
 		active: active, activeRole: activeRole,
 	}, nil
 }
@@ -146,6 +159,10 @@ func (r *Resolver) currentTurnRequirements(ctx context.Context, sessionID string
 }
 
 func requirementsFromMessage(message *schema.Message) turnInputRequirements {
+	return requirementsFromMessageWithImages(message, true)
+}
+
+func requirementsFromMessageWithImages(message *schema.Message, includeImages bool) turnInputRequirements {
 	var result turnInputRequirements
 	if message == nil {
 		return result
@@ -153,21 +170,35 @@ func requirementsFromMessage(message *schema.Message) turnInputRequirements {
 	for _, part := range message.UserInputMultiContent {
 		switch part.Type {
 		case schema.ChatMessagePartTypeImageURL:
-			result.Vision = true
+			result.Vision = result.Vision || includeImages
 		case schema.ChatMessagePartTypeFileURL:
-			result.Files = true
+			// 当前文件附件在接收时已提取为受控 UTF-8 文本，Provider 请求阶段会转换成
+			// text part，不依赖 Eino Adapter 尚未实现的原生 file_url。只有缺少提取结果
+			// 的异常消息才需要原生 Files Capability，并由后续水合 fail closed。
+			if stringMessagePartExtra(part.Extra, "extracted_text") == "" {
+				result.Files = true
+			}
 		}
 	}
 	return result
 }
 
-// requirementsFromMessages 检查本次真正会发送给 Provider 的 Context。
-// 历史多模态 User Message 仍在 Context 中时，后续纯文本 Turn 也必须继续使用
-// 能处理这些内容的模型；只检查当前 User Message 会在第二轮重新切回 text-only 模型。
+func stringMessagePartExtra(extra map[string]any, key string) string {
+	if extra == nil {
+		return ""
+	}
+	value, _ := extra[key].(string)
+	return strings.TrimSpace(value)
+}
+
+// requirementsFromMessages 检查本次真正会发送给 Provider 的 Context。它与
+// sessions.HydrateMessages 使用同一个历史图片重放窗口：图片紧邻追问仍使用 Vision
+// Model，更早图片已经变为文本占位，不应继续锁定图片模型路由。
 func requirementsFromMessages(messages []*schema.Message) turnInputRequirements {
 	var result turnInputRequirements
-	for _, message := range messages {
-		current := requirementsFromMessage(message)
+	imageReplayMask := multimodal.ImageReplayMask(messages)
+	for index, message := range messages {
+		current := requirementsFromMessageWithImages(message, imageReplayMask[index])
 		result.Vision = result.Vision || current.Vision
 		result.Files = result.Files || current.Files
 	}

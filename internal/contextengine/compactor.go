@@ -39,14 +39,18 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		return CompactResult{}, fmt.Errorf("计算 Compaction Budget 失败: %w", err)
 	}
 
-	before, err := e.Build(ctx, BuildRequest{
+	document, err := e.sessions.LoadTranscript(ctx, request.SessionID)
+	if err != nil {
+		return CompactResult{}, fmt.Errorf("读取待压缩 Session 失败: %w", err)
+	}
+	before, err := e.buildFromDocument(ctx, BuildRequest{
 		SessionID:         request.SessionID,
 		Instruction:       request.Instruction,
 		ContextWindow:     request.ContextWindow,
 		MaxOutputTokens:   request.MaxOutputTokens,
 		ToolTokenEstimate: request.ToolTokenEstimate,
 		ReasoningPolicy:   ReasoningReplayAuto,
-	})
+	}, budget, document)
 	if err != nil {
 		return CompactResult{}, err
 	}
@@ -54,16 +58,16 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		return CompactResult{Compacted: false, Before: before.Usage, After: before.Usage}, nil
 	}
 
-	document, err := e.sessions.LoadTranscript(ctx, request.SessionID)
-	if err != nil {
-		return CompactResult{}, fmt.Errorf("读取待压缩 Session 失败: %w", err)
-	}
 	plan, err := planCompaction(document, budget.KeepRecentTokens, e.estimator)
 	if err != nil {
 		return CompactResult{}, err
 	}
 
-	serialized := serializeCompactionPlan(plan, e.config.SerializerMaxChars)
+	serialized := serializeCompactionPlanWithLimit(
+		plan,
+		e.config.SerializerMaxChars,
+		compactionSerializationLimit(e.config.SerializerMaxChars, request.ContextWindow),
+	)
 	if serialized == "" {
 		return CompactResult{}, ErrNothingToCompact
 	}
@@ -100,6 +104,14 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		before.Usage.MemoryTokens +
 		e.estimator.EstimateMessage(schema.UserMessage(compactionCheckpointPrefix+summary)) +
 		e.estimator.EstimateMessages(retainedMessages)
+	if tokensAfterEstimate >= before.Usage.UsedTokens {
+		return CompactResult{}, fmt.Errorf(
+			"%w: 压缩没有降低 Context 占用: before=%d after_estimate=%d",
+			ErrContextBudgetExceeded,
+			before.Usage.UsedTokens,
+			tokensAfterEstimate,
+		)
+	}
 
 	entry, err := e.sessions.AppendCompaction(operationCtx, request.SessionID, transcript.AppendCompactionInput{
 		ExpectedLeafID:   plan.ParentLeafID,
