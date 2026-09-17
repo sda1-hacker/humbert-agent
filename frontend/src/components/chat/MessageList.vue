@@ -37,6 +37,10 @@ import {
   metadataOf,
 } from "../../utils/toolTrace.js";
 
+import {
+  DEFAULT_AGENT_AVATAR,
+} from "../../utils/avatar.js";
+
 import AssistantTurn
   from "./AssistantTurn.vue";
 
@@ -117,6 +121,14 @@ const currentAgentName =
             .selectedAgent
             ?.name ||
         "Humbert",
+    );
+
+const currentAgentAvatar =
+    computed(() =>
+        agentStore
+            .selectedAgent
+            ?.avatar ||
+        DEFAULT_AGENT_AVATAR,
     );
 
 const currentModelName =
@@ -418,21 +430,19 @@ onUnmounted(() => {
           "
             class="message-empty"
         >
-          <div
-              class="
-              message-empty-avatar
-            "
-          >
-            H
-          </div>
+          <div class="message-empty-eyebrow">READY</div>
 
           <div
               class="
               message-empty-title
             "
           >
-            今天想聊点什么？
+            开始一段新对话
           </div>
+
+          <p class="message-empty-description">
+            写下目标或添加材料，{{ currentAgentName }} 会从当前上下文开始工作。
+          </p>
         </div>
 
         <template
@@ -466,6 +476,7 @@ onUnmounted(() => {
               :agent-name="
               currentAgentName
             "
+              :agent-avatar="currentAgentAvatar"
               :model-name="
               modelNameForMessage(
                 block.message,
@@ -493,6 +504,7 @@ onUnmounted(() => {
             :agent-name="
             currentAgentName
           "
+            :agent-avatar="currentAgentAvatar"
             :model-name="
             currentModelName
           "
@@ -662,7 +674,7 @@ onUnmounted(() => {
 .message-empty {
   display: flex;
 
-  min-height: 420px;
+  min-height: 360px;
 
   align-items: center;
   justify-content: center;
@@ -670,35 +682,40 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-.message-empty-avatar {
-  display: grid;
-
-  width: 62px;
-  height: 62px;
-
-  place-items: center;
-
-  border: 1px solid var(--h-border);
-
-  border-radius: 50%;
-
-  background: var(--h-surface);
-
+.message-empty-eyebrow {
   color: var(--h-accent);
 
-  font-family: Georgia,
-  "Times New Roman",
-  serif;
+  font-family: var(--h-ui);
 
-  font-size: 25px;
+  font-size: 10px;
+
+  font-weight: 500;
+
+  letter-spacing: 0.12em;
 }
 
 .message-empty-title {
-  margin-top: 18px;
+  margin-top: 12px;
 
-  color: var(--h-text-secondary);
+  color: var(--h-text);
 
-  font-size: 17px;
+  font-size: 26px;
+
+  font-weight: 500;
+}
+
+.message-empty-description {
+  max-width: 420px;
+
+  margin: 10px 0 0;
+
+  color: var(--h-text-muted);
+
+  font-size: 12px;
+
+  line-height: 1.7;
+
+  text-align: center;
 }
 
 .message-bottom-space {

@@ -252,6 +252,36 @@ func (s *Store) ArchiveTask(ctx context.Context, id string, now time.Time) (Task
 	return value, nil
 }
 
+// DeleteTask 永久删除 Task 配置与全部运行记录。调用方必须先把排队运行收敛为终态；
+// 正在启动、运行或等待确认的 Task 不允许删除，避免 Runtime Event 写回已经消失的记录。
+func (s *Store) DeleteTask(ctx context.Context, id string) ([]Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, err := s.getTaskLocked(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := s.listRunsLocked(ctx, value.AgentID, value.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, run := range runs {
+		if !run.Status.Terminal() {
+			return nil, ErrTaskBusy
+		}
+	}
+	if err := os.RemoveAll(s.taskDir(value.AgentID, value.ID)); err != nil {
+		return nil, fmt.Errorf("删除 Task 目录失败: %w", err)
+	}
+	delete(s.taskAgents, value.ID)
+	delete(s.issues, "task:"+value.ID)
+	for _, run := range runs {
+		delete(s.runTasks, run.ID)
+		delete(s.issues, "run:"+run.ID)
+	}
+	return runs, nil
+}
+
 func (s *Store) CreateRun(ctx context.Context, value Run) (Run, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -349,6 +379,89 @@ func (s *Store) ListRuns(ctx context.Context, taskID string) ([]Run, error) {
 		return nil, err
 	}
 	return s.listRunsLocked(ctx, task.AgentID, task.ID)
+}
+
+// DeleteRun 永久删除一条已经结束的运行记录。非终态 Run 仍可能被 Scheduler 或
+// Runtime 更新，因此必须先取消或等待结束。
+func (s *Store) DeleteRun(ctx context.Context, id string) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, err := s.getRunLocked(ctx, id)
+	if err != nil {
+		return Run{}, err
+	}
+	if !run.Status.Terminal() {
+		return Run{}, ErrTaskBusy
+	}
+	if err := s.deleteRunLocked(ctx, run); err != nil {
+		return Run{}, err
+	}
+	return run, nil
+}
+
+// DeleteRuns 删除一个 Task 的全部终态历史。只要存在排队或活动运行就整体拒绝，
+// 避免 UI 显示“清空成功”但仍留下部分记录。
+func (s *Store) DeleteRuns(ctx context.Context, taskID string) ([]Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, err := s.getTaskLocked(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := s.listRunsLocked(ctx, task.AgentID, task.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, run := range runs {
+		if !run.Status.Terminal() {
+			return nil, ErrTaskBusy
+		}
+	}
+	for _, run := range runs {
+		if err := s.deleteRunLocked(ctx, run); err != nil {
+			return nil, err
+		}
+	}
+	return runs, nil
+}
+
+// RunBySession 返回引用指定会话的运行记录。TaskRun 是任务会话的生命周期所有者；
+// SessionService 用它阻止用户从普通会话入口误删仍可审计的任务结果。
+func (s *Store) RunBySession(ctx context.Context, sessionID string) (Run, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sessionID = strings.TrimSpace(sessionID)
+	if uuid.Validate(sessionID) != nil {
+		return Run{}, false, nil
+	}
+	values, err := s.listTasksLocked(ctx, true)
+	if err != nil {
+		return Run{}, false, err
+	}
+	for _, task := range values {
+		runs, readErr := s.listRunsLocked(ctx, task.AgentID, task.ID)
+		if readErr != nil {
+			continue
+		}
+		for _, run := range runs {
+			if run.SessionID == sessionID {
+				return run, true, nil
+			}
+		}
+	}
+	return Run{}, false, nil
+}
+
+func (s *Store) deleteRunLocked(ctx context.Context, run Run) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Remove(s.runPath(run.AgentID, run.TaskID, run.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("删除 TaskRun 失败: %w", err)
+	}
+	delete(s.runTasks, run.ID)
+	delete(s.issues, "run:"+run.ID)
+	return nil
 }
 
 func (s *Store) listRunsLocked(ctx context.Context, agentID, taskID string) ([]Run, error) {
@@ -565,7 +678,11 @@ func (s *Store) writeRunLocked(ctx context.Context, value Run) error {
 }
 
 func (s *Store) taskConfigPath(agentID, taskID string) string {
-	return filepath.Join(s.agentsRoot, agentID, "tasks", taskID, taskConfigName)
+	return filepath.Join(s.taskDir(agentID, taskID), taskConfigName)
+}
+
+func (s *Store) taskDir(agentID, taskID string) string {
+	return filepath.Join(s.agentsRoot, agentID, "tasks", taskID)
 }
 
 func (s *Store) runsDir(agentID, taskID string) string {

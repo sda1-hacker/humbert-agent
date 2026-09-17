@@ -37,14 +37,14 @@ func TestNarrowAgentCommandsPreserveUnrelatedConfiguration(t *testing.T) {
 	}
 	service := NewService(store, nil, nil)
 
-	profile, err := service.UpdateProfile(ctx, original.ID, "New", "new instruction")
+	profile, err := service.UpdateProfile(ctx, original.ID, "New", "", "new instruction")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if profile.Agent.Name != "New" || profile.Agent.Instruction != "new instruction" {
 		t.Fatalf("profile not updated: %#v", profile.Agent)
 	}
-	assertAgentPreserved(t, profile.Agent, original, "profile", map[string]bool{"Name": true, "Instruction": true, "UpdatedAt": true})
+	assertAgentPreserved(t, profile.Agent, original, "profile", map[string]bool{"Name": true, "Avatar": true, "Instruction": true, "UpdatedAt": true})
 
 	beforeModel := profile.Agent
 	model, err := service.SetModel(ctx, original.ID, "")

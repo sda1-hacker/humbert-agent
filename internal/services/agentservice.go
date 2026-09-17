@@ -39,6 +39,8 @@ type AgentDTO struct {
 
 	Name string `json:"name"`
 
+	Avatar string `json:"avatar"`
+
 	Instruction string `json:"instruction"`
 
 	ModelID string `json:"modelID"`
@@ -83,6 +85,7 @@ type AgentSecurityRequest struct {
 // AgentProfileRequest 只修改 Agent 身份/系统指令。
 type AgentProfileRequest struct {
 	Name        string `json:"name"`
+	Avatar      string `json:"avatar"`
 	Instruction string `json:"instruction"`
 }
 
@@ -161,6 +164,7 @@ type SandboxDiagnosticsDTO struct {
 // CreateAgentRequest 是创建 Agent 的 Desktop DTO。
 type CreateAgentRequest struct {
 	Name                   string             `json:"name"`
+	Avatar                 string             `json:"avatar"`
 	Instruction            string             `json:"instruction"`
 	ModelID                string             `json:"modelID"`
 	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
@@ -175,6 +179,7 @@ type CreateAgentRequest struct {
 // UpdateAgentRequest 是修改 Agent 的 Desktop DTO。
 type UpdateAgentRequest struct {
 	Name                   string             `json:"name"`
+	Avatar                 string             `json:"avatar"`
 	Instruction            string             `json:"instruction"`
 	ModelID                string             `json:"modelID"`
 	ModelRolesConfigured   bool               `json:"modelRolesConfigured"`
@@ -328,6 +333,8 @@ func (s *AgentService) CreateAgent(
 				agents.CreateInput{
 					Name: request.Name,
 
+					Avatar: request.Avatar,
+
 					Instruction: request.Instruction,
 
 					ModelID: request.ModelID,
@@ -400,6 +407,8 @@ func (s *AgentService) UpdateAgent(
 				agents.UpdateInput{
 					Name: request.Name,
 
+					Avatar: request.Avatar,
+
 					Instruction: request.Instruction,
 
 					ModelID: request.ModelID,
@@ -433,7 +442,7 @@ func (s *AgentService) UpdateAgent(
 func (s *AgentService) UpdateAgentProfile(id string, request AgentProfileRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	value, err := s.core.Agents().UpdateProfile(ctx, id, request.Name, request.Instruction)
+	value, err := s.core.Agents().UpdateProfile(ctx, id, request.Name, request.Avatar, request.Instruction)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent Profile 失败: %w", err)
 	}
@@ -840,6 +849,8 @@ func (s *AgentService) toDTO(
 		ID: value.Agent.ID,
 
 		Name: value.Agent.Name,
+
+		Avatar: value.Agent.Avatar,
 
 		Instruction: value.Agent.Instruction,
 

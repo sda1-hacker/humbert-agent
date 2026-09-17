@@ -131,6 +131,19 @@ func (s *SessionService) Delete(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// TaskRun 持有其专用 Session 的审计生命周期。若允许从普通会话侧栏直接删除，
+	// 运行历史中的“查看对话”会变成永久失效的悬空引用。用户需要从任务运行历史删除
+	// 对应记录；Task Manager 会同时清理 Run 与 Session。
+	if manager := s.core.Tasks(); manager != nil {
+		run, referenced, err := manager.RunBySession(ctx, id)
+		if err != nil {
+			return fmt.Errorf("检查任务会话引用失败: %w", err)
+		}
+		if referenced {
+			return fmt.Errorf("该会话属于任务运行记录，不能单独删除；请先在任务的运行历史中删除对应记录（run_id=%s）", run.ID)
+		}
+	}
+
 	if err := s.core.Runtime().DeleteSession(ctx, id); err != nil {
 		return fmt.Errorf("删除 Session 失败: %w", err)
 	}

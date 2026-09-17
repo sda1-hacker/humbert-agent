@@ -19,6 +19,10 @@ func All(
 		),
 
 		application.NewService(
+			NewPreferenceService(core),
+		),
+
+		application.NewService(
 			NewModelService(core),
 		),
 

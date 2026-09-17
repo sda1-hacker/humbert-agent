@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { readAttachment } from "../../api/sessions.js";
+import ImagePreviewDialog from "../ui/ImagePreviewDialog.vue";
 
 const props = defineProps({
   sessionId: { type: String, required: true },
@@ -10,6 +11,8 @@ const props = defineProps({
 
 const imageSources = ref({});
 const loadingImages = ref({});
+const preview = ref({ visible: false, src: "", name: "" });
+const imageLoadPromises = new Map();
 
 function humanSize(value) {
   const bytes = Number(value || 0);
@@ -29,21 +32,29 @@ function base64ToBlob(base64, mimeType) {
 }
 
 async function loadImage(attachment) {
-  if (!attachment?.id || imageSources.value[attachment.id] || loadingImages.value[attachment.id]) return;
-  loadingImages.value = { ...loadingImages.value, [attachment.id]: true };
-  try {
-    const result = await readAttachment(props.sessionId, attachment.id);
-    imageSources.value = {
-      ...imageSources.value,
-      [attachment.id]: `data:${attachment.mimeType || "image/*"};base64,${result?.base64Data || ""}`,
-    };
-  } catch (error) {
-    Message.error(error?.message || String(error));
-  } finally {
-    const next = { ...loadingImages.value };
-    delete next[attachment.id];
-    loadingImages.value = next;
-  }
+  const id = attachment?.id;
+  if (!id || imageSources.value[id]) return;
+  if (imageLoadPromises.has(id)) return imageLoadPromises.get(id);
+
+  const pending = (async () => {
+    loadingImages.value = { ...loadingImages.value, [id]: true };
+    try {
+      const result = await readAttachment(props.sessionId, id);
+      imageSources.value = {
+        ...imageSources.value,
+        [id]: `data:${attachment.mimeType || "image/*"};base64,${result?.base64Data || ""}`,
+      };
+    } catch (error) {
+      Message.error(error?.message || String(error));
+    } finally {
+      imageLoadPromises.delete(id);
+      const next = { ...loadingImages.value };
+      delete next[id];
+      loadingImages.value = next;
+    }
+  })();
+  imageLoadPromises.set(id, pending);
+  return pending;
 }
 
 async function downloadAttachment(attachment) {
@@ -61,6 +72,13 @@ async function downloadAttachment(attachment) {
   } catch (error) {
     Message.error(error?.message || String(error));
   }
+}
+
+async function previewImage(attachment) {
+  await loadImage(attachment);
+  const src = imageSources.value[attachment?.id];
+  if (!src) return;
+  preview.value = { visible: true, src, name: attachment?.name || "图片预览" };
 }
 
 async function loadVisibleImages() {
@@ -87,8 +105,8 @@ watch(() => props.attachments, () => void loadVisibleImages(), { deep: true });
           v-if="attachment.kind === 'image'"
           type="button"
           class="attachment-image-button"
-          :title="`下载 ${attachment.name}`"
-          @click="downloadAttachment(attachment)"
+          :title="`预览 ${attachment.name}`"
+          @click="previewImage(attachment)"
       >
         <img
             v-if="imageSources[attachment.id]"
@@ -98,6 +116,14 @@ watch(() => props.attachments, () => void loadVisibleImages(), { deep: true });
         />
         <span v-else class="attachment-loading">读取图片…</span>
       </button>
+
+      <button
+          v-if="attachment.kind === 'image'"
+          type="button"
+          class="attachment-download"
+          :title="`下载 ${attachment.name}`"
+          @click="downloadAttachment(attachment)"
+      >下载</button>
 
       <button
           v-else
@@ -114,6 +140,11 @@ watch(() => props.attachments, () => void loadVisibleImages(), { deep: true });
         </span>
       </button>
     </div>
+    <ImagePreviewDialog
+        v-model:visible="preview.visible"
+        :src="preview.src"
+        :name="preview.name"
+    />
   </div>
 </template>
 
@@ -140,6 +171,10 @@ watch(() => props.attachments, () => void loadVisibleImages(), { deep: true });
   overflow: hidden;
   border-radius: 9px;
 }
+
+.attachment--image { position: relative; }
+.attachment-download { position: absolute; right: 7px; bottom: 7px; padding: 3px 7px; border: 1px solid rgb(255 255 255 / 45%); border-radius: 5px; background: rgb(20 24 30 / 72%); color: #fff; font-size: 10px; cursor: pointer; opacity: 0; transition: opacity 120ms ease; }
+.attachment--image:hover .attachment-download, .attachment-download:focus-visible { opacity: 1; }
 
 .attachment-image {
   display: block;

@@ -26,6 +26,8 @@ type Agent struct {
 
 	Name string `json:"name"`
 
+	Avatar string `json:"avatar,omitempty"`
+
 	Instruction string `json:"instruction"`
 
 	ModelID string `json:"model_id,omitempty"`
@@ -84,6 +86,8 @@ type DeletionState struct {
 type CreateInput struct {
 	Name string
 
+	Avatar string
+
 	Instruction string
 
 	ModelID string
@@ -109,6 +113,8 @@ type CreateInput struct {
 // 不会搬迁、删除或者复制原 Workspace 中的任何文件。
 type UpdateInput struct {
 	Name string
+
+	Avatar string
 
 	Instruction string
 

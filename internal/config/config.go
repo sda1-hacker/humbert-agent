@@ -113,7 +113,10 @@ security:
 `
 
 const defaultPreferencesJSON = `{
-  "schema_version": 1
+  "schema_version": 1,
+  "user": {
+    "name": "你"
+  }
 }
 `
 
@@ -399,8 +402,8 @@ func loadFromHome(home string) (*Config, error) {
 		return nil, fmt.Errorf("初始化默认配置文件失败: %w", err)
 	}
 
-	// preferences.json 当前只是预留配置入口。Provider/Model 文件由 models.Store
-	// 初始化，因为只有对应领域知道它们的 Schema。
+	// preferences.json 保存用户身份与界面偏好；具体校验和后续写入由
+	// preferences.Store 负责。Provider/Model 文件仍由各自领域 Store 初始化。
 	if err := ensureDefaultTextFile(paths.PreferencesFile, defaultPreferencesJSON); err != nil {
 		return nil, fmt.Errorf("初始化 preferences.json 失败: %w", err)
 	}

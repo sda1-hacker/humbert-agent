@@ -15,11 +15,19 @@ import ApprovalCard
 import MarkdownRenderer
   from "./MarkdownRenderer.vue";
 
+import IdentityAvatar
+  from "../ui/IdentityAvatar.vue";
+
 const props =
     defineProps({
       agentName: {
         type: String,
         default: "Humbert",
+      },
+
+      agentAvatar: {
+        type: String,
+        default: "",
       },
 
       modelName: {
@@ -131,7 +139,8 @@ const liveTrace =
 <template>
   <article class="live-turn">
     <header class="live-header">
-      {{ authorText }}
+      <IdentityAvatar :src="agentAvatar" :name="agentName" :size="30" />
+      <span>{{ authorText }}</span>
     </header>
 
     <!--
@@ -201,6 +210,12 @@ const liveTrace =
 }
 
 .live-header {
+  display: flex;
+
+  align-items: center;
+
+  gap: 10px;
+
   max-width: 100%;
 
   margin-bottom: 9px;
@@ -228,15 +243,15 @@ const liveTrace =
 
   min-width: 0;
 
-  padding: 10px 14px;
+  padding: 0;
 
   overflow-x: hidden;
 
-  border: 1px solid var(--h-border);
+  border: 0;
 
-  border-radius: 4px 13px 13px 13px;
+  border-radius: 0;
 
-  background: var(--h-surface);
+  background: transparent;
 
   color: var(--h-text);
 

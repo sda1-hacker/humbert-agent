@@ -9,7 +9,10 @@ import {
 import {
     archiveTask,
     cancelTaskRun,
+    clearTaskRuns,
     createTask,
+    deleteTask,
+    deleteTaskRun,
     listTaskRuns,
     listTasks,
     runTaskNow,
@@ -164,6 +167,27 @@ export const useTaskStore = defineStore("tasks", {
             delete nextRuns[id];
             this.runsByTask = nextRuns;
             await this.load();
+        },
+
+        async remove(id) {
+            await deleteTask(id);
+            const nextRuns = { ...this.runsByTask };
+            delete nextRuns[id];
+            this.runsByTask = nextRuns;
+            await this.load();
+        },
+
+        async removeRun(taskID, runID) {
+            await deleteTaskRun(runID);
+            await this.loadRuns(taskID);
+        },
+
+        async clearRuns(taskID) {
+            await clearTaskRuns(taskID);
+            this.runsByTask = {
+                ...this.runsByTask,
+                [taskID]: [],
+            };
         },
 
         async runNow(id) {

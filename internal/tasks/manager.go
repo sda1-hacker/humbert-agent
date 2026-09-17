@@ -145,6 +145,10 @@ func (m *Manager) Runs(ctx context.Context, taskID string) ([]Run, error) {
 	return m.store.ListRuns(ctx, taskID)
 }
 
+func (m *Manager) Run(ctx context.Context, runID string) (Run, error) {
+	return m.store.GetRun(ctx, runID)
+}
+
 func (m *Manager) Create(ctx context.Context, input CreateInput) (Task, error) {
 	if _, err := m.agents.Get(ctx, strings.TrimSpace(input.AgentID)); err != nil {
 		return Task{}, err
@@ -212,6 +216,88 @@ func (m *Manager) Archive(ctx context.Context, id string) (Task, error) {
 	}
 	m.publish(Event{Type: "task.archived", TaskID: value.ID, Task: &value})
 	return value, nil
+}
+
+// Delete 永久删除任务、运行历史以及由这些运行创建的专用会话。Scheduler 的创建与
+// 分派也持有 cycleMu，因此删除与到期入队/启动不会交错。
+func (m *Manager) Delete(ctx context.Context, id string) error {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	task, err := m.store.GetTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	runs, err := m.store.ListRuns(ctx, task.ID)
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		if run.Status.Active() {
+			return ErrTaskBusy
+		}
+	}
+	now := time.Now().UTC()
+	for index := range runs {
+		if runs[index].Status != RunQueued {
+			continue
+		}
+		runs[index].Status = RunCancelled
+		runs[index].Error = "任务已删除，尚未开始的运行已取消。"
+		runs[index].FinishedAt = &now
+		if err := m.store.UpdateRun(ctx, runs[index]); err != nil {
+			return err
+		}
+	}
+	deletedRuns, err := m.store.DeleteTask(ctx, task.ID)
+	if err != nil {
+		return err
+	}
+	m.publish(Event{Type: "task.deleted", TaskID: task.ID})
+	m.deleteRunSessions(deletedRuns)
+	return nil
+}
+
+// DeleteRun 删除单条终态运行及其专用会话。运行记录先删除，随后会话按 best effort
+// 清理；即使会话已经被旧版本删除，也不会阻塞历史记录清理。
+func (m *Manager) DeleteRun(ctx context.Context, runID string) error {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	run, err := m.store.DeleteRun(ctx, runID)
+	if err != nil {
+		return err
+	}
+	m.publish(Event{Type: "run.deleted", TaskID: run.TaskID, RunID: run.ID})
+	m.deleteRunSessions([]Run{run})
+	return nil
+}
+
+// ClearRuns 原子清空一个 Task 的终态历史；存在排队或活动运行时拒绝。
+func (m *Manager) ClearRuns(ctx context.Context, taskID string) error {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	runs, err := m.store.DeleteRuns(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	m.publish(Event{Type: "runs.deleted", TaskID: taskID})
+	m.deleteRunSessions(runs)
+	return nil
+}
+
+func (m *Manager) RunBySession(ctx context.Context, sessionID string) (Run, bool, error) {
+	return m.store.RunBySession(ctx, sessionID)
+}
+
+func (m *Manager) deleteRunSessions(runs []Run) {
+	for _, run := range runs {
+		sessionID := strings.TrimSpace(run.SessionID)
+		if sessionID == "" {
+			continue
+		}
+		if err := m.runtime.DeleteSession(context.Background(), sessionID); err != nil && !errors.Is(err, sessions.ErrSessionNotFound) {
+			m.logger.Warn(context.Background(), "清理 TaskRun 会话失败", "operation", "task.run.session.delete", "task_id", run.TaskID, "run_id", run.ID, "session_id", sessionID, "error", err)
+		}
+	}
 }
 
 func (m *Manager) RunNow(ctx context.Context, taskID string) (Run, error) {

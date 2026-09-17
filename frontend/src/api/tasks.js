@@ -25,6 +25,18 @@ export function archiveTask(id) {
     return Call.ByName(`${taskServiceName}.Archive`, id);
 }
 
+export function deleteTask(id) {
+    return Call.ByName(`${taskServiceName}.Delete`, id);
+}
+
+export function deleteTaskRun(id) {
+    return Call.ByName(`${taskServiceName}.DeleteRun`, id);
+}
+
+export function clearTaskRuns(taskID) {
+    return Call.ByName(`${taskServiceName}.ClearRuns`, taskID);
+}
+
 export function runTaskNow(id) {
     return Call.ByName(`${taskServiceName}.RunNow`, id);
 }

@@ -61,27 +61,28 @@ type TaskApprovalDTO struct {
 }
 
 type TaskRunDTO struct {
-	ID              string           `json:"id"`
-	TaskID          string           `json:"taskID"`
-	AgentID         string           `json:"agentID"`
-	SessionID       string           `json:"sessionID"`
-	RequestID       string           `json:"requestID,omitempty"`
-	RuntimeRunID    string           `json:"runtimeRunID,omitempty"`
-	Trigger         string           `json:"trigger"`
-	ParentRunID     string           `json:"parentRunID,omitempty"`
-	ScheduledFor    string           `json:"scheduledFor"`
-	Attempt         int              `json:"attempt"`
-	Status          string           `json:"status"`
-	ToolCalls       int              `json:"toolCalls"`
-	ModelCalls      int              `json:"modelCalls"`
-	Approval        *TaskApprovalDTO `json:"approval,omitempty"`
-	ResultMessageID string           `json:"resultMessageID,omitempty"`
-	ResultPreview   string           `json:"resultPreview,omitempty"`
-	Error           string           `json:"error,omitempty"`
-	CreatedAt       string           `json:"createdAt"`
-	StartedAt       string           `json:"startedAt,omitempty"`
-	FinishedAt      string           `json:"finishedAt,omitempty"`
-	DeadlineAt      string           `json:"deadlineAt,omitempty"`
+	ID               string           `json:"id"`
+	TaskID           string           `json:"taskID"`
+	AgentID          string           `json:"agentID"`
+	SessionID        string           `json:"sessionID"`
+	SessionAvailable bool             `json:"sessionAvailable"`
+	RequestID        string           `json:"requestID,omitempty"`
+	RuntimeRunID     string           `json:"runtimeRunID,omitempty"`
+	Trigger          string           `json:"trigger"`
+	ParentRunID      string           `json:"parentRunID,omitempty"`
+	ScheduledFor     string           `json:"scheduledFor"`
+	Attempt          int              `json:"attempt"`
+	Status           string           `json:"status"`
+	ToolCalls        int              `json:"toolCalls"`
+	ModelCalls       int              `json:"modelCalls"`
+	Approval         *TaskApprovalDTO `json:"approval,omitempty"`
+	ResultMessageID  string           `json:"resultMessageID,omitempty"`
+	ResultPreview    string           `json:"resultPreview,omitempty"`
+	Error            string           `json:"error,omitempty"`
+	CreatedAt        string           `json:"createdAt"`
+	StartedAt        string           `json:"startedAt,omitempty"`
+	FinishedAt       string           `json:"finishedAt,omitempty"`
+	DeadlineAt       string           `json:"deadlineAt,omitempty"`
 }
 
 type SaveTaskRequest struct {
@@ -157,7 +158,12 @@ func (s *TaskService) Runs(taskID string) ([]TaskRunDTO, error) {
 	}
 	result := make([]TaskRunDTO, 0, len(values))
 	for _, value := range values {
-		result = append(result, taskRunDTO(value))
+		dto := taskRunDTO(value)
+		if value.SessionID != "" {
+			_, sessionErr := s.core.Sessions().Get(ctx, value.SessionID)
+			dto.SessionAvailable = sessionErr == nil
+		}
+		result = append(result, dto)
 	}
 	return result, nil
 }
@@ -197,6 +203,59 @@ func (s *TaskService) Archive(id string) error {
 		return fmt.Errorf("归档任务失败: %w", err)
 	}
 	return nil
+}
+
+func (s *TaskService) Delete(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	runs, err := s.core.Tasks().Runs(ctx, id)
+	if err != nil {
+		return fmt.Errorf("读取待删除任务的运行历史失败: %w", err)
+	}
+	if err := s.core.Tasks().Delete(ctx, id); err != nil {
+		return fmt.Errorf("删除任务失败: %w", err)
+	}
+	s.clearSessionRules(runs)
+	return nil
+}
+
+func (s *TaskService) DeleteRun(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	run, err := s.core.Tasks().Run(ctx, id)
+	if err != nil {
+		return fmt.Errorf("读取待删除运行记录失败: %w", err)
+	}
+	if err := s.core.Tasks().DeleteRun(ctx, id); err != nil {
+		return fmt.Errorf("删除运行记录失败: %w", err)
+	}
+	s.clearSessionRules([]tasks.Run{run})
+	return nil
+}
+
+func (s *TaskService) ClearRuns(taskID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	runs, err := s.core.Tasks().Runs(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("读取待清空运行历史失败: %w", err)
+	}
+	if err := s.core.Tasks().ClearRuns(ctx, taskID); err != nil {
+		return fmt.Errorf("清空运行历史失败: %w", err)
+	}
+	s.clearSessionRules(runs)
+	return nil
+}
+
+func (s *TaskService) clearSessionRules(runs []tasks.Run) {
+	if s.core.Permissions() == nil {
+		return
+	}
+	for _, run := range runs {
+		if run.SessionID != "" {
+			s.core.Permissions().ClearSessionRules(run.SessionID)
+		}
+	}
 }
 
 func (s *TaskService) RunNow(id string) (TaskRunDTO, error) {

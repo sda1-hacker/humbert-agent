@@ -21,6 +21,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
+	"github.com/sda1-hacker/humbert-agent/internal/preferences"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
@@ -89,6 +90,8 @@ type Application struct {
 	sandbox *sandbox.Manager
 
 	permissions *permission.Engine
+
+	preferences *preferences.Store
 
 	approvals *approval.Manager
 
@@ -215,6 +218,10 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Approval Manager 失败: %w", err)
+	}
+	preferenceStore, err := preferences.NewStore(ctx, cfg.Paths.PreferencesFile)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Preferences Store 失败: %w", err)
 	}
 
 	skillManager, err := skills.NewManager(ctx, cfg.Paths.SkillsDir, cfg.Runtime.Skills, logger)
@@ -422,6 +429,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		workspaces:    workspaceManager,
 		sandbox:       sandboxManager,
 		permissions:   permissionEngine,
+		preferences:   preferenceStore,
 		approvals:     approvalManager,
 		tools:         toolRegistry,
 		skills:        skillManager,
@@ -492,6 +500,11 @@ func (a *Application) Sandbox() *sandbox.Manager {
 // Tool Registry 则持有同一个 Engine 作为运行时 Authorizer。
 func (a *Application) Permissions() *permission.Engine {
 	return a.permissions
+}
+
+// Preferences 返回应用级用户资料与界面偏好存储。
+func (a *Application) Preferences() *preferences.Store {
+	return a.preferences
 }
 
 // Approvals 返回当前进程的 Human Approval Manager。普通 Desktop 调用通过 RuntimeService

@@ -78,6 +78,10 @@ import {
   useTaskStore,
 } from "../stores/tasks.js";
 
+import {
+  usePreferenceStore,
+} from "../stores/preferences.js";
+
 const layoutStore =
     useLayoutStore();
 
@@ -95,6 +99,9 @@ const runtimeStore =
 
 const taskStore =
     useTaskStore();
+
+const preferenceStore =
+    usePreferenceStore();
 
 /**
  * 设置页是否处于打开状态。
@@ -291,6 +298,10 @@ onMounted(async () => {
       modelStore.load(),
 
       agentStore.load(),
+
+      preferenceStore.load().catch((error) => {
+        console.warn("[Preferences] 用户资料加载失败，继续使用默认身份", error);
+      }),
 
       taskStore.load(),
     ]);

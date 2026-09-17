@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/sda1-hacker/humbert-agent/internal/avatar"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
@@ -241,6 +242,10 @@ func (s *Service) Create(
 		return AgentInfo{},
 			err
 	}
+	normalizedAvatar, err := avatar.NormalizeDataURL(input.Avatar)
+	if err != nil {
+		return AgentInfo{}, fmt.Errorf("Agent 头像无效: %w", err)
+	}
 
 	normalized.EnabledSkills, err = s.normalizeEnabledSkills(ctx, input.EnabledSkills)
 	if err != nil {
@@ -299,6 +304,8 @@ func (s *Service) Create(
 			ID: id,
 
 			Name: normalized.Name,
+
+			Avatar: normalizedAvatar,
 
 			Instruction: normalized.Instruction,
 
@@ -455,6 +462,10 @@ func (s *Service) Update(
 		return AgentInfo{},
 			err
 	}
+	normalizedAvatar, err := avatar.NormalizeDataURL(input.Avatar)
+	if err != nil {
+		return AgentInfo{}, fmt.Errorf("Agent 头像无效: %w", err)
+	}
 
 	normalized.EnabledSkills, err = s.normalizeEnabledSkills(ctx, input.EnabledSkills)
 	if err != nil {
@@ -531,6 +542,9 @@ func (s *Service) Update(
 	existing.Agent.Name =
 		normalized.Name
 
+	existing.Agent.Avatar =
+		normalizedAvatar
+
 	existing.Agent.Instruction =
 		normalized.Instruction
 
@@ -602,7 +616,7 @@ func (s *Service) Update(
 }
 
 // UpdateProfile 只修改 Agent 的身份与系统指令，不触碰模型、能力、Sandbox 或 Workspace。
-func (s *Service) UpdateProfile(ctx context.Context, id, name, instruction string) (AgentInfo, error) {
+func (s *Service) UpdateProfile(ctx context.Context, id, name, profileAvatar, instruction string) (AgentInfo, error) {
 	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
 	if err != nil {
 		return AgentInfo{}, err
@@ -614,7 +628,12 @@ func (s *Service) UpdateProfile(ctx context.Context, id, name, instruction strin
 	if len([]rune(name)) > 100 {
 		return AgentInfo{}, errors.New("Agent 名称不能超过 100 个字符")
 	}
+	normalizedAvatar, err := avatar.NormalizeDataURL(profileAvatar)
+	if err != nil {
+		return AgentInfo{}, fmt.Errorf("Agent 头像无效: %w", err)
+	}
 	existing.Agent.Name = name
+	existing.Agent.Avatar = normalizedAvatar
 	existing.Agent.Instruction = strings.TrimSpace(instruction)
 	existing.Agent.UpdatedAt = time.Now().UTC()
 	if err := s.store.Update(ctx, existing.Agent); err != nil {

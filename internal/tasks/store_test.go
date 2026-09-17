@@ -209,6 +209,99 @@ func TestCancelQueuedAutomaticRunsKeepsManualRun(t *testing.T) {
 	}
 }
 
+func TestStoreDeleteRunRemovesSessionReference(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	now := time.Now().UTC()
+	sessionID := uuid.NewString()
+	run, _, err := store.CreateRun(context.Background(), Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID, SessionID: sessionID,
+		Trigger: TriggerManual, ScheduledFor: now, Attempt: 1, Status: RunSucceeded,
+		CreatedAt: now, FinishedAt: timePointer(now),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if referenced, ok, findErr := store.RunBySession(context.Background(), sessionID); findErr != nil || !ok || referenced.ID != run.ID {
+		t.Fatalf("run reference=(%+v,%v,%v)", referenced, ok, findErr)
+	}
+	deleted, err := store.DeleteRun(context.Background(), run.ID)
+	if err != nil || deleted.ID != run.ID {
+		t.Fatalf("delete run=(%+v,%v)", deleted, err)
+	}
+	if _, err := store.GetRun(context.Background(), run.ID); !errors.Is(err, ErrRunNotFound) {
+		t.Fatalf("get deleted run error=%v want ErrRunNotFound", err)
+	}
+	if _, ok, err := store.RunBySession(context.Background(), sessionID); err != nil || ok {
+		t.Fatalf("deleted run still references session: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestStoreDeleteRejectsNonTerminalRun(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	now := time.Now().UTC()
+	run, _, err := store.CreateRun(context.Background(), Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+		Trigger: TriggerManual, ScheduledFor: now, Attempt: 1, Status: RunQueued, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteRun(context.Background(), run.ID); !errors.Is(err, ErrTaskBusy) {
+		t.Fatalf("delete queued run error=%v want ErrTaskBusy", err)
+	}
+}
+
+func TestStoreDeleteTaskRemovesTerminalRuns(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	now := time.Now().UTC()
+	run, _, err := store.CreateRun(context.Background(), Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+		Trigger: TriggerManual, ScheduledFor: now, Attempt: 1, Status: RunFailed,
+		Error: "test", CreatedAt: now, FinishedAt: timePointer(now),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedRuns, err := store.DeleteTask(context.Background(), task.ID)
+	if err != nil || len(deletedRuns) != 1 || deletedRuns[0].ID != run.ID {
+		t.Fatalf("delete task runs=%+v err=%v", deletedRuns, err)
+	}
+	if _, err := store.GetTask(context.Background(), task.ID); !errors.Is(err, ErrTaskNotFound) {
+		t.Fatalf("get deleted task error=%v want ErrTaskNotFound", err)
+	}
+	if _, err := os.Stat(store.taskDir(agentID, task.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("task directory still exists: %v", err)
+	}
+}
+
+func TestStoreClearRunsIsAllOrNothing(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	now := time.Now().UTC()
+	for _, status := range []RunStatus{RunSucceeded, RunQueued} {
+		run := Run{
+			ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+			Trigger: TriggerManual, ScheduledFor: now, Attempt: 1, Status: status, CreatedAt: now,
+		}
+		if status.Terminal() {
+			run.FinishedAt = timePointer(now)
+		}
+		if _, _, err := store.CreateRun(context.Background(), run); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DeleteRuns(context.Background(), task.ID); !errors.Is(err, ErrTaskBusy) {
+		t.Fatalf("clear runs error=%v want ErrTaskBusy", err)
+	}
+	runs, err := store.ListRuns(context.Background(), task.ID)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("clear runs was partial: len=%d err=%v", len(runs), err)
+	}
+}
+
 func TestStoreIsolatesCorruptTask(t *testing.T) {
 	store, agentID := newTestStore(t)
 	valid := createTestTask(t, store, agentID)

@@ -30,8 +30,14 @@ import {
   useSessionStore,
 } from "../../stores/sessions.js";
 
+import ImagePreviewDialog
+  from "../ui/ImagePreviewDialog.vue";
+
 const fileInput =
     ref(null);
+
+const imagePreview =
+    ref({visible: false, src: "", name: ""});
 
 const MAX_ATTACHMENTS = 8;
 const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
@@ -126,6 +132,11 @@ const selectedModelID =
         agentStore
             .selectedAgent
             ?.modelID ?? ""
+    ));
+
+const selectedAgentName =
+    computed(() => (
+        agentStore.selectedAgent?.name || "Humbert"
     ));
 
 const contextUsage =
@@ -488,6 +499,10 @@ async function selectAttachments(event) {
   const input = event?.target;
   const files = Array.from(input?.files || []);
   if (input) input.value = "";
+  await addAttachments(files);
+}
+
+async function addAttachments(files) {
   if (files.length === 0) return;
 
   if (attachments.value.length + files.length > MAX_ATTACHMENTS) {
@@ -497,8 +512,8 @@ async function selectAttachments(event) {
 
   const candidateMetadata = [
     ...attachments.value,
-    ...files.map((file) => ({
-      name: file.name,
+    ...files.map((file, index) => ({
+      name: String(file.name || "").trim() || `pasted-image-${Date.now()}-${index + 1}.png`,
       mimeType: file.type || "application/octet-stream",
       sizeBytes: file.size
     })),
@@ -513,19 +528,20 @@ async function selectAttachments(event) {
   const next = [];
   try {
     for (const file of files) {
-      if (file.size <= 0) throw new Error(`${file.name} 是空文件`);
-      if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${file.name} 超过 12 MiB 限制`);
+      const name = String(file.name || "").trim() || `pasted-image-${Date.now()}.png`;
+      if (file.size <= 0) throw new Error(`${name} 是空文件`);
+      if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${name} 超过 12 MiB 限制`);
       const image = isImageAttachment(file);
       if (!image && !isTextAttachment(file)) {
-        throw new Error(`${file.name} 暂不支持；当前文件附件仅支持图片、UTF-8 文本、源码和 JSON/YAML/XML 等文本格式`);
+        throw new Error(`${name} 暂不支持；当前文件附件仅支持图片、UTF-8 文本、源码和 JSON/YAML/XML 等文本格式`);
       }
       if (!image && file.size > MAX_TEXT_ATTACHMENT_BYTES) {
-        throw new Error(`${file.name} 超过文本附件 512 KiB 限制`);
+        throw new Error(`${name} 超过文本附件 512 KiB 限制`);
       }
       total += file.size;
       if (total > MAX_ATTACHMENT_TOTAL_BYTES) throw new Error("单条消息附件总大小不能超过 24 MiB");
       next.push({
-        name: file.name,
+        name,
         mimeType: file.type || "application/octet-stream",
         sizeBytes: file.size,
         base64Data: await fileToBase64(file),
@@ -536,6 +552,26 @@ async function selectAttachments(event) {
     return;
   }
   attachments.value = [...attachments.value, ...next];
+}
+
+async function pasteAttachments(event) {
+  if (!sessionStore.selectedID || running.value || sending.value) return;
+  const files = Array.from(event?.clipboardData?.items || [])
+      .filter((item) => item.kind === "file" && String(item.type || "").toLowerCase().startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+  if (files.length === 0) return;
+  event.preventDefault();
+  await addAttachments(files);
+}
+
+function previewDraftImage(attachment) {
+  if (!isImageAttachment(attachment) || !attachment?.base64Data) return;
+  imagePreview.value = {
+    visible: true,
+    src: `data:${attachment.mimeType || "image/png"};base64,${attachment.base64Data}`,
+    name: attachment.name || "图片预览",
+  };
 }
 
 function removeAttachment(index) {
@@ -745,7 +781,16 @@ watch(
             :key="`${attachment.name}-${attachment.sizeBytes}-${index}`"
             class="composer-attachment"
         >
-          <span class="composer-attachment__icon">{{ attachment.mimeType.startsWith('image/') ? '🖼' : '📎' }}</span>
+          <button
+              v-if="attachment.mimeType.startsWith('image/')"
+              type="button"
+              class="composer-attachment__preview"
+              :title="`预览 ${attachment.name}`"
+              @click="previewDraftImage(attachment)"
+          >
+            <img :src="`data:${attachment.mimeType};base64,${attachment.base64Data}`" :alt="attachment.name" />
+          </button>
+          <span v-else class="composer-attachment__icon">📎</span>
           <span class="composer-attachment__body">
             <span class="composer-attachment__name">{{ attachment.name }}</span>
             <span class="composer-attachment__size">{{ formatAttachmentSize(attachment.sizeBytes) }}</span>
@@ -771,13 +816,20 @@ watch(
         "
           :placeholder="
           sessionStore.selectedID
-            ? '给 Humbert 发送消息…'
+            ? `给 ${selectedAgentName} 发送消息…`
             : '请先创建一个对话'
         "
           class="composer-textarea"
+          @paste="pasteAttachments"
           @keydown.enter.exact.prevent="
           send
         "
+      />
+
+      <ImagePreviewDialog
+          v-model:visible="imagePreview.visible"
+          :src="imagePreview.src"
+          :name="imagePreview.name"
       />
 
       <div
@@ -1151,7 +1203,7 @@ watch(
 
   border: 1px solid var(--h-border-strong);
 
-  border-radius: 14px;
+  border-radius: 8px;
 
   background: var(--h-surface);
 }
@@ -1175,8 +1227,8 @@ watch(
   gap: 7px;
   padding: 6px 8px;
   border: 1px solid var(--h-border);
-  border-radius: 8px;
-  background: var(--h-surface);
+  border-radius: 6px;
+  background: var(--h-bg);
 }
 
 .composer-attachment__body {
@@ -1184,6 +1236,24 @@ watch(
   min-width: 0;
   flex: 1;
   flex-direction: column;
+}
+
+.composer-attachment__preview {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 5px;
+  background: var(--h-surface-soft, var(--h-bg));
+  cursor: zoom-in;
+}
+
+.composer-attachment__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .composer-attachment__name {

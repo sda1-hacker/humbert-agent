@@ -700,9 +700,10 @@ watch(
   <aside class="conversation-sidebar">
     <!-- 固定顶部 -->
     <header class="sidebar-header">
-      <span class="sidebar-title">
-        Agent
-      </span>
+      <div class="sidebar-brand">
+        <span class="sidebar-title">工作台</span>
+        <span class="sidebar-kicker">AGENTS &amp; SESSIONS</span>
+      </div>
 
       <a-tooltip
           content="新建 Agent"
@@ -798,7 +799,7 @@ watch(
     <div class="sidebar-divider"></div>
 
     <!-- Search -->
-    <div class="sidebar-search" style="margin-top: 10px">
+    <div class="sidebar-search sidebar-search--sessions">
       <a-input
           v-model="
           sessionStore.search
@@ -1214,29 +1215,53 @@ watch(
 .sidebar-header {
   display: flex;
 
-  height: 56px;
+  height: 64px;
 
-  flex: 0 0 56px;
+  flex: 0 0 64px;
 
   align-items: center;
 
   justify-content: space-between;
 
-  padding: 0 12px 0 16px;
+  padding: 0 12px 0 18px;
+}
+
+.sidebar-brand {
+  display: flex;
+
+  min-width: 0;
+
+  flex-direction: column;
+
+  gap: 2px;
 }
 
 .sidebar-title {
-  color: var(--h-text-secondary);
+  color: var(--h-text);
 
-  font-size: 14px;
+  font-size: 16px;
 
   font-weight: 500;
+}
+
+.sidebar-kicker {
+  color: var(--h-text-muted);
+
+  font-family: var(--h-ui);
+
+  font-size: 8px;
+
+  letter-spacing: 0.11em;
 }
 
 .sidebar-search {
   flex: 0 0 auto;
 
   padding: 0 12px 10px;
+}
+
+.sidebar-search--sessions {
+  margin-top: 10px;
 }
 
 .sidebar-primary-nav {
@@ -1251,10 +1276,11 @@ watch(
   min-height: 46px;
   align-items: center;
   gap: 9px;
-  padding: 6px 10px;
+  padding: 6px 10px 6px 12px;
   cursor: pointer;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0 6px 6px 0;
   background: transparent;
   color: var(--h-text-secondary);
   font: inherit;
@@ -1266,9 +1292,13 @@ watch(
 }
 
 .sidebar-primary-entry--active {
-  border-color: var(--h-border);
-  background: var(--h-surface);
+  border-left-color: var(--h-accent);
+  background: transparent;
   color: var(--h-text);
+}
+
+.sidebar-primary-entry--active .sidebar-primary-entry__icon {
+  color: var(--h-accent);
 }
 
 .sidebar-primary-entry__icon {
@@ -1291,14 +1321,14 @@ watch(
 
 .sidebar-primary-entry__text strong {
   color: inherit;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
 }
 
 .sidebar-primary-entry__text small {
   overflow: hidden;
   color: var(--h-text-muted);
-  font-size: 8px;
+  font-size: 9px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1350,9 +1380,10 @@ watch(
 
   min-height: 46px;
 
-  border: 1px solid transparent;
+  border: 0;
+  border-left: 2px solid transparent;
 
-  border-radius: 8px;
+  border-radius: 0 6px 6px 0;
 
   background: transparent;
 }
@@ -1362,9 +1393,9 @@ watch(
 }
 
 .agent-row--active {
-  border-color: var(--h-border);
+  border-left-color: var(--h-accent);
 
-  background: var(--h-surface);
+  background: transparent;
 }
 
 .agent-toggle {
@@ -1544,7 +1575,8 @@ watch(
 
   cursor: pointer;
 
-  border: 1px solid transparent;
+  border: 0;
+  border-left: 2px solid transparent;
 
   outline: none;
 
@@ -1580,9 +1612,9 @@ watch(
 }
 
 .session-row--active {
-  border-color: var(--h-border);
+  border-left-color: var(--h-accent);
 
-  background: var(--h-surface);
+  background: transparent;
 }
 
 .session-main {

@@ -15,6 +15,9 @@ import MarkdownRenderer
 import MessageActions
   from "./MessageActions.vue";
 
+import IdentityAvatar
+  from "../ui/IdentityAvatar.vue";
+
 const props =
     defineProps({
       message: {
@@ -42,6 +45,11 @@ const props =
       agentName: {
         type: String,
         default: "Humbert",
+      },
+
+      agentAvatar: {
+        type: String,
+        default: "",
       },
 
       modelName: {
@@ -104,7 +112,8 @@ const incomplete =
 <template>
   <article class="assistant-turn">
     <header class="assistant-header">
-      {{ authorText }}
+      <IdentityAvatar :src="agentAvatar" :name="agentName" :size="30" />
+      <span>{{ authorText }}</span>
     </header>
 
     <ThinkingProcessCard
@@ -155,6 +164,12 @@ const incomplete =
 }
 
 .assistant-header {
+  display: flex;
+
+  align-items: center;
+
+  gap: 10px;
+
   max-width: 100%;
 
   margin-bottom: 9px;
@@ -182,13 +197,13 @@ const incomplete =
 
   min-width: 0;
 
-  padding: 10px 14px;
+  padding: 0;
 
-  border: 1px solid var(--h-border);
+  border: 0;
 
-  border-radius: 4px 13px 13px 13px;
+  border-radius: 0;
 
-  background: var(--h-surface);
+  background: transparent;
 
   color: var(--h-text);
 

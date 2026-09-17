@@ -18,6 +18,7 @@ import SandboxSettings from "./SandboxSettings.vue";
 import SkillPackageSettings from "./SkillPackageSettings.vue";
 import MCPSettings from "./MCPSettings.vue";
 import AppPageHeader from "../ui/AppPageHeader.vue";
+import UserProfileSettings from "./UserProfileSettings.vue";
 
 const props = defineProps({
   initialKey: {
@@ -32,6 +33,19 @@ const emit = defineEmits([
 ]);
 
 const navigationGroups = [
+  {
+    key: "personal",
+    title: "个人",
+    items: [
+      {
+        key: "profile",
+        title: "个人资料",
+        description: "设置你在聊天中显示的名称和头像。",
+        keywords: ["个人", "用户", "名称", "头像", "profile", "avatar"],
+        glyph: "我",
+      },
+    ],
+  },
   {
     key: "ai",
     title: "AI 与模型",
@@ -225,7 +239,8 @@ function selectItem(key) {
           />
 
           <section class="settings-content__body">
-            <ModelCatalog v-if="activeKey === 'models'"/>
+            <UserProfileSettings v-if="activeKey === 'profile'"/>
+            <ModelCatalog v-else-if="activeKey === 'models'"/>
             <ProviderSettings v-else-if="activeKey === 'providers'"/>
             <MultimediaSettings v-else-if="activeKey === 'multimedia'"/>
             <PermissionSettings v-else-if="activeKey === 'permissions'"/>
@@ -259,7 +274,7 @@ function selectItem(key) {
   display: grid;
 
   grid-template-columns:
-    272px minmax(0, 1fr);
+    252px minmax(0, 1fr);
 
   background: var(--h-bg);
 }
@@ -346,9 +361,9 @@ function selectItem(key) {
 .settings-sidebar__title {
   color: var(--h-text);
 
-  font-size: 18px;
+  font-size: 20px;
 
-  font-weight: 600;
+  font-weight: 500;
 
   letter-spacing: 0.01em;
 }
@@ -364,9 +379,9 @@ function selectItem(key) {
 
   border-color: transparent !important;
 
-  border-radius: 9px;
+  border-radius: 6px;
 
-  background: rgba(255, 255, 255, 0.34) !important;
+  background: var(--h-surface) !important;
 }
 
 .settings-search :deep(.arco-input-wrapper:hover),
@@ -422,11 +437,12 @@ function selectItem(key) {
 
   gap: 11px;
 
-  padding: 0 12px;
+  padding: 0 12px 0 14px;
 
   border: 0;
+  border-left: 2px solid transparent;
 
-  border-radius: 9px;
+  border-radius: 0 6px 6px 0;
 
   background: transparent;
 
@@ -447,9 +463,11 @@ function selectItem(key) {
 }
 
 .settings-nav-item--active {
-  background: var(--h-accent-soft);
+  border-left-color: var(--h-accent);
 
-  color: var(--h-accent-hover);
+  background: transparent;
+
+  color: var(--h-text);
 }
 
 .settings-nav-item__glyph {
@@ -462,29 +480,20 @@ function selectItem(key) {
 
   place-items: center;
 
-  border: 1px solid var(--h-border-strong);
+  border: 0;
 
-  border-radius: 7px;
+  color: var(--h-accent);
 
-  color: var(--h-text-muted);
-
-  font-family: ui-monospace,
-  SFMono-Regular,
-  Menlo,
-  Monaco,
-  Consolas,
-  monospace;
+  font-family: var(--h-mono);
 
   font-size: 9px;
 
-  font-weight: 600;
+  font-weight: 500;
 }
 
 .settings-nav-item--active
 .settings-nav-item__glyph {
-  border-color: var(--h-accent-border);
-
-  color: var(--h-accent-hover);
+  color: var(--h-accent);
 }
 
 .settings-nav-item__text {
@@ -492,7 +501,7 @@ function selectItem(key) {
 
   font-size: 13px;
 
-  font-weight: 500;
+  font-weight: 400;
 
   text-overflow: ellipsis;
 

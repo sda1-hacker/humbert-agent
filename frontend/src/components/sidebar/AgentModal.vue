@@ -43,6 +43,16 @@ import AgentSecurityEditor
 import ModelCapabilityBadges
   from "../models/ModelCapabilityBadges.vue";
 
+import IdentityAvatar
+  from "../ui/IdentityAvatar.vue";
+
+import {
+  DEFAULT_AGENT_AVATAR,
+} from "../../utils/avatar.js";
+
+const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
+const AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
 const props =
     defineProps({
       agent: {
@@ -79,6 +89,9 @@ const saving =
 const selectingWorkspace =
     ref(false);
 
+const avatarInput =
+    ref(null);
+
 const activeTab =
     ref("basic");
 
@@ -93,6 +106,8 @@ const form =
       id: "",
 
       name: "",
+
+      avatar: "",
 
       instruction: "",
 
@@ -203,6 +218,8 @@ function resetForm(agent) {
 
           name: "",
 
+          avatar: "",
+
           instruction: "",
 
           modelID:
@@ -253,6 +270,9 @@ function resetForm(agent) {
 
         name:
         agent.name,
+
+        avatar:
+        agent.avatar || "",
 
         instruction:
         agent.instruction,
@@ -428,6 +448,35 @@ async function chooseWorkspace() {
   }
 }
 
+function fileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error || new Error("读取头像失败"));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function chooseAvatar(event) {
+  const input = event?.target;
+  const file = input?.files?.[0];
+  if (input) input.value = "";
+  if (!file) return;
+  if (!AVATAR_TYPES.has(String(file.type || "").toLowerCase())) {
+    Message.warning("头像仅支持 PNG、JPEG、GIF 或 WebP");
+    return;
+  }
+  if (file.size <= 0 || file.size > MAX_AVATAR_BYTES) {
+    Message.warning("头像图片不能超过 2 MiB");
+    return;
+  }
+  try {
+    form.avatar = await fileToDataURL(file);
+  } catch (error) {
+    Message.error(error?.message || String(error));
+  }
+}
+
 /**
  * 创建或更新 Agent。
  *
@@ -466,6 +515,9 @@ async function save() {
   try {
     const request = {
       name,
+
+      avatar:
+      form.avatar,
 
       instruction:
       form.instruction,
@@ -692,6 +744,25 @@ async function removeAgent() {
     >
       <a-tab-pane key="basic" title="基本设置">
         <a-form :model="form" layout="vertical" class="agent-tab-form">
+          <div class="agent-avatar-editor">
+            <IdentityAvatar :src="form.avatar || DEFAULT_AGENT_AVATAR" :name="form.name || 'Agent'" :size="64" />
+            <div class="agent-avatar-editor__actions">
+              <strong>Agent 头像</strong>
+              <span>显示在聊天消息中；未选择时使用默认头像。</span>
+              <div>
+                <a-button size="small" @click="avatarInput?.click()">选择头像</a-button>
+                <a-button v-if="form.avatar" size="small" type="text" status="danger" @click="form.avatar = ''">移除</a-button>
+              </div>
+            </div>
+            <input
+                ref="avatarInput"
+                class="agent-avatar-input"
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                @change="chooseAvatar"
+            />
+          </div>
+
           <a-form-item label="Agent 名称">
             <a-input
                 v-model="form.name"
@@ -865,6 +936,23 @@ async function removeAgent() {
 .instruction-pane {
   padding: 4px 2px 8px;
 }
+
+.agent-avatar-editor {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 12px;
+  border: 1px solid var(--h-border);
+  border-radius: 9px;
+  background: var(--h-surface-soft, var(--h-surface));
+}
+
+.agent-avatar-editor__actions { display: grid; gap: 4px; }
+.agent-avatar-editor__actions strong { color: var(--h-text); font-size: 12px; }
+.agent-avatar-editor__actions span { color: var(--h-text-muted); font-size: 10px; }
+.agent-avatar-editor__actions > div { display: flex; gap: 6px; margin-top: 3px; }
+.agent-avatar-input { display: none; }
 
 .agent-config-pane,
 .instruction-pane {

@@ -303,56 +303,58 @@ onMounted(load);
               description="这些选项会改变所有继承全局设置的 Agent。普通使用场景保持默认即可。"
           >
             <div class="policy-editor">
-              <label>
+              <div class="policy-field">
                 <span>文件保护范围</span>
-                <a-select v-model="form.defaultProfile">
+                <a-select v-model="form.defaultProfile" aria-label="文件保护范围">
                   <a-option value="standard">标准保护</a-option>
                   <a-option value="workspace_only">严格保护（仅工作目录）</a-option>
                   <a-option value="full_access">不受限制</a-option>
                 </a-select>
                 <small>标准保护允许只读访问用户目录中的普通文件；严格保护只允许访问工作目录。</small>
-              </label>
+              </div>
 
-              <label>
+              <div class="policy-field">
                 <span>网络范围</span>
-                <a-select v-model="form.defaultNetworkMode">
+                <a-select v-model="form.defaultNetworkMode" aria-label="网络范围">
                   <a-option value="none">禁止联网</a-option>
                   <a-option value="public">仅公网</a-option>
                   <a-option value="all">全部网络（含本机与局域网）</a-option>
                 </a-select>
                 <small>“全部网络”会扩大到本机和局域网服务，仅在明确需要时使用。</small>
-              </label>
+              </div>
 
-              <label>
+              <div class="policy-field">
                 <span>允许的本地程序</span>
                 <a-textarea
                     v-model="form.shellCommandsText"
+                    aria-label="允许的本地程序"
                     :auto-size="{ minRows: 4, maxRows: 8 }"
                     placeholder="每行一个程序，例如 python3"
                 />
                 <small>这里只填写程序名称，不填写路径或 Shell 命令。推荐保留 python3、git、go、node 等你确实需要的程序。</small>
-              </label>
+              </div>
 
-              <label>
+              <div class="policy-field">
                 <span>本地程序隔离</span>
-                <a-select v-model="form.defaultNativeMode">
+                <a-select v-model="form.defaultNativeMode" aria-label="本地程序隔离">
                   <a-option value="preferred">自动使用</a-option>
                   <a-option value="required">必须使用</a-option>
                   <a-option value="off">关闭</a-option>
                 </a-select>
                 <small>“必须使用”会在当前系统无法满足隔离要求时拒绝启动 Python、Node、Skill、stdio MCP 等本地程序。</small>
-              </label>
+              </div>
 
-              <label>
+              <div class="policy-field">
                 <span>进程退出等待时间</span>
                 <a-input-number
                     v-model="form.commandGracePeriodMS"
+                    aria-label="进程退出等待时间"
                     :min="100"
                     :max="30000"
                     :step="100"
                 />
                 <small>停止或超时后等待子进程正常退出的毫秒数。通常不需要修改。</small>
-              </label>
+              </div>
             </div>
 
             <div class="card-actions">
@@ -543,12 +545,12 @@ onMounted(load);
   gap: 14px 18px;
 }
 
-.policy-editor label {
+.policy-field {
   display: grid;
   gap: 7px;
 }
 
-.policy-editor label > span {
+.policy-field > span {
   color: var(--h-text);
   font-size: 11px;
   font-weight: 650;

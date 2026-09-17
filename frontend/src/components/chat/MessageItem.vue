@@ -11,9 +11,18 @@ import {
   useModelStore,
 } from "../../stores/models.js";
 
+import {
+  usePreferenceStore,
+} from "../../stores/preferences.js";
+
+import {
+  DEFAULT_AGENT_AVATAR,
+} from "../../utils/avatar.js";
+
 import MarkdownRenderer from "./MarkdownRenderer.vue";
 import MessageAttachments from "./MessageAttachments.vue";
 import MessageActions from "./MessageActions.vue";
+import IdentityAvatar from "../ui/IdentityAvatar.vue";
 
 const props =
     defineProps({
@@ -39,6 +48,13 @@ const agentStore =
 
 const modelStore =
     useModelStore();
+
+const preferenceStore =
+    usePreferenceStore();
+
+const userName = computed(() => preferenceStore.user?.name || "你");
+const userAvatar = computed(() => preferenceStore.user?.avatar || "");
+const agentAvatar = computed(() => agentStore.selectedAgent?.avatar || DEFAULT_AGENT_AVATAR);
 
 /**
  * 当前 Assistant Message 真正使用的模型。
@@ -115,7 +131,7 @@ const assistantName =
           message-author--user
         "
       >
-        你
+        {{ userName }}
       </div>
 
       <div
@@ -137,6 +153,7 @@ const assistantName =
           allow-reuse
       />
     </div>
+    <IdentityAvatar :src="userAvatar" :name="userName" :size="30" />
   </article>
 
   <!-- ==============================
@@ -151,6 +168,11 @@ const assistantName =
       message-row--assistant
     "
   >
+    <IdentityAvatar
+        :src="agentAvatar"
+        :name="agentStore.selectedAgent?.name || 'Humbert'"
+        :size="30"
+    />
     <div
         class="
         message-column
@@ -214,6 +236,10 @@ const assistantName =
   width: 100%;
 
   margin-bottom: 26px;
+
+  align-items: flex-start;
+
+  gap: 10px;
 }
 
 .message-row--assistant {
@@ -278,12 +304,8 @@ const assistantName =
 }
 
 /*
- * 两边都使用消息气泡，但没有阴影。
- *
- * 用户使用 Accent Soft；
- * AI 使用 Surface + Border。
- *
- * 层级只依靠背景色和边框。
+ * 用户消息使用轻量色块；Assistant 回答回归文档式正文，
+ * 避免长回答被包进层层卡片。
  */
 .message-bubble {
   max-width: 100%;
@@ -291,7 +313,7 @@ const assistantName =
   padding:
       10px 14px;
 
-  border-radius: 13px;
+  border-radius: 8px;
 
   font-size: 14px;
 
@@ -303,35 +325,18 @@ const assistantName =
 }
 
 .message-bubble--assistant {
-  border:
-      1px solid
-      var(--h-border);
+  padding: 0;
 
-  /*
-   * AI 左侧气泡左上角略小，
-   * 让视觉方向更像即时通讯。
-   */
-  border-top-left-radius: 4px;
+  border: 0;
 
-  background:
-      var(--h-surface);
+  background: transparent;
 
   color:
       var(--h-text);
 }
 
 .message-bubble--user {
-  /*
-   * 用户消息使用非常轻的暖棕色边界。
-   *
-   * 背景与 Border 都来自 Humbert 的全局暖棕 Token，
-   * 避免在聊天区域残留旧版蓝灰色视觉。
-   */
-  border:
-      1px solid
-      var(--h-border-strong);
-
-  border-top-right-radius: 4px;
+  border: 0;
 
   background:
       var(--h-accent-soft);
