@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -41,6 +42,7 @@ const (
 	EventTurnMaintaining         EventType = "turn.maintaining"
 	EventAssistantReasoningDelta EventType = "assistant.reasoning.delta"
 	EventAssistantDelta          EventType = "assistant.delta"
+	EventModelStarted            EventType = "model.started"
 	EventToolStarted             EventType = "tool.started"
 	EventToolCompleted           EventType = "tool.completed"
 	EventToolFailed              EventType = "tool.failed"
@@ -352,6 +354,9 @@ type Snapshot struct {
 	SessionWriter SessionWriter
 
 	EventReporter EventReporter
+
+	ExecutionLimits ExecutionLimits
+	limitState      *executionLimitState
 }
 
 // StartTurnInput 描述新的 User Turn。
@@ -360,6 +365,16 @@ type StartTurnInput struct {
 
 	Input              sessions.UserInput
 	RetryUserMessageID string
+	Limits             ExecutionLimits
+}
+
+// ExecutionLimits 是后台 Task 对单次 Runtime Turn 施加的硬边界。普通聊天使用零值，
+// 保持现有交互语义；TaskRunner 会显式设置这些值。
+type ExecutionLimits struct {
+	MaxDuration   time.Duration
+	Deadline      time.Time
+	MaxModelCalls int
+	MaxToolCalls  int
 }
 
 // StartTurnResult 是异步 Turn 启动结果。

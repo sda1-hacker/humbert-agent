@@ -47,6 +47,13 @@ const MCPWorkspaceView =
         ),
     );
 
+const TasksWorkspaceView =
+    defineAsyncComponent(
+        () => import(
+            "../components/tasks/TasksWorkspaceView.vue"
+        ),
+    );
+
 import {
   useAgentStore,
 } from "../stores/agents.js";
@@ -67,6 +74,10 @@ import {
   useSessionStore,
 } from "../stores/sessions.js";
 
+import {
+  useTaskStore,
+} from "../stores/tasks.js";
+
 const layoutStore =
     useLayoutStore();
 
@@ -81,6 +92,9 @@ const sessionStore =
 
 const runtimeStore =
     useRuntimeStore();
+
+const taskStore =
+    useTaskStore();
 
 /**
  * 设置页是否处于打开状态。
@@ -170,6 +184,30 @@ watch(
     },
 );
 
+watch(
+    () => taskStore.eventSequence,
+    () => {
+      const event = taskStore.lastEvent;
+      const task = taskStore.items.find((item) => item.id === event?.taskID);
+      const name = task?.name || "后台任务";
+      switch (event?.type) {
+        case "run.waiting_approval":
+          Message.warning(`“${name}”正在等待操作确认`);
+          break;
+        case "run.succeeded":
+          Message.success(`“${name}”已完成`);
+          break;
+        case "run.failed":
+        case "run.timed_out":
+        case "run.interrupted":
+          Message.error(`“${name}”运行未完成`);
+          break;
+        default:
+          break;
+      }
+    },
+);
+
 /**
  * 打开独立设置页面。
  *
@@ -208,6 +246,11 @@ function openConnectors() {
   mainView.value = "connectors";
 }
 
+function openTasks() {
+  settingsVisible.value = false;
+  mainView.value = "tasks";
+}
+
 function openChat() {
   settingsVisible.value = false;
   mainView.value = "chat";
@@ -223,14 +266,33 @@ function closeSettings() {
   settingsVisible.value = false;
 }
 
+async function openTaskSession(payload) {
+  const agentID = payload?.agentID ?? "";
+  const sessionID = payload?.sessionID ?? "";
+  if (!agentID || !sessionID) {
+    return;
+  }
+  try {
+    agentStore.select(agentID);
+    await sessionStore.loadForAgent(agentID);
+    await sessionStore.select(sessionID);
+    openChat();
+  } catch (error) {
+    Message.error(error?.message ?? String(error));
+  }
+}
+
 onMounted(async () => {
   runtimeStore.initialiseEvents();
+  taskStore.initialiseEvents();
 
   try {
     await Promise.all([
       modelStore.load(),
 
       agentStore.load(),
+
+      taskStore.load(),
     ]);
 
     await sessionStore
@@ -247,6 +309,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   runtimeStore.disposeEvents();
+  taskStore.disposeEvents();
 });
 </script>
 
@@ -278,6 +341,7 @@ onUnmounted(() => {
           @open-chat="openChat"
           @open-skills="openSkills"
           @open-connectors="openConnectors"
+          @open-tasks="openTasks"
           @open-settings="openSettings"
       />
 
@@ -286,6 +350,11 @@ onUnmounted(() => {
       <MCPWorkspaceView
           v-if="mainView === 'connectors'"
           @manage-servers="openConnectorSettings"
+      />
+
+      <TasksWorkspaceView
+          v-else-if="mainView === 'tasks'"
+          @open-session="openTaskSession"
       />
 
       <SkillWorkspaceView

@@ -139,6 +139,11 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 	if sessionID == "" {
 		return StartTurnResult{}, errors.New("Session ID 不能为空")
 	}
+	if !input.Limits.Deadline.IsZero() {
+		var cancelDeadline context.CancelFunc
+		ctx, cancelDeadline = context.WithDeadline(ctx, input.Limits.Deadline)
+		defer cancelDeadline()
+	}
 	ctx, finish, err := s.beginOperation(ctx)
 	if err != nil {
 		return StartTurnResult{}, err
@@ -183,8 +188,20 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 		receipt.StartError = runtimeUserVisibleError(err)
 		return receipt, fmt.Errorf("解析 Agent Runtime Snapshot 失败: %w", err)
 	}
+	if err := configureExecutionLimits(snapshot, input.Limits); err != nil {
+		receipt.StartError = runtimeUserVisibleError(err)
+		return receipt, err
+	}
 
-	runCtx, cancel := context.WithCancel(s.rootCtx)
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if !input.Limits.Deadline.IsZero() {
+		runCtx, cancel = context.WithDeadline(s.rootCtx, input.Limits.Deadline)
+	} else if input.Limits.MaxDuration > 0 {
+		runCtx, cancel = context.WithTimeout(s.rootCtx, input.Limits.MaxDuration)
+	} else {
+		runCtx, cancel = context.WithCancel(s.rootCtx)
+	}
 	active := &activeRun{
 		RequestID:       requestID,
 		RunID:           runID,

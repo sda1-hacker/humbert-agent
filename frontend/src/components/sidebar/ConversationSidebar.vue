@@ -57,6 +57,7 @@ const emit =
       "open-settings",
       "open-skills",
       "open-connectors",
+      "open-tasks",
     ]);
 
 const agentStore =
@@ -724,6 +725,28 @@ watch(
         class="sidebar-primary-nav"
         aria-label="工作区导航"
     >
+      <button
+          type="button"
+          class="sidebar-primary-entry"
+          :class="{
+            'sidebar-primary-entry--active': props.activeView === 'tasks',
+          }"
+          @click="emit('open-tasks')"
+      >
+        <svg
+            class="sidebar-primary-entry__icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+        >
+          <path d="M7 3v3M17 3v3M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm-2 5h18M8 12h3M8 16h7"/>
+        </svg>
+
+        <span class="sidebar-primary-entry__text">
+          <strong>任务</strong>
+          <small>主动运行与定时计划</small>
+        </span>
+      </button>
+
       <button
           type="button"
           class="sidebar-primary-entry"

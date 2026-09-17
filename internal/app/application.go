@@ -25,6 +25,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
+	"github.com/sda1-hacker/humbert-agent/internal/tasks"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
@@ -108,6 +109,8 @@ type Application struct {
 	memory *memory.Manager
 
 	runtime *agentruntime.Service
+
+	tasks *tasks.Manager
 
 	startedAt time.Time
 
@@ -396,6 +399,21 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		approvalManager,
 	)
 
+	taskStore, err := tasks.NewStore(ctx, cfg.Paths.AgentsDir)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Task Store 失败: %w", err)
+	}
+	for _, issue := range taskStore.Issues() {
+		logger.Warn(ctx, "Task 数据损坏，已隔离且不影响其它任务", "operation", "task.recovery.isolate", "agent_id", issue.AgentID, "task_id", issue.TaskID, "run_id", issue.RunID, "error", issue.Error)
+	}
+	taskManager, err := tasks.NewManager(taskStore, agentService, sessionService, runtimeService, events, logger)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Task Manager 失败: %w", err)
+	}
+	if err := taskManager.Start(ctx); err != nil {
+		return nil, fmt.Errorf("启动 Task Scheduler 失败: %w", err)
+	}
+
 	application := &Application{
 		config:        cfg,
 		logger:        logger,
@@ -414,6 +432,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		contextEngine: contextEngine,
 		memory:        memoryManager,
 		runtime:       runtimeService,
+		tasks:         taskManager,
 		startedAt:     time.Now().UTC(),
 	}
 	application.ready.Store(true)
@@ -517,6 +536,11 @@ func (a *Application) Runtime() *agentruntime.Service {
 	return a.runtime
 }
 
+// Tasks 返回应用级主动任务管理器。Task 归属 Agent，不引入 Project 聚合。
+func (a *Application) Tasks() *tasks.Manager {
+	return a.tasks
+}
+
 // Status 返回当前 Core 状态，并主动读取文件级 Source of Truth 做健康检查。
 func (a *Application) Status(ctx context.Context) (Status, error) {
 	status := Status{
@@ -553,6 +577,9 @@ func (a *Application) Status(ctx context.Context) (Status, error) {
 	if _, err := a.mcp.List(ctx); err != nil {
 		return status, fmt.Errorf("MCP 文件存储健康检查失败: %w", err)
 	}
+	if _, err := a.tasks.List(ctx); err != nil {
+		return status, fmt.Errorf("Task 文件存储健康检查失败: %w", err)
+	}
 
 	status.StorageReady = true
 	return status, nil
@@ -572,7 +599,12 @@ func (a *Application) Shutdown(ctx context.Context) error {
 
 		var shutdownErrors []error
 
-		// Runtime 必须首先关闭。只有所有受控 Agent Turn 都退出后，才能安全关闭
+		// Task Scheduler 必须先停止产生新 Run，再关闭 Runtime。
+		if err := a.tasks.Close(ctx); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 Task Manager 失败: %w", err))
+		}
+
+		// Runtime 随后关闭。只有所有受控 Agent Turn 都退出后，才能安全关闭
 		// Workspace watcher 和 EventBus。文件 Store 没有独立后台资源需要 Close。
 		if err := a.runtime.Close(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 RuntimeService 失败: %w", err))

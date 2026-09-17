@@ -45,5 +45,9 @@ func All(
 		application.NewService(
 			NewChatService(core),
 		),
+
+		application.NewService(
+			NewTaskService(core),
+		),
 	}
 }

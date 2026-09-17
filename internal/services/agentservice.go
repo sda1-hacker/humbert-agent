@@ -759,6 +759,9 @@ func (s *AgentService) DeleteAgent(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
 
+	releaseTasks := s.core.Tasks().SuspendAgent(id)
+	defer releaseTasks()
+
 	deletedSessions, err := s.core.Runtime().DeleteAgent(ctx, id, func(deleteCtx context.Context) error {
 		return s.core.Agents().Delete(deleteCtx, id)
 	})

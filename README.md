@@ -19,11 +19,16 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 ├── agents/
 │   └── <agent-id>/
 │       ├── config.json
-│       └── sessions/
-│           └── <session-id>/
+│       ├── sessions/
+│       │   └── <session-id>/
+│       │       ├── config.json
+│       │       ├── session.jsonl
+│       │       └── memory.json
+│       └── tasks/
+│           └── <task-id>/
 │               ├── config.json
-│               ├── session.jsonl
-│               └── memory.json
+│               └── runs/
+│                   └── <run-id>.json
 ├── workspaces/
 ├── skills/
 ├── mcp/
@@ -43,6 +48,8 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 - `agents/<id>/sessions/<id>/config.json`：会话标题、工作目录等配置。
 - `agents/<id>/sessions/<id>/session.jsonl`：消息、工具调用/结果与压缩检查点的事实来源。
 - `agents/<id>/sessions/<id>/memory.json`：从会话历史派生的记忆，按需创建。
+- `agents/<id>/tasks/<id>/config.json`：主动任务、结构化日程、重叠/错过策略与执行限制。
+- `agents/<id>/tasks/<id>/runs/<id>.json`：每次运行的持久化状态、计数、审批投影与结果摘要。
 - `logs/`：运行审计；实时 `turn.*` 事件不追加到消息 JSONL。
 - `workspaces/`：Managed Agent Workspace。
 
@@ -70,6 +77,15 @@ Provider、Model、Agent 等低频配置使用“临时文件 + `fsync` + `renam
 - 文本、源码、JSON/YAML/XML 等 UTF-8 文件会提取为普通文本内容，因此不依赖 Provider 原生 Files API。
 - Agent 只保存 Chat、Utility 与 Memory 模型。全局图片回退模型在“设置 → 多媒体”中配置；Chat 模型缺少 Vision 时才会使用该模型。
 - PDF、Office、音频和视频当前不支持。模型设置中的 Files/Audio 是 Provider 能力元数据，不代表 Humbert 已经实现对应附件入口。
+
+### 主动任务
+
+- “任务”工作台支持手动、单次、固定间隔、每天和每周计划；每天/每周计划使用 IANA 时区并由 Go 后端计算下一次运行时间。
+- 错过计划可选择跳过或恢复后补跑一次；重叠可选择跳过或最多保留一个候补运行。全局最多并行两个任务，同一 Agent 同时只运行一个任务。
+- 每次 TaskRun 创建独立 Session，完整消息与工具事实仍写入该 Session 的 JSONL；TaskRun JSON 只保存控制面状态、模型/工具调用计数、审批安全投影和结果摘要。
+- 后台运行继续使用 Agent 的 Permission、Sandbox、Skills 与 MCP 配置。需要确认的工具会进入 `waiting_approval`，可在任务历史中批准或拒绝。
+- 单次运行具有最长时间、模型调用次数、工具调用次数与重试次数限制。重试以父 Run ID 幂等创建，启动时会补建崩溃窗口中遗漏的重试。暂停会取消尚未开始的自动运行；手动运行仍可执行。
+- 应用异常退出后，`starting/running/waiting_approval` 会在下次启动时转为 `interrupted`。旧 Eino checkpoint 和工具参数不会恢复或自动重放；原 Session 可用于审计。
 
 当前分页只把选中窗口恢复成 Eino Message，限制了恢复、IPC 与前端渲染量。Transcript
 首次访问或文件变化时仍会严格加载、校验完整 JSONL Tree；随后使用容量受限、可重建的

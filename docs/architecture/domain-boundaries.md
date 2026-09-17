@@ -63,6 +63,32 @@ header 合法时，Store 才会重建当前版本配置。
 同一 Session 同时最多有一个 Turn/压缩/删除操作。删除 Agent 时，Runtime 在同一并发
 边界内拒绝新操作并检查已有 Session reservation；随后由 Agent 删除状态机级联清理。
 
+## Task 与 TaskRun
+
+Task 直接归属 Agent，不引入 Project：
+
+`Agent -> Task -> TaskRun -> Session`
+
+Task 是低频控制面，保存提示词、启用状态、结构化 Schedule、Misfire/Overlap Policy 和单次
+执行限制。TaskRun 是持久化状态机：
+
+`queued -> starting -> running -> waiting_approval -> running -> terminal`
+
+终态包括 `succeeded`、`failed`、`cancelled`、`timed_out`、`interrupted` 与 `skipped`。
+计划触发以 `TaskID + ScheduledFor` 做幂等去重；`queue_one` 最多保留一个候补。Scheduler
+限制全局和单 Agent 并发，并在 Agent 删除边界内停止新建运行。Retry 记录父 Run ID；启动
+扫描会幂等补建“失败终态已落盘、重试尚未创建”这一崩溃窗口中的候补 Run。
+
+TaskRun 启动时创建普通 Session。Session JSONL 仍是用户消息、模型回复和工具调用/结果的
+唯一执行事实来源；TaskRun JSON 不复制完整 transcript，只保存调度/重试状态、计数、可安全
+展示的 Approval Presentation 与短结果摘要。应用重启时，遗留活动状态统一收敛为
+`interrupted`，并清除 Approval 投影；不会恢复进程内 checkpoint，也不会自动重放可能已有
+副作用的 Tool Call。原来尚未开始的 `queued` 运行可以继续分派。
+
+普通聊天不启用 Task 执行限额。TaskRunner 在同一 Runtime 快照上附加最长时长、模型调用
+次数和工具调用次数限制，因此仍复用既有 Context、Permission、Sandbox、Skills 和 MCP
+链路，不存在第二套弱化的执行器。
+
 ## Chat Input 与附件
 
 用户输入由文本和零个或多个附件组成。附件字节保存在 Session 的 `attachments/` sidecar，

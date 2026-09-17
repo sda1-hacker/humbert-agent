@@ -317,6 +317,11 @@ func buildToolLifecycleMiddleware(snapshot *Snapshot) compose.InvokableToolMiddl
 			if input == nil {
 				return next(ctx, input)
 			}
+			if snapshot != nil && snapshot.limitState != nil {
+				if err := snapshot.limitState.beforeToolCall(); err != nil {
+					return nil, err
+				}
+			}
 
 			startedAt := time.Now()
 			// Tool Arguments 属于不可信且可能包含密钥/文件正文的模型生成数据。实时事件只用于
@@ -345,6 +350,9 @@ func buildToolLifecycleMiddleware(snapshot *Snapshot) compose.InvokableToolMiddl
 				// 都只是“某个能力本次调用失败”，应该把错误交还给模型，让 ReAct 循环有机会
 				// 调整策略，而不是因为一个外部网站超时直接终止整次聊天。
 				if ctxErr := ctx.Err(); ctxErr != nil {
+					return nil, err
+				}
+				if errors.Is(err, ErrExecutionLimitExceeded) {
 					return nil, err
 				}
 
