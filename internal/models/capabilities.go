@@ -37,6 +37,7 @@ type Capabilities struct {
 }
 
 // EffectiveCapabilities 将自动推断与用户覆盖合并成 Runtime 能力。
+// todo 后期存储到配置中，扩展不同模型的能力。
 func EffectiveCapabilities(providerType ProviderType, modelName string, config CapabilityConfig) Capabilities {
 	inferred := inferCapabilities(providerType, modelName)
 	return Capabilities{
