@@ -53,5 +53,9 @@ func All(
 		application.NewService(
 			NewTaskService(core),
 		),
+
+		application.NewService(
+			NewProactiveService(core),
+		),
 	}
 }

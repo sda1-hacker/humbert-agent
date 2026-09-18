@@ -44,6 +44,7 @@ type TaskDTO struct {
 	AgentID   string          `json:"agentID"`
 	Name      string          `json:"name"`
 	Prompt    string          `json:"prompt"`
+	Execution string          `json:"execution"`
 	Status    string          `json:"status"`
 	Schedule  TaskScheduleDTO `json:"schedule"`
 	Limits    TaskLimitsDTO   `json:"limits"`
@@ -70,6 +71,7 @@ type TaskRunDTO struct {
 	RequestID        string           `json:"requestID,omitempty"`
 	RuntimeRunID     string           `json:"runtimeRunID,omitempty"`
 	Trigger          string           `json:"trigger"`
+	Execution        string           `json:"execution"`
 	ParentRunID      string           `json:"parentRunID,omitempty"`
 	ScheduledFor     string           `json:"scheduledFor"`
 	Attempt          int              `json:"attempt"`
@@ -87,12 +89,13 @@ type TaskRunDTO struct {
 }
 
 type SaveTaskRequest struct {
-	AgentID  string          `json:"agentID"`
-	Name     string          `json:"name"`
-	Prompt   string          `json:"prompt"`
-	Status   string          `json:"status"`
-	Schedule TaskScheduleDTO `json:"schedule"`
-	Limits   TaskLimitsDTO   `json:"limits"`
+	AgentID   string          `json:"agentID"`
+	Name      string          `json:"name"`
+	Prompt    string          `json:"prompt"`
+	Execution string          `json:"execution"`
+	Status    string          `json:"status"`
+	Schedule  TaskScheduleDTO `json:"schedule"`
+	Limits    TaskLimitsDTO   `json:"limits"`
 }
 
 type TaskStatusRequest struct {
@@ -180,7 +183,7 @@ func (s *TaskService) Create(request SaveTaskRequest) (TaskDTO, error) {
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.core.Tasks().Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
+	value, err := s.core.Tasks().Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("创建任务失败: %w", err)
 	}
@@ -194,7 +197,7 @@ func (s *TaskService) Update(id string, request SaveTaskRequest) (TaskDTO, error
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.core.Tasks().Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
+	value, err := s.core.Tasks().Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("更新任务失败: %w", err)
 	}
@@ -344,7 +347,7 @@ func limitsFromDTO(value TaskLimitsDTO) tasks.Limits {
 }
 
 func taskDTO(value tasks.Task) TaskDTO {
-	return TaskDTO{ID: value.ID, AgentID: value.AgentID, Name: value.Name, Prompt: value.Prompt, Status: string(value.Status), Schedule: scheduleDTO(value.Schedule), Limits: TaskLimitsDTO{MaxDurationSeconds: value.Limits.MaxDurationSeconds, MaxModelCalls: value.Limits.MaxModelCalls, MaxToolCalls: value.Limits.MaxToolCalls, MaxAttempts: value.Limits.MaxAttempts, RetryDelaySeconds: value.Limits.RetryDelaySeconds}, NextRunAt: formatOptionalTime(value.NextRunAt), CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: value.UpdatedAt.Format(time.RFC3339Nano)}
+	return TaskDTO{ID: value.ID, AgentID: value.AgentID, Name: value.Name, Prompt: value.Prompt, Execution: string(value.EffectiveExecution()), Status: string(value.Status), Schedule: scheduleDTO(value.Schedule), Limits: TaskLimitsDTO{MaxDurationSeconds: value.Limits.MaxDurationSeconds, MaxModelCalls: value.Limits.MaxModelCalls, MaxToolCalls: value.Limits.MaxToolCalls, MaxAttempts: value.Limits.MaxAttempts, RetryDelaySeconds: value.Limits.RetryDelaySeconds}, NextRunAt: formatOptionalTime(value.NextRunAt), CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: value.UpdatedAt.Format(time.RFC3339Nano)}
 }
 
 func scheduleDTO(value tasks.Schedule) TaskScheduleDTO {
@@ -352,7 +355,7 @@ func scheduleDTO(value tasks.Schedule) TaskScheduleDTO {
 }
 
 func taskRunDTO(value tasks.Run) TaskRunDTO {
-	result := TaskRunDTO{ID: value.ID, TaskID: value.TaskID, AgentID: value.AgentID, SessionID: value.SessionID, RequestID: value.RequestID, RuntimeRunID: value.RuntimeRunID, Trigger: string(value.Trigger), ParentRunID: value.ParentRunID, ScheduledFor: value.ScheduledFor.Format(time.RFC3339Nano), Attempt: value.Attempt, Status: string(value.Status), ToolCalls: value.ToolCalls, ModelCalls: value.ModelCalls, ResultMessageID: value.ResultMessageID, ResultPreview: value.ResultPreview, Error: value.Error, CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), StartedAt: formatOptionalTime(value.StartedAt), FinishedAt: formatOptionalTime(value.FinishedAt), DeadlineAt: formatOptionalTime(value.DeadlineAt)}
+	result := TaskRunDTO{ID: value.ID, TaskID: value.TaskID, AgentID: value.AgentID, SessionID: value.SessionID, RequestID: value.RequestID, RuntimeRunID: value.RuntimeRunID, Trigger: string(value.Trigger), Execution: string(value.Execution), ParentRunID: value.ParentRunID, ScheduledFor: value.ScheduledFor.Format(time.RFC3339Nano), Attempt: value.Attempt, Status: string(value.Status), ToolCalls: value.ToolCalls, ModelCalls: value.ModelCalls, ResultMessageID: value.ResultMessageID, ResultPreview: value.ResultPreview, Error: value.Error, CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), StartedAt: formatOptionalTime(value.StartedAt), FinishedAt: formatOptionalTime(value.FinishedAt), DeadlineAt: formatOptionalTime(value.DeadlineAt)}
 	if value.Approval != nil {
 		result.Approval = &TaskApprovalDTO{ID: value.Approval.ID, ToolName: value.Approval.ToolName, Risk: value.Approval.Risk, Presentation: value.Approval.Presentation, CreatedAt: value.Approval.CreatedAt.Format(time.RFC3339Nano), ExpiresAt: value.Approval.ExpiresAt.Format(time.RFC3339Nano)}
 	}

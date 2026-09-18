@@ -1,0 +1,319 @@
+package proactive
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sda1-hacker/humbert-agent/internal/atomicfile"
+)
+
+const (
+	storeSchemaVersion = 1
+	maxStoredRecords   = 500
+)
+
+type storeDocument struct {
+	SchemaVersion int `json:"schema_version"`
+
+	Settings Settings `json:"settings"`
+	Records  []Record `json:"records"`
+
+	Workspaces map[string]WorkspaceSnapshot `json:"workspaces"`
+
+	LastHeartbeatAt *time.Time `json:"last_heartbeat_at,omitempty"`
+}
+
+type Store struct {
+	path string
+
+	mu  sync.RWMutex
+	doc storeDocument
+}
+
+func NewStore(ctx context.Context, path string) (*Store, error) {
+	if ctx == nil {
+		return nil, errors.New("context.Context 不能为空")
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, errors.New("主动助手状态文件路径不能为空")
+	}
+	store := &Store{path: path}
+	var doc storeDocument
+	if err := atomicfile.ReadJSON(ctx, path, &doc); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("读取主动助手状态失败: %w", err)
+		}
+		doc = storeDocument{
+			SchemaVersion: storeSchemaVersion,
+			Settings:      DefaultSettings(),
+			Records:       []Record{},
+			Workspaces:    map[string]WorkspaceSnapshot{},
+		}
+		if err := normalizeDocument(&doc); err != nil {
+			return nil, err
+		}
+		store.doc = doc
+		if err := store.persistLocked(ctx); err != nil {
+			return nil, err
+		}
+		return store, nil
+	}
+	if doc.SchemaVersion != storeSchemaVersion {
+		return nil, fmt.Errorf("不支持的主动助手状态 schema_version: %d", doc.SchemaVersion)
+	}
+	if err := normalizeDocument(&doc); err != nil {
+		return nil, err
+	}
+	store.doc = doc
+	return store, nil
+}
+
+func normalizeDocument(doc *storeDocument) error {
+	if doc == nil {
+		return errors.New("主动助手状态为空")
+	}
+	settings, err := NormalizeSettings(doc.Settings)
+	if err != nil {
+		return err
+	}
+	doc.Settings = settings
+	if doc.Records == nil {
+		doc.Records = []Record{}
+	}
+	if len(doc.Records) > maxStoredRecords {
+		doc.Records = append([]Record(nil), doc.Records[len(doc.Records)-maxStoredRecords:]...)
+	}
+	if doc.Workspaces == nil {
+		doc.Workspaces = map[string]WorkspaceSnapshot{}
+	}
+	return nil
+}
+
+func NormalizeSettings(value Settings) (Settings, error) {
+	defaults := DefaultSettings()
+	if value.HeartbeatIntervalMinutes == 0 {
+		value.HeartbeatIntervalMinutes = defaults.HeartbeatIntervalMinutes
+	}
+	if value.HeartbeatIntervalMinutes < 1 || value.HeartbeatIntervalMinutes > 24*60 {
+		return Settings{}, errors.New("心跳间隔必须位于 1-1440 分钟")
+	}
+	if value.QuietHours.Start == "" {
+		value.QuietHours.Start = defaults.QuietHours.Start
+	}
+	if value.QuietHours.End == "" {
+		value.QuietHours.End = defaults.QuietHours.End
+	}
+	if _, _, err := parseClock(value.QuietHours.Start); err != nil {
+		return Settings{}, fmt.Errorf("免打扰开始时间无效: %w", err)
+	}
+	if _, _, err := parseClock(value.QuietHours.End); err != nil {
+		return Settings{}, fmt.Errorf("免打扰结束时间无效: %w", err)
+	}
+	if strings.TrimSpace(value.QuietHours.TimeZone) != "" {
+		if _, err := time.LoadLocation(strings.TrimSpace(value.QuietHours.TimeZone)); err != nil {
+			return Settings{}, fmt.Errorf("免打扰时区无效: %w", err)
+		}
+	}
+	if value.Rules == nil {
+		value.Rules = map[EventKind]EventRule{}
+	}
+	for kind, defaultRule := range defaults.Rules {
+		rule, exists := value.Rules[kind]
+		if !exists {
+			value.Rules[kind] = defaultRule
+			continue
+		}
+		if rule.Action == "" {
+			rule.Action = defaultRule.Action
+		}
+		if rule.Action != ActionIgnore && rule.Action != ActionNotify && rule.Action != ActionRunAgent {
+			return Settings{}, fmt.Errorf("事件 %s 的动作无效: %s", kind, rule.Action)
+		}
+		if rule.CooldownSeconds < 0 || rule.CooldownSeconds > 24*60*60 {
+			return Settings{}, fmt.Errorf("事件 %s 的冷却时间无效", kind)
+		}
+		rule.AgentID = strings.TrimSpace(rule.AgentID)
+		rule.AgentPrompt = strings.TrimSpace(rule.AgentPrompt)
+		value.Rules[kind] = rule
+	}
+	return value, nil
+}
+
+func (s *Store) Settings() Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneSettings(s.doc.Settings)
+}
+
+func (s *Store) UpdateSettings(ctx context.Context, value Settings) (Settings, error) {
+	normalized, err := NormalizeSettings(value)
+	if err != nil {
+		return Settings{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.doc.Settings = normalized
+	if err := s.persistLocked(ctx); err != nil {
+		return Settings{}, err
+	}
+	return cloneSettings(normalized), nil
+}
+
+func (s *Store) Records(limit int) []Record {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if limit <= 0 || limit > len(s.doc.Records) {
+		limit = len(s.doc.Records)
+	}
+	start := len(s.doc.Records) - limit
+	result := append([]Record(nil), s.doc.Records[start:]...)
+	sort.SliceStable(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
+	return result
+}
+
+func (s *Store) FindByEventKey(key string) (Record, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for index := len(s.doc.Records) - 1; index >= 0; index-- {
+		if s.doc.Records[index].Event.Key == key {
+			return s.doc.Records[index], true
+		}
+	}
+	return Record{}, false
+}
+
+func (s *Store) FindByAutomationRunID(runID string) (Record, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for index := len(s.doc.Records) - 1; index >= 0; index-- {
+		if s.doc.Records[index].AutomationRunID == runID {
+			return s.doc.Records[index], true
+		}
+	}
+	return Record{}, false
+}
+
+func (s *Store) LastHandledKind(kind EventKind) (Record, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for index := len(s.doc.Records) - 1; index >= 0; index-- {
+		value := s.doc.Records[index]
+		if value.Event.Kind == kind && value.Status != RecordIgnored {
+			return value, true
+		}
+	}
+	return Record{}, false
+}
+
+func (s *Store) PutRecord(ctx context.Context, value Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	updated := false
+	for index := range s.doc.Records {
+		if s.doc.Records[index].ID == value.ID {
+			s.doc.Records[index] = value
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		s.doc.Records = append(s.doc.Records, value)
+	}
+	if len(s.doc.Records) > maxStoredRecords {
+		s.doc.Records = append([]Record(nil), s.doc.Records[len(s.doc.Records)-maxStoredRecords:]...)
+	}
+	return s.persistLocked(ctx)
+}
+
+func (s *Store) DeferredRecords() []Record {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	result := make([]Record, 0)
+	for _, value := range s.doc.Records {
+		if value.Status == RecordDeferred {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func (s *Store) WorkspaceSnapshot(agentID string) (WorkspaceSnapshot, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, exists := s.doc.Workspaces[agentID]
+	if !exists {
+		return WorkspaceSnapshot{}, false
+	}
+	value.Files = cloneFileMap(value.Files)
+	return value, true
+}
+
+func (s *Store) PutWorkspaceSnapshot(ctx context.Context, value WorkspaceSnapshot) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.doc.Workspaces == nil {
+		s.doc.Workspaces = map[string]WorkspaceSnapshot{}
+	}
+	value.Files = cloneFileMap(value.Files)
+	s.doc.Workspaces[value.AgentID] = value
+	return s.persistLocked(ctx)
+}
+
+func (s *Store) SetHeartbeat(ctx context.Context, value time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value = value.UTC()
+	s.doc.LastHeartbeatAt = &value
+	return s.persistLocked(ctx)
+}
+
+func (s *Store) LastHeartbeat() *time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.doc.LastHeartbeatAt == nil {
+		return nil
+	}
+	value := *s.doc.LastHeartbeatAt
+	return &value
+}
+
+func (s *Store) persistLocked(ctx context.Context) error {
+	s.doc.SchemaVersion = storeSchemaVersion
+	return atomicfile.WriteJSON(ctx, s.path, 0o600, s.doc)
+}
+
+func cloneSettings(value Settings) Settings {
+	value.Rules = cloneRules(value.Rules)
+	return value
+}
+
+func cloneRules(source map[EventKind]EventRule) map[EventKind]EventRule {
+	result := make(map[EventKind]EventRule, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func cloneFileMap(source map[string]WorkspaceFileStamp) map[string]WorkspaceFileStamp {
+	result := make(map[string]WorkspaceFileStamp, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
+}
+
+func parseClock(value string) (int, int, error) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(value))
+	if err != nil {
+		return 0, 0, errors.New("必须使用 HH:MM 格式")
+	}
+	return parsed.Hour(), parsed.Minute(), nil
+}

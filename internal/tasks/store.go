@@ -553,6 +553,42 @@ func (s *Store) CancelQueuedAutomaticRuns(ctx context.Context, taskID string, no
 	return result, nil
 }
 
+// ReconcileQueuedAutomationRuns 把应用崩溃前尚未开始的内部 automation 收敛为
+// interrupted。普通计划任务的 queued 仍按原有调度语义恢复；内部主动动作则禁止
+// 自动重放，避免重复发送消息或再次执行带副作用的工具。
+func (s *Store) ReconcileQueuedAutomationRuns(ctx context.Context, now time.Time) ([]Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	values, err := s.listTasksLocked(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Run, 0)
+	for _, task := range values {
+		if !task.Internal {
+			continue
+		}
+		runs, readErr := s.listRunsLocked(ctx, task.AgentID, task.ID)
+		if readErr != nil {
+			continue
+		}
+		for _, run := range runs {
+			if run.Status != RunQueued || run.Trigger != TriggerAutomation {
+				continue
+			}
+			finished := now.UTC()
+			run.Status = RunInterrupted
+			run.Error = "应用在内部自动运行开始前退出；为避免重复主动执行，本次运行未恢复。"
+			run.FinishedAt = &finished
+			if err := s.writeRunLocked(ctx, run); err != nil {
+				return result, err
+			}
+			result = append(result, run)
+		}
+	}
+	return result, nil
+}
+
 // ReconcileInterrupted 把上次进程遗留的非终态 Run 安全收敛为 interrupted。Approval
 // checkpoint 是进程态，重启后绝不恢复或自动执行旧的高风险调用。
 func (s *Store) ReconcileInterrupted(ctx context.Context, now time.Time) ([]Run, error) {
@@ -615,6 +651,9 @@ func (s *Store) readRunLocked(ctx context.Context, agentID, taskID, runID string
 }
 
 func validateStoredTask(value Task) error {
+	if _, err := normalizeExecution(value.Execution); err != nil {
+		return err
+	}
 	status := value.Status
 	if status == TaskStatusArchived {
 		status = TaskStatusPaused
@@ -635,13 +674,18 @@ func validateStoredTask(value Task) error {
 }
 
 func validateStoredRun(value Run) error {
+	if value.Execution != "" {
+		if _, err := normalizeExecution(value.Execution); err != nil {
+			return err
+		}
+	}
 	switch value.Status {
 	case RunQueued, RunStarting, RunRunning, RunWaitingApproval, RunSucceeded, RunFailed, RunCancelled, RunTimedOut, RunInterrupted, RunSkipped:
 	default:
 		return fmt.Errorf("无效运行状态: %s", value.Status)
 	}
 	switch value.Trigger {
-	case TriggerManual, TriggerSchedule, TriggerRetry:
+	case TriggerManual, TriggerSchedule, TriggerRetry, TriggerAutomation:
 	default:
 		return fmt.Errorf("无效触发来源: %s", value.Trigger)
 	}

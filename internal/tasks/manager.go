@@ -14,6 +14,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/eventbus"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	"github.com/sda1-hacker/humbert-agent/internal/notifications"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 )
@@ -36,6 +37,8 @@ type Manager struct {
 	runtime  *agentruntime.Service
 	events   *eventbus.Bus
 	logger   *logging.Logger
+
+	notifications *notifications.Service
 
 	rootCtx     context.Context
 	cancel      context.CancelFunc
@@ -74,12 +77,20 @@ func (m *Manager) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context.Context 不能为空")
 	}
-	interrupted, err := m.store.ReconcileInterrupted(ctx, time.Now())
+	now := time.Now()
+	interrupted, err := m.store.ReconcileInterrupted(ctx, now)
 	if err != nil {
 		return fmt.Errorf("恢复 TaskRun 状态失败: %w", err)
 	}
+	queuedAutomation, err := m.store.ReconcileQueuedAutomationRuns(ctx, now)
+	if err != nil {
+		return fmt.Errorf("恢复主动助手运行状态失败: %w", err)
+	}
 	for _, run := range interrupted {
 		m.logger.Warn(ctx, "TaskRun 已在启动恢复时标记为 interrupted", "operation", "task.run.reconcile", "task_id", run.TaskID, "run_id", run.ID)
+	}
+	for _, run := range queuedAutomation {
+		m.logger.Warn(ctx, "未启动的内部自动运行已在恢复时标记为 interrupted", "operation", "task.automation.reconcile", "task_id", run.TaskID, "run_id", run.ID)
 	}
 	if err := m.recoverRetries(ctx); err != nil {
 		return fmt.Errorf("恢复 TaskRun 重试队列失败: %w", err)
@@ -138,7 +149,18 @@ func (m *Manager) Close(ctx context.Context) error {
 }
 
 func (m *Manager) List(ctx context.Context) ([]Task, error) {
-	return m.store.ListTasks(ctx, false)
+	values, err := m.store.ListTasks(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Task, 0, len(values))
+	for _, value := range values {
+		if value.Internal {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result, nil
 }
 
 func (m *Manager) Runs(ctx context.Context, taskID string) ([]Run, error) {
@@ -147,6 +169,22 @@ func (m *Manager) Runs(ctx context.Context, taskID string) ([]Run, error) {
 
 func (m *Manager) Run(ctx context.Context, runID string) (Run, error) {
 	return m.store.GetRun(ctx, runID)
+}
+
+// ActiveRunForSession 用于主动助手区分普通聊天审批与 TaskRun 审批，避免同一
+// approval 同时产生两条通知。它只暴露当前活动映射，不改变 Task 生命周期。
+func (m *Manager) ActiveRunForSession(ctx context.Context, sessionID string) (Run, bool) {
+	m.mu.Lock()
+	runID := m.activeBySession[strings.TrimSpace(sessionID)]
+	m.mu.Unlock()
+	if runID == "" {
+		return Run{}, false
+	}
+	run, err := m.store.GetRun(ctx, runID)
+	if err != nil {
+		return Run{}, false
+	}
+	return run, true
 }
 
 func (m *Manager) Create(ctx context.Context, input CreateInput) (Task, error) {
@@ -165,7 +203,11 @@ func (m *Manager) Create(ctx context.Context, input CreateInput) (Task, error) {
 	if status != TaskStatusActive {
 		next = nil
 	}
-	value := Task{ID: uuid.NewString(), AgentID: strings.TrimSpace(input.AgentID), Name: name, Prompt: prompt, Status: status, Schedule: schedule, Limits: limits, NextRunAt: next, CreatedAt: now, UpdatedAt: now}
+	execution, err := normalizeExecution(input.Execution)
+	if err != nil {
+		return Task{}, err
+	}
+	value := Task{ID: uuid.NewString(), AgentID: strings.TrimSpace(input.AgentID), Name: name, Prompt: prompt, Execution: execution, Status: status, Schedule: schedule, Limits: limits, NextRunAt: next, CreatedAt: now, UpdatedAt: now}
 	if err := m.store.CreateTask(ctx, value); err != nil {
 		return Task{}, err
 	}
@@ -193,7 +235,11 @@ func (m *Manager) Update(ctx context.Context, id string, input UpdateInput) (Tas
 	if status != TaskStatusActive {
 		next = nil
 	}
-	existing.Name, existing.Prompt, existing.Status = name, prompt, status
+	execution, err := normalizeExecution(input.Execution)
+	if err != nil {
+		return Task{}, err
+	}
+	existing.Name, existing.Prompt, existing.Execution, existing.Status = name, prompt, execution, status
 	existing.Schedule, existing.Limits, existing.NextRunAt = schedule, limits, next
 	existing.UpdatedAt = now
 	if err := m.store.UpdateTask(ctx, existing); err != nil {
@@ -351,6 +397,14 @@ func (m *Manager) deleteRunSessions(runs []Run) {
 	}
 }
 
+// SetNotificationService 注入统一通知服务。必须在 Manager.Start 之前调用，
+// 使应用启动时补跑的 notification 任务也不会启动模型。
+func (m *Manager) SetNotificationService(service *notifications.Service) {
+	m.mu.Lock()
+	m.notifications = service
+	m.mu.Unlock()
+}
+
 func (m *Manager) RunNow(ctx context.Context, taskID string) (Run, error) {
 	task, err := m.store.GetTask(ctx, taskID)
 	if err != nil {
@@ -363,7 +417,7 @@ func (m *Manager) RunNow(ctx context.Context, taskID string) (Run, error) {
 		return Run{}, errors.New("Agent 正在删除，不能启动任务")
 	}
 	now := time.Now().UTC()
-	run := Run{ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerManual, ScheduledFor: now, Attempt: 1, Status: RunQueued, CreatedAt: now}
+	run := Run{ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerManual, Execution: task.EffectiveExecution(), ScheduledFor: now, Attempt: 1, Status: RunQueued, CreatedAt: now}
 	created, _, err := m.store.CreateRun(ctx, run)
 	if err != nil {
 		return Run{}, err
@@ -373,6 +427,50 @@ func (m *Manager) RunNow(ctx context.Context, taskID string) (Run, error) {
 		m.logger.Warn(ctx, "立即调度 TaskRun 失败", "operation", "task.dispatch", "run_id", created.ID, "error", err)
 	}
 	return m.store.GetRun(ctx, created.ID)
+}
+
+// RunAutomation 让 Humbert 内部子系统复用现有 Task Runtime 执行一次 Agent 工作。
+// 内部任务会完整持久化用于审计，但不会出现在普通 Task 列表；应用重启后未完成
+// 的 automation 不会自动重放。
+func (m *Manager) RunAutomation(ctx context.Context, input AutomationInput) (Task, Run, error) {
+	agentID := strings.TrimSpace(input.AgentID)
+	if _, err := m.agents.Get(ctx, agentID); err != nil {
+		return Task{}, Run{}, err
+	}
+	name, prompt, status, schedule, limits, err := normalizeTaskInput(
+		input.Name, input.Prompt, TaskStatusActive, Schedule{Type: ScheduleManual}, input.Limits,
+	)
+	if err != nil {
+		return Task{}, Run{}, err
+	}
+	now := time.Now().UTC()
+	task := Task{
+		ID: uuid.NewString(), AgentID: agentID, Internal: true,
+		Origin: strings.TrimSpace(input.Origin), OriginRef: strings.TrimSpace(input.OriginRef),
+		Name: name, Prompt: prompt, Execution: ExecutionAgent, Status: status, Schedule: schedule, Limits: limits,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := m.store.CreateTask(ctx, task); err != nil {
+		return Task{}, Run{}, err
+	}
+	run := Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerAutomation, Execution: ExecutionAgent,
+		ScheduledFor: now, Attempt: 1, Status: RunQueued, CreatedAt: now,
+	}
+	created, _, err := m.store.CreateRun(ctx, run)
+	if err != nil {
+		_, _ = m.store.ArchiveTask(context.WithoutCancel(ctx), task.ID, time.Now().UTC())
+		return Task{}, Run{}, err
+	}
+	m.publish(Event{Type: "run.queued", TaskID: task.ID, RunID: created.ID, Task: &task, Run: &created})
+	if err := m.dispatch(ctx); err != nil {
+		m.logger.Warn(ctx, "立即调度内部自动运行失败", "operation", "task.automation.dispatch", "run_id", created.ID, "error", err)
+	}
+	current, err := m.store.GetRun(ctx, created.ID)
+	if err != nil {
+		return task, created, nil
+	}
+	return task, current, nil
 }
 
 func (m *Manager) CancelRun(ctx context.Context, runID string) (Run, error) {
@@ -494,7 +592,7 @@ func (m *Manager) enqueueDue(ctx context.Context, now time.Time) error {
 			finished := now
 			finishedAt = &finished
 		}
-		run := Run{ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerSchedule, ScheduledFor: scheduledFor, Attempt: 1, Status: status, Error: errText, CreatedAt: now, FinishedAt: finishedAt}
+		run := Run{ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerSchedule, Execution: task.EffectiveExecution(), ScheduledFor: scheduledFor, Attempt: 1, Status: status, Error: errText, CreatedAt: now, FinishedAt: finishedAt}
 		created, _, createErr := m.store.CreateRun(ctx, run)
 		if createErr != nil {
 			return createErr
@@ -530,7 +628,7 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 		// 手动 RunNow 是用户的显式操作，允许在计划暂停时执行；计划运行和重试
 		// 则必须在真正启动前再次确认 Task 仍为 active。该校验是暂停时取消队列
 		// 之外的第二道防线，避免旧队列或异常数据绕过暂停状态。
-		if task.Status == TaskStatusArchived || (task.Status != TaskStatusActive && run.Trigger != TriggerManual) {
+		if task.Status == TaskStatusArchived || (task.Status != TaskStatusActive && run.Trigger != TriggerManual && run.Trigger != TriggerAutomation) {
 			now := time.Now().UTC()
 			run.Status = RunCancelled
 			run.Error = "任务计划已暂停，排队中的自动运行不再启动。"
@@ -541,6 +639,18 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 			m.publish(Event{Type: "run.cancelled", TaskID: run.TaskID, RunID: run.ID, Run: &run})
 			continue
 		}
+		execution := run.Execution
+		if execution == "" {
+			execution = task.EffectiveExecution()
+		}
+		run.Execution = execution
+		if execution == ExecutionNotification {
+			if err := m.startNotificationRun(ctx, task, run); err != nil {
+				m.failRun(ctx, run, fmt.Errorf("发送任务通知失败: %w", err))
+			}
+			continue
+		}
+
 		m.mu.Lock()
 		blocked := m.closed || len(m.activeByRun) >= m.maxConcurrent || m.activeAgents[run.AgentID] > 0 || m.deletingAgents[run.AgentID] > 0
 		m.mu.Unlock()
@@ -556,6 +666,41 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 			m.failRun(ctx, run, fmt.Errorf("启动 TaskRun 失败: %w", err))
 		}
 	}
+	return nil
+}
+
+func (m *Manager) startNotificationRun(ctx context.Context, task Task, run Run) error {
+	m.mu.Lock()
+	notifier := m.notifications
+	m.mu.Unlock()
+	if notifier == nil {
+		return errors.New("Task 通知服务未初始化")
+	}
+	now := time.Now().UTC()
+	run.Execution = ExecutionNotification
+	run.Status = RunStarting
+	run.StartedAt = &now
+	if err := m.store.UpdateRun(ctx, run); err != nil {
+		return err
+	}
+	if err := notifier.Send(ctx, notifications.Notification{
+		Level:   notifications.LevelInfo,
+		Title:   task.Name,
+		Body:    task.Prompt,
+		AgentID: task.AgentID,
+		TaskID:  task.ID,
+		RunID:   run.ID,
+	}); err != nil {
+		return err
+	}
+	finished := time.Now().UTC()
+	run.Status = RunSucceeded
+	run.ResultPreview = task.Prompt
+	run.FinishedAt = &finished
+	if err := m.store.UpdateRun(context.WithoutCancel(ctx), run); err != nil {
+		return err
+	}
+	m.publish(Event{Type: "run.succeeded", TaskID: task.ID, RunID: run.ID, Task: &task, Run: &run})
 	return nil
 }
 
@@ -646,6 +791,9 @@ func taskSessionTitle(task Task, startedAt time.Time) string {
 		}
 	}
 	localTime := startedAt.In(location)
+	if task.Internal && task.Origin == "proactive" {
+		return fmt.Sprintf("主动·%d月%d日%s·", localTime.Month(), localTime.Day(), task.Name)
+	}
 	return fmt.Sprintf("任务·%d月%d日%s·", localTime.Month(), localTime.Day(), task.Name)
 }
 
@@ -704,7 +852,11 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 		m.logger.Error(context.Background(), "更新 TaskRun 事件状态失败", "run_id", run.ID, "error", err)
 		return
 	}
-	m.publish(Event{Type: "run." + string(run.Status), TaskID: run.TaskID, RunID: run.ID, Run: &run})
+	var taskSnapshot *Task
+	if task, taskErr := m.store.GetTask(context.Background(), run.TaskID); taskErr == nil {
+		taskSnapshot = &task
+	}
+	m.publish(Event{Type: "run." + string(run.Status), TaskID: run.TaskID, RunID: run.ID, Task: taskSnapshot, Run: &run})
 	if run.Status.Terminal() {
 		m.releaseActive(run)
 		m.maybeRetry(run)
@@ -740,7 +892,11 @@ func (m *Manager) failRun(ctx context.Context, run Run, err error) {
 	run.Status, run.Error, run.FinishedAt, run.Approval = RunFailed, logging.SafeErrorText(err, 2048), &now, nil
 	_ = m.store.UpdateRun(context.WithoutCancel(ctx), run)
 	m.releaseActive(run)
-	m.publish(Event{Type: "run.failed", TaskID: run.TaskID, RunID: run.ID, Run: &run})
+	var taskSnapshot *Task
+	if task, taskErr := m.store.GetTask(context.Background(), run.TaskID); taskErr == nil {
+		taskSnapshot = &task
+	}
+	m.publish(Event{Type: "run.failed", TaskID: run.TaskID, RunID: run.ID, Task: taskSnapshot, Run: &run})
 	m.maybeRetry(run)
 }
 
@@ -760,7 +916,7 @@ func (m *Manager) maybeRetry(run Run) {
 			retryAt = now
 		}
 	}
-	retry := Run{ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerRetry, ParentRunID: run.ID, ScheduledFor: retryAt, Attempt: run.Attempt + 1, Status: RunQueued, CreatedAt: now}
+	retry := Run{ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerRetry, Execution: task.EffectiveExecution(), ParentRunID: run.ID, ScheduledFor: retryAt, Attempt: run.Attempt + 1, Status: RunQueued, CreatedAt: now}
 	created, _, err := m.store.CreateRun(context.Background(), retry)
 	if err == nil {
 		m.publish(Event{Type: "run.queued", TaskID: task.ID, RunID: created.ID, Run: &created})
@@ -844,6 +1000,18 @@ func (m *Manager) publish(event Event) {
 	event.OccurredAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err := m.events.Publish(context.Background(), TopicEvent, event); err != nil && !errors.Is(err, eventbus.ErrClosed) {
 		m.logger.Warn(context.Background(), "发布 Task Event 失败", "error", err)
+	}
+}
+
+func normalizeExecution(value ExecutionType) (ExecutionType, error) {
+	if value == "" {
+		return ExecutionAgent, nil
+	}
+	switch value {
+	case ExecutionAgent, ExecutionNotification:
+		return value, nil
+	default:
+		return "", fmt.Errorf("无效任务执行方式: %s", value)
 	}
 }
 

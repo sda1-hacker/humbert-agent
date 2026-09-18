@@ -6,6 +6,13 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
 )
 
+type ExecutionType string
+
+const (
+	ExecutionAgent        ExecutionType = "agent"
+	ExecutionNotification ExecutionType = "notification"
+)
+
 type TaskStatus string
 
 const (
@@ -66,9 +73,16 @@ type Task struct {
 	ID      string `json:"id"`
 	AgentID string `json:"agent_id"`
 
-	Name   string     `json:"name"`
-	Prompt string     `json:"prompt"`
-	Status TaskStatus `json:"status"`
+	// Internal 标识由 Humbert 子系统创建的隐藏任务。它仍然完整持久化并复用
+	// Task Runtime，但不会出现在普通用户任务列表中。
+	Internal  bool   `json:"internal,omitempty"`
+	Origin    string `json:"origin,omitempty"`
+	OriginRef string `json:"origin_ref,omitempty"`
+
+	Name      string        `json:"name"`
+	Prompt    string        `json:"prompt"`
+	Execution ExecutionType `json:"execution,omitempty"`
+	Status    TaskStatus    `json:"status"`
 
 	Schedule Schedule `json:"schedule"`
 	Limits   Limits   `json:"limits"`
@@ -98,9 +112,10 @@ const (
 type RunTrigger string
 
 const (
-	TriggerManual   RunTrigger = "manual"
-	TriggerSchedule RunTrigger = "schedule"
-	TriggerRetry    RunTrigger = "retry"
+	TriggerManual     RunTrigger = "manual"
+	TriggerSchedule   RunTrigger = "schedule"
+	TriggerRetry      RunTrigger = "retry"
+	TriggerAutomation RunTrigger = "automation"
 )
 
 // ApprovalSnapshot 只持久化可安全展示的审批投影，不含 checkpoint、原始 Tool 参数或
@@ -123,11 +138,12 @@ type Run struct {
 	RequestID    string `json:"request_id,omitempty"`
 	RuntimeRunID string `json:"runtime_run_id,omitempty"`
 
-	Trigger      RunTrigger `json:"trigger"`
-	ParentRunID  string     `json:"parent_run_id,omitempty"`
-	ScheduledFor time.Time  `json:"scheduled_for"`
-	Attempt      int        `json:"attempt"`
-	Status       RunStatus  `json:"status"`
+	Trigger      RunTrigger    `json:"trigger"`
+	Execution    ExecutionType `json:"execution,omitempty"`
+	ParentRunID  string        `json:"parent_run_id,omitempty"`
+	ScheduledFor time.Time     `json:"scheduled_for"`
+	Attempt      int           `json:"attempt"`
+	Status       RunStatus     `json:"status"`
 
 	ToolCalls  int `json:"tool_calls"`
 	ModelCalls int `json:"model_calls"`
@@ -144,20 +160,22 @@ type Run struct {
 }
 
 type CreateInput struct {
-	AgentID  string
-	Name     string
-	Prompt   string
-	Status   TaskStatus
-	Schedule Schedule
-	Limits   Limits
+	AgentID   string
+	Name      string
+	Prompt    string
+	Execution ExecutionType
+	Status    TaskStatus
+	Schedule  Schedule
+	Limits    Limits
 }
 
 type UpdateInput struct {
-	Name     string
-	Prompt   string
-	Status   TaskStatus
-	Schedule Schedule
-	Limits   Limits
+	Name      string
+	Prompt    string
+	Execution ExecutionType
+	Status    TaskStatus
+	Schedule  Schedule
+	Limits    Limits
 }
 
 type Issue struct {
@@ -165,6 +183,13 @@ type Issue struct {
 	TaskID  string `json:"task_id"`
 	RunID   string `json:"run_id,omitempty"`
 	Error   string `json:"error"`
+}
+
+func (t Task) EffectiveExecution() ExecutionType {
+	if t.Execution == "" {
+		return ExecutionAgent
+	}
+	return t.Execution
 }
 
 func (s RunStatus) Terminal() bool {
@@ -178,4 +203,15 @@ func (s RunStatus) Terminal() bool {
 
 func (s RunStatus) Active() bool {
 	return s == RunStarting || s == RunRunning || s == RunWaitingApproval
+}
+
+// AutomationInput 是 Humbert 内部子系统复用 Task Runtime 的入口。
+// 这类任务不会进入普通 Task 列表，也不会自动重试，避免应用重启后重放副作用。
+type AutomationInput struct {
+	AgentID   string
+	Name      string
+	Prompt    string
+	Origin    string
+	OriginRef string
+	Limits    Limits
 }

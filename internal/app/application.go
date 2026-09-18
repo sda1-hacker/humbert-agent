@@ -21,8 +21,10 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/mcp/einoadapter"
 	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
+	"github.com/sda1-hacker/humbert-agent/internal/notifications"
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
 	"github.com/sda1-hacker/humbert-agent/internal/preferences"
+	"github.com/sda1-hacker/humbert-agent/internal/proactive"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
@@ -115,6 +117,10 @@ type Application struct {
 	runtime *agentruntime.Service
 
 	tasks *tasks.Manager
+
+	notifications *notifications.Service
+
+	proactive *proactive.Manager
 
 	startedAt time.Time
 
@@ -424,8 +430,32 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Task Manager 失败: %w", err)
 	}
+	notificationService := notifications.New(notifications.NewEventProvider(events))
+	taskManager.SetNotificationService(notificationService)
 	if err := taskManager.Start(ctx); err != nil {
 		return nil, fmt.Errorf("启动 Task Scheduler 失败: %w", err)
+	}
+
+	proactiveStore, err := proactive.NewStore(ctx, filepath.Join(cfg.Paths.ConfigDir, "proactive.json"))
+	if err != nil {
+		_ = taskManager.Close(context.Background())
+		return nil, fmt.Errorf("初始化主动助手状态存储失败: %w", err)
+	}
+	proactiveManager, err := proactive.NewManager(
+		proactiveStore,
+		taskManager,
+		events,
+		notificationService,
+		proactive.NewWorkspaceMonitor(agentService, workspaceManager),
+		logger,
+	)
+	if err != nil {
+		_ = taskManager.Close(context.Background())
+		return nil, fmt.Errorf("初始化主动助手 Manager 失败: %w", err)
+	}
+	if err := proactiveManager.Start(ctx); err != nil {
+		_ = taskManager.Close(context.Background())
+		return nil, fmt.Errorf("启动主动助手失败: %w", err)
 	}
 
 	application := &Application{
@@ -448,6 +478,8 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		memory:        memoryManager,
 		runtime:       runtimeService,
 		tasks:         taskManager,
+		notifications: notificationService,
+		proactive:     proactiveManager,
 		startedAt:     time.Now().UTC(),
 	}
 	application.ready.Store(true)
@@ -561,6 +593,16 @@ func (a *Application) Tasks() *tasks.Manager {
 	return a.tasks
 }
 
+// Proactive 返回主动助手运行时。它负责事件判断、心跳巡检、通知和内部 Agent 自动执行。
+func (a *Application) Proactive() *proactive.Manager {
+	return a.proactive
+}
+
+// Notifications 返回统一通知服务。Desktop Adapter 通过事件订阅消费通知。
+func (a *Application) Notifications() *notifications.Service {
+	return a.notifications
+}
+
 // Status 返回当前 Core 状态，并主动读取文件级 Source of Truth 做健康检查。
 func (a *Application) Status(ctx context.Context) (Status, error) {
 	status := Status{
@@ -618,6 +660,13 @@ func (a *Application) Shutdown(ctx context.Context) error {
 		)
 
 		var shutdownErrors []error
+
+		// 主动助手必须先停止产生通知/内部 Agent Run，再关闭 Task Scheduler。
+		if a.proactive != nil {
+			if err := a.proactive.Close(ctx); err != nil {
+				shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭主动助手失败: %w", err))
+			}
+		}
 
 		// Task Scheduler 必须先停止产生新 Run，再关闭 Runtime。
 		if err := a.tasks.Close(ctx); err != nil {

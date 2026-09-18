@@ -30,28 +30,28 @@ const SettingsView =
     defineAsyncComponent(
         () => import(
             "../components/settings/SettingsView.vue"
-        ),
+            ),
     );
 
 const SkillWorkspaceView =
     defineAsyncComponent(
         () => import(
             "../components/skills/SkillWorkspaceView.vue"
-        ),
+            ),
     );
 
 const MCPWorkspaceView =
     defineAsyncComponent(
         () => import(
             "../components/mcp/MCPWorkspaceView.vue"
-        ),
+            ),
     );
 
 const TasksWorkspaceView =
     defineAsyncComponent(
         () => import(
             "../components/tasks/TasksWorkspaceView.vue"
-        ),
+            ),
     );
 
 import {
@@ -82,6 +82,10 @@ import {
   usePreferenceStore,
 } from "../stores/preferences.js";
 
+import {
+  useProactiveStore,
+} from "../stores/proactive.js";
+
 const layoutStore =
     useLayoutStore();
 
@@ -102,6 +106,9 @@ const taskStore =
 
 const preferenceStore =
     usePreferenceStore();
+
+const proactiveStore =
+    useProactiveStore();
 
 /**
  * 设置页是否处于打开状态。
@@ -192,25 +199,43 @@ watch(
 );
 
 watch(
-    () => taskStore.eventSequence,
+    () => proactiveStore.notificationSequence,
     () => {
-      const event = taskStore.lastEvent;
-      const task = taskStore.items.find((item) => item.id === event?.taskID);
-      const name = task?.name || "后台任务";
-      switch (event?.type) {
-        case "run.waiting_approval":
-          Message.warning(`“${name}”正在等待操作确认`);
+      const notification = proactiveStore.notification;
+      if (!notification) return;
+
+      const message = notification.body
+          ? `${notification.title}：${notification.body}`
+          : notification.title;
+
+      switch (notification.level) {
+        case "success":
+          Message.success(message);
           break;
-        case "run.succeeded":
-          Message.success(`“${name}”已完成`);
+        case "warning":
+          Message.warning(message);
           break;
-        case "run.failed":
-        case "run.timed_out":
-        case "run.interrupted":
-          Message.error(`“${name}”运行未完成`);
+        case "error":
+          Message.error(message);
           break;
         default:
+          Message.info(message);
           break;
+      }
+
+      if (
+          typeof document !== "undefined" &&
+          document.hidden &&
+          "Notification" in globalThis &&
+          globalThis.Notification.permission === "granted"
+      ) {
+        try {
+          new globalThis.Notification(notification.title, {
+            body: notification.body || "",
+          });
+        } catch (error) {
+          console.warn("[Proactive] 系统通知发送失败，已使用应用内通知", error);
+        }
       }
     },
 );
@@ -292,6 +317,7 @@ async function openTaskSession(payload) {
 onMounted(async () => {
   runtimeStore.initialiseEvents();
   taskStore.initialiseEvents();
+  proactiveStore.initialiseEvents();
 
   try {
     await Promise.all([
@@ -304,6 +330,10 @@ onMounted(async () => {
       }),
 
       taskStore.load(),
+
+      proactiveStore.load().catch((error) => {
+        console.warn("[Proactive] 主动助手状态加载失败", error);
+      }),
     ]);
 
     await sessionStore
@@ -321,12 +351,13 @@ onMounted(async () => {
 onUnmounted(() => {
   runtimeStore.disposeEvents();
   taskStore.disposeEvents();
+  proactiveStore.disposeEvents();
 });
 </script>
 
 <template>
   <div class="app-shell">
-    <WindowChrome />
+    <WindowChrome/>
 
     <!--
       Settings 是一级页面，不再使用 Drawer。
@@ -356,7 +387,7 @@ onUnmounted(() => {
           @open-settings="openSettings"
       />
 
-      <SidebarResizer />
+      <SidebarResizer/>
 
       <MCPWorkspaceView
           v-if="mainView === 'connectors'"
@@ -375,7 +406,7 @@ onUnmounted(() => {
           @manage-packages="openSettings('skills')"
       />
 
-      <ChatView v-else />
+      <ChatView v-else/>
     </div>
   </div>
 </template>
@@ -395,8 +426,7 @@ onUnmounted(() => {
 
   overflow: hidden;
 
-  background:
-      var(--h-bg);
+  background: var(--h-bg);
 }
 
 .app-shell__main,
