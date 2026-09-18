@@ -6,7 +6,7 @@ const (
 	// CurrentVersion 是 Session Memory sidecar 当前格式版本。
 	// memory.json 是可重建派生状态，因此当前开发阶段不维护复杂迁移链；遇到未知版本时
 	// Manager 会把它视为不可用状态，并在下一次刷新时基于 Transcript 重新生成。
-	CurrentVersion = 1
+	CurrentVersion = 2
 
 	importantFactsHeading = "### 重要事实"
 	timelineHeading       = "### 事情经过"
@@ -34,6 +34,14 @@ type Artifacts struct {
 	ModifiedFiles []string `json:"modifiedFiles,omitempty"`
 }
 
+// SourceRange 记录 Session Memory 所覆盖的原始会话范围。Memory 是派生参考数据，
+// 真正事实仍以这些 Entry 对应的 session.jsonl 为准。
+type SourceRange struct {
+	FirstEntryID string `json:"firstEntryId,omitempty"`
+	LastEntryID  string `json:"lastEntryId,omitempty"`
+	EntryCount   int    `json:"entryCount,omitempty"`
+}
+
 // Document 是单 Session memory.json 的完整派生状态。
 //
 // Summary 必须严格使用“重要事实/事情经过”两个标题。主模型只注入“重要事实”部分，
@@ -49,6 +57,8 @@ type Document struct {
 	Summary string `json:"summary"`
 
 	Artifacts Artifacts `json:"artifacts"`
+
+	Sources SourceRange `json:"sources"`
 
 	UpdatedAt time.Time `json:"updatedAt"`
 }

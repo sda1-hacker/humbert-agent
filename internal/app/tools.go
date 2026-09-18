@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/config"
+	"github.com/sda1-hacker/humbert-agent/internal/contextartifact"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
@@ -39,6 +40,8 @@ func buildToolRegistry(
 	authorizer humberttools.Authorizer,
 	skillManager *skills.Manager,
 	agentSkillEnable builtin.AgentSkillEnableFunc,
+	historyRepository builtin.HistoryRepository,
+	artifactStore *contextartifact.Store,
 	logger *logging.Logger,
 ) (*humberttools.Registry, error) {
 	if ctx == nil {
@@ -76,6 +79,13 @@ func buildToolRegistry(
 		return nil, fmt.Errorf("初始化 ToolRegistry 失败: AgentSkillEnableFunc 不能为空")
 	}
 
+	if historyRepository == nil {
+		return nil, fmt.Errorf("初始化 ToolRegistry 失败: HistoryRepository 不能为空")
+	}
+	if artifactStore == nil {
+		return nil, fmt.Errorf("初始化 ToolRegistry 失败: ContextArtifactStore 不能为空")
+	}
+
 	if logger == nil {
 		return nil, fmt.Errorf(
 			"初始化 ToolRegistry 失败: Logger 不能为空",
@@ -99,6 +109,7 @@ func buildToolRegistry(
 	registry, err :=
 		humberttools.NewRegistry(
 			authorizer,
+			artifactStore,
 		)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -124,6 +135,25 @@ func buildToolRegistry(
 
 			return nil
 		}
+
+	// 上下文恢复能力属于 Humbert 的运行时可靠性基础设施，始终随 Runtime 提供，
+	// 不受 Agent 的 Builtin 选择开关影响。这里刻意只暴露两个内部只读 Tool：
+	// session_history 负责搜索/读取旧会话，context_resource 负责读取被移出工作窗口的
+	// 超大工具结果和历史文本附件。这样既保留按需恢复能力，又减少模型侧 Tool Schema。
+	sessionHistoryFactory, err := builtin.NewSessionHistoryFactory(historyRepository)
+	if err != nil {
+		return nil, fmt.Errorf("创建 session_history Factory 失败: %w", err)
+	}
+	if err := register(sessionHistoryFactory); err != nil {
+		return nil, err
+	}
+	contextResourceFactory, err := builtin.NewContextResourceFactory(artifactStore, historyRepository)
+	if err != nil {
+		return nil, fmt.Errorf("创建 context_resource Factory 失败: %w", err)
+	}
+	if err := register(contextResourceFactory); err != nil {
+		return nil, err
+	}
 
 	// install_skill 是 Skills 控制面的唯一 Agent 可写入口。它只负责下载安装并可选择修改
 	// 当前 Agent 的 enabled_skills，不会执行包内 scripts。RiskWrite 让默认 Permission Policy

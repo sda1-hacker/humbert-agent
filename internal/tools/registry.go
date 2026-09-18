@@ -41,6 +41,8 @@ type Registry struct {
 	revision uint64
 
 	authorizer Authorizer
+
+	resultArchiver ResultArchiver
 }
 
 // NewRegistry 创建 Tool Registry。
@@ -51,11 +53,17 @@ type Registry struct {
 // 都会递增 Revision。
 func NewRegistry(
 	authorizer Authorizer,
+	archivers ...ResultArchiver,
 ) (*Registry, error) {
 	if authorizer == nil {
 		return nil, errors.New(
 			"Tool Registry Authorizer 不能为空",
 		)
+	}
+
+	var archiver ResultArchiver
+	if len(archivers) > 0 {
+		archiver = archivers[0]
 	}
 
 	return &Registry{
@@ -65,7 +73,8 @@ func NewRegistry(
 
 		revision: 1,
 
-		authorizer: authorizer,
+		authorizer:     authorizer,
+		resultArchiver: archiver,
 	}, nil
 }
 
@@ -289,7 +298,7 @@ func (r *Registry) Resolve(
 		}
 
 		descriptor := factory.Descriptor()
-		if scope.EnabledBuiltinTools != nil {
+		if scope.EnabledBuiltinTools != nil && !descriptor.Internal {
 			if _, ok := selected[descriptor.Name]; !ok {
 				continue
 			}
@@ -316,6 +325,7 @@ func (r *Registry) Resolve(
 			descriptor,
 			scope,
 			instance,
+			r.resultArchiver,
 		)
 		if err != nil {
 			return ResolvedTools{},

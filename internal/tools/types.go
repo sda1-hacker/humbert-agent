@@ -48,6 +48,10 @@ type Descriptor struct {
 	// MCPOrigin 仅在 Tool 来自 MCP Server 时提供。它不会暴露给模型；Guard 会把
 	// ServerID/Fingerprint 传给 PermissionEngine，用于 Approval 展示和长期 Rule 绑定。
 	MCPOrigin *MCPOrigin
+
+	// Internal 表示 Humbert 为运行时可靠性提供的内部只读能力（例如历史检索）。
+	// Internal Tool 不受 Agent 的 enabled_builtin_tools 选择影响，也不在普通能力设置中展示。
+	Internal bool
 }
 
 // MCPOrigin 描述一个 MCP Tool 的稳定来源身份。
@@ -182,6 +186,10 @@ type Scope struct {
 	// SkillScriptCommands 是当前 Turn 冻结的 Skill -> Script -> Interpreter Command。
 	// 与 SkillIdentities 一起用于构建 run_skill_script 的 Permission CapabilityIdentity。
 	SkillScriptCommands map[string]map[string]string
+
+	// ToolResultMaxChars 是当前模型工作窗口允许单个 ToolResult 直接进入上下文的字符上限。
+	// 超过上限的完整结果由 ResultArchiver 保存，模型只收到首尾摘录和引用编号。
+	ToolResultMaxChars int
 }
 
 // SandboxPolicy 返回当前 Scope 的有效 Sandbox；未显式注入时使用安全的 Workspace-only 默认值。
@@ -244,6 +252,11 @@ type Factory interface {
 		einotool.InvokableTool,
 		error,
 	)
+}
+
+// ResultArchiver 是 Tool 层与 Session Context Artifact 存储的最小边界。
+type ResultArchiver interface {
+	Archive(ctx context.Context, sessionID string, toolName string, content string) (string, error)
 }
 
 // ResolvedTools 是一次 RuntimeSnapshot 真正冻结的 ToolSet。

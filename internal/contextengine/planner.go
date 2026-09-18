@@ -208,12 +208,25 @@ func extractArtifactPaths(entries []transcript.Entry) ([]string, []string) {
 	readSet := make(map[string]struct{})
 	modifiedSet := make(map[string]struct{})
 
+	// 先建立 ToolResult 状态。只有明确记录了成功结果的调用才能被记为读过/修改过文件；
+	// Permission Deny、用户拒绝、Tool Error 或崩溃后缺失结果都不能污染 Artifact 状态。
+	results := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Message == nil || entry.Message.Role != transcript.RoleToolResult {
+			continue
+		}
+		callID := strings.TrimSpace(entry.Message.ToolCallID)
+		if callID != "" {
+			results[callID] = toolResultSucceeded(entry.Message)
+		}
+	}
+
 	for _, entry := range entries {
 		if entry.Message == nil || entry.Message.Role != transcript.RoleAssistant {
 			continue
 		}
 		for _, block := range entry.Message.Content {
-			if block.Type != transcript.ContentToolCall || len(block.Arguments) == 0 {
+			if block.Type != transcript.ContentToolCall || len(block.Arguments) == 0 || !results[block.ID] {
 				continue
 			}
 			var args map[string]any
@@ -228,15 +241,38 @@ func extractArtifactPaths(entries []transcript.Entry) ([]string, []string) {
 			switch block.Name {
 			case "read_file":
 				readSet[pathValue] = struct{}{}
-			case "write_file", "edit_file":
+			case "write_file", "edit_file", "apply_patch":
 				modifiedSet[pathValue] = struct{}{}
 			}
 		}
 	}
 
-	readFiles := setToSortedSlice(readSet)
-	modifiedFiles := setToSortedSlice(modifiedSet)
-	return readFiles, modifiedFiles
+	return setToSortedSlice(readSet), setToSortedSlice(modifiedSet)
+}
+
+func toolResultSucceeded(message *transcript.AgentMessage) bool {
+	if message == nil || message.IsError {
+		return false
+	}
+	var text strings.Builder
+	for _, block := range message.Content {
+		if block.Type == transcript.ContentText {
+			text.WriteString(block.Text)
+			text.WriteByte('\n')
+		}
+	}
+	value := strings.ToLower(strings.TrimSpace(text.String()))
+	if value == "" {
+		return true
+	}
+	// Permission Guard 的拒绝属于普通 ToolResult（不是 Runtime error），因此不能只依赖
+	// IsError。这里识别 Humbert 自己稳定生成的拒绝文本，防止把“未执行”误记为已修改文件。
+	if strings.Contains(value, "permission policy 拒绝") ||
+		strings.Contains(value, "用户拒绝了工具") ||
+		strings.Contains(value, "未执行任何操作") {
+		return false
+	}
+	return true
 }
 
 func setToSortedSlice(values map[string]struct{}) []string {

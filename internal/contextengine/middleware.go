@@ -35,6 +35,9 @@ type ContextMiddlewareConfig struct {
 
 	Model einomodel.BaseChatModel
 
+	CompactionContextWindow   int
+	CompactionMaxOutputTokens int
+
 	Budget Budget
 
 	ToolTokenEstimate int
@@ -181,34 +184,54 @@ func (m *MidRunCompactor) beforeChatModel(ctx context.Context, state *adk.ChatMo
 }
 
 func (m *MidRunCompactor) compactMessages(ctx context.Context, messages []*schema.Message) ([]*schema.Message, error) {
-	firstConversation := 0
-	for firstConversation < len(messages) && messages[firstConversation] != nil && messages[firstConversation].Role == schema.System {
-		firstConversation++
+	prefixEnd := 0
+	for prefixEnd < len(messages) {
+		message := messages[prefixEnd]
+		if message == nil {
+			prefixEnd++
+			continue
+		}
+		if message.Role == schema.System || isSessionMemoryReferenceMessage(message) {
+			prefixEnd++
+			continue
+		}
+		break
 	}
-	if len(messages)-firstConversation < 2 {
+
+	previousCheckpoint := ""
+	conversationStart := prefixEnd
+	if conversationStart < len(messages) && isCompactionCheckpointMessage(messages[conversationStart]) {
+		previousCheckpoint = strings.TrimSpace(strings.TrimPrefix(messageVisibleText(messages[conversationStart]), compactionCheckpointPrefix))
+		conversationStart++
+	}
+	if len(messages)-conversationStart < 2 {
 		return nil, ErrNothingToCompact
 	}
 
+	targetRecent := m.config.Budget.TargetRecentTokens
+	if targetRecent <= 0 {
+		targetRecent = 1
+	}
 	candidate := len(messages) - 1
 	retainedTokens := 0
-	for index := len(messages) - 1; index >= firstConversation; index-- {
+	for index := len(messages) - 1; index >= conversationStart; index-- {
 		retainedTokens += m.config.Estimator.EstimateMessage(messages[index])
 		candidate = index
-		if retainedTokens >= m.config.Budget.KeepRecentTokens {
+		if retainedTokens >= targetRecent {
 			break
 		}
 	}
-	if candidate <= firstConversation {
+	if candidate <= conversationStart {
 		return nil, ErrNothingToCompact
 	}
 
 	// 优先完整 User Turn；若当前 Turn 太大则允许 split，但不能从 ToolResult 开始。
 	boundary := candidate
-	for index := candidate; index >= firstConversation; index-- {
+	for index := candidate; index >= conversationStart; index-- {
 		if messages[index] != nil && messages[index].Role == schema.User {
-			if index > firstConversation {
+			if index > conversationStart {
 				candidateTokens := m.config.Estimator.EstimateMessages(messages[index:])
-				if candidateTokens <= m.config.Budget.KeepRecentTokens+m.config.Budget.KeepRecentTokens/4 {
+				if candidateTokens <= targetRecent+targetRecent/4 {
 					boundary = index
 				}
 			}
@@ -216,55 +239,67 @@ func (m *MidRunCompactor) compactMessages(ctx context.Context, messages []*schem
 		}
 	}
 	if boundary < len(messages) && messages[boundary] != nil && messages[boundary].Role == schema.Tool {
-		adjusted, err := runtimeToolTransactionStart(messages, firstConversation, boundary)
+		adjusted, err := runtimeToolTransactionStart(messages, conversationStart, boundary)
 		if err != nil {
 			return nil, err
 		}
 		boundary = adjusted
 	}
-	if boundary <= firstConversation {
+	if boundary <= conversationStart {
 		return nil, ErrNothingToCompact
 	}
 
-	serialized := serializeRuntimeMessagesWithLimit(
-		messages[firstConversation:boundary],
-		m.config.SerializerMaxChars,
-		compactionSerializationLimit(m.config.SerializerMaxChars, m.config.Budget.ContextWindow),
-	)
-	if strings.TrimSpace(serialized) == "" {
-		return nil, ErrNothingToCompact
+	toSummarize := make([]*schema.Message, 0, boundary-conversationStart)
+	for _, message := range messages[conversationStart:boundary] {
+		toSummarize = append(toSummarize, applyReasoningReplayPolicy(message, ReasoningReplayOmit))
 	}
-
-	operationTimeout := m.config.OperationTimeout
-	if operationTimeout <= 0 {
-		operationTimeout = 2 * time.Minute
+	toSummarize = closeInterruptedToolCalls(toSummarize)
+	compactionWindow := m.config.CompactionContextWindow
+	if compactionWindow <= 0 {
+		compactionWindow = m.config.Budget.ContextWindow
 	}
-	operationCtx, cancel := context.WithTimeout(ctx, operationTimeout)
-	defer cancel()
-
-	response, err := m.config.Model.Generate(operationCtx, []*schema.Message{
-		schema.SystemMessage(compactionSystemPrompt),
-		schema.UserMessage(serialized),
+	compactionOutput := m.config.CompactionMaxOutputTokens
+	if compactionOutput <= 0 {
+		compactionOutput = m.config.Budget.MaxOutputTokens
+	}
+	generator := CheckpointGenerator{
+		Model:            m.config.Model,
+		Estimator:        m.config.Estimator,
+		ContextWindow:    compactionWindow,
+		MaxOutputTokens:  compactionOutput,
+		OperationTimeout: m.config.OperationTimeout,
+		ArgumentMaxRunes: m.config.SerializerMaxChars,
+	}
+	summary, err := generator.Generate(ctx, CheckpointInput{
+		PreviousCheckpoint: previousCheckpoint,
+		Messages:           toSummarize,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("生成 MidRun Checkpoint 失败: %w", err)
-	}
-	if response == nil {
-		return nil, errors.New("MidRun 压缩模型返回空 Message")
-	}
-	summary, err := normalizeSummaryResult(messageVisibleText(response))
-	if err != nil {
-		return nil, err
+		m.config.Logger.Warn(
+			ctx,
+			"生成 MidRun Checkpoint 失败，改用本地应急检查点",
+			"operation", "context.compaction.mid_run_fallback",
+			"session_id", m.config.SessionID,
+			"error", err.Error(),
+		)
+		summary = localFallbackCheckpoint(previousCheckpoint, toSummarize, m.config.SerializerMaxChars)
+		if strings.TrimSpace(summary) == "" {
+			return nil, fmt.Errorf("生成 MidRun Checkpoint 失败且本地兜底为空: %w", err)
+		}
 	}
 
-	result := make([]*schema.Message, 0, firstConversation+1+len(messages)-boundary)
-	result = append(result, messages[:firstConversation]...)
-	result = append(result, schema.UserMessage(compactionCheckpointPrefix+summary+"\n\n[Internal continuation notice]\nThe current task is still in progress. Continue it from this checkpoint and the recent messages. Do not mention the compaction unless necessary."))
+	result := make([]*schema.Message, 0, prefixEnd+1+len(messages)-boundary)
+	result = append(result, messages[:prefixEnd]...)
+	result = append(result, schema.UserMessage(compactionCheckpointPrefix+summary+"\n\n[Internal continuation notice]\n当前任务仍在进行。请根据这个检查点和最近消息继续，不要因为上下文压缩而结束任务，也不必向用户解释压缩过程。"))
 	result = append(result, messages[boundary:]...)
-	if err := validateProjectedToolTransactions(result[firstConversation:]); err != nil {
+	if err := validateProjectedToolTransactions(result[prefixEnd:]); err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func isCompactionCheckpointMessage(message *schema.Message) bool {
+	return message != nil && message.Role == schema.User && strings.HasPrefix(strings.TrimSpace(messageVisibleText(message)), compactionCheckpointPrefix)
 }
 
 func runtimeToolTransactionStart(messages []*schema.Message, first int, toolIndex int) (int, error) {
@@ -288,62 +323,6 @@ func runtimeToolTransactionStart(messages []*schema.Message, first int, toolInde
 		}
 	}
 	return 0, fmt.Errorf("ToolResult %s 找不到对应 ToolCall", callID)
-}
-
-func serializeRuntimeMessages(messages []*schema.Message, maxChars int) string {
-	return serializeRuntimeMessagesWithLimit(messages, maxChars, maxChars*8)
-}
-
-func serializeRuntimeMessagesWithLimit(messages []*schema.Message, maxChars int, maxTotalChars int) string {
-	var builder strings.Builder
-	for _, message := range messages {
-		if message == nil {
-			continue
-		}
-		switch message.Role {
-		case schema.User:
-			builder.WriteString("\n[User]\n")
-			builder.WriteString(truncateText(messageVisibleText(message), maxChars))
-			for _, part := range message.UserInputMultiContent {
-				switch part.Type {
-				case schema.ChatMessagePartTypeImageURL:
-					builder.WriteString("\n[Image attachment]")
-				case schema.ChatMessagePartTypeFileURL:
-					name := "file"
-					if part.File != nil && strings.TrimSpace(part.File.Name) != "" {
-						name = part.File.Name
-					}
-					builder.WriteString("\n[File attachment: ")
-					builder.WriteString(name)
-					builder.WriteString("]")
-				}
-			}
-
-		case schema.Assistant:
-			if strings.TrimSpace(message.ReasoningContent) != "" {
-				builder.WriteString("\n[Assistant reasoning]\n")
-				builder.WriteString(truncateText(message.ReasoningContent, maxChars))
-			}
-			if strings.TrimSpace(message.Content) != "" {
-				builder.WriteString("\n[Assistant]\n")
-				builder.WriteString(truncateText(message.Content, maxChars))
-			}
-			for _, call := range message.ToolCalls {
-				builder.WriteString("\n[Assistant tool call]\n")
-				builder.WriteString(call.Function.Name)
-				builder.WriteString("(")
-				builder.WriteString(summarizeToolArguments([]byte(call.Function.Arguments), maxChars))
-				builder.WriteString(")")
-			}
-		case schema.Tool:
-			builder.WriteString("\n[Tool result: ")
-			builder.WriteString(message.ToolName)
-			builder.WriteString("]\n")
-			builder.WriteString(truncateText(message.Content, maxChars))
-		}
-		builder.WriteByte('\n')
-	}
-	return truncateCompactionPayload(strings.TrimSpace(builder.String()), maxTotalChars)
 }
 
 func messageVisibleText(message *schema.Message) string {

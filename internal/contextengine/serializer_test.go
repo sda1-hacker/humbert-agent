@@ -4,61 +4,41 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
-
-	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
-func TestSerializeCompactionPlanIncludesPreviousCheckpointAndTruncatesToolResult(t *testing.T) {
+func TestSplitTextByEstimatedTokensPreservesAllHistoryInOrder(t *testing.T) {
 	t.Parallel()
 
-	plan := Plan{
-		PreviousSummary: "old checkpoint",
-		ToSummarize: []transcript.Entry{{
-			Type: transcript.EntryMessage,
-			ID:   "tool",
-			Message: &transcript.AgentMessage{
-				Role:       transcript.RoleToolResult,
-				ToolName:   "read_file",
-				ToolCallID: "call-1",
-				Content:    []transcript.ContentBlock{{Type: transcript.ContentText, Text: strings.Repeat("中", 500)}},
-				Timestamp:  1,
-			},
-		}},
+	original := strings.Repeat("前", 31) + strings.Repeat("middle-", 20) + strings.Repeat("后", 29)
+	remaining := original
+	var rebuilt strings.Builder
+	for remaining != "" {
+		chunk, rest := splitTextByEstimatedTokens(remaining, 40, plannerEstimator{})
+		if chunk == "" {
+			t.Fatal("split returned empty chunk")
+		}
+		if !utf8.ValidString(chunk) || !utf8.ValidString(rest) {
+			t.Fatal("split produced invalid UTF-8")
+		}
+		rebuilt.WriteString(chunk)
+		remaining = rest
 	}
-
-	serialized := serializeCompactionPlan(plan, 256)
-	if !strings.Contains(serialized, "[Previous checkpoint]\nold checkpoint") {
-		t.Fatalf("previous checkpoint missing: %s", serialized)
-	}
-	if !strings.Contains(serialized, "...[truncated for compaction]") {
-		t.Fatalf("expected tool result truncation: %s", serialized)
+	// splitTextByEstimatedTokens trims only segment boundaries. Use content without boundary spaces
+	// so exact equality verifies that no middle section was silently omitted.
+	if rebuilt.String() != original {
+		t.Fatalf("rebuilt history differs: got %q want %q", rebuilt.String(), original)
 	}
 }
 
-func TestSerializeCompactionPlanPreservesAttachmentMeaningAndGlobalLimit(t *testing.T) {
+func TestTruncateTextOnlyTruncatesSingleLocalField(t *testing.T) {
 	t.Parallel()
-	plan := Plan{ToSummarize: []transcript.Entry{{
-		Type: transcript.EntryMessage,
-		ID:   "user",
-		Message: &transcript.AgentMessage{
-			Role: transcript.RoleUser,
-			Content: []transcript.ContentBlock{
-				{Type: transcript.ContentText, Text: strings.Repeat("old ", 200)},
-				{Type: transcript.ContentImage, Name: "diagram.png", MIMEType: "image/png", SizeBytes: 42},
-				{Type: transcript.ContentFile, Name: "notes.txt", MIMEType: "text/plain", SizeBytes: 12, ExtractedText: "important file fact"},
-			},
-			Timestamp: 1,
-		},
-	}}}
 
-	serialized := serializeCompactionPlanWithLimit(plan, 256, 600)
-	if utf8.RuneCountInString(serialized) > 600 {
-		t.Fatalf("serialized rune count = %d", utf8.RuneCountInString(serialized))
+	got := truncateText(strings.Repeat("中", 20), 8)
+	if !strings.HasPrefix(got, strings.Repeat("中", 8)) {
+		t.Fatalf("unexpected prefix: %q", got)
 	}
-	for _, expected := range []string{"diagram.png", "notes.txt", "important file fact"} {
-		if !strings.Contains(serialized, expected) {
-			t.Fatalf("attachment context %q missing: %s", expected, serialized)
-		}
+	if !strings.Contains(got, "truncated for local context field") {
+		t.Fatalf("missing local truncation marker: %q", got)
 	}
 }
 

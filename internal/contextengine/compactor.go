@@ -54,41 +54,87 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 	if err != nil {
 		return CompactResult{}, err
 	}
-	if !request.Force && !before.Usage.NeedsCompaction {
+	shouldCompact := before.Usage.NeedsCompaction
+	if request.UseSoftLimit {
+		shouldCompact = before.Usage.NeedsSoftCompaction
+	}
+	if !request.Force && !shouldCompact {
 		return CompactResult{Compacted: false, Before: before.Usage, After: before.Usage}, nil
 	}
 
-	plan, err := planCompaction(document, budget.KeepRecentTokens, e.estimator)
+	// 如果固定上下文本身已经吃掉硬安全线，继续压缩历史不会解决问题。这里立即返回
+	// 带分类占用的错误，让 UI/日志能够明确提示“工具定义或系统指令过大”，而不是重复
+	// 调用压缩模型三次以后才得到泛化错误。
+	if before.Budget.FixedTokens >= before.Budget.ThresholdTokens-512 {
+		return CompactResult{}, &FixedContextBudgetError{
+			ContextWindow:       before.Budget.ContextWindow,
+			ThresholdTokens:     before.Budget.ThresholdTokens,
+			SystemTokens:        before.Usage.SystemTokens,
+			ToolTokens:          before.Usage.ToolTokens,
+			MemoryTokens:        before.Usage.MemoryTokens,
+			HistoryBudgetTokens: before.Budget.HistoryBudgetTokens,
+		}
+	}
+
+	targetRecent := before.Budget.TargetRecentTokens
+	if targetRecent <= 0 {
+		// 固定上下文已经吃掉绝大多数窗口时仍尽量保留最后一个安全消息；若连这样都无法
+		// 降到阈值，后续 tokensAfterEstimate 会返回明确的固定开销诊断。
+		targetRecent = 1
+	}
+	plan, err := planCompaction(document, targetRecent, e.estimator)
 	if err != nil {
 		return CompactResult{}, err
 	}
 
-	serialized := serializeCompactionPlanWithLimit(
-		plan,
-		e.config.SerializerMaxChars,
-		compactionSerializationLimit(e.config.SerializerMaxChars, request.ContextWindow),
-	)
-	if serialized == "" {
-		return CompactResult{}, ErrNothingToCompact
+	toSummarize, err := decodeEntries(plan.ToSummarize, ReasoningReplayOmit)
+	if err != nil {
+		return CompactResult{}, err
+	}
+	// 压缩器必须与正常投影共享“中断工具调用结果未知”的恢复语义，不能把只有 ToolCall
+	// 没有 ToolResult 的崩溃历史总结成已经执行成功。
+	toSummarize = closeInterruptedToolCalls(toSummarize)
+
+	compactionWindow := request.CompactionContextWindow
+	if compactionWindow <= 0 {
+		compactionWindow = request.ContextWindow
+	}
+	compactionOutput := request.CompactionMaxOutputTokens
+	if compactionOutput <= 0 {
+		compactionOutput = request.MaxOutputTokens
+	}
+	generator := CheckpointGenerator{
+		Model:            request.Model,
+		Estimator:        e.estimator,
+		ContextWindow:    compactionWindow,
+		MaxOutputTokens:  compactionOutput,
+		OperationTimeout: time.Duration(e.config.OperationTimeoutMS) * time.Millisecond,
+		ArgumentMaxRunes: e.config.SerializerMaxChars,
+	}
+	summary, err := generator.Generate(ctx, CheckpointInput{
+		PreviousCheckpoint: plan.PreviousSummary,
+		Messages:           toSummarize,
+	})
+	if err != nil {
+		// 远程/本地压缩模型不可用时，优先让会话继续，而不是把已经完成的用户 Turn
+		// 变成失败。应急检查点不会冒充完整摘要，并且 durable metadata 会保留本次
+		// 来源范围，模型后续可以通过 session_history 精确追回旧细节。
+		e.logger.Warn(
+			ctx,
+			"生成 Context Checkpoint 失败，改用本地应急检查点",
+			"operation", "context.compaction.fallback",
+			"session_id", request.SessionID,
+			"reason", string(request.Reason),
+			"error", err.Error(),
+		)
+		summary = localFallbackCheckpoint(plan.PreviousSummary, toSummarize, e.config.SerializerMaxChars)
+		if strings.TrimSpace(summary) == "" {
+			return CompactResult{}, fmt.Errorf("生成 Compaction Checkpoint 失败且本地兜底为空: %w", err)
+		}
 	}
 
 	operationCtx, cancel := context.WithTimeout(ctx, time.Duration(e.config.OperationTimeoutMS)*time.Millisecond)
 	defer cancel()
-
-	response, err := request.Model.Generate(operationCtx, []*schema.Message{
-		schema.SystemMessage(compactionSystemPrompt),
-		schema.UserMessage(serialized),
-	})
-	if err != nil {
-		return CompactResult{}, fmt.Errorf("调用模型生成 Compaction Checkpoint 失败: %w", err)
-	}
-	if response == nil {
-		return CompactResult{}, errors.New("压缩模型返回空 Message")
-	}
-	summary, err := normalizeSummaryResult(messageVisibleText(response))
-	if err != nil {
-		return CompactResult{}, err
-	}
 
 	// TokensAfter 是提交前的估算：summary + retained + instruction + tools。真正提交后再
 	// Build 一次得到 After Usage；持久化该值主要用于历史诊断，不作为下一次阈值事实源。
@@ -120,10 +166,14 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		TokensBefore:     before.Usage.UsedTokens,
 		TokensAfter:      tokensAfterEstimate,
 		Details: transcript.CompactionDetails{
-			Reason:        string(request.Reason),
-			SplitTurn:     plan.SplitTurn,
-			ReadFiles:     append([]string(nil), plan.ReadFiles...),
-			ModifiedFiles: append([]string(nil), plan.ModifiedFiles...),
+			Reason:             string(request.Reason),
+			SplitTurn:          plan.SplitTurn,
+			ReadFiles:          append([]string(nil), plan.ReadFiles...),
+			ModifiedFiles:      append([]string(nil), plan.ModifiedFiles...),
+			WindowGeneration:   before.Window.Generation + 1,
+			SourceFirstEntryID: firstPlanEntryID(plan.ToSummarize),
+			SourceLastEntryID:  lastPlanEntryID(plan.ToSummarize),
+			SourceEntryCount:   len(plan.ToSummarize),
 		},
 	})
 	if err != nil {
@@ -177,4 +227,18 @@ func decodeEntries(entries []transcript.Entry, policy ReasoningReplayPolicy) ([]
 		result = append(result, applyReasoningReplayPolicy(decoded.Message, policy))
 	}
 	return result, nil
+}
+
+func firstPlanEntryID(entries []transcript.Entry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	return entries[0].ID
+}
+
+func lastPlanEntryID(entries []transcript.Entry) string {
+	if len(entries) == 0 {
+		return ""
+	}
+	return entries[len(entries)-1].ID
 }

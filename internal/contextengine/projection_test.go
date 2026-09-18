@@ -95,3 +95,82 @@ func TestValidateProjectedToolTransactionsRejectsDanglingResult(t *testing.T) {
 		t.Fatalf("valid tool transaction rejected: %v", err)
 	}
 }
+
+func TestProjectionAutoDropsCompletedHistoricalReasoning(t *testing.T) {
+	t.Parallel()
+
+	branch := []transcript.Entry{
+		projectionUser("u1", "first"),
+		projectionAssistant("a1", "first-answer", "old-thinking"),
+		projectionUser("u2", "second"),
+		projectionAssistant("a2", "second-answer", "current-thinking"),
+	}
+	projection, err := projectActiveBranch(transcript.Document{ActiveBranch: branch}, ReasoningReplayAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.RecentMessages[1].ReasoningContent != "" {
+		t.Fatalf("completed historical reasoning should be omitted: %q", projection.RecentMessages[1].ReasoningContent)
+	}
+	if projection.RecentMessages[3].ReasoningContent != "current-thinking" {
+		t.Fatalf("current turn reasoning should remain available: %q", projection.RecentMessages[3].ReasoningContent)
+	}
+}
+
+func TestProjectionCarriesWindowGenerationAndSourceRange(t *testing.T) {
+	t.Parallel()
+
+	branch := []transcript.Entry{
+		projectionUser("u1", "old"),
+		projectionAssistant("a1", "old-answer", ""),
+		projectionUser("u2", "recent"),
+		{Type: transcript.EntryCompaction, ID: "cmp1", Summary: "## Goal\nG\n## Constraints & Preferences\nC\n## Progress\n### Done\nD\n### In Progress\nI\n### Blocked\nB\n## Key Decisions\nK\n## Next Steps\nN\n## Critical Context\nX", FirstKeptEntryID: "u2", Details: &transcript.CompactionDetails{
+			WindowGeneration: 1, SourceFirstEntryID: "u1", SourceLastEntryID: "a1", SourceEntryCount: 2,
+		}},
+	}
+	projection, err := projectActiveBranch(transcript.Document{ActiveBranch: branch}, ReasoningReplayAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.Window.Generation != 1 || projection.Window.StartEntryID != "u2" || projection.Window.CheckpointID != "cmp1" {
+		t.Fatalf("unexpected window state: %#v", projection.Window)
+	}
+	if !projection.Retained.Available || projection.Retained.SourceEntryCount != 2 {
+		t.Fatalf("unexpected retained state: %#v", projection.Retained)
+	}
+	if !strings.Contains(projection.Checkpoint.Content, "session_history") {
+		t.Fatalf("checkpoint did not expose history recovery guidance: %q", projection.Checkpoint.Content)
+	}
+}
+
+func TestProjectionAddsCompatibilityGuidanceForLegacyHistoryTools(t *testing.T) {
+	t.Parallel()
+
+	branch := []transcript.Entry{
+		projectionUser("u1", "old"),
+		projectionUser("u2", "recent"),
+		{Type: transcript.EntryCompaction, ID: "cmp1", Summary: "## Goal\n继续任务\n## Critical Context\n旧版本要求使用 history_search/history_read。", FirstKeptEntryID: "u2", Details: &transcript.CompactionDetails{
+			WindowGeneration: 1, SourceFirstEntryID: "u1", SourceLastEntryID: "u1", SourceEntryCount: 1,
+		}},
+	}
+	projection, err := projectActiveBranch(transcript.Document{ActiveBranch: branch}, ReasoningReplayAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projection.Checkpoint == nil || !strings.Contains(projection.Checkpoint.Content, "已合并为 session_history") {
+		t.Fatalf("legacy history guidance was not migrated: %#v", projection.Checkpoint)
+	}
+}
+
+func TestProjectionMigratesLegacyContextArtifactGuidance(t *testing.T) {
+	t.Parallel()
+
+	legacy := schema.ToolMessage(`{"humbert_context_result_truncated":true,"artifact_id":"artifact-1","instruction":"完整结果已保存在会话上下文产物中；需要中间内容时使用 context_artifact_read 按区间读取。"}`, "call-1", schema.WithToolName("run_command"))
+	migrated := normalizeLegacyContextToolGuidance(legacy)
+	if migrated == legacy {
+		t.Fatal("expected a cloned migrated message")
+	}
+	if !strings.Contains(migrated.Content, "context_resource") || strings.Contains(migrated.Content, "context_artifact_read") {
+		t.Fatalf("legacy context artifact guidance was not migrated: %q", migrated.Content)
+	}
+}

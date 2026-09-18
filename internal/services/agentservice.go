@@ -490,6 +490,9 @@ func (s *AgentService) ListBuiltinTools() []BuiltinToolDTO {
 	descriptors := s.core.Tools().List()
 	result := make([]BuiltinToolDTO, 0, len(descriptors))
 	for _, descriptor := range descriptors {
+		if descriptor.Internal {
+			continue
+		}
 		// MCP Tool 不进入 Builtin Registry；保留判断可防未来 Registry 合并时误暴露。
 		if descriptor.MCPOrigin != nil {
 			continue

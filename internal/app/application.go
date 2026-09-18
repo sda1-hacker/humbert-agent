@@ -12,6 +12,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
+	"github.com/sda1-hacker/humbert-agent/internal/contextartifact"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/credential"
 	"github.com/sda1-hacker/humbert-agent/internal/eventbus"
@@ -276,26 +277,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	}
 	mcpManager.SetReferenceChecker(agentService)
 
-	// ToolRegistry 在 AgentService 之后创建，是因为 install_skill Tool 可以在用户明确批准后
-	// 把刚安装的 Skill 写入当前 Agent Profile。该修改只影响下一 Turn；当前 Turn 的 Runtime
-	// Snapshot 已经冻结，不会因为安装动作在执行中途获得新的 Skill 能力。
-	toolRegistry, err := buildToolRegistry(
-		ctx,
-		cfg.Paths.ConfigFile,
-		workspaceManager,
-		sandboxManager,
-		permissionEngine,
-		skillManager,
-		func(callCtx context.Context, agentID string, skillName string) error {
-			_, enableErr := agentService.EnableSkillForAgent(callCtx, agentID, skillName)
-			return enableErr
-		},
-		logger,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 ToolRegistry 失败: %w", err)
-	}
-
 	mcpRuntimeBackend, err := einoadapter.NewBackend(cfg.Runtime.MCP, permissionEngine, credentials, sandboxManager, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 MCP Runtime Backend 失败: %w", err)
@@ -322,6 +303,32 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		workspaceManager,
 		logger,
 	)
+
+	contextArtifactStore, err := contextartifact.NewStore(sessionService)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Context Artifact Store 失败: %w", err)
+	}
+
+	// ToolRegistry 在 SessionService 之后创建，使内部 history/context_artifact Tool 能读取
+	// 当前 Session 的受控完整记录与大结果 sidecar。普通 Builtin 仍保持原有注册语义。
+	toolRegistry, err := buildToolRegistry(
+		ctx,
+		cfg.Paths.ConfigFile,
+		workspaceManager,
+		sandboxManager,
+		permissionEngine,
+		skillManager,
+		func(callCtx context.Context, agentID string, skillName string) error {
+			_, enableErr := agentService.EnableSkillForAgent(callCtx, agentID, skillName)
+			return enableErr
+		},
+		sessionService,
+		contextArtifactStore,
+		logger,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 ToolRegistry 失败: %w", err)
+	}
 
 	// Context 与 Memory 共用同一个近似 Token Estimator，保证自动刷新阈值、
 	// Compaction Planner 和 Composer Usage 使用一致口径。Session Memory 是派生状态，

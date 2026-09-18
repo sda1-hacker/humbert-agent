@@ -278,6 +278,10 @@ type Snapshot struct {
 
 	CompactionModel einomodel.ToolCallingChatModel
 
+	CompactionContextWindow int
+
+	CompactionMaxOutputTokens int
+
 	MemoryModel einomodel.ToolCallingChatModel
 
 	ToolRevision uint64

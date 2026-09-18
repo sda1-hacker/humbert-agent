@@ -2,8 +2,11 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode/utf8"
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -23,6 +26,7 @@ func GuardInvokableTool(
 	descriptor Descriptor,
 	scope Scope,
 	instance einotool.InvokableTool,
+	archivers ...ResultArchiver,
 ) (einotool.BaseTool, error) {
 	if ctx == nil {
 		return nil, errors.New("保护 Tool 失败: context.Context 不能为空")
@@ -56,11 +60,16 @@ func GuardInvokableTool(
 		)
 	}
 
+	var archiver ResultArchiver
+	if len(archivers) > 0 {
+		archiver = archivers[0]
+	}
 	return &guardedInvokableTool{
 		tool:       instance,
 		descriptor: descriptor,
 		scope:      scope,
 		authorizer: authorizer,
+		archiver:   archiver,
 	}, nil
 }
 
@@ -85,6 +94,7 @@ type guardedInvokableTool struct {
 	descriptor Descriptor
 	scope      Scope
 	authorizer Authorizer
+	archiver   ResultArchiver
 }
 
 // Info 将底层 Tool Metadata 原样提供给 Eino ChatModel。
@@ -226,7 +236,39 @@ func (t *guardedInvokableTool) invokeRealTool(
 	if err != nil {
 		return "", fmt.Errorf("Tool %q 执行失败: %w", t.descriptor.Name, err)
 	}
-	return result, nil
+	return t.protectLargeResult(ctx, result)
+}
+
+func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result string) (string, error) {
+	limit := t.scope.ToolResultMaxChars
+	if limit <= 0 || utf8.RuneCountInString(result) <= limit || t.archiver == nil || strings.TrimSpace(t.scope.SessionID) == "" {
+		return result, nil
+	}
+	id, err := t.archiver.Archive(ctx, t.scope.SessionID, t.descriptor.Name, result)
+	if err != nil {
+		return "", fmt.Errorf("保存 Tool %q 超大完整结果失败: %w", t.descriptor.Name, err)
+	}
+	runes := []rune(result)
+	headCount := limit / 2
+	tailCount := limit - headCount
+	head := string(runes[:headCount])
+	tail := string(runes[len(runes)-tailCount:])
+	payload := map[string]any{
+		"humbert_context_result_truncated": true,
+		"artifact_id":                      id, // 兼容上一版会话记录
+		"resource_type":                    "artifact",
+		"resource_id":                      id,
+		"tool":                             t.descriptor.Name,
+		"original_chars":                   len(runes),
+		"head":                             head,
+		"tail":                             tail,
+		"instruction":                      "完整结果已保存在会话上下文资源中；需要中间内容时调用 context_resource，并使用 resource_type=artifact、resource_id=上述编号按区间读取。",
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func permissionDeniedResult(toolName string) string {

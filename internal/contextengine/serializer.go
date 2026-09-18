@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
-
-	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
 const compactionSystemPrompt = `你是 Humbert 的内部上下文压缩器。你的输出只会作为后续模型调用的内部 checkpoint，不是给用户看的回复。
@@ -31,152 +29,9 @@ const compactionSystemPrompt = `你是 Humbert 的内部上下文压缩器。你
 - 如果之前 checkpoint 与新历史冲突，以时间更晚、明确确认的信息为准。
 - 不调用工具，不向用户提问，不评价压缩行为。`
 
-// serializeCompactionPlan 把即将离开主 Context 的 Transcript 区域转换成摘要模型输入。
-//
-// Transcript 原文永不截断；这里只限制单个消息块以及整个摘要请求的字符数，防止大型
-// 用户输入、附件文本或 ToolResult 让压缩请求本身再次超过 Context Window。截断按 rune
-// 边界执行，不会产生非法 UTF-8。
-func serializeCompactionPlan(plan Plan, maxChars int) string {
-	return serializeCompactionPlanWithLimit(plan, maxChars, maxChars*8)
-}
-
-func serializeCompactionPlanWithLimit(plan Plan, maxChars int, maxTotalChars int) string {
-	if maxChars < 256 {
-		maxChars = 256
-	}
-	if maxTotalChars < 512 {
-		maxTotalChars = 512
-	}
-
-	var builder strings.Builder
-	if strings.TrimSpace(plan.PreviousSummary) != "" {
-		builder.WriteString("[Previous checkpoint]\n")
-		builder.WriteString(truncateText(strings.TrimSpace(plan.PreviousSummary), maxChars*2))
-		builder.WriteString("\n\n[New history to merge]\n")
-	}
-
-	for _, entry := range plan.ToSummarize {
-		if entry.Message == nil {
-			continue
-		}
-		message := entry.Message
-		switch message.Role {
-		case transcript.RoleUser:
-			builder.WriteString("\n[User]\n")
-			builder.WriteString(truncateText(wireVisibleText(message.Content), maxChars))
-			for _, block := range message.Content {
-				switch block.Type {
-				case transcript.ContentImage:
-					builder.WriteString("\n[Image attachment: ")
-					builder.WriteString(attachmentLabel(block))
-					builder.WriteString("]")
-				case transcript.ContentFile:
-					builder.WriteString("\n[File attachment: ")
-					builder.WriteString(attachmentLabel(block))
-					builder.WriteString("]\n")
-					builder.WriteString(truncateText(block.ExtractedText, maxChars))
-				}
-			}
-			builder.WriteByte('\n')
-
-		case transcript.RoleAssistant:
-			for _, block := range message.Content {
-				switch block.Type {
-				case transcript.ContentThinking:
-					if block.Redacted || strings.TrimSpace(block.Thinking) == "" {
-						continue
-					}
-					builder.WriteString("\n[Assistant reasoning]\n")
-					builder.WriteString(truncateText(block.Thinking, maxChars))
-					builder.WriteByte('\n')
-				case transcript.ContentText:
-					builder.WriteString("\n[Assistant]\n")
-					builder.WriteString(truncateText(block.Text, maxChars))
-					builder.WriteByte('\n')
-				case transcript.ContentToolCall:
-					builder.WriteString("\n[Assistant tool call]\n")
-					builder.WriteString(block.Name)
-					builder.WriteString("(")
-					builder.WriteString(summarizeToolArguments(block.Arguments, maxChars))
-					builder.WriteString(")\n")
-				}
-			}
-
-		case transcript.RoleToolResult:
-			builder.WriteString("\n[Tool result: ")
-			builder.WriteString(message.ToolName)
-			if message.IsError {
-				builder.WriteString("; error")
-			}
-			builder.WriteString("]\n")
-			builder.WriteString(truncateText(wireVisibleText(message.Content), maxChars))
-			builder.WriteByte('\n')
-		}
-	}
-
-	return truncateCompactionPayload(strings.TrimSpace(builder.String()), maxTotalChars)
-}
-
-func attachmentLabel(block transcript.ContentBlock) string {
-	name := strings.TrimSpace(block.Name)
-	if name == "" {
-		name = "attachment"
-	}
-	label := name
-	if mimeType := strings.TrimSpace(block.MIMEType); mimeType != "" {
-		label += "; MIME: " + mimeType
-	}
-	if block.SizeBytes > 0 {
-		label += fmt.Sprintf("; %d bytes", block.SizeBytes)
-	}
-	return label
-}
-
-// truncateCompactionPayload 为整个摘要输入设置硬边界，并同时保留开头的旧 checkpoint
-// 与结尾的最新历史。只做单块截断不能阻止大量短消息共同撑爆摘要模型上下文。
-func truncateCompactionPayload(value string, maxRunes int) string {
-	value = strings.TrimSpace(value)
-	if maxRunes <= 0 || utf8.RuneCountInString(value) <= maxRunes {
-		return value
-	}
-	marker := "\n\n...[middle history omitted for compaction budget]...\n\n"
-	markerRunes := []rune(marker)
-	if maxRunes <= len(markerRunes)+2 {
-		return truncateText(value, maxRunes)
-	}
-	runes := []rune(value)
-	available := maxRunes - len(markerRunes)
-	prefix := available / 3
-	suffix := available - prefix
-	return string(runes[:prefix]) + marker + string(runes[len(runes)-suffix:])
-}
-
-func compactionSerializationLimit(maxChars int, contextWindow int) int {
-	limit := maxChars * 8
-	if limit < 512 {
-		limit = 512
-	}
-	// 非 ASCII 最坏接近 1 rune/token。只让序列化历史占窗口一半，为系统提示、摘要输出
-	// 和 Provider framing 留出空间。
-	if contextWindow > 0 && contextWindow/2 < limit {
-		limit = contextWindow / 2
-	}
-	if limit < 512 {
-		limit = 512
-	}
-	return limit
-}
-
-func wireVisibleText(blocks []transcript.ContentBlock) string {
-	var builder strings.Builder
-	for _, block := range blocks {
-		if block.Type == transcript.ContentText {
-			builder.WriteString(block.Text)
-		}
-	}
-	return builder.String()
-}
-
+// truncateText 只用于单个字段、应急检查点和敏感参数的局部保护。
+// 正常持久化压缩不再调用任何“全局保留头尾、删除中间”的函数；完整待压缩历史由
+// CheckpointGenerator 按顺序分段吸收。
 func truncateText(value string, maxRunes int) string {
 	if maxRunes <= 0 || value == "" {
 		return value
@@ -185,7 +40,7 @@ func truncateText(value string, maxRunes int) string {
 		return value
 	}
 	runes := []rune(value)
-	return string(runes[:maxRunes]) + "\n...[truncated for compaction]"
+	return string(runes[:maxRunes]) + "\n...[truncated for local context field]"
 }
 
 // normalizeSummaryResult 校验摘要模型返回了最小可恢复结构。

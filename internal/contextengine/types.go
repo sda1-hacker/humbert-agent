@@ -2,6 +2,7 @@ package contextengine
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -47,9 +48,29 @@ type Budget struct {
 
 	ReserveTokens int `json:"reserveTokens"`
 
+	// ThresholdTokens 是模型输入的硬安全线。达到该值后，下一次模型调用前必须完成压缩。
 	ThresholdTokens int `json:"thresholdTokens"`
 
+	// SoftThresholdTokens 是主动维护线。Turn 已完成且达到该值时，可以提前换到新的工作窗口，
+	// 避免下一次用户消息等待同步压缩。
+	SoftThresholdTokens int `json:"softThresholdTokens"`
+
+	// KeepRecentTokens 保留旧字段语义，等于当前轮次最终计算出的 TargetRecentTokens。
 	KeepRecentTokens int `json:"keepRecentTokens"`
+
+	// PreferredRecentTokens 是配置希望保留的最近原始历史；TargetRecentTokens 则会根据本轮
+	// System/Tool/Memory 等固定占用动态收缩。
+	PreferredRecentTokens int `json:"preferredRecentTokens"`
+	TargetRecentTokens    int `json:"targetRecentTokens"`
+
+	// FixedTokens 是不能通过压缩对话历史释放的占用。HistoryBudgetTokens 是硬阈值扣除
+	// FixedTokens 后真正留给“检查点 + 最近原始消息”的容量。
+	FixedTokens         int `json:"fixedTokens"`
+	HistoryBudgetTokens int `json:"historyBudgetTokens"`
+
+	// CheckpointBudgetTokens 是压缩器为交接检查点预留的建议预算。它不是强制输出长度，
+	// 但会参与 TargetRecentTokens 计算，避免最近历史把检查点空间全部吃掉。
+	CheckpointBudgetTokens int `json:"checkpointBudgetTokens"`
 }
 
 // Usage 描述某个 Session 在当前模型下的上下文使用情况。
@@ -86,17 +107,51 @@ type Usage struct {
 
 	ReserveTokens int `json:"reserveTokens"`
 
+	// ThresholdTokens 是模型输入的硬安全线。达到该值后，下一次模型调用前必须完成压缩。
 	ThresholdTokens int `json:"thresholdTokens"`
 
+	// SoftThresholdTokens 是主动维护线。Turn 已完成且达到该值时，可以提前换到新的工作窗口，
+	// 避免下一次用户消息等待同步压缩。
+	SoftThresholdTokens int `json:"softThresholdTokens"`
+
+	// KeepRecentTokens 保留旧字段语义，等于当前轮次最终计算出的 TargetRecentTokens。
 	KeepRecentTokens int `json:"keepRecentTokens"`
+
+	// PreferredRecentTokens 是配置希望保留的最近原始历史；TargetRecentTokens 则会根据本轮
+	// System/Tool/Memory 等固定占用动态收缩。
+	PreferredRecentTokens int `json:"preferredRecentTokens"`
+	TargetRecentTokens    int `json:"targetRecentTokens"`
+
+	// FixedTokens 是不能通过压缩对话历史释放的占用。HistoryBudgetTokens 是硬阈值扣除
+	// FixedTokens 后真正留给“检查点 + 最近原始消息”的容量。
+	FixedTokens         int `json:"fixedTokens"`
+	HistoryBudgetTokens int `json:"historyBudgetTokens"`
+
+	// CheckpointBudgetTokens 是压缩器为交接检查点预留的建议预算。它不是强制输出长度，
+	// 但会参与 TargetRecentTokens 计算，避免最近历史把检查点空间全部吃掉。
+	CheckpointBudgetTokens int `json:"checkpointBudgetTokens"`
 
 	Percent float64 `json:"percent"`
 
 	NeedsCompaction bool `json:"needsCompaction"`
 
+	NeedsSoftCompaction bool `json:"needsSoftCompaction"`
+
 	LatestCompactionID string `json:"latestCompactionID,omitempty"`
 
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// WindowState 描述当前模型工作窗口。工作窗口不是另一份历史文件，而是完整会话记录上
+// 的一个逻辑阶段：每次 durable compaction 完成后 generation +1，并由最新检查点与
+// firstKeptEntryId 确定新窗口的起点。
+type WindowState struct {
+	Generation         int    `json:"generation"`
+	StartEntryID       string `json:"startEntryID,omitempty"`
+	CheckpointID       string `json:"checkpointID,omitempty"`
+	SourceFirstEntryID string `json:"sourceFirstEntryID,omitempty"`
+	SourceLastEntryID  string `json:"sourceLastEntryID,omitempty"`
+	SourceEntryCount   int    `json:"sourceEntryCount,omitempty"`
 }
 
 // Assembly 描述下一次模型调用实际装配出来的 Context 结构，但不暴露 Prompt、Memory、
@@ -117,20 +172,34 @@ type Assembly struct {
 
 	MemoryInjected bool `json:"memoryInjected"`
 
+	ReferenceMessageCount int `json:"referenceMessageCount"`
+
 	CheckpointInjected bool `json:"checkpointInjected"`
 
 	LatestCompactionID string `json:"latestCompactionID,omitempty"`
+
+	Window WindowState `json:"window"`
+
+	RetainedStateAvailable bool `json:"retainedStateAvailable"`
 }
 
 // Snapshot 是一次模型调用所需的 Context 投影。
 //
-// Instruction 已经包含 Agent Runtime Instruction 与当前 Session Memory 的 Key Facts；
-// Messages 则由最新 Compaction Checkpoint + Recent ActiveBranch 原始消息构成。Snapshot
-// 本身不持久化，任何时候都可从 Transcript + memory.json 重建。
+// Instruction 只包含本 Turn 的 Agent/Runtime 系统指令；Session Memory 作为低权限内部参考消息
+// 放在 Messages 中。Messages 由参考消息 + 最新 Compaction Checkpoint + Recent ActiveBranch
+// 原始消息构成。Snapshot 本身不持久化，任何时候都可从 Transcript + memory.json 重建。
 type Snapshot struct {
 	Instruction string
 
 	Messages []*schema.Message
+
+	// Budget 是结合本轮固定上下文开销后得到的真实工作窗口预算，而不是仅按模型窗口
+	// 计算的基础预算。MidRun 压缩必须复用它，不能重新退回静态 KeepRecent。
+	Budget Budget
+
+	Window WindowState
+
+	Retained RetainedState
 
 	Usage Usage
 
@@ -168,7 +237,16 @@ type CompactRequest struct {
 
 	ToolTokenEstimate int
 
+	// CompactionContextWindow/CompactionMaxOutputTokens 描述真正执行压缩的模型能力。
+	// 未设置时回退主模型值，保持旧调用兼容。
+	CompactionContextWindow   int
+	CompactionMaxOutputTokens int
+
 	Reason CompactionReason
+
+	// UseSoftLimit 仅用于 Turn 完成后的主动维护：达到软阈值即可提前生成新的工作窗口。
+	// 首次模型调用前与执行中的紧急保护仍使用硬阈值。
+	UseSoftLimit bool
 
 	Force bool
 }
@@ -185,6 +263,30 @@ type CompactResult struct {
 
 	After Usage `json:"after"`
 }
+
+// FixedContextBudgetError 表示无需读取/压缩更多历史就能确定“固定占用”已经让当前模型
+// 没有足够的对话工作空间。调用方可以 errors.Is(err, ErrContextBudgetExceeded)，同时把
+// System/Tool/Memory 的具体占用展示给用户，避免无意义地重复压缩。
+type FixedContextBudgetError struct {
+	ContextWindow       int
+	ThresholdTokens     int
+	SystemTokens        int
+	ToolTokens          int
+	MemoryTokens        int
+	HistoryBudgetTokens int
+}
+
+func (e *FixedContextBudgetError) Error() string {
+	if e == nil {
+		return ErrContextBudgetExceeded.Error()
+	}
+	return fmt.Sprintf(
+		"%v: 固定上下文占用过大: threshold=%d system=%d tools=%d memory=%d history_budget=%d window=%d",
+		ErrContextBudgetExceeded, e.ThresholdTokens, e.SystemTokens, e.ToolTokens, e.MemoryTokens, e.HistoryBudgetTokens, e.ContextWindow,
+	)
+}
+
+func (e *FixedContextBudgetError) Unwrap() error { return ErrContextBudgetExceeded }
 
 // ErrNothingToCompact 表示当前分支没有足够的旧历史可安全压缩。
 //

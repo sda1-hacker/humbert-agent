@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sync"
 	"unicode/utf8"
 
 	einotool "github.com/cloudwego/eino/components/tool"
@@ -33,11 +35,61 @@ type Estimator interface {
 // 估算策略刻意偏保守：ASCII 内容约 4 字符/token；非 ASCII rune（中文、日文等）按
 // 1 rune/token 计；每条消息和 ToolCall 再加入固定协议开销。它不会声称与 Provider
 // tokenizer 完全一致，真正的安全性来自 Context Budget 预留的 10%-20% reserve。
-type ApproxEstimator struct{}
+type ApproxEstimator struct {
+	mu     sync.RWMutex
+	factor float64
+}
+
+// UsageCalibrator 是可选的真实 Provider 用量校准能力。ContextEngine 只在 Estimator 实现
+// 该接口时上报首个模型请求的真实 Prompt Token，不要求其它测试/Fake Estimator 支持。
+type UsageCalibrator interface {
+	ObservePromptUsage(estimated int, actual int)
+}
 
 // NewApproxEstimator 创建默认 Token Estimator。
 func NewApproxEstimator() *ApproxEstimator {
-	return &ApproxEstimator{}
+	return &ApproxEstimator{factor: 1}
+}
+
+func (e *ApproxEstimator) calibrationFactor() float64 {
+	e.mu.RLock()
+	factor := e.factor
+	e.mu.RUnlock()
+	if factor <= 0 {
+		return 1
+	}
+	return factor
+}
+
+// ObservePromptUsage 使用有界指数移动平均校准默认字符估算。它只修正近似 tokenizer
+// 与真实 Provider 的系统性偏差，绝不取消 ContextEngine 自己的安全预留。
+func (e *ApproxEstimator) ObservePromptUsage(estimated int, actual int) {
+	if estimated <= 0 || actual <= 0 {
+		return
+	}
+	ratio := float64(actual) / float64(estimated)
+	if ratio < 0.75 {
+		ratio = 0.75
+	}
+	if ratio > 1.35 {
+		ratio = 1.35
+	}
+
+	e.mu.Lock()
+	current := e.factor
+	if current <= 0 {
+		current = 1
+	}
+	// 真实 usage 可能因为 Provider 自己的缓存/协议 framing 有波动，因此每次只吸收 10%。
+	next := current*0.90 + current*ratio*0.10
+	if next < 0.80 {
+		next = 0.80
+	}
+	if next > 1.30 {
+		next = 1.30
+	}
+	e.factor = next
+	e.mu.Unlock()
 }
 
 // EstimateText 估算普通 UTF-8 文本的 Token 数。
@@ -66,15 +118,19 @@ func (e *ApproxEstimator) EstimateText(text string) int {
 	}
 
 	asciiTokens := (ascii + 3) / 4
-	return asciiTokens + nonASCII
+	raw := asciiTokens + nonASCII
+	if raw == 0 {
+		return 0
+	}
+	return maxInt(1, int(math.Ceil(float64(raw)*e.calibrationFactor())))
 }
 
 // EstimateMessage 估算一条 Eino Message 的协议占用。
 func (e *ApproxEstimator) EstimateMessage(message *schema.Message) int {
-	return e.estimateMessageWithImages(message, true)
+	return e.estimateMessageWithAttachments(message, true, true)
 }
 
-func (e *ApproxEstimator) estimateMessageWithImages(message *schema.Message, includeImages bool) int {
+func (e *ApproxEstimator) estimateMessageWithAttachments(message *schema.Message, includeImages bool, includeFiles bool) int {
 	if message == nil {
 		return 0
 	}
@@ -108,12 +164,14 @@ func (e *ApproxEstimator) estimateMessageWithImages(message *schema.Message, inc
 				tokens += e.EstimateText(multimodal.HistoricalImagePlaceholder(part))
 			}
 		case schema.ChatMessagePartTypeFileURL:
-			// Humbert 把受支持的文本文件确定性提取后再交给 Provider。预算必须按真实
-			// 提取文本计算，不能继续使用固定常量，否则一个较大的源码文件会严重低估。
+			if !includeFiles {
+				tokens += e.EstimateText(multimodal.HistoricalFilePlaceholder(part))
+				break
+			}
+			// 近期文本附件仍按真实提取正文估算；更早附件由 FileReplayMask 转为元数据占位。
 			if extracted := extraStringValue(part.Extra, "extracted_text"); extracted != "" {
 				tokens += 12 + e.EstimateText(extracted)
 			} else {
-				// 仅为损坏/手工构造消息保留 fail-safe 预算；正常 v3 数据要求文件包含提取文本。
 				tokens += 2048
 			}
 		}
@@ -148,8 +206,9 @@ func extraStringValue(extra map[string]any, key string) string {
 func (e *ApproxEstimator) EstimateMessages(messages []*schema.Message) int {
 	total := 0
 	imageReplayMask := multimodal.ImageReplayMask(messages)
+	fileReplayMask := multimodal.FileReplayMask(messages)
 	for index, message := range messages {
-		total += e.estimateMessageWithImages(message, imageReplayMask[index])
+		total += e.estimateMessageWithAttachments(message, imageReplayMask[index], fileReplayMask[index])
 	}
 	return total
 }

@@ -29,6 +29,10 @@ type projectionResult struct {
 	RecentMessages []*schema.Message
 
 	LatestCompactionID string
+
+	Window WindowState
+
+	Retained RetainedState
 }
 
 // projectActiveBranch 将 Transcript ActiveBranch 投影成主模型可见的 Eino Messages。
@@ -56,6 +60,14 @@ func projectActiveBranch(
 
 	if latest != nil {
 		result.LatestCompactionID = latest.ID
+		result.Retained = retainedStateFromCompaction(latest)
+		result.Window.CheckpointID = latest.ID
+		result.Window.Generation = compactionGeneration(branch, latestIndex, latest)
+		if latest.Details != nil {
+			result.Window.SourceFirstEntryID = latest.Details.SourceFirstEntryID
+			result.Window.SourceLastEntryID = latest.Details.SourceLastEntryID
+			result.Window.SourceEntryCount = latest.Details.SourceEntryCount
+		}
 		firstKeptIndex := findEntryIndex(branch, latest.FirstKeptEntryID)
 		if firstKeptIndex < 0 || firstKeptIndex >= latestIndex {
 			return projectionResult{}, fmt.Errorf(
@@ -65,9 +77,41 @@ func projectActiveBranch(
 			)
 		}
 		startIndex = firstKeptIndex
-		result.Checkpoint = schema.UserMessage(
-			compactionCheckpointPrefix + strings.TrimSpace(latest.Summary),
-		)
+		result.Window.StartEntryID = latest.FirstKeptEntryID
+		checkpointText := compactionCheckpointPrefix + strings.TrimSpace(latest.Summary)
+		if strings.Contains(checkpointText, "history_search") || strings.Contains(checkpointText, "history_read") {
+			checkpointText += "\n\n[工具兼容说明]\n旧检查点中提到的 history_search/history_read 已合并为 session_history：先 action=search 定位，再 action=read 读取原文。"
+		}
+		if latest.Details != nil && latest.Details.SourceEntryCount > 0 {
+			checkpointText += fmt.Sprintf(
+				"\n\n[History recovery]\n这个检查点由 %d 条原始历史生成，来源范围 %s .. %s。若需要检查点未保留的旧细节，请使用 session_history：先 action=search 定位 entry_id，再 action=read 回查完整会话记录。",
+				latest.Details.SourceEntryCount, latest.Details.SourceFirstEntryID, latest.Details.SourceLastEntryID,
+			)
+		}
+		result.Checkpoint = schema.UserMessage(checkpointText)
+	}
+
+	if latest == nil {
+		for index := 0; index < len(branch); index++ {
+			if branch[index].Type == transcript.EntryMessage && branch[index].Message != nil {
+				result.Window.StartEntryID = branch[index].ID
+				break
+			}
+		}
+	}
+
+	// Auto 模式只保留“当前用户轮次”之后仍在进行中的推理内容。已经完成的旧轮次只回放
+	// 最终回答/工具事务，避免历史 Thinking 在长会话中反复占用大量上下文。显式 Include/Omit
+	// 仍保持原有语义。
+	latestUserIndex := -1
+	if policy == "" || policy == ReasoningReplayAuto {
+		for index := len(branch) - 1; index >= startIndex; index-- {
+			entry := branch[index]
+			if entry.Type == transcript.EntryMessage && entry.Message != nil && entry.Message.Role == transcript.RoleUser {
+				latestUserIndex = index
+				break
+			}
+		}
 	}
 
 	for index := startIndex; index < len(branch); index++ {
@@ -82,7 +126,17 @@ func projectActiveBranch(
 		if decoded.Message == nil {
 			return projectionResult{}, fmt.Errorf("Context Message Entry %s 解码为空", entry.ID)
 		}
-		message := applyReasoningReplayPolicy(decoded.Message, policy)
+
+		effectivePolicy := policy
+		if effectivePolicy == "" || effectivePolicy == ReasoningReplayAuto {
+			if latestUserIndex >= 0 && index < latestUserIndex {
+				effectivePolicy = ReasoningReplayOmit
+			} else {
+				effectivePolicy = ReasoningReplayInclude
+			}
+		}
+		message := applyReasoningReplayPolicy(decoded.Message, effectivePolicy)
+		message = normalizeLegacyContextToolGuidance(message)
 		result.RecentMessages = append(result.RecentMessages, message)
 	}
 
@@ -94,6 +148,19 @@ func projectActiveBranch(
 		result.Messages = append([]*schema.Message{result.Checkpoint}, result.RecentMessages...)
 	}
 	return result, nil
+}
+
+func compactionGeneration(branch []transcript.Entry, latestIndex int, latest *transcript.Entry) int {
+	if latest != nil && latest.Details != nil && latest.Details.WindowGeneration > 0 {
+		return latest.Details.WindowGeneration
+	}
+	generation := 0
+	for index := 0; index <= latestIndex && index < len(branch); index++ {
+		if branch[index].Type == transcript.EntryCompaction {
+			generation++
+		}
+	}
+	return generation
 }
 
 func latestCompaction(branch []transcript.Entry) (int, *transcript.Entry) {
@@ -144,6 +211,24 @@ func applyReasoningReplayPolicy(message *schema.Message, policy ReasoningReplayP
 		}
 		clone.AssistantGenMultiContent = parts
 	}
+	return &clone
+}
+
+// normalizeLegacyContextToolGuidance 只迁移 Humbert 自己生成的旧 ToolResult 引导文本，
+// 不改写用户/助手正文。这样上一版已经持久化的超大结果仍能引导模型使用新的统一资源工具。
+func normalizeLegacyContextToolGuidance(message *schema.Message) *schema.Message {
+	if message == nil || message.Role != schema.Tool || !strings.Contains(message.Content, "humbert_context_result_truncated") {
+		return message
+	}
+	if !strings.Contains(message.Content, "context_artifact_read") {
+		return message
+	}
+	clone := *message
+	clone.Content = strings.ReplaceAll(
+		clone.Content,
+		"使用 context_artifact_read 按区间读取",
+		"调用 context_resource，并使用 resource_type=artifact、resource_id=artifact_id 按区间读取",
+	)
 	return &clone
 }
 

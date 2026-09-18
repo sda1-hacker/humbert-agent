@@ -278,6 +278,7 @@ func (s *Service) HydrateMessages(ctx context.Context, sessionID string, message
 	result := make([]*schema.Message, 0, len(messages))
 	var hydratedBytes int64
 	imageReplayMask := multimodal.ImageReplayMask(messages)
+	fileReplayMask := multimodal.FileReplayMask(messages)
 	for index, message := range messages {
 		hydrated, err := s.hydrateUserAttachmentsWithBudget(
 			ctx,
@@ -285,6 +286,7 @@ func (s *Service) HydrateMessages(ctx context.Context, sessionID string, message
 			message,
 			&hydratedBytes,
 			imageReplayMask[index],
+			fileReplayMask[index],
 		)
 		if err != nil {
 			return nil, fmt.Errorf("恢复第 %d 条 Runtime Message 附件失败: %w", index+1, err)
@@ -297,7 +299,7 @@ func (s *Service) HydrateMessages(ctx context.Context, sessionID string, message
 // hydrateUserAttachments 构造单条 Provider Message；附件二进制只在请求内存中存在。
 func (s *Service) hydrateUserAttachments(ctx context.Context, sessionID string, message *schema.Message) (*schema.Message, error) {
 	var hydratedBytes int64
-	return s.hydrateUserAttachmentsWithBudget(ctx, sessionID, message, &hydratedBytes, true)
+	return s.hydrateUserAttachmentsWithBudget(ctx, sessionID, message, &hydratedBytes, true, true)
 }
 
 func (s *Service) hydrateUserAttachmentsWithBudget(
@@ -306,6 +308,7 @@ func (s *Service) hydrateUserAttachmentsWithBudget(
 	message *schema.Message,
 	hydratedBytes *int64,
 	replayImages bool,
+	replayFiles bool,
 ) (*schema.Message, error) {
 	if message == nil || message.Role != schema.User || len(message.UserInputMultiContent) == 0 {
 		return message, nil
@@ -336,6 +339,10 @@ func (s *Service) hydrateUserAttachmentsWithBudget(
 		case schema.ChatMessagePartTypeFileURL:
 			if part.File == nil {
 				return nil, errors.New("历史文件附件结构无效")
+			}
+			if !replayFiles {
+				next = schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: multimodal.HistoricalFilePlaceholder(part)}
+				break
 			}
 			extractedText := stringExtra(part.Extra, "extracted_text")
 			if extractedText == "" {

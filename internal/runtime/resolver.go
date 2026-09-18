@@ -21,6 +21,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
+	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
@@ -165,14 +166,13 @@ func (r *Resolver) ResolveTurn(
 		}
 	}
 
-	budget, err := r.contextEngine.BudgetForModel(base.model.ContextWindow, base.model.MaxOutputTokens)
-	if err != nil {
-		return nil, fmt.Errorf("计算 Runtime Context Budget 失败: %w", err)
-	}
+	budget := contextSnapshot.Budget
 	contextHandler, err := r.contextEngine.NewMidRunHandler(
 		base.session.ID,
 		contextSnapshot.Instruction,
 		compactionModel(base.modelRoles).Instance,
+		compactionModel(base.modelRoles).ContextWindow,
+		compactionModel(base.modelRoles).MaxOutputTokens,
 		budget,
 		base.toolTokenEstimate,
 	)
@@ -195,49 +195,51 @@ func (r *Resolver) ResolveTurn(
 	}
 
 	return &Snapshot{
-		Manifest:          manifest,
-		RequestID:         requestID,
-		RunID:             runID,
-		SessionID:         base.session.ID,
-		AgentID:           manifest.AgentID,
-		AgentName:         manifest.AgentName,
-		BaseInstruction:   base.baseInstruction,
-		Instruction:       contextSnapshot.Instruction,
-		ModelID:           manifest.ModelID,
-		ModelRevision:     manifest.ModelRevision,
-		ModelRole:         base.modelRoles.activeRole,
-		ModelCapabilities: base.model.Capabilities,
-		CompactionModel:   compactionModel(base.modelRoles).Instance,
-		MemoryModel:       base.modelRoles.memory.Instance,
-		ToolRevision:      manifest.ToolRevision,
-		BuiltinToolNames:  append([]string(nil), manifest.BuiltinToolNames...),
-		SkillRevision:     manifest.SkillRevision,
-		SkillNames:        append([]string(nil), manifest.SkillNames...),
-		MCPRevision:       manifest.MCPRevision,
-		MCPServers:        append([]humbertmcp.RuntimeServerSnapshot(nil), manifest.MCPServers...),
-		MCPUnavailable:    append([]humbertmcp.RuntimeServerFailure(nil), manifest.MCPUnavailable...),
-		MCPTools:          append([]humbertmcp.RuntimeToolSnapshot(nil), manifest.MCPTools...),
-		MCPToolNames:      append([]string(nil), manifest.MCPToolNames...),
-		ProviderID:        base.model.ProviderID,
-		ProviderAPI:       base.model.API,
-		ProviderName:      base.model.ProviderName,
-		ModelName:         base.model.ModelName,
-		ModelDisplayName:  base.model.ModelDisplayName,
-		Model:             base.model.Instance,
-		ContextWindow:     base.model.ContextWindow,
-		MaxOutputTokens:   base.model.MaxOutputTokens,
-		ToolTokenEstimate: base.toolTokenEstimate,
-		ContextBudget:     budget,
-		ContextUsage:      contextSnapshot.Usage,
-		ContextAssembly:   contextSnapshot.Assembly,
-		PreRunCompacted:   preRunCompacted,
-		AgentHandlers:     handlers,
-		Tools:             mergeRuntimeTools(base.tools.Tools, base.mcp.Tools),
-		Messages:          providerMessages,
-		Workspace:         base.workspace,
-		Sandbox:           base.sandbox,
-		SessionWriter:     r.sessions,
-		EventReporter:     r.eventReporter,
+		Manifest:                  manifest,
+		RequestID:                 requestID,
+		RunID:                     runID,
+		SessionID:                 base.session.ID,
+		AgentID:                   manifest.AgentID,
+		AgentName:                 manifest.AgentName,
+		BaseInstruction:           base.baseInstruction,
+		Instruction:               contextSnapshot.Instruction,
+		ModelID:                   manifest.ModelID,
+		ModelRevision:             manifest.ModelRevision,
+		ModelRole:                 base.modelRoles.activeRole,
+		ModelCapabilities:         base.model.Capabilities,
+		CompactionModel:           compactionModel(base.modelRoles).Instance,
+		CompactionContextWindow:   compactionModel(base.modelRoles).ContextWindow,
+		CompactionMaxOutputTokens: compactionModel(base.modelRoles).MaxOutputTokens,
+		MemoryModel:               base.modelRoles.memory.Instance,
+		ToolRevision:              manifest.ToolRevision,
+		BuiltinToolNames:          append([]string(nil), manifest.BuiltinToolNames...),
+		SkillRevision:             manifest.SkillRevision,
+		SkillNames:                append([]string(nil), manifest.SkillNames...),
+		MCPRevision:               manifest.MCPRevision,
+		MCPServers:                append([]humbertmcp.RuntimeServerSnapshot(nil), manifest.MCPServers...),
+		MCPUnavailable:            append([]humbertmcp.RuntimeServerFailure(nil), manifest.MCPUnavailable...),
+		MCPTools:                  append([]humbertmcp.RuntimeToolSnapshot(nil), manifest.MCPTools...),
+		MCPToolNames:              append([]string(nil), manifest.MCPToolNames...),
+		ProviderID:                base.model.ProviderID,
+		ProviderAPI:               base.model.API,
+		ProviderName:              base.model.ProviderName,
+		ModelName:                 base.model.ModelName,
+		ModelDisplayName:          base.model.ModelDisplayName,
+		Model:                     base.model.Instance,
+		ContextWindow:             base.model.ContextWindow,
+		MaxOutputTokens:           base.model.MaxOutputTokens,
+		ToolTokenEstimate:         base.toolTokenEstimate,
+		ContextBudget:             contextSnapshot.Budget,
+		ContextUsage:              contextSnapshot.Usage,
+		ContextAssembly:           contextSnapshot.Assembly,
+		PreRunCompacted:           preRunCompacted,
+		AgentHandlers:             handlers,
+		Tools:                     mergeRuntimeTools(base.tools.Tools, base.mcp.Tools),
+		Messages:                  providerMessages,
+		Workspace:                 base.workspace,
+		Sandbox:                   base.sandbox,
+		SessionWriter:             r.sessions,
+		EventReporter:             r.eventReporter,
 	}, nil
 }
 
@@ -306,14 +308,17 @@ func (r *Resolver) compactUntilSafe(
 	current := snapshot
 	compacted := false
 	for pass := 0; pass < maxCompactionPasses && current.Usage.NeedsCompaction; pass++ {
+		compactModel := compactionModel(base.modelRoles)
 		result, err := r.contextEngine.Compact(ctx, contextengine.CompactRequest{
-			SessionID:         base.session.ID,
-			Model:             compactionModel(base.modelRoles).Instance,
-			Instruction:       base.baseInstruction,
-			ContextWindow:     base.model.ContextWindow,
-			MaxOutputTokens:   base.model.MaxOutputTokens,
-			ToolTokenEstimate: base.toolTokenEstimate,
-			Reason:            contextengine.CompactionReasonThreshold,
+			SessionID:                 base.session.ID,
+			Model:                     compactModel.Instance,
+			Instruction:               base.baseInstruction,
+			ContextWindow:             base.model.ContextWindow,
+			MaxOutputTokens:           base.model.MaxOutputTokens,
+			ToolTokenEstimate:         base.toolTokenEstimate,
+			CompactionContextWindow:   compactModel.ContextWindow,
+			CompactionMaxOutputTokens: compactModel.MaxOutputTokens,
+			Reason:                    contextengine.CompactionReasonThreshold,
 		})
 		if err != nil {
 			if errors.Is(err, contextengine.ErrNothingToCompact) {
@@ -415,15 +420,18 @@ func (r *Resolver) ManualCompact(
 		return ManualCompactionResult{}, err
 	}
 
+	compactModel := compactionModel(base.modelRoles)
 	compactResult, compactErr := r.contextEngine.Compact(ctx, contextengine.CompactRequest{
-		SessionID:         base.session.ID,
-		Model:             compactionModel(base.modelRoles).Instance,
-		Instruction:       base.baseInstruction,
-		ContextWindow:     base.model.ContextWindow,
-		MaxOutputTokens:   base.model.MaxOutputTokens,
-		ToolTokenEstimate: base.toolTokenEstimate,
-		Reason:            contextengine.CompactionReasonManual,
-		Force:             true,
+		SessionID:                 base.session.ID,
+		Model:                     compactModel.Instance,
+		Instruction:               base.baseInstruction,
+		ContextWindow:             base.model.ContextWindow,
+		MaxOutputTokens:           base.model.MaxOutputTokens,
+		ToolTokenEstimate:         base.toolTokenEstimate,
+		CompactionContextWindow:   compactModel.ContextWindow,
+		CompactionMaxOutputTokens: compactModel.MaxOutputTokens,
+		Reason:                    contextengine.CompactionReasonManual,
+		Force:                     true,
 	})
 	if compactErr != nil && !errors.Is(compactErr, contextengine.ErrNothingToCompact) {
 		return ManualCompactionResult{}, fmt.Errorf("手动压缩 Context 失败: %w", compactErr)
@@ -457,6 +465,9 @@ func (r *Resolver) MaintainAfterTurn(ctx context.Context, snapshot *Snapshot) er
 	if snapshot == nil {
 		return errors.New("Runtime Snapshot 不能为空")
 	}
+	// 使用本 Turn 第一次真实模型请求的 Prompt Usage 校准近似 Token 估算。校准失败或
+	// Provider 未返回 Usage 都不影响主流程，它只是后续预算的精度优化。
+	r.observeInitialPromptUsage(ctx, snapshot)
 	compactionRuntimeModel := snapshot.CompactionModel
 	if compactionRuntimeModel == nil {
 		compactionRuntimeModel = snapshot.Model
@@ -468,13 +479,16 @@ func (r *Resolver) MaintainAfterTurn(ctx context.Context, snapshot *Snapshot) er
 	postRunCompacted := false
 	if r.contextEngine.Config().AutoCompaction {
 		result, err := r.contextEngine.Compact(ctx, contextengine.CompactRequest{
-			SessionID:         snapshot.SessionID,
-			Model:             compactionRuntimeModel,
-			Instruction:       snapshot.BaseInstruction,
-			ContextWindow:     snapshot.ContextWindow,
-			MaxOutputTokens:   snapshot.MaxOutputTokens,
-			ToolTokenEstimate: snapshot.ToolTokenEstimate,
-			Reason:            contextengine.CompactionReasonMidRun,
+			SessionID:                 snapshot.SessionID,
+			Model:                     compactionRuntimeModel,
+			Instruction:               snapshot.BaseInstruction,
+			ContextWindow:             snapshot.ContextWindow,
+			MaxOutputTokens:           snapshot.MaxOutputTokens,
+			ToolTokenEstimate:         snapshot.ToolTokenEstimate,
+			CompactionContextWindow:   snapshot.CompactionContextWindow,
+			CompactionMaxOutputTokens: snapshot.CompactionMaxOutputTokens,
+			Reason:                    contextengine.CompactionReasonThreshold,
+			UseSoftLimit:              true,
 		})
 		if err != nil && !errors.Is(err, contextengine.ErrNothingToCompact) {
 			return fmt.Errorf("Turn 完成后持久化 Context Compaction 失败: %w", err)
@@ -487,6 +501,42 @@ func (r *Resolver) MaintainAfterTurn(ctx context.Context, snapshot *Snapshot) er
 		return fmt.Errorf("Turn 完成后刷新 Session Memory 失败: %w", err)
 	}
 	return nil
+}
+
+// observeInitialPromptUsage 找到当前用户轮次之后第一条带 Provider Usage 的 Assistant
+// 记录。它对应 StartTurn 时 ContextSnapshot 产生的第一次模型请求，因此可以与
+// snapshot.ContextUsage.UsedTokens 做近似校准；后续工具循环的 Prompt 已包含新增 ToolResult，
+// 不能再拿初始估算直接比较。
+func (r *Resolver) observeInitialPromptUsage(ctx context.Context, snapshot *Snapshot) {
+	if snapshot == nil || snapshot.ContextUsage.UsedTokens <= 0 {
+		return
+	}
+	document, err := r.sessions.LoadTranscript(ctx, snapshot.SessionID)
+	if err != nil {
+		return
+	}
+	latestUser := -1
+	for index := len(document.ActiveBranch) - 1; index >= 0; index-- {
+		entry := document.ActiveBranch[index]
+		if entry.Type == transcript.EntryMessage && entry.Message != nil && entry.Message.Role == transcript.RoleUser {
+			latestUser = index
+			break
+		}
+	}
+	if latestUser < 0 {
+		return
+	}
+	for index := latestUser + 1; index < len(document.ActiveBranch); index++ {
+		entry := document.ActiveBranch[index]
+		if entry.Type != transcript.EntryMessage || entry.Message == nil || entry.Message.Role != transcript.RoleAssistant {
+			continue
+		}
+		if entry.Message.Usage == nil || entry.Message.Usage.Input <= 0 {
+			continue
+		}
+		r.contextEngine.ObservePromptUsage(snapshot.ContextUsage.UsedTokens, entry.Message.Usage.Input)
+		return
+	}
 }
 
 // shouldForceMemoryRefresh 统一 durable compaction 与 Session Memory 的收敛规则。
@@ -560,6 +610,7 @@ func (r *Resolver) resolveContextBase(
 		SkillRevision:       skillSnapshot.Revision,
 		SkillIdentities:     skillSnapshot.PackageIdentities(),
 		SkillScriptCommands: skillSnapshot.ScriptRuntimeCommands(),
+		ToolResultMaxChars:  toolResultMaxCharsForContext(modelSnapshot.ContextWindow),
 	}
 	resolvedTools, err := r.tools.Resolve(ctx, toolScope)
 	if err != nil {
@@ -737,6 +788,24 @@ func mergeRuntimeTools(base []einotool.BaseTool, extra []einotool.BaseTool) []ei
 	result = append(result, base...)
 	result = append(result, extra...)
 	return result
+}
+
+// toolResultMaxCharsForContext 给单个 ToolResult 设置与模型窗口相关的直接注入上限。
+// 完整结果会由 Context Artifact Store 保存，因此这里可以保守限制而不丢失可恢复性。
+func toolResultMaxCharsForContext(contextWindow int) int {
+	if contextWindow <= 0 {
+		return 16000
+	}
+	// 近似允许单结果占 8% 上下文，按中英文混合保守使用约 2 chars/token；
+	// 同时限制在 8K-64K 字符，避免极端大窗口让一次 ToolResult 重新成为上下文炸弹。
+	limit := contextWindow * 2 / 12
+	if limit < 8192 {
+		limit = 8192
+	}
+	if limit > 65536 {
+		limit = 65536
+	}
+	return limit
 }
 
 // OperationTimeout 返回 Context/Memory 单次维护任务的最长执行时间。

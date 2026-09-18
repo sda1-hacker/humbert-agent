@@ -218,6 +218,16 @@ type CompactionDetails struct {
 	ReadFiles []string `json:"readFiles,omitempty"`
 
 	ModifiedFiles []string `json:"modifiedFiles,omitempty"`
+
+	// WindowGeneration 表示提交此检查点后进入的工作窗口编号。0 是初始窗口，
+	// 第一次持久化压缩产生 generation=1。
+	WindowGeneration int `json:"windowGeneration,omitempty"`
+
+	// Source* 是被该检查点吸收的原始历史范围。摘要只是导航与交接信息，真正事实仍可
+	// 通过 session_history 的 read 动作从这些 Entry 中追回。
+	SourceFirstEntryID string `json:"sourceFirstEntryId,omitempty"`
+	SourceLastEntryID  string `json:"sourceLastEntryId,omitempty"`
+	SourceEntryCount   int    `json:"sourceEntryCount,omitempty"`
 }
 
 // AppendCompactionInput 描述向 Session Tree 追加 CompactionEntry 所需的数据。

@@ -85,7 +85,7 @@ func NewManager(
 	}, nil
 }
 
-// ContextFacts 返回注入主模型 Instruction 的“重要事实”正文。
+// ContextFacts 返回注入主模型参考上下文的“重要事实”正文。
 //
 // Memory 是可重建派生状态，因此文件损坏、旧版本等错误不能让用户无法继续聊天。这里会
 // 统一记录不含文件正文/Secret 的 Warn 并返回空事实；后续 Refresh 会覆盖重建。
@@ -137,7 +137,12 @@ func (m *Manager) ContextFacts(
 	if strings.TrimSpace(facts) == "- 暂无" {
 		return "", nil
 	}
-	return strings.TrimSpace(facts), nil
+	result := strings.TrimSpace(facts)
+	if document.Sources.EntryCount > 0 {
+		result += fmt.Sprintf("\n\n来源范围：%s .. %s（%d 条原始记录）。如需核对细节，可使用 session_history（先 search、再 read）。",
+			document.Sources.FirstEntryID, document.Sources.LastEntryID, document.Sources.EntryCount)
+	}
+	return result, nil
 }
 
 // Refresh 根据当前 ActiveBranch 更新 Session Memory。
@@ -320,9 +325,25 @@ func (m *Manager) prepareAndGenerate(
 		},
 		Summary:   summary,
 		Artifacts: mergeArtifacts(previousArtifacts, artifacts, rebuilt),
+		Sources:   memorySourceRange(branch),
 		UpdatedAt: time.Now().UTC(),
 	}
 	return result, next, true, nil
+}
+
+func memorySourceRange(branch []transcript.Entry) SourceRange {
+	result := SourceRange{}
+	for _, entry := range branch {
+		if entry.Type != transcript.EntryMessage || entry.Message == nil {
+			continue
+		}
+		if result.FirstEntryID == "" {
+			result.FirstEntryID = entry.ID
+		}
+		result.LastEntryID = entry.ID
+		result.EntryCount++
+	}
+	return result
 }
 
 // rebuildSegment 为丢失/失效 memory.json 构造受控的重建输入。

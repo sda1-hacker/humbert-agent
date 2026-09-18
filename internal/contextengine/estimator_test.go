@@ -46,3 +46,25 @@ func TestApproxEstimatorMatchesHistoricalImageReplayWindow(t *testing.T) {
 		t.Fatalf("historical image placeholder should be cheaper than replay: immediate=%d later=%d", immediateTokens, laterTokens)
 	}
 }
+
+func TestApproxEstimatorCalibratesTowardProviderUsage(t *testing.T) {
+	t.Parallel()
+	estimator := NewApproxEstimator()
+	text := strings.Repeat("a", 4000)
+	before := estimator.EstimateText(text)
+	if before <= 0 {
+		t.Fatalf("expected positive estimate")
+	}
+
+	// 连续观察 Provider 实际输入高于本地估算，后续估算应平滑上调，但不能一次跳到极端值。
+	for i := 0; i < 8; i++ {
+		estimator.ObservePromptUsage(before, before*2)
+	}
+	after := estimator.EstimateText(text)
+	if after <= before {
+		t.Fatalf("expected calibrated estimate to increase: before=%d after=%d", before, after)
+	}
+	if after > int(float64(before)*1.31)+1 {
+		t.Fatalf("calibration exceeded safety bound: before=%d after=%d", before, after)
+	}
+}

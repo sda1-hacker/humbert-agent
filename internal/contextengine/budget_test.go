@@ -66,3 +66,38 @@ func TestCalculateBudgetRejectsInvalidOutputLimit(t *testing.T) {
 		t.Fatal("expected error when MaxOutputTokens reaches ContextWindow")
 	}
 }
+
+func TestResolveBudgetForFixedContextShrinksRecentTail(t *testing.T) {
+	t.Parallel()
+
+	base, err := CalculateBudget(testContextConfig(), 128*1024, 8*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := ResolveBudgetForFixedContext(base, 90*1024, 4*1024)
+	if resolved.FixedTokens != 90*1024 {
+		t.Fatalf("FixedTokens = %d", resolved.FixedTokens)
+	}
+	if resolved.HistoryBudgetTokens != resolved.ThresholdTokens-resolved.FixedTokens {
+		t.Fatalf("HistoryBudgetTokens = %d", resolved.HistoryBudgetTokens)
+	}
+	if resolved.TargetRecentTokens >= resolved.PreferredRecentTokens {
+		t.Fatalf("TargetRecentTokens should shrink: target=%d preferred=%d", resolved.TargetRecentTokens, resolved.PreferredRecentTokens)
+	}
+	if resolved.TargetRecentTokens+resolved.CheckpointBudgetTokens > resolved.HistoryBudgetTokens {
+		t.Fatalf("recent + checkpoint exceeds history budget: recent=%d checkpoint=%d history=%d", resolved.TargetRecentTokens, resolved.CheckpointBudgetTokens, resolved.HistoryBudgetTokens)
+	}
+}
+
+func TestResolveBudgetForFixedContextCanReduceRecentToZero(t *testing.T) {
+	t.Parallel()
+
+	base, err := CalculateBudget(testContextConfig(), 16*1024, 4*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := ResolveBudgetForFixedContext(base, base.ThresholdTokens, 0)
+	if resolved.HistoryBudgetTokens != 0 || resolved.TargetRecentTokens != 0 {
+		t.Fatalf("unexpected remaining budget: history=%d recent=%d", resolved.HistoryBudgetTokens, resolved.TargetRecentTokens)
+	}
+}
