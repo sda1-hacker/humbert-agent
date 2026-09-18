@@ -54,6 +54,15 @@ const TasksWorkspaceView =
             ),
     );
 
+// 工作区与产物页包含文件树、预览和 Session 产物追踪，同样属于低频一级页面，
+// 因此保持按需加载，不增加聊天首屏包体。
+const WorkspaceView =
+    defineAsyncComponent(
+        () => import(
+            "../components/workspace/WorkspaceView.vue"
+            ),
+    );
+
 import {
   useAgentStore,
 } from "../stores/agents.js";
@@ -86,6 +95,10 @@ import {
   useProactiveStore,
 } from "../stores/proactive.js";
 
+import {
+  useWorkspaceStore,
+} from "../stores/workspace.js";
+
 const layoutStore =
     useLayoutStore();
 
@@ -109,6 +122,9 @@ const preferenceStore =
 
 const proactiveStore =
     useProactiveStore();
+
+const workspaceStore =
+    useWorkspaceStore();
 
 /**
  * 设置页是否处于打开状态。
@@ -138,6 +154,8 @@ const settingsInitialKey =
  * chat       -> 对话
  * skills     -> Skills 中心
  * connectors -> MCP 连接器
+ * tasks      -> 主动任务
+ * workspace  -> Agent 工作区与产物
  *
  * Settings 仍然是覆盖整个业务区域的一级页面；关闭 Settings 后回到
  * 用户打开设置前所在的主工作区。
@@ -283,6 +301,12 @@ function openTasks() {
   mainView.value = "tasks";
 }
 
+/** 打开当前 Agent 的工作区与产物页面。 */
+function openWorkspace() {
+  settingsVisible.value = false;
+  mainView.value = "workspace";
+}
+
 function openChat() {
   settingsVisible.value = false;
   mainView.value = "chat";
@@ -318,6 +342,7 @@ onMounted(async () => {
   runtimeStore.initialiseEvents();
   taskStore.initialiseEvents();
   proactiveStore.initialiseEvents();
+  workspaceStore.initialiseEvents();
 
   try {
     await Promise.all([
@@ -352,12 +377,13 @@ onUnmounted(() => {
   runtimeStore.disposeEvents();
   taskStore.disposeEvents();
   proactiveStore.disposeEvents();
+  workspaceStore.disposeEvents();
 });
 </script>
 
 <template>
   <div class="app-shell">
-    <WindowChrome/>
+    <WindowChrome />
 
     <!--
       Settings 是一级页面，不再使用 Drawer。
@@ -384,10 +410,11 @@ onUnmounted(() => {
           @open-skills="openSkills"
           @open-connectors="openConnectors"
           @open-tasks="openTasks"
+          @open-workspace="openWorkspace"
           @open-settings="openSettings"
       />
 
-      <SidebarResizer/>
+      <SidebarResizer />
 
       <MCPWorkspaceView
           v-if="mainView === 'connectors'"
@@ -406,7 +433,12 @@ onUnmounted(() => {
           @manage-packages="openSettings('skills')"
       />
 
-      <ChatView v-else/>
+      <WorkspaceView
+          v-else-if="mainView === 'workspace'"
+          @open-session="openTaskSession"
+      />
+
+      <ChatView v-else />
     </div>
   </div>
 </template>
@@ -426,7 +458,8 @@ onUnmounted(() => {
 
   overflow: hidden;
 
-  background: var(--h-bg);
+  background:
+      var(--h-bg);
 }
 
 .app-shell__main,

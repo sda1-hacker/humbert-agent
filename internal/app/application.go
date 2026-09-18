@@ -33,6 +33,7 @@ import (
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
+	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 )
 
 const Version = "0.1.0"
@@ -89,6 +90,10 @@ type Application struct {
 	events *eventbus.Bus
 
 	workspaces *workspace.Manager
+
+	// workspaceView 是桌面“工作区与产物”页面的只读查询层。
+	// 它不拥有新的文件生命周期，只投影 Agent 当前 Workspace 与 Session 工具事务。
+	workspaceView *workspaceview.Service
 
 	sandbox *sandbox.Manager
 
@@ -310,6 +315,13 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		logger,
 	)
 
+	// 工作区页面与 Agent Runtime 共用同一个 WorkspaceManager / SessionService。
+	// 这样 UI 浏览不会出现第二套路径解析或第二份“产物数据库”。
+	workspaceViewService, err := workspaceview.NewService(agentService, sessionService, workspaceManager)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Workspace View Service 失败: %w", err)
+	}
+
 	contextArtifactStore, err := contextartifact.NewStore(sessionService)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Context Artifact Store 失败: %w", err)
@@ -464,6 +476,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		credentials:   credentials,
 		events:        events,
 		workspaces:    workspaceManager,
+		workspaceView: workspaceViewService,
 		sandbox:       sandboxManager,
 		permissions:   permissionEngine,
 		preferences:   preferenceStore,
@@ -528,6 +541,13 @@ func (a *Application) Events() *eventbus.Bus {
 // Workspaces 返回 WorkspaceManager。
 func (a *Application) Workspaces() *workspace.Manager {
 	return a.workspaces
+}
+
+// WorkspaceView 返回桌面工作区/产物查询服务。
+//
+// 调用方只能通过它读取当前 Agent Workspace 的受控视图，不能取得任意物理路径读写能力。
+func (a *Application) WorkspaceView() *workspaceview.Service {
+	return a.workspaceView
 }
 
 // Sandbox 返回跨平台 Sandbox Manager。

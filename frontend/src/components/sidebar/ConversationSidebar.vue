@@ -58,6 +58,7 @@ const emit =
       "open-skills",
       "open-connectors",
       "open-tasks",
+      "open-workspace",
     ]);
 
 const agentStore =
@@ -730,6 +731,29 @@ watch(
           type="button"
           class="sidebar-primary-entry"
           :class="{
+            'sidebar-primary-entry--active': props.activeView === 'workspace',
+          }"
+          @click="emit('open-workspace')"
+      >
+        <svg
+            class="sidebar-primary-entry__icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+        >
+          <path d="M3 6.5h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-12Z"/>
+          <path d="M7 13h10M7 16h6"/>
+        </svg>
+
+        <span class="sidebar-primary-entry__text">
+          <strong>工作区</strong>
+          <small>文件预览与 Agent 产物</small>
+        </span>
+      </button>
+
+      <button
+          type="button"
+          class="sidebar-primary-entry"
+          :class="{
             'sidebar-primary-entry--active': props.activeView === 'tasks',
           }"
           @click="emit('open-tasks')"
@@ -739,7 +763,8 @@ watch(
             viewBox="0 0 24 24"
             aria-hidden="true"
         >
-          <path d="M7 3v3M17 3v3M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm-2 5h18M8 12h3M8 16h7"/>
+          <path
+              d="M7 3v3M17 3v3M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm-2 5h18M8 12h3M8 16h7"/>
         </svg>
 
         <span class="sidebar-primary-entry__text">
@@ -793,7 +818,6 @@ watch(
         </span>
       </button>
     </nav>
-
 
 
     <div class="sidebar-divider"></div>

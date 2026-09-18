@@ -69,7 +69,7 @@ function normalizeSkills(state) {
                 skill?.source &&
                 typeof skill.source === "object"
                     ? skill.source
-                    : { known: false },
+                    : {known: false},
           }),
       )
       : [];

@@ -57,5 +57,10 @@ func All(
 		application.NewService(
 			NewProactiveService(core),
 		),
+
+		// WorkspaceService 只暴露当前 Agent Workspace 的受控只读视图与产物来源。
+		application.NewService(
+			NewWorkspaceService(core),
+		),
 	}
 }
