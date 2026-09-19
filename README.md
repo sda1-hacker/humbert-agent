@@ -2,7 +2,7 @@
 
 Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Personal Agent 项目。
 名字Humbert来自于作者喜欢的一个日本民谣组合ハンバート ハンバート。
-作者也是刚入门Agent开发，功能正在逐渐完善,希望大家一起来学习，有什么好的建议多多issues
+作者也是刚接触Agent开发，功能正在逐渐完善,希望大家一起来学习，有什么好的建议多多issues
 
 ## 数据目录
 
@@ -82,47 +82,5 @@ export HUMBERT_SECURITY_SHELL_ENABLED=false
 ```bash
 wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings
 wails3 dev
-
-
-# 替换图标：
-rm -fr ./bin/
-rm -f build/darwin/icons.icns
-rm -f build/windows/icon.ico
-wails3 task common:generate:icons
-
-从 build/darwin/Info.dev.plist 和 Info.plist 中删除
-<key>CFBundleIconName</key>
-<string>appicon</string>
-
-rm -f build/darwin/Assets.car
-```
-
-## 前端依赖
-
-```bash
-cd frontend
-npm install
-cd ..
-```
-
-## 开发运行
-
-```bash
-wails3 dev
-```
-
-## Go 测试与静态检查
-
-```bash
-gofmt -w <modified-go-files>
-go test ./...
-go vet ./...
-```
-
-前端生产构建：
-
-```bash
-cd frontend
-npm run build
 ```
 
