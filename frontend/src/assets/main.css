@@ -955,3 +955,68 @@ a {
         width: 100%;
     }
 }
+
+/* =============================
+   Humbert Confirm Modal
+   ============================= */
+
+/*
+ * 删除 Agent、删除对话、删除任务等确认动作统一使用应用内 Modal。
+ *
+ * 这里故意不使用 Arco 的 simple/messageType 图标模式：
+ * 原生系统弹窗和 simple Modal 都会把大图标放在视觉中心，和 Humbert 目前
+ * “文字层级 + 低饱和状态色”的界面语言不一致。危险性只通过确认按钮表达即可。
+ */
+.humbert-confirm-modal {
+    border: 1px solid var(--h-border) !important;
+    border-radius: var(--h-radius-lg) !important;
+    background: var(--h-surface) !important;
+    box-shadow: none !important;
+    overflow: hidden;
+}
+
+.humbert-confirm-modal .arco-modal-header {
+    padding: 20px 22px 10px !important;
+    border-bottom: 0 !important;
+}
+
+.humbert-confirm-modal .arco-modal-title {
+    color: var(--h-text) !important;
+    font-family: var(--h-ui);
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.45;
+    text-align: left;
+}
+
+.humbert-confirm-modal .arco-modal-body,
+.humbert-confirm-modal__body {
+    padding: 0 22px 20px !important;
+    color: var(--h-text-secondary) !important;
+    font-family: var(--h-ui);
+    font-size: 14px;
+    line-height: 1.8;
+    white-space: pre-line;
+}
+
+.humbert-confirm-modal .arco-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 14px 22px 18px !important;
+    border-top: 1px solid var(--h-border) !important;
+    background: color-mix(in srgb, var(--h-bg) 52%, var(--h-surface));
+}
+
+.humbert-confirm-modal .arco-modal-footer .arco-btn {
+    min-width: 88px;
+}
+
+/*
+ * Arco 的 Modal 遮罩统一使用暖灰黑，而不是操作系统弹窗那种厚重冷灰。
+ * 该规则同时改善重命名等现有应用内 Modal，使不同弹窗之间保持一致。
+ */
+.arco-modal-mask {
+    background: rgba(20, 20, 19, 0.22) !important;
+    backdrop-filter: blur(1.5px);
+}

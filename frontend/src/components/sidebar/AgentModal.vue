@@ -12,8 +12,8 @@ import {
 } from "@arco-design/web-vue";
 
 import {
-  Dialogs,
-} from "@wailsio/runtime";
+  confirmAction,
+} from "../../utils/confirm.js";
 
 import {
   IconDelete,
@@ -272,7 +272,7 @@ function resetForm(agent) {
         agent.name,
 
         avatar:
-        agent.avatar || "",
+            agent.avatar || "",
 
         instruction:
         agent.instruction,
@@ -598,36 +598,19 @@ async function save() {
         );
 
     if (workspaceChanged) {
-      const answer =
-          await Dialogs.Question({
-            Title:
+      const confirmed =
+          await confirmAction({
+            title:
                 "更换 Agent 目录",
 
-            Message:
+            message:
                 "更换 Workspace 只影响之后的 Agent Turn，不会移动或删除原目录中的文件。是否继续？",
 
-            Buttons: [
-              {
-                Label:
-                    "继续更换",
-
-                IsDefault:
-                    false,
-              },
-              {
-                Label:
-                    "取消",
-
-                IsDefault:
-                    true,
-              },
-            ],
+            confirmText:
+                "继续更换",
           });
 
-      if (
-          answer !==
-          "继续更换"
-      ) {
+      if (!confirmed) {
         return;
       }
     }
@@ -671,35 +654,20 @@ async function removeAgent() {
   }
 
   try {
-    const answer =
-        await Dialogs.Question({
-          Title:
+    const confirmed =
+        await confirmAction({
+          title:
               "删除 Agent",
 
-          Message:
+          message:
               `确定删除 Agent「${form.name}」吗？该 Agent 的全部对话、附件、记忆和 Humbert 管理的 Workspace 会一并删除；如果使用的是自定义外部 Workspace，外部文件不会被删除。`,
 
-          Buttons: [
-            {
-              Label:
-                  "删除",
-
-              IsDefault:
-                  false,
-            },
-            {
-              Label:
-                  "取消",
-
-              IsDefault:
-                  true,
-            },
-          ],
+          confirmText:
+              "删除",
+          danger: true,
         });
 
-    if (
-        answer !== "删除"
-    ) {
+    if (!confirmed) {
       return;
     }
 
@@ -745,13 +713,14 @@ async function removeAgent() {
       <a-tab-pane key="basic" title="基本设置">
         <a-form :model="form" layout="vertical" class="agent-tab-form">
           <div class="agent-avatar-editor">
-            <IdentityAvatar :src="form.avatar || DEFAULT_AGENT_AVATAR" :name="form.name || 'Agent'" :size="64" />
+            <IdentityAvatar :src="form.avatar || DEFAULT_AGENT_AVATAR" :name="form.name || 'Agent'" :size="64"/>
             <div class="agent-avatar-editor__actions">
               <strong>Agent 头像</strong>
               <span>显示在聊天消息中；未选择时使用默认头像。</span>
               <div>
                 <a-button size="small" @click="avatarInput?.click()">选择头像</a-button>
-                <a-button v-if="form.avatar" size="small" type="text" status="danger" @click="form.avatar = ''">移除</a-button>
+                <a-button v-if="form.avatar" size="small" type="text" status="danger" @click="form.avatar = ''">移除
+                </a-button>
               </div>
             </div>
             <input
@@ -790,7 +759,7 @@ async function removeAgent() {
             <template #extra>
               <div class="model-role-extra">
                 <span>普通对话和默认 Runtime 使用该模型。</span>
-                <ModelCapabilityBadges v-if="selectedChatModel" :capabilities="selectedChatModel.capabilities" compact />
+                <ModelCapabilityBadges v-if="selectedChatModel" :capabilities="selectedChatModel.capabilities" compact/>
               </div>
             </template>
           </a-form-item>
@@ -802,7 +771,8 @@ async function removeAgent() {
             </div>
             <div class="model-role-grid">
               <a-form-item label="Utility 模型">
-                <a-select v-model="form.modelRoles.utilityModelID" allow-clear allow-search placeholder="回退 Chat 模型">
+                <a-select v-model="form.modelRoles.utilityModelID" allow-clear allow-search
+                          placeholder="回退 Chat 模型">
                   <a-option
                       v-for="model in roleModelOptions(form.modelRoles.utilityModelID)"
                       :key="model.id" :value="model.id" :disabled="!model.enabled"
@@ -814,7 +784,8 @@ async function removeAgent() {
               </a-form-item>
 
               <a-form-item label="Memory 模型">
-                <a-select v-model="form.modelRoles.memoryModelID" allow-clear allow-search placeholder="回退 Utility / Chat">
+                <a-select v-model="form.modelRoles.memoryModelID" allow-clear allow-search
+                          placeholder="回退 Utility / Chat">
                   <a-option
                       v-for="model in roleModelOptions(form.modelRoles.memoryModelID)"
                       :key="model.id" :value="model.id" :disabled="!model.enabled"
@@ -829,7 +800,7 @@ async function removeAgent() {
           </div>
 
           <a-form-item label="Skills">
-            <SkillSelector v-model="form.enabledSkills" />
+            <SkillSelector v-model="form.enabledSkills"/>
           </a-form-item>
 
           <a-form-item label="Agent 目录">
@@ -850,7 +821,9 @@ async function removeAgent() {
                     :loading="selectingWorkspace"
                     @click="chooseWorkspace"
                 >
-                  <template #icon><IconFolder /></template>
+                  <template #icon>
+                    <IconFolder/>
+                  </template>
                   {{ form.workspacePath ? "重新选择" : "选择目录" }}
                 </a-button>
               </div>
@@ -910,7 +883,9 @@ async function removeAgent() {
             :disabled="saving"
             @click="removeAgent"
         >
-          <template #icon><IconDelete /></template>
+          <template #icon>
+            <IconDelete/>
+          </template>
           删除 Agent
         </a-button>
         <span v-else></span>
@@ -948,11 +923,30 @@ async function removeAgent() {
   background: var(--h-surface-soft, var(--h-surface));
 }
 
-.agent-avatar-editor__actions { display: grid; gap: 4px; }
-.agent-avatar-editor__actions strong { color: var(--h-text); font-size: 12px; }
-.agent-avatar-editor__actions span { color: var(--h-text-muted); font-size: 10px; }
-.agent-avatar-editor__actions > div { display: flex; gap: 6px; margin-top: 3px; }
-.agent-avatar-input { display: none; }
+.agent-avatar-editor__actions {
+  display: grid;
+  gap: 4px;
+}
+
+.agent-avatar-editor__actions strong {
+  color: var(--h-text);
+  font-size: 12px;
+}
+
+.agent-avatar-editor__actions span {
+  color: var(--h-text-muted);
+  font-size: 10px;
+}
+
+.agent-avatar-editor__actions > div {
+  display: flex;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.agent-avatar-input {
+  display: none;
+}
 
 .agent-config-pane,
 .instruction-pane {

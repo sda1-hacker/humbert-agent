@@ -10,8 +10,8 @@ import {
 } from "@arco-design/web-vue";
 
 import {
-  Dialogs,
-} from "@wailsio/runtime";
+  confirmAction,
+} from "../../../utils/confirm.js";
 
 import {
   IconDelete,
@@ -217,27 +217,19 @@ async function save() {
  * 后端会继续负责最终的完整性检查。
  */
 async function remove(provider) {
-  const result =
-      await Dialogs.Question({
-        Title:
+  const confirmed =
+      await confirmAction({
+        title:
             "删除供应商",
 
-        Message:
+        message:
             `确定删除供应商「${provider.name}」吗？`,
 
-        Buttons: [
-          {
-            Label: "删除",
-            IsDefault: false,
-          },
-          {
-            Label: "取消",
-            IsDefault: true,
-          },
-        ],
+        confirmText: "删除",
+        danger: true,
       });
 
-  if (result !== "删除") {
+  if (!confirmed) {
     return;
   }
 

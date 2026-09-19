@@ -11,8 +11,8 @@ import {
 } from "@arco-design/web-vue";
 
 import {
-  Dialogs,
-} from "@wailsio/runtime";
+  confirmAction,
+} from "../../utils/confirm.js";
 
 import {
   IconDelete,
@@ -372,22 +372,14 @@ async function save() {
 async function remove(server) {
   if (!server?.id) return;
 
-  const result = await Dialogs.Question({
-    Title: "删除 MCP Server",
-    Message: `确定删除「${server.name}」吗？如果仍有 Agent 启用了这个 Server 的 Tool，Humbert 会拒绝删除。关联的 Credential（包括 stdio 环境变量与 HTTP 认证）也会一并清理。`,
-    Buttons: [
-      {
-        Label: "删除",
-        IsDefault: false,
-      },
-      {
-        Label: "取消",
-        IsDefault: true,
-      },
-    ],
+  const confirmed = await confirmAction({
+    title: "删除 MCP Server",
+    message: `确定删除「${server.name}」吗？如果仍有 Agent 启用了这个 Server 的 Tool，Humbert 会拒绝删除。关联的 Credential（包括 stdio 环境变量与 HTTP 认证）也会一并清理。`,
+    confirmText: "删除",
+    danger: true,
   });
 
-  if (result !== "删除") return;
+  if (!confirmed) return;
 
   try {
     await deleteMCPServer(server.id);

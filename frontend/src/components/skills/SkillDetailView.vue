@@ -10,8 +10,8 @@ import {
 } from "@arco-design/web-vue";
 
 import {
-  Dialogs,
-} from "@wailsio/runtime";
+  confirmAction,
+} from "../../utils/confirm.js";
 
 import {
   IconDelete,
@@ -182,7 +182,7 @@ const source =
       return value &&
       typeof value === "object"
           ? value
-          : { known: false };
+          : {known: false};
     });
 
 const sourceLabel =
@@ -394,23 +394,11 @@ function shortIdentity(value) {
 }
 
 async function confirmMutation(title, message, actionLabel) {
-  const answer =
-      await Dialogs.Question({
-        Title: title,
-        Message: message,
-        Buttons: [
-          {
-            Label: actionLabel,
-            IsDefault: false,
-          },
-          {
-            Label: "取消",
-            IsDefault: true,
-          },
-        ],
-      });
-
-  return answer === actionLabel;
+  return confirmAction({
+    title,
+    message,
+    confirmText: actionLabel,
+  });
 }
 
 function toggleFolder(path) {
@@ -493,33 +481,20 @@ async function removeSkill() {
     return;
   }
 
-  const answer =
-      await Dialogs.Question({
-        Title:
+  const confirmed =
+      await confirmAction({
+        title:
             "删除 Skill",
 
-        Message:
+        message:
             `确定删除 Skill「${displayName.value}」吗？此操作只删除本地安装包。`,
 
-        Buttons: [
-          {
-            Label:
-                "删除",
-
-            IsDefault:
-                false,
-          },
-          {
-            Label:
-                "取消",
-
-            IsDefault:
-                true,
-          },
-        ],
+        confirmText:
+            "删除",
+        danger: true,
       });
 
-  if (answer !== "删除") {
+  if (!confirmed) {
     return;
   }
 
@@ -979,7 +954,7 @@ watch(
             @click="removeSkill"
         >
           <template #icon>
-            <IconDelete />
+            <IconDelete/>
           </template>
           删除 Skill
         </a-button>
@@ -1017,7 +992,9 @@ watch(
             v-if="skill.valid && ['unsupported', 'needs_setup'].includes(skill.runtimeStatus)"
             class="skill-detail__runtime-warning"
         >
-          {{ skill.runtimeMessage || (skill.runtimeStatus === 'needs_setup' ? "这个 Skill 可以启用，但执行部分能力前需要补充运行环境。" : "这个 Skill 已安装，但当前 Humbert Runtime 暂不支持启用。") }}
+          {{
+            skill.runtimeMessage || (skill.runtimeStatus === 'needs_setup' ? "这个 Skill 可以启用，但执行部分能力前需要补充运行环境。" : "这个 Skill 已安装，但当前 Humbert Runtime 暂不支持启用。")
+          }}
         </p>
       </div>
 
@@ -1043,7 +1020,7 @@ watch(
               @click="beginAliasEdit"
           >
             <template #icon>
-              <IconEdit />
+              <IconEdit/>
             </template>
             修改显示名称
           </a-button>
@@ -1080,7 +1057,8 @@ watch(
         </div>
 
         <p class="skill-detail__alias-help">
-          这里只修改 Humbert 的本地显示名称，不会改写第三方 SKILL.md，也不会改变 Agent.config.json 中的 canonical skill name。
+          这里只修改 Humbert 的本地显示名称，不会改写第三方 SKILL.md，也不会改变 Agent.config.json 中的 canonical skill
+          name。
         </p>
       </div>
     </section>
@@ -1147,10 +1125,13 @@ watch(
               size="small"
               :color="runtime.supported && runtime.available ? 'green' : 'orange'"
           >
-            {{ runtime.supported && runtime.available ? `可通过 ${runtime.command} 运行` : (runtime.message || "需要配置") }}
+            {{
+              runtime.supported && runtime.available ? `可通过 ${runtime.command} 运行` : (runtime.message || "需要配置")
+            }}
           </a-tag>
         </div>
-        <p>脚本只会通过 <code>run_skill_script</code> 在当前 Workspace 的临时副本中执行，并继续受命令白名单、Sandbox、Permission 与 Approval 约束。</p>
+        <p>脚本只会通过 <code>run_skill_script</code> 在当前 Workspace 的临时副本中执行，并继续受命令白名单、Sandbox、Permission
+          与 Approval 约束。</p>
       </div>
     </section>
 
@@ -1220,7 +1201,7 @@ watch(
               @click="checkForUpdate"
           >
             <template #icon>
-              <IconRefresh />
+              <IconRefresh/>
             </template>
             检查更新
           </a-button>
@@ -1333,7 +1314,8 @@ watch(
             class="skill-source__alert"
         >
           <template v-if="updateCheck.updateAvailable">
-            发现新的 Package 内容：{{ shortIdentity(updateCheck.currentIdentity) }} → {{ shortIdentity(updateCheck.candidateIdentity) }}。点击“更新 Skill”后才会原子替换当前安装。
+            发现新的 Package 内容：{{ shortIdentity(updateCheck.currentIdentity) }} →
+            {{ shortIdentity(updateCheck.candidateIdentity) }}。点击“更新 Skill”后才会原子替换当前安装。
           </template>
 
           <template v-else>
@@ -1348,9 +1330,11 @@ watch(
           :show-icon="true"
           class="skill-source__alert"
       >
-        {{ skill.valid
-          ? "这个 Skill 没有可复用的安装来源，通常是旧版本 Humbert 安装或手工复制的 Package。它仍可正常使用；重新选择 URL 或本地目录后，Humbert 才能自动检查和更新。"
-          : "这个无效 Skill 没有可复用的安装来源。请重新选择 URL 或本地 Skill 目录；Humbert 会先完整验证候选 Package，再原子替换当前损坏内容。" }}
+        {{
+          skill.valid
+              ? "这个 Skill 没有可复用的安装来源，通常是旧版本 Humbert 安装或手工复制的 Package。它仍可正常使用；重新选择 URL 或本地目录后，Humbert 才能自动检查和更新。"
+              : "这个无效 Skill 没有可复用的安装来源。请重新选择 URL 或本地 Skill 目录；Humbert 会先完整验证候选 Package，再原子替换当前损坏内容。"
+        }}
       </a-alert>
 
       <div
@@ -1358,9 +1342,11 @@ watch(
           class="skill-source__editor"
       >
         <div class="skill-source__editor-title">
-          {{ !skill.valid
-            ? (source.known ? "更换修复来源" : "选择修复来源")
-            : (source.known ? "更换来源并重新安装" : "建立更新来源") }}
+          {{
+            !skill.valid
+                ? (source.known ? "更换修复来源" : "选择修复来源")
+                : (source.known ? "更换来源并重新安装" : "建立更新来源")
+          }}
         </div>
 
         <div class="skill-source__remote-row">
@@ -1382,7 +1368,6 @@ watch(
         </div>
 
 
-
         <div class="skill-source__local-row">
           <a-input
               v-model="sourceSkillPathDraft"
@@ -1402,7 +1387,8 @@ watch(
 
         <p>或者从本地目录重新安装并记录来源。</p>
         <p>
-          Humbert 会先完整验证 canonical name 必须仍是「{{ skill.name }}」。来源不匹配、下载失败或 Package 校验失败时，{{ skill.valid ? "当前安装" : "当前损坏 Package" }} 保持不变。
+          Humbert 会先完整验证 canonical name 必须仍是「{{ skill.name }}」。来源不匹配、下载失败或 Package
+          校验失败时，{{ skill.valid ? "当前安装" : "当前损坏 Package" }} 保持不变。
         </p>
       </div>
     </section>
@@ -1442,7 +1428,7 @@ watch(
               </span>
             </div>
 
-            <IconFolder />
+            <IconFolder/>
           </div>
 
           <div class="skill-files__tree">

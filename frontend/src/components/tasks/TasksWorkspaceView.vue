@@ -12,8 +12,8 @@ import {
 } from "@arco-design/web-vue";
 
 import {
-  Dialogs,
-} from "@wailsio/runtime";
+  confirmAction,
+} from "../../utils/confirm.js";
 
 import ApprovalCard from "../chat/ApprovalCard.vue";
 import EmptyState from "../ui/EmptyState.vue";
@@ -46,13 +46,13 @@ const approvalID = ref("");
 const approvalError = ref("");
 
 const weekdays = [
-  {value: 1, label: "一"},
-  {value: 2, label: "二"},
-  {value: 3, label: "三"},
-  {value: 4, label: "四"},
-  {value: 5, label: "五"},
-  {value: 6, label: "六"},
-  {value: 0, label: "日"},
+  { value: 1, label: "一" },
+  { value: 2, label: "二" },
+  { value: 3, label: "三" },
+  { value: 4, label: "四" },
+  { value: 5, label: "五" },
+  { value: 6, label: "六" },
+  { value: 0, label: "日" },
 ];
 
 function localTimeZone() {
@@ -146,7 +146,7 @@ watch(() => selectedTask.value?.id, () => {
   if (!creating.value) {
     applyTask(selectedTask.value);
   }
-}, {immediate: true});
+}, { immediate: true });
 
 watch(() => selectedTask.value?.status, (status) => {
   if (!creating.value && status) {
@@ -300,15 +300,13 @@ async function deleteSelected() {
   }
   const taskID = selectedTask.value.id;
   const taskName = selectedTask.value.name;
-  const confirmed = await Dialogs.Question({
-    Title: "删除任务",
-    Message: `永久删除“${taskName}”？任务配置、全部运行历史及其对应对话都会被删除，此操作无法撤销。`,
-    Buttons: [
-      {Label: "删除", IsDefault: false},
-      {Label: "取消", IsDefault: true},
-    ],
+  const confirmed = await confirmAction({
+    title: "删除任务",
+    message: `永久删除“${taskName}”？任务配置、全部运行历史及其对应对话都会被删除，此操作无法撤销。`,
+    confirmText: "删除",
+    danger: true,
   });
-  if (confirmed !== "删除") {
+  if (!confirmed) {
     return;
   }
   deletingTask.value = true;
@@ -326,15 +324,13 @@ async function deleteRun(run) {
   if (!run?.id || deletingRunID.value) {
     return;
   }
-  const confirmed = await Dialogs.Question({
-    Title: "删除运行记录",
-    Message: "这条运行历史及其对应对话会被永久删除，此操作无法撤销。",
-    Buttons: [
-      {Label: "删除", IsDefault: false},
-      {Label: "取消", IsDefault: true},
-    ],
+  const confirmed = await confirmAction({
+    title: "删除运行记录",
+    message: "这条运行历史及其对应对话会被永久删除，此操作无法撤销。",
+    confirmText: "删除",
+    danger: true,
   });
-  if (confirmed !== "删除") {
+  if (!confirmed) {
     return;
   }
   deletingRunID.value = run.id;
@@ -353,15 +349,13 @@ async function clearRuns() {
     return;
   }
   const taskID = selectedTask.value.id;
-  const confirmed = await Dialogs.Question({
-    Title: "清空运行历史",
-    Message: "全部运行历史及其对应对话都会被永久删除，此操作无法撤销。",
-    Buttons: [
-      {Label: "清空", IsDefault: false},
-      {Label: "取消", IsDefault: true},
-    ],
+  const confirmed = await confirmAction({
+    title: "清空运行历史",
+    message: "全部运行历史及其对应对话都会被永久删除，此操作无法撤销。",
+    confirmText: "清空",
+    danger: true,
   });
-  if (confirmed !== "清空") {
+  if (!confirmed) {
     return;
   }
   clearingRuns.value = true;
@@ -533,7 +527,7 @@ onMounted(async () => {
           <div class="form-grid">
             <div class="field field--wide">
               <span>任务名称</span>
-              <a-input v-model="form.name" :max-length="120" aria-label="任务名称" placeholder="例如：整理每日工作摘要"/>
+              <a-input v-model="form.name" :max-length="120" aria-label="任务名称" placeholder="例如：整理每日工作摘要" />
             </div>
 
             <div class="field">
@@ -576,22 +570,22 @@ onMounted(async () => {
 
             <div v-if="form.scheduleType !== 'manual'" class="field">
               <span>时区</span>
-              <a-input v-model="form.timeZone" aria-label="时区" placeholder="Asia/Shanghai"/>
+              <a-input v-model="form.timeZone" aria-label="时区" placeholder="Asia/Shanghai" />
             </div>
 
             <div v-if="form.scheduleType === 'once'" class="field field--wide">
               <span>运行时间</span>
-              <input v-model="form.runAt" class="native-input" type="datetime-local" aria-label="运行时间"/>
+              <input v-model="form.runAt" class="native-input" type="datetime-local" aria-label="运行时间" />
             </div>
 
             <div v-if="form.scheduleType === 'interval'" class="field field--wide">
               <span>间隔分钟数</span>
-              <a-input-number v-model="form.intervalMinutes" :min="1" :max="525600" aria-label="间隔分钟数"/>
+              <a-input-number v-model="form.intervalMinutes" :min="1" :max="525600" aria-label="间隔分钟数" />
             </div>
 
             <div v-if="['daily', 'weekly'].includes(form.scheduleType)" class="field">
               <span>当天时间</span>
-              <input v-model="form.timeOfDay" class="native-input" type="time" aria-label="当天时间"/>
+              <input v-model="form.timeOfDay" class="native-input" type="time" aria-label="当天时间" />
             </div>
 
             <div v-if="form.scheduleType === 'weekly'" class="field">
@@ -603,8 +597,7 @@ onMounted(async () => {
                     type="button"
                     :class="['weekday', { 'weekday--active': form.weekdays.includes(day.value) }]"
                     @click="toggleWeekday(day.value)"
-                >{{ day.label }}
-                </button>
+                >{{ day.label }}</button>
               </div>
             </div>
 
@@ -628,21 +621,11 @@ onMounted(async () => {
           <details class="limits">
             <summary>执行限制与重试</summary>
             <div class="form-grid form-grid--limits">
-              <div class="field"><span>最长秒数</span>
-                <a-input-number v-model="form.maxDurationSeconds" :min="30" :max="86400" aria-label="最长秒数"/>
-              </div>
-              <div class="field"><span>最多模型调用</span>
-                <a-input-number v-model="form.maxModelCalls" :min="1" :max="100" aria-label="最多模型调用"/>
-              </div>
-              <div class="field"><span>最多工具调用</span>
-                <a-input-number v-model="form.maxToolCalls" :min="1" :max="500" aria-label="最多工具调用"/>
-              </div>
-              <div class="field"><span>最多尝试次数</span>
-                <a-input-number v-model="form.maxAttempts" :min="1" :max="5" aria-label="最多尝试次数"/>
-              </div>
-              <div class="field"><span>重试延迟秒数</span>
-                <a-input-number v-model="form.retryDelaySeconds" :min="1" :max="21600" aria-label="重试延迟秒数"/>
-              </div>
+              <div class="field"><span>最长秒数</span><a-input-number v-model="form.maxDurationSeconds" :min="30" :max="86400" aria-label="最长秒数" /></div>
+              <div class="field"><span>最多模型调用</span><a-input-number v-model="form.maxModelCalls" :min="1" :max="100" aria-label="最多模型调用" /></div>
+              <div class="field"><span>最多工具调用</span><a-input-number v-model="form.maxToolCalls" :min="1" :max="500" aria-label="最多工具调用" /></div>
+              <div class="field"><span>最多尝试次数</span><a-input-number v-model="form.maxAttempts" :min="1" :max="5" aria-label="最多尝试次数" /></div>
+              <div class="field"><span>重试延迟秒数</span><a-input-number v-model="form.retryDelaySeconds" :min="1" :max="21600" aria-label="重试延迟秒数" /></div>
             </div>
           </details>
 
@@ -668,8 +651,7 @@ onMounted(async () => {
                 :loading="clearingRuns"
                 :disabled="selectedRuns.some((run) => !canDeleteRun(run))"
                 @click="clearRuns"
-            >清空历史
-            </a-button>
+            >清空历史</a-button>
           </div>
 
           <div v-if="taskStore.loadingRuns[selectedTask.id]" class="runs-loading">正在加载…</div>
@@ -705,8 +687,7 @@ onMounted(async () => {
                   v-if="run.sessionID && run.sessionAvailable"
                   size="small"
                   @click="emit('open-session', { agentID: run.agentID, sessionID: run.sessionID })"
-              >查看对话
-              </a-button>
+              >查看对话</a-button>
               <a-button v-else-if="run.sessionID" size="small" disabled>对话已删除</a-button>
               <a-button v-if="canCancel(run)" size="small" status="danger" @click="cancelRun(run)">取消运行</a-button>
               <a-button
@@ -715,14 +696,13 @@ onMounted(async () => {
                   status="danger"
                   :loading="deletingRunID === run.id"
                   @click="deleteRun(run)"
-              >删除记录
-              </a-button>
+              >删除记录</a-button>
             </footer>
           </article>
         </section>
 
         <section v-else-if="!creating" class="workspace-empty">
-          <EmptyState title="选择一个任务" description="查看并编辑计划、执行限制与运行历史。"/>
+          <EmptyState title="选择一个任务" description="查看并编辑计划、执行限制与运行历史。" />
         </section>
       </div>
     </div>
@@ -758,23 +738,10 @@ onMounted(async () => {
 }
 
 .tasks-header h1,
-.panel-heading h2 {
-  margin: 0;
-  color: var(--h-text);
-}
-
-.tasks-header h1 {
-  font-size: 30px;
-  font-weight: 500;
-  letter-spacing: -0.015em;
-}
-
+.panel-heading h2 { margin: 0; color: var(--h-text); }
+.tasks-header h1 { font-size: 30px; font-weight: 500; letter-spacing: -0.015em; }
 .tasks-header p,
-.panel-heading p {
-  margin: 5px 0 0;
-  color: var(--h-text-muted);
-  font-size: 13px;
-}
+.panel-heading p { margin: 5px 0 0; color: var(--h-text-muted); font-size: 13px; }
 
 .tasks-layout {
   display: grid;
@@ -798,11 +765,7 @@ onMounted(async () => {
 }
 
 .task-list__loading,
-.runs-loading {
-  padding: 24px;
-  color: var(--h-text-muted);
-  text-align: center;
-}
+.runs-loading { padding: 24px; color: var(--h-text-muted); text-align: center; }
 
 .task-list__item {
   display: flex;
@@ -820,25 +783,10 @@ onMounted(async () => {
   cursor: pointer;
 }
 
-.task-list__item:hover {
-  background: var(--h-surface-hover);
-}
-
-.task-list__item--active {
-  border-left-color: var(--h-accent);
-  background: transparent;
-}
-
-.task-list__topline {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.task-list__item small {
-  color: var(--h-text-muted);
-}
+.task-list__item:hover { background: var(--h-surface-hover); }
+.task-list__item--active { border-left-color: var(--h-accent); background: transparent; }
+.task-list__topline { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.task-list__item small { color: var(--h-text-muted); }
 
 .task-state,
 .run-status {
@@ -852,35 +800,17 @@ onMounted(async () => {
 }
 
 .task-state--active,
-.run-status--succeeded {
-  color: rgb(var(--green-6));
-  background: rgb(var(--green-1));
-}
-
+.run-status--succeeded { color: rgb(var(--green-6)); background: rgb(var(--green-1)); }
 .task-state--paused,
 .run-status--skipped,
-.run-status--cancelled {
-  color: var(--h-text-muted);
-}
-
+.run-status--cancelled { color: var(--h-text-muted); }
 .run-status--failed,
 .run-status--timed_out,
-.run-status--interrupted {
-  color: rgb(var(--red-6));
-  background: rgb(var(--red-1));
-}
-
+.run-status--interrupted { color: rgb(var(--red-6)); background: rgb(var(--red-1)); }
 .run-status--running,
 .run-status--starting,
-.run-status--queued {
-  color: var(--h-accent);
-  background: var(--h-accent-soft);
-}
-
-.run-status--waiting_approval {
-  color: rgb(var(--orange-6));
-  background: rgb(var(--orange-1));
-}
+.run-status--queued { color: var(--h-accent); background: var(--h-accent-soft); }
+.run-status--waiting_approval { color: rgb(var(--orange-6)); background: rgb(var(--orange-1)); }
 
 .task-detail {
   background: var(--h-bg);
@@ -893,46 +823,14 @@ onMounted(async () => {
   padding: 28px 30px;
 }
 
-.run-history {
-  border-top: 1px solid var(--h-border);
-}
+.run-history { border-top: 1px solid var(--h-border); }
+.panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+.panel-heading h2 { font-size: 20px; font-weight: 500; }
 
-.panel-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 18px;
-}
-
-.panel-heading h2 {
-  font-size: 20px;
-  font-weight: 500;
-}
-
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 14px;
-}
-
-.form-grid--limits {
-  margin-top: 14px;
-}
-
-.field {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 7px;
-  color: var(--h-text-muted);
-  font-size: 12px;
-}
-
-.field--wide {
-  grid-column: 1 / -1;
-}
-
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-grid--limits { margin-top: 14px; }
+.field { display: flex; min-width: 0; flex-direction: column; gap: 7px; color: var(--h-text-muted); font-size: 12px; }
+.field--wide { grid-column: 1 / -1; }
 .native-input {
   box-sizing: border-box;
   width: 100%;
@@ -945,11 +843,7 @@ onMounted(async () => {
   font: inherit;
 }
 
-.weekday-row {
-  display: flex;
-  gap: 5px;
-}
-
+.weekday-row { display: flex; gap: 5px; }
 .weekday {
   width: 28px;
   height: 28px;
@@ -959,112 +853,33 @@ onMounted(async () => {
   background: transparent;
   cursor: pointer;
 }
+.weekday--active { border-color: rgb(var(--primary-6)); color: rgb(var(--primary-6)); background: rgb(var(--primary-1)); }
 
-.weekday--active {
-  border-color: rgb(var(--primary-6));
-  color: rgb(var(--primary-6));
-  background: rgb(var(--primary-1));
-}
+.limits { margin-top: 18px; color: var(--h-text); }
+.limits summary { cursor: pointer; color: var(--h-text-muted); font-size: 13px; }
+.editor-actions { display: flex; align-items: center; gap: 9px; margin-top: 22px; }
+.editor-actions__spacer { flex: 1; }
 
-.limits {
-  margin-top: 18px;
-  color: var(--h-text);
-}
-
-.limits summary {
-  cursor: pointer;
-  color: var(--h-text-muted);
-  font-size: 13px;
-}
-
-.editor-actions {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 22px;
-}
-
-.editor-actions__spacer {
-  flex: 1;
-}
-
-.run-card {
-  margin-bottom: 12px;
-  border: 0;
-  border-radius: 8px;
-  padding: 15px;
-  background: var(--h-surface);
-}
-
+.run-card { margin-bottom: 12px; border: 0; border-radius: 8px; padding: 15px; background: var(--h-surface); }
 .run-card header,
 .run-card footer,
-.run-metrics {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.run-card header {
-  color: var(--h-text-muted);
-  font-size: 11px;
-}
-
-.run-card header time {
-  margin-left: auto;
-}
-
-.run-metrics {
-  margin-top: 10px;
-  color: var(--h-text-muted);
-  font-size: 12px;
-}
-
+.run-metrics { display: flex; align-items: center; gap: 9px; }
+.run-card header { color: var(--h-text-muted); font-size: 11px; }
+.run-card header time { margin-left: auto; }
+.run-metrics { margin-top: 10px; color: var(--h-text-muted); font-size: 12px; }
 .run-result,
-.run-error {
-  margin: 11px 0 0;
-  white-space: pre-wrap;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.run-result {
-  color: var(--h-text);
-}
-
-.run-error {
-  color: rgb(var(--red-6));
-}
-
-.run-card footer {
-  justify-content: flex-end;
-  margin-top: 12px;
-}
-
-.workspace-empty {
-  display: grid;
-  place-items: center;
-}
+.run-error { margin: 11px 0 0; white-space: pre-wrap; font-size: 13px; line-height: 1.55; }
+.run-result { color: var(--h-text); }
+.run-error { color: rgb(var(--red-6)); }
+.run-card footer { justify-content: flex-end; margin-top: 12px; }
+.workspace-empty { display: grid; place-items: center; }
 
 @media (max-width: 1050px) {
-  .tasks-layout {
-    grid-template-columns: 190px minmax(0, 1fr);
-  }
-
+  .tasks-layout { grid-template-columns: 190px minmax(0, 1fr); }
   .task-editor,
-  .run-history {
-    padding: 24px 22px;
-  }
-
-  .form-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .field--wide {
-    grid-column: auto;
-  }
-
-  .weekday-row {
-    flex-wrap: wrap;
-  }
+  .run-history { padding: 24px 22px; }
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .field--wide { grid-column: auto; }
+  .weekday-row { flex-wrap: wrap; }
 }
 </style>

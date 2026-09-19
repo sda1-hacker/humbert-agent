@@ -10,8 +10,8 @@ import {
 } from "@arco-design/web-vue";
 
 import {
-  Dialogs,
-} from "@wailsio/runtime";
+  confirmAction,
+} from "../../utils/confirm.js";
 
 import {
   IconDelete,
@@ -390,35 +390,20 @@ async function removeSession(
     return;
   }
 
-  const result =
-      await Dialogs.Question({
-        Title:
+  const confirmed =
+      await confirmAction({
+        title:
             "删除对话",
 
-        Message:
+        message:
             `确定删除「${session.title}」以及其中的全部消息吗？如果这是任务生成的对话，对应的运行历史也会一并永久删除。`,
 
-        Buttons: [
-          {
-            Label:
-                "删除",
-
-            IsDefault:
-                false,
-          },
-          {
-            Label:
-                "取消",
-
-            IsDefault:
-                true,
-          },
-        ],
+        confirmText:
+            "删除",
+        danger: true,
       });
 
-  if (
-      result !== "删除"
-  ) {
+  if (!confirmed) {
     return;
   }
 
@@ -763,8 +748,7 @@ watch(
             viewBox="0 0 24 24"
             aria-hidden="true"
         >
-          <path
-              d="M7 3v3M17 3v3M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm-2 5h18M8 12h3M8 16h7"/>
+          <path d="M7 3v3M17 3v3M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm-2 5h18M8 12h3M8 16h7"/>
         </svg>
 
         <span class="sidebar-primary-entry__text">
@@ -818,6 +802,7 @@ watch(
         </span>
       </button>
     </nav>
+
 
 
     <div class="sidebar-divider"></div>

@@ -11,8 +11,8 @@ import {
 } from "@arco-design/web-vue";
 
 import {
-  Dialogs,
-} from "@wailsio/runtime";
+  confirmAction,
+} from "../../../utils/confirm.js";
 
 import {
   IconDelete,
@@ -38,16 +38,16 @@ const testingID =
     ref("");
 
 const capabilityFields = [
-  { key: "tools", label: "Tool Calling", help: "模型是否支持函数/工具调用。Agent 暴露 Tool 时必须开启。" },
-  { key: "vision", label: "Vision", help: "模型是否支持图片输入。" },
-  { key: "files", label: "Files", help: "Provider 的原生文件输入能力元数据；当前 Humbert 附件入口尚不接收 PDF/Office。" },
-  { key: "reasoning", label: "Reasoning", help: "标记模型具备原生推理能力，供后续路由与 UI 使用。" },
-  { key: "json", label: "JSON", help: "模型是否支持可靠的结构化/JSON 输出模式。" },
-  { key: "audio", label: "Audio", help: "模型的音频能力元数据；当前 Humbert 尚未实现音频附件链路。" },
+  {key: "tools", label: "Tool Calling", help: "模型是否支持函数/工具调用。Agent 暴露 Tool 时必须开启。"},
+  {key: "vision", label: "Vision", help: "模型是否支持图片输入。"},
+  {key: "files", label: "Files", help: "Provider 的原生文件输入能力元数据；当前 Humbert 附件入口尚不接收 PDF/Office。"},
+  {key: "reasoning", label: "Reasoning", help: "标记模型具备原生推理能力，供后续路由与 UI 使用。"},
+  {key: "json", label: "JSON", help: "模型是否支持可靠的结构化/JSON 输出模式。"},
+  {key: "audio", label: "Audio", help: "模型的音频能力元数据；当前 Humbert 尚未实现音频附件链路。"},
 ];
 
 function defaultCapabilityConfig() {
-  return { tools: "auto", vision: "auto", files: "auto", reasoning: "auto", json: "auto", audio: "auto" };
+  return {tools: "auto", vision: "auto", files: "auto", reasoning: "auto", json: "auto", audio: "auto"};
 }
 
 const form =
@@ -224,7 +224,7 @@ async function save() {
       maxOutputTokens:
           Number(form.maxOutputTokens),
 
-      capabilityConfig: { ...form.capabilityConfig },
+      capabilityConfig: {...form.capabilityConfig},
 
       enabled:
           Boolean(form.enabled),
@@ -287,32 +287,24 @@ async function test(model) {
 }
 
 /**
- * 删除模型前使用原生确认对话框二次确认。
+ * 删除模型前使用 Humbert 应用内确认框二次确认。
  *
  * 后端仍会检查 Agent 对 Model 的引用关系，
  * 因此即使前端确认删除，也不会绕过领域完整性约束。
  */
 async function remove(model) {
-  const result =
-      await Dialogs.Question({
-        Title: "删除模型",
+  const confirmed =
+      await confirmAction({
+        title: "删除模型",
 
-        Message:
+        message:
             `确定删除模型「${model.displayName}」吗？历史会话记录会保留；如果仍有 Agent 在 Chat、Utility、Memory 角色中使用，或被多媒体设置选中，需要先切换相关配置。`,
 
-        Buttons: [
-          {
-            Label: "删除",
-            IsDefault: false,
-          },
-          {
-            Label: "取消",
-            IsDefault: true,
-          },
-        ],
+        confirmText: "删除",
+        danger: true,
       });
 
-  if (result !== "删除") {
+  if (!confirmed) {
     return;
   }
 
@@ -410,7 +402,7 @@ watch(
           <div class="model-main">
             <div class="model-name">{{ model.displayName }}</div>
             <div class="model-meta">{{ model.providerName }} · {{ model.modelName }}</div>
-            <ModelCapabilityBadges class="model-capabilities" :capabilities="model.capabilities" compact />
+            <ModelCapabilityBadges class="model-capabilities" :capabilities="model.capabilities" compact/>
           </div>
 
           <div class="model-actions">
