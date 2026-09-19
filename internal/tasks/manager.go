@@ -207,7 +207,16 @@ func (m *Manager) Create(ctx context.Context, input CreateInput) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	value := Task{ID: uuid.NewString(), AgentID: strings.TrimSpace(input.AgentID), Name: name, Prompt: prompt, Execution: execution, Status: status, Schedule: schedule, Limits: limits, NextRunAt: next, CreatedAt: now, UpdatedAt: now}
+	conversationMode, err := normalizeConversationMode(input.ConversationMode, execution)
+	if err != nil {
+		return Task{}, err
+	}
+	value := Task{
+		ID: uuid.NewString(), AgentID: strings.TrimSpace(input.AgentID),
+		Name: name, Prompt: prompt, Execution: execution, ConversationMode: conversationMode,
+		Status: status, Schedule: schedule, Limits: limits, NextRunAt: next,
+		CreatedAt: now, UpdatedAt: now,
+	}
 	if err := m.store.CreateTask(ctx, value); err != nil {
 		return Task{}, err
 	}
@@ -239,8 +248,21 @@ func (m *Manager) Update(ctx context.Context, id string, input UpdateInput) (Tas
 	if err != nil {
 		return Task{}, err
 	}
+	conversationMode, err := normalizeConversationMode(input.ConversationMode, execution)
+	if err != nil {
+		return Task{}, err
+	}
+	previousConversationMode := existing.EffectiveConversationMode()
 	existing.Name, existing.Prompt, existing.Execution, existing.Status = name, prompt, execution, status
+	existing.ConversationMode = conversationMode
 	existing.Schedule, existing.Limits, existing.NextRunAt = schedule, limits, next
+
+	// 会话方式从连续切到独立（或切换成仅通知）时，仅解除 Task 对持续 Session 的引用。
+	// 旧 Session 本身属于用户历史，不在保存任务配置时自动删除；用户仍可从会话列表查看。
+	// 从独立切到连续也从空引用开始，避免随意挑选某个旧的独立运行会话作为持续会话。
+	if execution != ExecutionAgent || conversationMode != ConversationContinuous || previousConversationMode != ConversationContinuous {
+		existing.PersistentSessionID = ""
+	}
 	existing.UpdatedAt = now
 	if err := m.store.UpdateTask(ctx, existing); err != nil {
 		return Task{}, err
@@ -315,22 +337,25 @@ func (m *Manager) Archive(ctx context.Context, id string) (Task, error) {
 	return value, nil
 }
 
-// Delete 永久删除任务、运行历史以及由这些运行创建的专用会话。Scheduler 的创建与
-// 分派也持有 cycleMu，因此删除与到期入队/启动不会交错。
-func (m *Manager) Delete(ctx context.Context, id string) error {
+// Delete 永久删除任务、运行历史以及由该任务使用的会话。
+//
+// 连续对话可能让多个 Run 指向同一个 Session，因此这里先收集唯一 Session ID，
+// 再在 Task 元数据删除后逐个清理，避免重复删除。同样会包含当前 PersistentSessionID，
+// 即使这个持续会话还没有对应任何 Run，也会随整个任务一起删除。
+func (m *Manager) Delete(ctx context.Context, id string) ([]string, error) {
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
 	task, err := m.store.GetTask(ctx, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	runs, err := m.store.ListRuns(ctx, task.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, run := range runs {
 		if run.Status.Active() {
-			return ErrTaskBusy
+			return nil, ErrTaskBusy
 		}
 	}
 	now := time.Now().UTC()
@@ -342,59 +367,144 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		runs[index].Error = "任务已删除，尚未开始的运行已取消。"
 		runs[index].FinishedAt = &now
 		if err := m.store.UpdateRun(ctx, runs[index]); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	deletedRuns, err := m.store.DeleteTask(ctx, task.ID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	m.publish(Event{Type: "task.deleted", TaskID: task.ID})
-	m.deleteRunSessions(deletedRuns)
-	return nil
-}
 
-// DeleteRun 删除单条终态运行及其专用会话。运行记录先删除，随后会话按 best effort
-// 清理；即使会话已经被旧版本删除，也不会阻塞历史记录清理。
-func (m *Manager) DeleteRun(ctx context.Context, runID string) error {
-	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
-	run, err := m.store.DeleteRun(ctx, runID)
-	if err != nil {
-		return err
+	candidates := taskRunSessionIDs(deletedRuns)
+	if persistentID := strings.TrimSpace(task.PersistentSessionID); persistentID != "" {
+		candidates = append(candidates, persistentID)
 	}
-	m.publish(Event{Type: "run.deleted", TaskID: run.TaskID, RunID: run.ID})
-	m.deleteRunSessions([]Run{run})
-	return nil
+	return m.deleteSessionIDs(candidates), nil
 }
 
-// ClearRuns 原子清空一个 Task 的终态历史；存在排队或活动运行时拒绝。
-func (m *Manager) ClearRuns(ctx context.Context, taskID string) error {
+// DeleteRun 只删除一条终态运行。
+//
+// 对独立对话，这个 Run 通常是该 Session 的唯一引用，因此会一起清理 Session。
+// 对连续对话，多个 Run 共用一个 Session；只要仍有其它 Run 引用，或者 Task 当前仍把
+// 它作为 PersistentSessionID，删除单条 Run 都不会破坏共享对话。
+func (m *Manager) DeleteRun(ctx context.Context, runID string) ([]string, error) {
 	m.cycleMu.Lock()
 	defer m.cycleMu.Unlock()
+	run, err := m.store.GetRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	task, err := m.store.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := m.store.DeleteRun(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	m.publish(Event{Type: "run.deleted", TaskID: deleted.TaskID, RunID: deleted.ID})
+	return m.deleteUnreferencedRunSessions(ctx, task, []Run{deleted}), nil
+}
+
+// ClearRuns 原子清空一个 Task 的终态运行历史。
+// 连续对话的当前 PersistentSessionID 会保留，避免用户只是清空“运行记录”却丢失
+// 长期跟踪对话；已经不再被 Task 引用的旧 Session 才会清理。
+func (m *Manager) ClearRuns(ctx context.Context, taskID string) ([]string, error) {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+	task, err := m.store.GetTask(ctx, taskID)
+	if err != nil {
+		return nil, err
+	}
 	runs, err := m.store.DeleteRuns(ctx, taskID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	m.publish(Event{Type: "runs.deleted", TaskID: taskID})
-	m.deleteRunSessions(runs)
-	return nil
+	return m.deleteUnreferencedRunSessions(ctx, task, runs), nil
 }
 
 func (m *Manager) RunBySession(ctx context.Context, sessionID string) (Run, bool, error) {
 	return m.store.RunBySession(ctx, sessionID)
 }
 
-func (m *Manager) deleteRunSessions(runs []Run) {
-	for _, run := range runs {
+// deleteUnreferencedRunSessions 清理因为删除运行记录而变成“无人引用”的专用 Session。
+// 它刻意把 Task 当前持续会话和其它剩余 Run 的 Session 视为保护引用，避免连续模式
+// 下删一条历史记录就把所有运行共用的对话一起删掉。
+func (m *Manager) deleteUnreferencedRunSessions(ctx context.Context, task Task, candidates []Run) []string {
+	remaining, err := m.store.ListRuns(ctx, task.ID)
+	if err != nil {
+		m.logger.Warn(context.Background(), "读取剩余 TaskRun 失败；为避免误删共享会话，本次跳过会话清理", "operation", "task.run.session.cleanup", "task_id", task.ID, "error", err)
+		return nil
+	}
+	return m.deleteSessionIDs(unreferencedRunSessionIDs(task, remaining, candidates))
+}
+
+// unreferencedRunSessionIDs 只做纯粹的引用计算，方便用单元测试覆盖共享 Session 的
+// 生命周期规则。返回值里的 Session 才允许被物理删除。
+func unreferencedRunSessionIDs(task Task, remaining, candidates []Run) []string {
+	protected := make(map[string]struct{})
+	if persistentID := strings.TrimSpace(task.PersistentSessionID); persistentID != "" {
+		protected[persistentID] = struct{}{}
+	}
+	for _, run := range remaining {
+		if sessionID := strings.TrimSpace(run.SessionID); sessionID != "" {
+			protected[sessionID] = struct{}{}
+		}
+	}
+
+	seen := make(map[string]struct{})
+	ids := make([]string, 0, len(candidates))
+	for _, run := range candidates {
 		sessionID := strings.TrimSpace(run.SessionID)
 		if sessionID == "" {
 			continue
 		}
-		if err := m.runtime.DeleteSession(context.Background(), sessionID); err != nil && !errors.Is(err, sessions.ErrSessionNotFound) {
-			m.logger.Warn(context.Background(), "清理 TaskRun 会话失败", "operation", "task.run.session.delete", "task_id", run.TaskID, "run_id", run.ID, "session_id", sessionID, "error", err)
+		if _, keep := protected[sessionID]; keep {
+			continue
+		}
+		if _, duplicate := seen[sessionID]; duplicate {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		ids = append(ids, sessionID)
+	}
+	return ids
+}
+
+// deleteSessionIDs 按唯一 ID best-effort 删除 Session，并返回桌面端应从缓存中忘记的 ID。
+// Session 已经被用户手动删除也算“已清理”，这样前端仍能可靠移除陈旧缓存。
+func (m *Manager) deleteSessionIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	deleted := make([]string, 0, len(ids))
+	for _, raw := range ids {
+		sessionID := strings.TrimSpace(raw)
+		if sessionID == "" {
+			continue
+		}
+		if _, exists := seen[sessionID]; exists {
+			continue
+		}
+		seen[sessionID] = struct{}{}
+		err := m.runtime.DeleteSession(context.Background(), sessionID)
+		if err != nil && !errors.Is(err, sessions.ErrSessionNotFound) {
+			m.logger.Warn(context.Background(), "清理 Task Session 失败", "operation", "task.run.session.delete", "session_id", sessionID, "error", err)
+			continue
+		}
+		deleted = append(deleted, sessionID)
+	}
+	return deleted
+}
+
+func taskRunSessionIDs(runs []Run) []string {
+	result := make([]string, 0, len(runs))
+	for _, run := range runs {
+		if sessionID := strings.TrimSpace(run.SessionID); sessionID != "" {
+			result = append(result, sessionID)
 		}
 	}
+	return result
 }
 
 // SetNotificationService 注入统一通知服务。必须在 Manager.Start 之前调用，
@@ -706,10 +816,7 @@ func (m *Manager) startNotificationRun(ctx context.Context, task Task, run Run) 
 
 func (m *Manager) startRun(ctx context.Context, task Task, run Run) error {
 	now := time.Now().UTC()
-	session, err := m.sessions.Create(ctx, sessions.CreateSessionInput{
-		AgentID: task.AgentID,
-		Title:   taskSessionTitle(task, now),
-	})
+	session, err := m.resolveRunSession(ctx, &task, now)
 	if err != nil {
 		return err
 	}
@@ -779,6 +886,61 @@ func (m *Manager) startRun(ctx context.Context, task Task, run Run) error {
 	}
 	m.publish(Event{Type: "run.started", TaskID: run.TaskID, RunID: run.ID, Run: &current})
 	return nil
+}
+
+// resolveRunSession 根据任务配置选择本次运行的 Session。
+//
+// 独立模式永远新建；连续模式优先复用 PersistentSessionID。该 ID 是弱引用，所以用户
+// 从会话侧栏手动删除 Session 后，这里会把“not found”视为自然换代，而不是任务失败。
+// 只有真正的读取错误（例如损坏数据）才会上抛，避免把异常悄悄伪装成新会话。
+func (m *Manager) resolveRunSession(ctx context.Context, task *Task, startedAt time.Time) (sessions.Session, error) {
+	if task == nil {
+		return sessions.Session{}, errors.New("Task 不能为空")
+	}
+	if task.EffectiveConversationMode() != ConversationContinuous {
+		return m.sessions.Create(ctx, sessions.CreateSessionInput{
+			AgentID: task.AgentID,
+			Title:   taskSessionTitle(*task, startedAt),
+		})
+	}
+
+	if persistentID := strings.TrimSpace(task.PersistentSessionID); persistentID != "" {
+		existing, err := m.sessions.Get(ctx, persistentID)
+		if err == nil {
+			if existing.AgentID != task.AgentID {
+				return sessions.Session{}, errors.New("连续任务引用的 Session 不属于当前 Agent")
+			}
+			return existing, nil
+		}
+		if !errors.Is(err, sessions.ErrSessionNotFound) {
+			return sessions.Session{}, fmt.Errorf("读取连续任务 Session 失败: %w", err)
+		}
+	}
+
+	created, err := m.sessions.Create(ctx, sessions.CreateSessionInput{
+		AgentID: task.AgentID,
+		Title:   continuousTaskSessionTitle(*task),
+	})
+	if err != nil {
+		return sessions.Session{}, err
+	}
+
+	// 先持久化 Task -> Session 引用，再让 Runtime 往这个 Session 写消息。
+	// 如果配置落盘失败，立即删除刚建的空 Session，避免产生无法解释的孤儿会话。
+	task.PersistentSessionID = created.ID
+	task.ConversationMode = ConversationContinuous
+	if err := m.store.UpdateTask(ctx, *task); err != nil {
+		_ = m.runtime.DeleteSession(context.WithoutCancel(ctx), created.ID)
+		return sessions.Session{}, fmt.Errorf("保存连续任务 Session 引用失败: %w", err)
+	}
+	m.publish(Event{Type: "task.session.bound", TaskID: task.ID, Task: task})
+	return created, nil
+}
+
+// continuousTaskSessionTitle 不包含某一次运行的日期，因为这个 Session 会跨多次计划运行
+// 长期复用；标题只表达它属于哪个持续任务。
+func continuousTaskSessionTitle(task Task) string {
+	return fmt.Sprintf("持续任务·%s", task.Name)
 }
 
 // taskSessionTitle 使用任务配置的时区展示实际启动日期。手动任务没有计划时区时使用
@@ -1013,6 +1175,18 @@ func normalizeExecution(value ExecutionType) (ExecutionType, error) {
 	default:
 		return "", fmt.Errorf("无效任务执行方式: %s", value)
 	}
+}
+
+// normalizeConversationMode 把旧配置与前端空值统一成明确模式。仅通知任务不创建
+// Session，所以即使请求里错误携带 continuous，也会规范成 isolated。
+func normalizeConversationMode(value ConversationMode, execution ExecutionType) (ConversationMode, error) {
+	if value != "" && value != ConversationIsolated && value != ConversationContinuous {
+		return "", fmt.Errorf("无效任务会话方式: %s", value)
+	}
+	if execution != ExecutionAgent || value == "" {
+		return ConversationIsolated, nil
+	}
+	return value, nil
 }
 
 func initialNextRun(schedule Schedule, now time.Time) (*time.Time, error) {

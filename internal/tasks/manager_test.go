@@ -288,3 +288,95 @@ func TestRecoverRetriesIsIdempotent(t *testing.T) {
 		t.Fatalf("retries=%d want=1", retries)
 	}
 }
+
+func TestContinuousTaskSessionTitleIsStableAcrossRuns(t *testing.T) {
+	task := Task{Name: "持续巡检"}
+	if got, want := continuousTaskSessionTitle(task), "持续任务·持续巡检"; got != want {
+		t.Fatalf("continuousTaskSessionTitle() = %q, want %q", got, want)
+	}
+}
+
+func TestUpdateFromContinuousToIsolatedClearsPersistentSessionReference(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	task.ConversationMode = ConversationContinuous
+	task.PersistentSessionID = uuid.NewString()
+	if err := store.UpdateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := testManagerForSchedule(store)
+	updated, err := manager.Update(context.Background(), task.ID, UpdateInput{
+		Name:             task.Name,
+		Prompt:           task.Prompt,
+		Execution:        ExecutionAgent,
+		ConversationMode: ConversationIsolated,
+		Status:           TaskStatusActive,
+		Schedule:         task.Schedule,
+		Limits:           task.Limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.EffectiveConversationMode() != ConversationIsolated {
+		t.Fatalf("conversation mode=%q want=%q", updated.EffectiveConversationMode(), ConversationIsolated)
+	}
+	if updated.PersistentSessionID != "" {
+		t.Fatalf("persistent session was not cleared: %q", updated.PersistentSessionID)
+	}
+}
+
+func TestUpdateContinuousTaskKeepsPersistentSessionReference(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	task.ConversationMode = ConversationContinuous
+	task.PersistentSessionID = uuid.NewString()
+	if err := store.UpdateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := testManagerForSchedule(store)
+	updated, err := manager.Update(context.Background(), task.ID, UpdateInput{
+		Name:             "renamed",
+		Prompt:           task.Prompt,
+		Execution:        ExecutionAgent,
+		ConversationMode: ConversationContinuous,
+		Status:           TaskStatusActive,
+		Schedule:         task.Schedule,
+		Limits:           task.Limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PersistentSessionID != task.PersistentSessionID {
+		t.Fatalf("persistent session=%q want=%q", updated.PersistentSessionID, task.PersistentSessionID)
+	}
+}
+
+func TestUnreferencedRunSessionIDsProtectsContinuousSharedSession(t *testing.T) {
+	shared := uuid.NewString()
+	task := Task{ConversationMode: ConversationContinuous, PersistentSessionID: shared}
+	deleted := []Run{{SessionID: shared}}
+	if got := unreferencedRunSessionIDs(task, nil, deleted); len(got) != 0 {
+		t.Fatalf("continuous persistent session should be protected, got=%v", got)
+	}
+}
+
+func TestUnreferencedRunSessionIDsProtectsSessionStillUsedByAnotherRun(t *testing.T) {
+	shared := uuid.NewString()
+	task := Task{ConversationMode: ConversationIsolated}
+	remaining := []Run{{SessionID: shared}}
+	deleted := []Run{{SessionID: shared}}
+	if got := unreferencedRunSessionIDs(task, remaining, deleted); len(got) != 0 {
+		t.Fatalf("session referenced by remaining run should be protected, got=%v", got)
+	}
+}
+
+func TestUnreferencedRunSessionIDsDeletesDedicatedSession(t *testing.T) {
+	dedicated := uuid.NewString()
+	task := Task{ConversationMode: ConversationIsolated}
+	got := unreferencedRunSessionIDs(task, nil, []Run{{SessionID: dedicated}})
+	if len(got) != 1 || got[0] != dedicated {
+		t.Fatalf("unreferenced session ids=%v want=[%s]", got, dedicated)
+	}
+}

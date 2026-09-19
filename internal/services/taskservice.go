@@ -40,11 +40,17 @@ type TaskLimitsDTO struct {
 }
 
 type TaskDTO struct {
-	ID        string          `json:"id"`
-	AgentID   string          `json:"agentID"`
-	Name      string          `json:"name"`
-	Prompt    string          `json:"prompt"`
-	Execution string          `json:"execution"`
+	ID        string `json:"id"`
+	AgentID   string `json:"agentID"`
+	Name      string `json:"name"`
+	Prompt    string `json:"prompt"`
+	Execution string `json:"execution"`
+
+	// ConversationMode / PersistentSessionID 让桌面端明确展示任务的会话策略。
+	// PersistentSessionID 只用于状态展示，不要求前端直接操作 Session 生命周期。
+	ConversationMode    string `json:"conversationMode"`
+	PersistentSessionID string `json:"persistentSessionID,omitempty"`
+
 	Status    string          `json:"status"`
 	Schedule  TaskScheduleDTO `json:"schedule"`
 	Limits    TaskLimitsDTO   `json:"limits"`
@@ -89,13 +95,14 @@ type TaskRunDTO struct {
 }
 
 type SaveTaskRequest struct {
-	AgentID   string          `json:"agentID"`
-	Name      string          `json:"name"`
-	Prompt    string          `json:"prompt"`
-	Execution string          `json:"execution"`
-	Status    string          `json:"status"`
-	Schedule  TaskScheduleDTO `json:"schedule"`
-	Limits    TaskLimitsDTO   `json:"limits"`
+	AgentID          string          `json:"agentID"`
+	Name             string          `json:"name"`
+	Prompt           string          `json:"prompt"`
+	Execution        string          `json:"execution"`
+	ConversationMode string          `json:"conversationMode"`
+	Status           string          `json:"status"`
+	Schedule         TaskScheduleDTO `json:"schedule"`
+	Limits           TaskLimitsDTO   `json:"limits"`
 }
 
 type TaskStatusRequest struct {
@@ -165,11 +172,19 @@ func (s *TaskService) Runs(taskID string) ([]TaskRunDTO, error) {
 		return nil, fmt.Errorf("读取任务运行历史失败: %w", err)
 	}
 	result := make([]TaskRunDTO, 0, len(values))
+	// 连续任务可能有几十条 Run 指向同一个 Session。这里按 SessionID 缓存存在性，
+	// 避免打开运行历史时为同一份持续对话反复读取 config.json。
+	sessionAvailability := make(map[string]bool)
 	for _, value := range values {
 		dto := taskRunDTO(value)
 		if value.SessionID != "" {
-			_, sessionErr := s.core.Sessions().Get(ctx, value.SessionID)
-			dto.SessionAvailable = sessionErr == nil
+			available, known := sessionAvailability[value.SessionID]
+			if !known {
+				_, sessionErr := s.core.Sessions().Get(ctx, value.SessionID)
+				available = sessionErr == nil
+				sessionAvailability[value.SessionID] = available
+			}
+			dto.SessionAvailable = available
 		}
 		result = append(result, dto)
 	}
@@ -183,7 +198,7 @@ func (s *TaskService) Create(request SaveTaskRequest) (TaskDTO, error) {
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.core.Tasks().Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
+	value, err := s.core.Tasks().Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("创建任务失败: %w", err)
 	}
@@ -197,7 +212,7 @@ func (s *TaskService) Update(id string, request SaveTaskRequest) (TaskDTO, error
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.core.Tasks().Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
+	value, err := s.core.Tasks().Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("更新任务失败: %w", err)
 	}
@@ -227,71 +242,45 @@ func (s *TaskService) Archive(id string) error {
 func (s *TaskService) Delete(id string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	runs, err := s.core.Tasks().Runs(ctx, id)
+	deletedSessionIDs, err := s.core.Tasks().Delete(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("读取待删除任务的运行历史失败: %w", err)
-	}
-	if err := s.core.Tasks().Delete(ctx, id); err != nil {
 		return nil, fmt.Errorf("删除任务失败: %w", err)
 	}
-	s.clearSessionRules(runs)
-	return taskRunSessionIDs(runs), nil
+	s.clearSessionRules(deletedSessionIDs)
+	return deletedSessionIDs, nil
 }
 
 func (s *TaskService) DeleteRun(id string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	run, err := s.core.Tasks().Run(ctx, id)
+	deletedSessionIDs, err := s.core.Tasks().DeleteRun(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("读取待删除运行记录失败: %w", err)
-	}
-	if err := s.core.Tasks().DeleteRun(ctx, id); err != nil {
 		return nil, fmt.Errorf("删除运行记录失败: %w", err)
 	}
-	s.clearSessionRules([]tasks.Run{run})
-	return taskRunSessionIDs([]tasks.Run{run}), nil
+	s.clearSessionRules(deletedSessionIDs)
+	return deletedSessionIDs, nil
 }
 
 func (s *TaskService) ClearRuns(taskID string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	runs, err := s.core.Tasks().Runs(ctx, taskID)
+	deletedSessionIDs, err := s.core.Tasks().ClearRuns(ctx, taskID)
 	if err != nil {
-		return nil, fmt.Errorf("读取待清空运行历史失败: %w", err)
-	}
-	if err := s.core.Tasks().ClearRuns(ctx, taskID); err != nil {
 		return nil, fmt.Errorf("清空运行历史失败: %w", err)
 	}
-	s.clearSessionRules(runs)
-	return taskRunSessionIDs(runs), nil
+	s.clearSessionRules(deletedSessionIDs)
+	return deletedSessionIDs, nil
 }
 
-// taskRunSessionIDs 把后端已经删除的任务会话显式返回给桌面端。Session 列表在
-// 前端是缓存；如果只删除磁盘目录而不返回失效 ID，左侧会话会一直显示到应用重启。
-func taskRunSessionIDs(runs []tasks.Run) []string {
-	seen := make(map[string]struct{}, len(runs))
-	result := make([]string, 0, len(runs))
-	for _, run := range runs {
-		sessionID := strings.TrimSpace(run.SessionID)
-		if sessionID == "" {
-			continue
-		}
-		if _, exists := seen[sessionID]; exists {
-			continue
-		}
-		seen[sessionID] = struct{}{}
-		result = append(result, sessionID)
-	}
-	return result
-}
-
-func (s *TaskService) clearSessionRules(runs []tasks.Run) {
+// clearSessionRules 只清理后端已经真正删除的 Session。连续任务删除单条运行记录或
+// 清空运行历史时，共享 Session 仍然存在，因此不能顺手撤销它的会话级权限。
+func (s *TaskService) clearSessionRules(sessionIDs []string) {
 	if s.core.Permissions() == nil {
 		return
 	}
-	for _, run := range runs {
-		if run.SessionID != "" {
-			s.core.Permissions().ClearSessionRules(run.SessionID)
+	for _, sessionID := range sessionIDs {
+		if strings.TrimSpace(sessionID) != "" {
+			s.core.Permissions().ClearSessionRules(sessionID)
 		}
 	}
 }
@@ -347,7 +336,20 @@ func limitsFromDTO(value TaskLimitsDTO) tasks.Limits {
 }
 
 func taskDTO(value tasks.Task) TaskDTO {
-	return TaskDTO{ID: value.ID, AgentID: value.AgentID, Name: value.Name, Prompt: value.Prompt, Execution: string(value.EffectiveExecution()), Status: string(value.Status), Schedule: scheduleDTO(value.Schedule), Limits: TaskLimitsDTO{MaxDurationSeconds: value.Limits.MaxDurationSeconds, MaxModelCalls: value.Limits.MaxModelCalls, MaxToolCalls: value.Limits.MaxToolCalls, MaxAttempts: value.Limits.MaxAttempts, RetryDelaySeconds: value.Limits.RetryDelaySeconds}, NextRunAt: formatOptionalTime(value.NextRunAt), CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: value.UpdatedAt.Format(time.RFC3339Nano)}
+	return TaskDTO{
+		ID: value.ID, AgentID: value.AgentID, Name: value.Name, Prompt: value.Prompt,
+		Execution:           string(value.EffectiveExecution()),
+		ConversationMode:    string(value.EffectiveConversationMode()),
+		PersistentSessionID: value.PersistentSessionID,
+		Status:              string(value.Status), Schedule: scheduleDTO(value.Schedule),
+		Limits: TaskLimitsDTO{
+			MaxDurationSeconds: value.Limits.MaxDurationSeconds, MaxModelCalls: value.Limits.MaxModelCalls,
+			MaxToolCalls: value.Limits.MaxToolCalls, MaxAttempts: value.Limits.MaxAttempts,
+			RetryDelaySeconds: value.Limits.RetryDelaySeconds,
+		},
+		NextRunAt: formatOptionalTime(value.NextRunAt),
+		CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), UpdatedAt: value.UpdatedAt.Format(time.RFC3339Nano),
+	}
 }
 
 func scheduleDTO(value tasks.Schedule) TaskScheduleDTO {

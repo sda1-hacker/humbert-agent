@@ -13,6 +13,18 @@ const (
 	ExecutionNotification ExecutionType = "notification"
 )
 
+// ConversationMode 决定 Agent 类型任务在多次运行之间如何使用 Session。
+//
+// isolated（独立对话）：每个 TaskRun 都创建自己的 Session，运行之间完全隔离。
+// continuous（连续对话）：同一个 Task 的所有运行尽量复用一个持久 Session；如果该
+// Session 被用户手动删除，下次运行会自动创建新的 Session 并更新任务引用。
+type ConversationMode string
+
+const (
+	ConversationIsolated   ConversationMode = "isolated"
+	ConversationContinuous ConversationMode = "continuous"
+)
+
 type TaskStatus string
 
 const (
@@ -82,7 +94,16 @@ type Task struct {
 	Name      string        `json:"name"`
 	Prompt    string        `json:"prompt"`
 	Execution ExecutionType `json:"execution,omitempty"`
-	Status    TaskStatus    `json:"status"`
+
+	// ConversationMode 只对 Agent 执行生效。旧任务没有该字段时按 isolated 处理，
+	// 保持升级前“每次运行创建新 Session”的行为不变。
+	ConversationMode ConversationMode `json:"conversation_mode,omitempty"`
+
+	// PersistentSessionID 是连续对话当前正在使用的 Session 引用。它是弱引用：
+	// Session 可以被用户从会话侧栏独立删除；运行时发现引用失效后会自动创建新会话。
+	PersistentSessionID string `json:"persistent_session_id,omitempty"`
+
+	Status TaskStatus `json:"status"`
 
 	Schedule Schedule `json:"schedule"`
 	Limits   Limits   `json:"limits"`
@@ -160,22 +181,24 @@ type Run struct {
 }
 
 type CreateInput struct {
-	AgentID   string
-	Name      string
-	Prompt    string
-	Execution ExecutionType
-	Status    TaskStatus
-	Schedule  Schedule
-	Limits    Limits
+	AgentID          string
+	Name             string
+	Prompt           string
+	Execution        ExecutionType
+	ConversationMode ConversationMode
+	Status           TaskStatus
+	Schedule         Schedule
+	Limits           Limits
 }
 
 type UpdateInput struct {
-	Name      string
-	Prompt    string
-	Execution ExecutionType
-	Status    TaskStatus
-	Schedule  Schedule
-	Limits    Limits
+	Name             string
+	Prompt           string
+	Execution        ExecutionType
+	ConversationMode ConversationMode
+	Status           TaskStatus
+	Schedule         Schedule
+	Limits           Limits
 }
 
 type Issue struct {
@@ -183,6 +206,19 @@ type Issue struct {
 	TaskID  string `json:"task_id"`
 	RunID   string `json:"run_id,omitempty"`
 	Error   string `json:"error"`
+}
+
+// EffectiveConversationMode 返回任务真正使用的会话方式。
+// 仅通知任务不会创建 Session，因此始终视为独立模式；旧版本任务缺少字段时也默认独立，
+// 从而保证配置文件向后兼容。
+func (t Task) EffectiveConversationMode() ConversationMode {
+	if t.EffectiveExecution() != ExecutionAgent {
+		return ConversationIsolated
+	}
+	if t.ConversationMode == "" {
+		return ConversationIsolated
+	}
+	return t.ConversationMode
 }
 
 func (t Task) EffectiveExecution() ExecutionType {

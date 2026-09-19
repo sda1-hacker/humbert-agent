@@ -425,8 +425,9 @@ func (s *Store) DeleteRuns(ctx context.Context, taskID string) ([]Run, error) {
 	return runs, nil
 }
 
-// RunBySession 返回引用指定会话的运行记录。TaskRun 是任务会话的生命周期所有者；
-// SessionService 用它保证从普通会话入口删除时同步清理对应的运行历史。
+// RunBySession 返回任意一条引用指定 Session 的运行记录。
+// 连续对话模式下可能有多条 Run 共享同一个 Session，因此本方法只用于查询关联关系，
+// 不再表示 Run 拥有 Session 的生命周期。删除 Session 不会反向删除 TaskRun。
 func (s *Store) RunBySession(ctx context.Context, sessionID string) (Run, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -651,8 +652,21 @@ func (s *Store) readRunLocked(ctx context.Context, agentID, taskID, runID string
 }
 
 func validateStoredTask(value Task) error {
-	if _, err := normalizeExecution(value.Execution); err != nil {
+	execution, err := normalizeExecution(value.Execution)
+	if err != nil {
 		return err
+	}
+	conversationMode, err := normalizeConversationMode(value.ConversationMode, execution)
+	if err != nil {
+		return err
+	}
+	if persistentID := strings.TrimSpace(value.PersistentSessionID); persistentID != "" {
+		if execution != ExecutionAgent || conversationMode != ConversationContinuous {
+			return errors.New("只有连续 Agent 任务可以保存 persistent_session_id")
+		}
+		if uuid.Validate(persistentID) != nil {
+			return errors.New("persistent_session_id 无效")
+		}
 	}
 	status := value.Status
 	if status == TaskStatusArchived {

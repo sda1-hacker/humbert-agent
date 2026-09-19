@@ -325,3 +325,34 @@ func TestStoreIsolatesCorruptTask(t *testing.T) {
 		t.Fatalf("issues=%+v", issues)
 	}
 }
+
+func TestStorePersistsContinuousConversationReference(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	task.ConversationMode = ConversationContinuous
+	task.PersistentSessionID = uuid.NewString()
+	if err := store.UpdateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EffectiveConversationMode() != ConversationContinuous {
+		t.Fatalf("conversation mode=%q want=%q", got.EffectiveConversationMode(), ConversationContinuous)
+	}
+	if got.PersistentSessionID != task.PersistentSessionID {
+		t.Fatalf("persistent session=%q want=%q", got.PersistentSessionID, task.PersistentSessionID)
+	}
+}
+
+func TestStoreRejectsPersistentSessionForIsolatedTask(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	task.ConversationMode = ConversationIsolated
+	task.PersistentSessionID = uuid.NewString()
+	if err := store.UpdateTask(context.Background(), task); err == nil {
+		t.Fatal("expected isolated task with persistent_session_id to be rejected")
+	}
+}

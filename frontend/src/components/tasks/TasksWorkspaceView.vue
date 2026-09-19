@@ -65,6 +65,8 @@ function emptyForm() {
     name: "",
     prompt: "",
     execution: "agent",
+    // 旧任务没有 conversationMode 时后端也会按 isolated 处理；前端同样以独立对话为默认。
+    conversationMode: "isolated",
     enabled: true,
     scheduleType: "manual",
     timeZone: localTimeZone(),
@@ -121,6 +123,7 @@ function applyTask(task) {
     name: task.name,
     prompt: task.prompt,
     execution: task.execution || "agent",
+    conversationMode: task.conversationMode || "isolated",
     enabled: task.status === "active",
     scheduleType: task.schedule?.type || "manual",
     timeZone: task.schedule?.timeZone || localTimeZone(),
@@ -202,6 +205,8 @@ function requestFromForm() {
     name: form.name.trim(),
     prompt: form.prompt.trim(),
     execution: form.execution,
+    // 仅通知任务没有 Session；这里显式归一成 isolated，避免隐藏表单值影响后端语义。
+    conversationMode: form.execution === "agent" ? form.conversationMode : "isolated",
     status: form.enabled ? "active" : "paused",
     schedule,
     limits: {
@@ -324,9 +329,13 @@ async function deleteRun(run) {
   if (!run?.id || deletingRunID.value) {
     return;
   }
+  const task = taskStore.items.find((item) => item.id === run.taskID);
+  const continuous = (task?.conversationMode || "isolated") === "continuous";
   const confirmed = await confirmAction({
     title: "删除运行记录",
-    message: "这条运行历史及其对应对话会被永久删除，此操作无法撤销。",
+    message: continuous
+        ? "这条运行历史会被永久删除；该任务的连续对话仍会保留，其他运行不会受到影响。"
+        : "这条运行历史及其独立对话会被永久删除，此操作无法撤销。",
     confirmText: "删除",
     danger: true,
   });
@@ -349,9 +358,12 @@ async function clearRuns() {
     return;
   }
   const taskID = selectedTask.value.id;
+  const continuous = (selectedTask.value.conversationMode || "isolated") === "continuous";
   const confirmed = await confirmAction({
     title: "清空运行历史",
-    message: "全部运行历史及其对应对话都会被永久删除，此操作无法撤销。",
+    message: continuous
+        ? "全部运行记录会被永久清空，但当前连续对话会保留，后续运行会继续使用它。"
+        : "全部运行历史及其独立对话都会被永久删除，此操作无法撤销。",
     confirmText: "清空",
     danger: true,
   });
@@ -411,6 +423,10 @@ function statusText(status) {
     interrupted: "已中断",
     skipped: "已跳过",
   })[status] || status;
+}
+
+function conversationModeText(value) {
+  return value === "continuous" ? "连续对话" : "独立对话";
 }
 
 function scheduleText(task) {
@@ -501,6 +517,8 @@ onMounted(async () => {
             </span>
           </span>
           <small>{{ agentName(task.agentID) }}</small>
+          <small v-if="task.execution === 'agent'">{{ conversationModeText(task.conversationMode) }}</small>
+          <small v-else>仅通知 · 不创建对话</small>
           <small>{{ scheduleText(task) }}</small>
           <small v-if="task.nextRunAt">下次：{{ formatTime(task.nextRunAt) }}</small>
         </button>
@@ -545,6 +563,19 @@ onMounted(async () => {
                   {{ agent.name }}
                 </a-option>
               </a-select>
+            </div>
+
+            <div v-if="form.execution === 'agent'" class="field field--wide">
+              <span>会话方式</span>
+              <a-select v-model="form.conversationMode" aria-label="会话方式">
+                <a-option value="isolated">独立对话</a-option>
+                <a-option value="continuous">连续对话</a-option>
+              </a-select>
+              <small class="field-help">
+                {{ form.conversationMode === "continuous"
+                  ? "所有运行继续使用同一个对话；如果该对话被手动删除，下次运行会自动新建。"
+                  : "每次运行创建新的对话，适合日报、检查和彼此独立的任务。" }}
+              </small>
             </div>
 
             <div class="field field--wide">
@@ -830,6 +861,7 @@ onMounted(async () => {
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .form-grid--limits { margin-top: 14px; }
 .field { display: flex; min-width: 0; flex-direction: column; gap: 7px; color: var(--h-text-muted); font-size: 12px; }
+.field-help { color: var(--h-text-subtle, var(--h-text-muted)); font-size: 11px; line-height: 1.55; }
 .field--wide { grid-column: 1 / -1; }
 .native-input {
   box-sizing: border-box;
