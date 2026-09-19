@@ -54,8 +54,8 @@ const TasksWorkspaceView =
             ),
     );
 
-// 工作区与产物页包含文件树、预览和 Session 产物追踪，同样属于低频一级页面，
-// 因此保持按需加载，不增加聊天首屏包体。
+// 工作区页包含文件树与安全文件预览，属于低频一级页面，因此保持按需加载，
+// 不把目录浏览组件加入聊天首屏主包。
 const WorkspaceView =
     defineAsyncComponent(
         () => import(
@@ -155,7 +155,7 @@ const settingsInitialKey =
  * skills     -> Skills 中心
  * connectors -> MCP 连接器
  * tasks      -> 主动任务
- * workspace  -> Agent 工作区与产物
+ * workspace  -> Agent / 项目工作区文件浏览
  *
  * Settings 仍然是覆盖整个业务区域的一级页面；关闭 Settings 后回到
  * 用户打开设置前所在的主工作区。
@@ -301,10 +301,40 @@ function openTasks() {
   mainView.value = "tasks";
 }
 
-/** 打开当前 Agent 的工作区与产物页面。 */
+/**
+ * 从左侧导航打开工作区。
+ *
+ * WorkspaceStore 会保留用户上一次主动选择的 Agent/项目；只有第一次进入时才默认跟随
+ * 当前聊天 Agent，因此浏览其它项目不会偷偷切换聊天上下文。
+ */
 function openWorkspace() {
   settingsVisible.value = false;
   mainView.value = "workspace";
+}
+
+/**
+ * 从聊天里的“本轮文件”直接跳到工作区预览。
+ *
+ * 这里由 AppShell 负责跨一级页面导航：先加载文件所属 Agent 的 Workspace，再打开相对路径，
+ * 最后切换主视图。这样 Chat 组件不需要知道 WorkspaceView 的实现细节。
+ */
+async function openWorkspaceFile(payload) {
+  const agentID = payload?.agentID ?? "";
+  const path = payload?.path ?? "";
+  if (!agentID || !path) {
+    return;
+  }
+
+  try {
+    await workspaceStore.load(agentID);
+    await workspaceStore.openPath(path);
+    settingsVisible.value = false;
+    mainView.value = "workspace";
+  } catch (error) {
+    Message.error(
+        error?.message ?? String(error),
+    );
+  }
 }
 
 function openChat() {
@@ -435,10 +465,12 @@ onUnmounted(() => {
 
       <WorkspaceView
           v-else-if="mainView === 'workspace'"
-          @open-session="openTaskSession"
       />
 
-      <ChatView v-else />
+      <ChatView
+          v-else
+          @open-workspace-file="openWorkspaceFile"
+      />
     </div>
   </div>
 </template>

@@ -50,6 +50,11 @@ import LiveAssistantTurn
 import MessageItem
   from "./MessageItem.vue";
 
+
+const emit = defineEmits([
+  "open-workspace-file",
+]);
+
 const viewport =
     ref(null);
 
@@ -221,6 +226,32 @@ const currentLiveTools =
             sessionStore.selectedID,
         ),
     );
+
+/**
+ * 把历史 Assistant Turn 中的文件点击提升到 AppShell。
+ *
+ * 文件本身只携带相对路径；所属 Agent 来自当前 Session 的一级上下文，避免聊天组件
+ * 自己直接修改全局工作区路由。
+ */
+function openWorkspaceFile(payload) {
+  const path =
+      typeof payload?.path === "string"
+          ? payload.path
+          : "";
+
+  const agentID =
+      sessionStore.agentID ||
+      agentStore.selectedID;
+
+  if (!path || !agentID) {
+    return;
+  }
+
+  emit("open-workspace-file", {
+    agentID,
+    path,
+  });
+}
 
 function modelNameForMessage(
     message,
@@ -482,6 +513,7 @@ onUnmounted(() => {
                 block.message,
               )
             "
+              @open-workspace-file="openWorkspaceFile"
           />
         </template>
 

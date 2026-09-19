@@ -31,22 +31,3 @@ export function formatWorkspaceTime(value) {
         minute: "2-digit",
     }).format(date);
 }
-
-/** 将后端稳定操作码映射成用户能直接理解的中文标签。 */
-export function artifactOperationLabel(value) {
-    switch (value) {
-        case "created": return "新建";
-        case "modified": return "修改";
-        case "copied": return "复制";
-        case "moved": return "移动";
-        case "deleted": return "删除";
-        default: return value || "文件操作";
-    }
-}
-
-/** 产物操作按“生成/变化/删除”分组，供前端过滤而不修改后端审计语义。 */
-export function artifactOperationGroup(value) {
-    if (["created", "copied", "moved"].includes(value)) return "created";
-    if (value === "deleted") return "deleted";
-    return "modified";
-}

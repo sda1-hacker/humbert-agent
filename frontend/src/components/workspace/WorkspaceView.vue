@@ -11,8 +11,6 @@ import {
   Message,
 } from "@arco-design/web-vue";
 
-import WorkspaceArtifacts
-  from "./WorkspaceArtifacts.vue";
 import WorkspaceFileTree
   from "./WorkspaceFileTree.vue";
 import WorkspacePreview
@@ -28,36 +26,22 @@ import {
   formatBytes,
 } from "../../utils/workspace.js";
 
-const emit = defineEmits([
-  "open-session",
-]);
-
 const agentStore = useAgentStore();
 const workspaceStore = useWorkspaceStore();
 
 const refreshing = ref(false);
 
 /**
- * 文件树与产物面板属于纯界面状态，不应该写入 Agent 配置或工作区配置。
+ * 文件树折叠状态属于纯 UI 偏好，不应该写入 Agent Profile 或 Workspace 配置。
  *
- * 使用 localStorage 的原因：
- * 1. 用户折叠后切换到聊天再回来，布局仍保持原样；
- * 2. 不会污染后端领域模型；
- * 3. localStorage 不可用时只退化为默认展开，不影响工作区核心功能。
+ * 工作区现在只剩“文件树 + 文件预览”两块，因此这里只保留左栏折叠状态。
  */
 const panelStateStorageKey =
-    "humbert.workspace.panels.v1";
+    "humbert.workspace.panels.v2";
 
 const leftCollapsed = ref(false);
-const rightCollapsed = ref(false);
 
 let revisionRefreshTimer = null;
-
-const selectedAgent = computed(() => (
-    agentStore.items.find(
-        (item) => item.id === agentStore.selectedID,
-    ) ?? null
-));
 
 const modeLabel = computed(() => (
     workspaceStore.overview?.mode === "custom"
@@ -66,48 +50,21 @@ const modeLabel = computed(() => (
 ));
 
 /**
- * 三栏布局由顶层统一控制。
- *
- * 折叠后保留 42px 的窄栏，而不是彻底把面板从 DOM 里隐藏：
- * 用户始终能看到“文件 / 产物”入口，也不需要额外寻找恢复按钮。
+ * 左栏折叠后保留 42px 的恢复入口；预览区始终占据剩余空间。
  */
 const contentStyle = computed(() => ({
   gridTemplateColumns: [
     leftCollapsed.value
         ? "42px"
-        : "minmax(220px, 268px)",
-    "minmax(320px, 1fr)",
-    rightCollapsed.value
-        ? "42px"
-        : "minmax(258px, 318px)",
+        : "minmax(220px, 286px)",
+    "minmax(360px, 1fr)",
   ].join(" "),
 }));
 
 /**
- * Agent 是应用级一级选择。
+ * Runtime / 主动助手只负责告诉 Store“底层 Workspace 可能变化”。
  *
- * 切换 Agent 后必须完整重载 Workspace，不能继续复用上一个 Agent 的相对路径；
- * 否则两个工作区里同名文件可能被错误地当成同一个文件预览。
- */
-watch(
-    () => agentStore.selectedID,
-    async (agentID) => {
-      try {
-        await workspaceStore.load(agentID);
-      } catch (error) {
-        Message.error(
-            error?.message ?? String(error),
-        );
-      }
-    },
-    {immediate: true},
-);
-
-/**
- * Runtime / 主动助手只负责告诉 Store“底层工作区可能变化”。
- *
- * Workspace 页面真正挂载时才执行刷新，并用 250ms 合并连续事件，避免一次 Agent
- * Turn 内多个 write/edit 事件触发多次目录 IPC。
+ * 页面可见时再执行合并刷新，避免一次 Turn 内多个 write/edit 事件产生重复 IPC。
  */
 watch(
     () => workspaceStore.revision,
@@ -126,13 +83,32 @@ watch(
 onMounted(() => {
   restorePanelState();
 
+  /**
+   * 工作区选择和聊天 Agent 选择是两份状态：
+   *
+   * - 第一次进入工作区：默认跟随当前聊天 Agent；
+   * - 用户在工作区切换到其它 Agent/项目后：保持工作区自己的选择；
+   * - 如果原选择已经被删除：回退到当前聊天 Agent或 Agent 列表第一项。
+   */
+  const existing = agentStore.items.some(
+      (item) => item.id === workspaceStore.agentID,
+  );
+  const initialAgentID = existing
+      ? workspaceStore.agentID
+      : (
+          agentStore.selectedID ||
+          agentStore.items[0]?.id ||
+          ""
+      );
+
   if (
-      agentStore.selectedID &&
-      workspaceStore.agentID !== agentStore.selectedID
+      initialAgentID &&
+      (
+          workspaceStore.agentID !== initialAgentID ||
+          !workspaceStore.overview
+      )
   ) {
-    void workspaceStore.load(
-        agentStore.selectedID,
-    );
+    void loadWorkspace(initialAgentID);
   }
 });
 
@@ -157,11 +133,8 @@ function restorePanelState() {
     }
 
     const state = JSON.parse(raw);
-
     leftCollapsed.value =
         Boolean(state?.leftCollapsed);
-    rightCollapsed.value =
-        Boolean(state?.rightCollapsed);
   } catch {
     // 布局偏好读取失败不应该影响文件访问，因此静默使用默认展开状态。
   }
@@ -177,11 +150,10 @@ function persistPanelState() {
         panelStateStorageKey,
         JSON.stringify({
           leftCollapsed: leftCollapsed.value,
-          rightCollapsed: rightCollapsed.value,
         }),
     );
   } catch {
-    // localStorage 仅保存界面偏好，失败时不阻塞任何工作区功能。
+    // localStorage 只是界面偏好；写入失败时不阻塞任何工作区能力。
   }
 }
 
@@ -190,14 +162,37 @@ function setLeftCollapsed(value) {
   persistPanelState();
 }
 
-function setRightCollapsed(value) {
-  rightCollapsed.value = Boolean(value);
-  persistPanelState();
+async function loadWorkspace(agentID) {
+  if (!agentID) {
+    return;
+  }
+
+  try {
+    await workspaceStore.load(agentID);
+  } catch (error) {
+    Message.error(
+        error?.message ?? String(error),
+    );
+  }
+}
+
+/**
+ * 顶部选择器用于在不同 Agent 对应的 Workspace 之间切换。
+ *
+ * Humbert 目前没有独立 Project 实体，因此一个 Agent 所绑定的 Workspace 就是当前阶段
+ * 的“项目入口”。以后增加 Project 模型时，只需要扩展选择器数据源，不需要重写文件浏览器。
+ */
+async function switchWorkspace(agentID) {
+  if (!agentID || agentID === workspaceStore.agentID) {
+    return;
+  }
+
+  await loadWorkspace(agentID);
 }
 
 async function refreshAll(showMessage = true) {
   if (
-      !agentStore.selectedID ||
+      !workspaceStore.agentID ||
       refreshing.value
   ) {
     return;
@@ -241,33 +236,32 @@ async function selectEntry(entry) {
     );
   }
 }
-
-async function openPath(path) {
-  try {
-    await workspaceStore.openPath(path);
-  } catch (error) {
-    Message.error(
-        error?.message ?? String(error),
-    );
-  }
-}
-
-function openSourceSession(payload) {
-  emit("open-session", {
-    agentID: agentStore.selectedID,
-    sessionID: payload?.sessionID ?? "",
-  });
-}
 </script>
 
 <template>
   <section class="workspace-view">
     <header class="workspace-view__topbar">
       <div class="workspace-view__heading">
-        <div class="workspace-view__eyebrow">WORKSPACE &amp; ARTIFACTS</div>
+        <div class="workspace-view__eyebrow">WORKSPACE</div>
 
         <div class="workspace-view__title-row">
-          <h1>{{ selectedAgent?.name || "工作区" }}</h1>
+          <span class="workspace-view__picker-label">Agent / 项目</span>
+
+          <a-select
+              class="workspace-view__agent-select"
+              :model-value="workspaceStore.agentID"
+              :loading="agentStore.loading"
+              placeholder="选择工作区"
+              @change="switchWorkspace"
+          >
+            <a-option
+                v-for="agent in agentStore.items"
+                :key="agent.id"
+                :value="agent.id"
+            >
+              {{ agent.name }}
+            </a-option>
+          </a-select>
 
           <span
               v-if="workspaceStore.overview"
@@ -317,11 +311,11 @@ function openSourceSession(payload) {
     </header>
 
     <div
-        v-if="!selectedAgent"
+        v-if="agentStore.items.length === 0"
         class="workspace-view__empty"
     >
       <strong>还没有可浏览的 Agent</strong>
-      <span>先创建或选择一个 Agent，Humbert 会在这里展示它当前绑定的工作区。</span>
+      <span>先创建一个 Agent 并为它配置工作区，Humbert 会在这里展示当前文件。</span>
     </div>
 
     <div
@@ -330,7 +324,7 @@ function openSourceSession(payload) {
     >
       <strong>工作区暂时不可用</strong>
       <span>{{ workspaceStore.error }}</span>
-      <a-button @click="workspaceStore.load(agentStore.selectedID)">重试</a-button>
+      <a-button @click="loadWorkspace(workspaceStore.agentID)">重试</a-button>
     </div>
 
     <template v-else>
@@ -338,7 +332,7 @@ function openSourceSession(payload) {
           v-if="workspaceStore.overview?.statsTruncated"
           class="workspace-view__notice"
       >
-        总览统计达到 5000 个文件的保护上限；文件树仍可继续按目录浏览，不影响真实文件。
+        顶部统计达到 5000 个文件的保护上限；左侧文件树仍可继续按目录浏览，不影响真实文件。
       </div>
 
       <div
@@ -354,7 +348,7 @@ function openSourceSession(payload) {
             @click="setLeftCollapsed(false)"
         >
           <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m9 5 7 7-7 7"/>
+            <path d="m9 5 7 7-7 7" />
           </svg>
           <span>文件</span>
         </button>
@@ -375,30 +369,6 @@ function openSourceSession(payload) {
             :preview="workspaceStore.preview"
             :loading="workspaceStore.loadingPreview"
         />
-
-        <button
-            v-if="rightCollapsed"
-            type="button"
-            class="workspace-view__rail workspace-view__rail--right"
-            aria-label="展开产物面板"
-            title="展开产物面板"
-            @click="setRightCollapsed(false)"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="m15 5-7 7 7 7"/>
-          </svg>
-          <span>产物</span>
-        </button>
-
-        <WorkspaceArtifacts
-            v-else
-            :artifacts="workspaceStore.artifacts"
-            :recent-files="workspaceStore.overview?.recentFiles || []"
-            :loading="workspaceStore.loadingArtifacts"
-            @collapse="setRightCollapsed(true)"
-            @open-path="openPath"
-            @open-session="openSourceSession"
-        />
       </div>
     </template>
   </section>
@@ -416,10 +386,6 @@ function openSourceSession(payload) {
   background: var(--h-bg);
 }
 
-/*
- * 顶部信息区使用 Humbert 自己的暖纸张色、墨蓝强调色和 Border Token。
- * 不再使用 Arco 的 color-bg / color-text Token，避免工作区和其它一级页面出现两套色系。
- */
 .workspace-view__topbar {
   display: flex;
   min-height: 104px;
@@ -448,20 +414,48 @@ function openSourceSession(payload) {
 
 .workspace-view__title-row {
   display: flex;
+  min-width: 0;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
 }
 
-.workspace-view__title-row h1 {
-  margin: 0;
+.workspace-view__picker-label {
+  flex: 0 0 auto;
+  color: var(--h-text-muted);
+  font-family: var(--h-ui);
+  font-size: 10px;
+}
+
+/*
+ * Agent 选择器视觉上承担原来大标题的位置，因此弱化 Arco 默认输入框感。
+ * 业务上仍使用 a-select，保证键盘操作和弹层行为继续由成熟组件负责。
+ */
+.workspace-view__agent-select {
+  width: clamp(150px, 23vw, 280px);
+}
+
+.workspace-view__agent-select :deep(.arco-select-view) {
+  min-height: 36px;
+  padding: 0 30px 0 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--h-text);
-  font-size: 25px;
+  box-shadow: none;
+  font-family: var(--h-serif);
+  font-size: 24px;
   font-weight: 500;
   letter-spacing: -0.015em;
-  line-height: 1.2;
+}
+
+.workspace-view__agent-select :deep(.arco-select-view:hover),
+.workspace-view__agent-select :deep(.arco-select-view-focus) {
+  background: transparent;
+  box-shadow: none;
 }
 
 .workspace-view__mode {
+  flex: 0 0 auto;
   padding: 3px 8px;
   border: 1px solid var(--h-border);
   border-radius: 999px;
@@ -471,8 +465,8 @@ function openSourceSession(payload) {
 }
 
 .workspace-view__path {
-  max-width: min(720px, 52vw);
-  margin-top: 7px;
+  max-width: min(760px, 56vw);
+  margin-top: 6px;
   overflow: hidden;
   color: var(--h-text-muted);
   font-family: var(--h-mono);
@@ -517,9 +511,10 @@ function openSourceSession(payload) {
   cursor: pointer;
   font-family: var(--h-ui);
   font-size: 11px;
-  transition: border-color var(--h-transition),
-  background-color var(--h-transition),
-  color var(--h-transition);
+  transition:
+      border-color var(--h-transition),
+      background-color var(--h-transition),
+      color var(--h-transition);
 }
 
 .workspace-view__refresh:hover:not(:disabled) {
@@ -566,8 +561,9 @@ function openSourceSession(payload) {
   color: var(--h-text-muted);
   cursor: pointer;
   font-family: var(--h-ui);
-  transition: background-color var(--h-transition),
-  color var(--h-transition);
+  transition:
+      background-color var(--h-transition),
+      color var(--h-transition);
 }
 
 .workspace-view__rail:hover {
@@ -577,10 +573,6 @@ function openSourceSession(payload) {
 
 .workspace-view__rail--left {
   border-right: 1px solid var(--h-border);
-}
-
-.workspace-view__rail--right {
-  border-left: 1px solid var(--h-border);
 }
 
 .workspace-view__rail svg {

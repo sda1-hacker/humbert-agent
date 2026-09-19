@@ -12,6 +12,10 @@ import ComposerBar
 import MessageList
   from "./MessageList.vue";
 
+const emit = defineEmits([
+  "open-workspace-file",
+]);
+
 const sessionStore =
     useSessionStore();
 </script>
@@ -36,7 +40,9 @@ const sessionStore =
     <template
         v-if="sessionStore.selectedID"
     >
-      <MessageList/>
+      <MessageList
+          @open-workspace-file="emit('open-workspace-file', $event)"
+      />
 
       <ComposerBar/>
     </template>

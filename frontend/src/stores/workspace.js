@@ -3,7 +3,6 @@ import { Events } from "@wailsio/runtime";
 
 import {
     getWorkspaceOverview,
-    listWorkspaceArtifacts,
     listWorkspaceDirectory,
     previewWorkspaceFile,
 } from "../api/workspace.js";
@@ -16,10 +15,10 @@ let unsubscribeProactive = null;
 let invalidationTimer = null;
 
 /**
- * 对 Wails/旧数据做最小归一化。
+ * 对 Wails 返回数组做最小归一化。
  *
- * 工作区页面是只读视图，因此遇到后端暂时缺少某个数组字段时优先显示空状态，
- * 而不是让 Vue 模板因为 undefined 直接中断整个页面。
+ * 工作区是只读浏览页，后端临时返回 null/undefined 时应该退化为空目录，
+ * 不能因为一个字段异常让整个 Vue 页面中断。
  */
 function normalizeArray(value) {
     return Array.isArray(value) ? value : [];
@@ -27,10 +26,14 @@ function normalizeArray(value) {
 
 export const useWorkspaceStore = defineStore("workspace", {
     state: () => ({
-        // agentID 表示当前这份文件树/产物缓存属于哪个 Agent。Agent 切换时整份状态重置。
+        /**
+         * 当前工作区正在浏览哪个 Agent。
+         *
+         * 这个值故意和 agentStore.selectedID 分离：聊天区可以停留在 Agent A，用户仍然
+         * 可以在“工作区”页面临时查看 Agent B 对应的项目目录，而不会因此切换聊天 Agent。
+         */
         agentID: "",
         overview: null,
-        artifacts: [],
 
         // directories 使用“相对路径 -> 一层目录结果”的懒加载缓存。
         // 这比一次从后端递归读取整棵树更适合大型仓库。
@@ -42,7 +45,6 @@ export const useWorkspaceStore = defineStore("workspace", {
         preview: null,
 
         loadingOverview: false,
-        loadingArtifacts: false,
         loadingDirectories: {},
         loadingPreview: false,
         error: "",
@@ -112,11 +114,10 @@ export const useWorkspaceStore = defineStore("workspace", {
             }, 180);
         },
 
-        /** 切换 Agent 时丢弃旧 Workspace 的文件树和预览，避免路径串台。 */
+        /** 切换工作区 Agent 时完整清空旧目录缓存，避免两个项目中同名路径串台。 */
         resetForAgent(agentID) {
             this.agentID = agentID || "";
             this.overview = null;
-            this.artifacts = [];
             this.directories = {};
             this.expandedPaths = ["."];
             this.selectedPath = "";
@@ -127,8 +128,9 @@ export const useWorkspaceStore = defineStore("workspace", {
         },
 
         /**
-         * 首次进入工作区时并行读取总览、根目录和产物。
-         * 任意一个查询失败都会保留错误文本，但不会主动清空另外已经成功的数据。
+         * 加载一个 Agent 对应的 Workspace。
+         *
+         * 工作区页面不再加载“产物/最近修改”记录，只读取当前文件系统：总览 + 根目录。
          */
         async load(agentID) {
             if (!agentID) {
@@ -142,7 +144,6 @@ export const useWorkspaceStore = defineStore("workspace", {
             const results = await Promise.allSettled([
                 this.loadOverview(),
                 this.loadDirectory(".", true),
-                this.loadArtifacts(),
             ]);
             const rejected = results.find((item) => item.status === "rejected");
             if (rejected) {
@@ -158,18 +159,6 @@ export const useWorkspaceStore = defineStore("workspace", {
                 return this.overview;
             } finally {
                 this.loadingOverview = false;
-            }
-        },
-
-        async loadArtifacts() {
-            if (!this.agentID) return [];
-            this.loadingArtifacts = true;
-            try {
-                const values = await listWorkspaceArtifacts(this.agentID, 120);
-                this.artifacts = normalizeArray(values);
-                return this.artifacts;
-            } finally {
-                this.loadingArtifacts = false;
             }
         },
 
@@ -194,9 +183,7 @@ export const useWorkspaceStore = defineStore("workspace", {
             }
         },
 
-        /**
-         * 展开目录时才向后端请求它的子项；收起只改变 UI 状态，不删除缓存。
-         */
+        /** 展开目录时才向后端请求它的子项；收起只改变 UI 状态，不删除缓存。 */
         async toggleDirectory(path) {
             const expanded = this.expandedPaths.includes(path);
             if (expanded) {
@@ -224,7 +211,12 @@ export const useWorkspaceStore = defineStore("workspace", {
             }
         },
 
-        /** 从产物/最近文件跳到预览时，不要求对应父目录已经在文件树中展开。 */
+        /**
+         * 从聊天里的“本轮文件变化”直接打开一个文件。
+         *
+         * 这里不要求父目录已经在左侧文件树展开；预览区可以独立读取相对路径。
+         * 之后用户若继续浏览目录，文件树仍按原来的懒加载方式工作。
+         */
         async openPath(path) {
             if (!path || !this.agentID) return null;
             const entry = {
@@ -247,7 +239,6 @@ export const useWorkspaceStore = defineStore("workspace", {
             try {
                 await Promise.all([
                     this.loadOverview(),
-                    this.loadArtifacts(),
                     ...expanded.map((path) => this.loadDirectory(path, true)),
                 ]);
                 if (selectedPath && selectedEntry?.type === "file") {

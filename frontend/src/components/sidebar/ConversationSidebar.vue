@@ -731,7 +731,7 @@ watch(
 
         <span class="sidebar-primary-entry__text">
           <strong>工作区</strong>
-          <small>文件预览与 Agent 产物</small>
+          <small>浏览 Agent / 项目文件</small>
         </span>
       </button>
 
