@@ -15,6 +15,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
+	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
 
 // DeltaEmitter 把 Assistant Streaming Delta 交给 RuntimeService。
@@ -335,7 +336,10 @@ func buildToolLifecycleMiddleware(snapshot *Snapshot) compose.InvokableToolMiddl
 				OccurredAt:    startedAt.UTC().Format(time.RFC3339Nano),
 			})
 
-			output, err := next(ctx, input)
+			// 将 ToolCall 身份放进 context。run_agent 会用它生成稳定的子运行 ID；
+			// Eino 从审批 checkpoint 恢复时仍使用同一个 CallID，因此不会重复创建子运行。
+			callCtx := humberttools.WithCallContext(ctx, input.CallID, input.Name)
+			output, err := next(callCtx, input)
 			duration := time.Since(startedAt).Milliseconds()
 			if err != nil {
 				// Eino Interrupt 是正常的 Human-in-the-loop 暂停信号，不是 Tool 失败。

@@ -396,7 +396,7 @@ async function removeSession(
             "删除对话",
 
         message:
-            `确定删除「${session.title}」以及其中的全部消息吗？任务运行历史不会因此删除；如果它属于连续任务，下次运行会自动创建新的对话。`,
+            `确定删除「${session.title}」以及其中的全部消息吗？如果它属于任务，对应的运行历史也会一并删除；连续任务下次运行时会创建新的对话。`,
 
         confirmText:
             "删除",
@@ -731,7 +731,7 @@ watch(
 
         <span class="sidebar-primary-entry__text">
           <strong>工作区</strong>
-          <small>浏览 Agent / 项目文件</small>
+          <small>浏览 Agent 工作区文件</small>
         </span>
       </button>
 
@@ -949,6 +949,7 @@ watch(
                       .modelDisplayName ||
                   "未配置模型"
                 }}
+                <span v-if="agent.subagentEnabled" class="agent-collaboration-mark">· 可协作</span>
               </span>
             </span>
 
@@ -1514,6 +1515,11 @@ watch(
   text-overflow: ellipsis;
 
   white-space: nowrap;
+}
+
+.agent-collaboration-mark {
+  color: var(--h-accent);
+  font-weight: 600;
 }
 
 .agent-running {

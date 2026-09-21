@@ -89,6 +89,38 @@ TaskRun 启动时创建普通 Session。Session JSONL 仍是用户消息、模�
 次数和工具调用次数限制，因此仍复用既有 Context、Permission、Sandbox、Skills 和 MCP
 链路，不存在第二套弱化的执行器。
 
+主动助手先把外部事件写入 `config/proactive.json` 的持久化 Inbox，再唤醒进程内消费者。
+事件只有在处理记录已经落盘后才从 Inbox 确认删除；重复 EventKey 会被去重。内部 Agent
+运行以 `Origin + OriginRef` 作为幂等键，关闭“领域记录已保存但 TaskRun ID 尚未回写”的
+崩溃窗口。重启时普通计划队列仍按调度策略恢复，未完成的内部自动运行则收敛为
+`interrupted`，避免重放未知副作用。
+
+## Agent-as-Tool 协作
+
+协作链路是：
+
+`Parent Session -> Parent ToolCall(run_agent) -> isolated Child Runtime -> Parent ToolResult`
+
+`run_agent` 不是后台 Task，也不创建 Child Session。父 Agent 在当前 Turn 内等待 Eino
+AgentTool 完成；子 Agent 只收到工具参数中的自包含 task，拥有独立的临时消息上下文。完成后
+只有最终结果回到父 Agent，父 Agent继续推理并生成用户回答。父 Session 的标准 ToolCall 与
+ToolResult 因而自然保留结果，后续 Context/Compaction/History 不需要额外注入协议。
+
+子 Runtime 使用目标 Agent 的 Profile、Chat Model、Instruction 和自身选择的
+Builtin Tool、Skill、MCP，不与父 Agent 的模型可见能力清单取交集。Workspace、
+Sandbox、Network 与 Permission 沿用父 Runtime：子 Agent 可以使用自己的专业能力，
+但不能借此扩大文件、网络或授权边界，审批仍定向当前父会话。`session_history`、`context_resource`、
+`install_skill`、`list_agents`、`run_agent` 不向子 Runtime 暴露：子 Agent 不能读取父会话、
+修改 Agent 配置或递归创建更多子 Agent。
+
+Agent Profile 的 `subagent_enabled` 是显式能力边界，默认关闭。`list_agents` 只列出已开启的
+Agent，`run_agent` 在执行前再次读取并校验目标 Profile，避免仅靠前端隐藏造成越权调用。
+
+子工具需要审批时，Eino CompositeInterrupt 把中断沿 AgentTool 边界传回父 Runtime，审批卡
+仍显示在当前对话；恢复时复用父 checkpoint 和稳定 ToolCall ID。每次调用在父 Session 目录的
+`subagents/<subrun-id>.json` 保存轻量审计（目标 Agent、task、状态、结果/错误），但它不是消息
+事实来源，也不会显示为侧栏会话。
+
 ## Chat Input 与附件
 
 用户输入由文本和零个或多个附件组成。附件字节保存在 Session 的 `attachments/` sidecar，
@@ -103,5 +135,7 @@ Base64 膨胀及上传同一二进制。文本、源码和 JSON/YAML/XML 等文�
 模型自身的 Vision/Files/Audio 等 Capability 在“设置 → 模型”维护。应用级图片路由保存在
 `config/models.json.multimedia.image_model_id`，只允许引用已启用且有效 Vision Capability
 为 true 的模型。Agent Profile 不再保存 Vision Model；当前 Chat 模型缺少 Vision 时，Runtime
-才切换到全局图片模型，并再次校验当前附件能力和 Tool Calling 能力。PDF/Office、音频与视频
+会先调用全局图片模型生成受长度和 Context 预算限制的“不可信视觉观察”，移除发给主模型的
+图片二进制，再由 Chat 模型结合观察结果继续推理和调用工具。辅助图片模型和主 Chat 模型共享
+同一次 Task 的模型调用次数上限。PDF/Office、音频与视频
 在完整解析链路落地前不提供虚假的应用级模型选择器。

@@ -207,6 +207,12 @@ export function toolDisplayName(
 
         run_command:
             "执行命令",
+
+        list_agents:
+            "查看可用 Agent",
+
+        run_agent:
+            "调用专业 Agent",
     };
 
     return (

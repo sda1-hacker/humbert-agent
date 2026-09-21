@@ -188,8 +188,14 @@ func (m *Manager) ActiveRunForSession(ctx context.Context, sessionID string) (Ru
 }
 
 func (m *Manager) Create(ctx context.Context, input CreateInput) (Task, error) {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+
 	if _, err := m.agents.Get(ctx, strings.TrimSpace(input.AgentID)); err != nil {
 		return Task{}, err
+	}
+	if m.agentSuspended(input.AgentID) {
+		return Task{}, errors.New("Agent 正在删除，不能创建任务")
 	}
 	name, prompt, status, schedule, limits, err := normalizeTaskInput(input.Name, input.Prompt, input.Status, input.Schedule, input.Limits)
 	if err != nil {
@@ -329,6 +335,9 @@ func (m *Manager) SetStatus(ctx context.Context, id string, status TaskStatus) (
 }
 
 func (m *Manager) Archive(ctx context.Context, id string) (Task, error) {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+
 	value, err := m.store.ArchiveTask(ctx, id, time.Now())
 	if err != nil {
 		return Task{}, err
@@ -429,6 +438,82 @@ func (m *Manager) RunBySession(ctx context.Context, sessionID string) (Run, bool
 	return m.store.RunBySession(ctx, sessionID)
 }
 
+// AutomationBySession 在内部 TaskRun 已经落盘 SessionID、但上层领域记录尚未来得及回写
+// 关联 ID 的短窗口内提供可靠反查。它只返回指定 origin 的内部自动运行。
+func (m *Manager) AutomationBySession(ctx context.Context, sessionID, origin string) (Task, Run, bool, error) {
+	run, found, err := m.store.RunBySession(ctx, sessionID)
+	if err != nil || !found {
+		return Task{}, Run{}, false, err
+	}
+	task, err := m.store.GetTask(ctx, run.TaskID)
+	if err != nil {
+		return Task{}, Run{}, false, err
+	}
+	if !task.Internal || task.Origin != strings.TrimSpace(origin) {
+		return Task{}, Run{}, false, nil
+	}
+	return task, run, true, nil
+}
+
+// DeleteConversation 删除一段 Session，以及所有明确引用该 Session 的 TaskRun。
+//
+// Session 与 TaskRun 虽然分别持久化，但用户从会话侧栏执行的是一个领域动作：删除任务
+// 对话时，对应的运行历史也必须一起消失。连续任务可能有多条 Run 共享同一 Session，
+// 因此这里在同一个调度临界区内一次性解析全部引用，并解除 PersistentSessionID。
+func (m *Manager) DeleteConversation(ctx context.Context, sessionID string) ([]Run, error) {
+	if ctx == nil {
+		return nil, errors.New("context.Context 不能为空")
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, errors.New("Session ID 不能为空")
+	}
+
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+
+	referencingTasks, runs, err := m.store.ReferencesBySession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	for _, run := range runs {
+		if !run.Status.Terminal() {
+			return nil, ErrTaskBusy
+		}
+	}
+
+	// 先删除 Session。Runtime 会拒绝删除正在执行/压缩的会话；只有该安全边界成功后，
+	// 才移除运行索引，避免删除请求被拒绝时先丢失用户可见的运行历史。
+	if err := m.runtime.DeleteSession(ctx, sessionID); err != nil {
+		return nil, err
+	}
+
+	deleted := make([]Run, 0, len(runs))
+	for _, run := range runs {
+		value, deleteErr := m.store.DeleteRun(context.WithoutCancel(ctx), run.ID)
+		if deleteErr != nil {
+			m.logger.Error(context.Background(), "Session 已删除，但对应 TaskRun 清理失败", "operation", "task.session.run.delete", "session_id", sessionID, "run_id", run.ID, "error", deleteErr)
+			return deleted, deleteErr
+		}
+		deleted = append(deleted, value)
+		m.publish(Event{Type: "run.deleted", TaskID: value.TaskID, RunID: value.ID})
+	}
+
+	for _, task := range referencingTasks {
+		if strings.TrimSpace(task.PersistentSessionID) != sessionID {
+			continue
+		}
+		task.PersistentSessionID = ""
+		task.UpdatedAt = time.Now().UTC()
+		if updateErr := m.store.UpdateTask(context.WithoutCancel(ctx), task); updateErr != nil {
+			m.logger.Error(context.Background(), "Session 已删除，但连续任务引用清理失败", "operation", "task.session.reference.clear", "session_id", sessionID, "task_id", task.ID, "error", updateErr)
+			return deleted, updateErr
+		}
+		m.publish(Event{Type: "task.updated", TaskID: task.ID, Task: &task})
+	}
+	return deleted, nil
+}
+
 // deleteUnreferencedRunSessions 清理因为删除运行记录而变成“无人引用”的专用 Session。
 // 它刻意把 Task 当前持续会话和其它剩余 Run 的 Session 视为保护引用，避免连续模式
 // 下删一条历史记录就把所有运行共用的对话一起删掉。
@@ -516,6 +601,9 @@ func (m *Manager) SetNotificationService(service *notifications.Service) {
 }
 
 func (m *Manager) RunNow(ctx context.Context, taskID string) (Run, error) {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+
 	task, err := m.store.GetTask(ctx, taskID)
 	if err != nil {
 		return Run{}, err
@@ -533,7 +621,7 @@ func (m *Manager) RunNow(ctx context.Context, taskID string) (Run, error) {
 		return Run{}, err
 	}
 	m.publish(Event{Type: "run.queued", TaskID: task.ID, RunID: created.ID, Run: &created})
-	if err := m.dispatch(ctx); err != nil {
+	if err := m.dispatchLocked(ctx); err != nil {
 		m.logger.Warn(ctx, "立即调度 TaskRun 失败", "operation", "task.dispatch", "run_id", created.ID, "error", err)
 	}
 	return m.store.GetRun(ctx, created.ID)
@@ -543,6 +631,9 @@ func (m *Manager) RunNow(ctx context.Context, taskID string) (Run, error) {
 // 内部任务会完整持久化用于审计，但不会出现在普通 Task 列表；应用重启后未完成
 // 的 automation 不会自动重放。
 func (m *Manager) RunAutomation(ctx context.Context, input AutomationInput) (Task, Run, error) {
+	m.cycleMu.Lock()
+	defer m.cycleMu.Unlock()
+
 	agentID := strings.TrimSpace(input.AgentID)
 	if _, err := m.agents.Get(ctx, agentID); err != nil {
 		return Task{}, Run{}, err
@@ -553,34 +644,71 @@ func (m *Manager) RunAutomation(ctx context.Context, input AutomationInput) (Tas
 	if err != nil {
 		return Task{}, Run{}, err
 	}
+	origin := strings.TrimSpace(input.Origin)
+	originRef := strings.TrimSpace(input.OriginRef)
+	if origin == "" || originRef == "" {
+		return Task{}, Run{}, errors.New("内部自动运行必须提供稳定的 Origin 与 OriginRef")
+	}
+	if existing, runs, found, findErr := m.store.FindInternalTaskByOrigin(ctx, origin, originRef); findErr != nil {
+		return Task{}, Run{}, findErr
+	} else if found && len(runs) > 0 {
+		// 同一来源动作已经创建过 Run。无论它仍在执行还是已经终态，都返回原记录，
+		// 绝不因为调用方重试而再次执行可能有副作用的工具。
+		return existing, runs[0], nil
+	} else if found {
+		// Task 已经原子落盘但进程在创建 Run 前退出；此时尚未产生模型/工具副作用，
+		// 可以安全地为同一个幂等 Task 补建唯一 Run。
+		created, createErr := m.createAutomationRun(ctx, existing)
+		return existing, created, createErr
+	}
 	now := time.Now().UTC()
 	task := Task{
 		ID: uuid.NewString(), AgentID: agentID, Internal: true,
-		Origin: strings.TrimSpace(input.Origin), OriginRef: strings.TrimSpace(input.OriginRef),
+		Origin: origin, OriginRef: originRef,
 		Name: name, Prompt: prompt, Execution: ExecutionAgent, Status: status, Schedule: schedule, Limits: limits,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := m.store.CreateTask(ctx, task); err != nil {
 		return Task{}, Run{}, err
 	}
+	created, err := m.createAutomationRun(ctx, task)
+	if err != nil {
+		_, _ = m.store.ArchiveTask(context.WithoutCancel(ctx), task.ID, time.Now().UTC())
+		return Task{}, Run{}, err
+	}
+	return task, created, nil
+}
+
+func (m *Manager) createAutomationRun(ctx context.Context, task Task) (Run, error) {
+	now := time.Now().UTC()
 	run := Run{
 		ID: uuid.NewString(), TaskID: task.ID, AgentID: task.AgentID, Trigger: TriggerAutomation, Execution: ExecutionAgent,
 		ScheduledFor: now, Attempt: 1, Status: RunQueued, CreatedAt: now,
 	}
 	created, _, err := m.store.CreateRun(ctx, run)
 	if err != nil {
-		_, _ = m.store.ArchiveTask(context.WithoutCancel(ctx), task.ID, time.Now().UTC())
-		return Task{}, Run{}, err
+		return Run{}, err
 	}
 	m.publish(Event{Type: "run.queued", TaskID: task.ID, RunID: created.ID, Task: &task, Run: &created})
-	if err := m.dispatch(ctx); err != nil {
+	// RunAutomation 持有 cycleMu，必须调用不重复加锁的分派实现。
+	if err := m.dispatchLocked(ctx); err != nil {
 		m.logger.Warn(ctx, "立即调度内部自动运行失败", "operation", "task.automation.dispatch", "run_id", created.ID, "error", err)
 	}
 	current, err := m.store.GetRun(ctx, created.ID)
 	if err != nil {
-		return task, created, nil
+		return created, nil
 	}
-	return task, current, nil
+	return current, nil
+}
+
+// AutomationByOrigin 暴露只读幂等关联，供主动助手在应用重启后修复尚未来得及回写的
+// TaskID/RunID。
+func (m *Manager) AutomationByOrigin(ctx context.Context, origin, originRef string) (Task, Run, bool, error) {
+	task, runs, found, err := m.store.FindInternalTaskByOrigin(ctx, origin, originRef)
+	if err != nil || !found || len(runs) == 0 {
+		return task, Run{}, found, err
+	}
+	return task, runs[0], true, nil
 }
 
 func (m *Manager) CancelRun(ctx context.Context, runID string) (Run, error) {
@@ -618,9 +746,11 @@ func (m *Manager) CancelRun(ctx context.Context, runID string) (Run, error) {
 	return run, nil
 }
 
-// SuspendAgent 阻止删除过程中新建 TaskRun。返回的 release 必须调用；已有运行仍由
-// Runtime.DeleteAgent 的 Session reservation 拒绝删除。
+// SuspendAgent 阻止删除过程中新建 Task/TaskRun。返回的 release 必须调用；已有运行仍由
+// Runtime.DeleteAgent 的 Session reservation 拒绝删除。cycleMu 会保持到删除操作结束，
+// 避免 Agent Aggregate 清理过程中被并发写入重新创建。
 func (m *Manager) SuspendAgent(agentID string) func() {
+	m.cycleMu.Lock()
 	m.mu.Lock()
 	m.deletingAgents[agentID]++
 	m.mu.Unlock()
@@ -633,6 +763,7 @@ func (m *Manager) SuspendAgent(agentID string) func() {
 				delete(m.deletingAgents, agentID)
 			}
 			m.mu.Unlock()
+			m.cycleMu.Unlock()
 		})
 	}
 }
@@ -954,9 +1085,9 @@ func taskSessionTitle(task Task, startedAt time.Time) string {
 	}
 	localTime := startedAt.In(location)
 	if task.Internal && task.Origin == "proactive" {
-		return fmt.Sprintf("主动·%d月%d日%s·", localTime.Month(), localTime.Day(), task.Name)
+		return fmt.Sprintf("主动·%d月%d日%s", localTime.Month(), localTime.Day(), task.Name)
 	}
-	return fmt.Sprintf("任务·%d月%d日%s·", localTime.Month(), localTime.Day(), task.Name)
+	return fmt.Sprintf("任务·%d月%d日%s", localTime.Month(), localTime.Day(), task.Name)
 }
 
 func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {

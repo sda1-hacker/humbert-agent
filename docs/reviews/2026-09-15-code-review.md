@@ -1,7 +1,8 @@
 # humbert-agent 代码审查与后续规划
 
 > 状态：历史审查基线，已归档，不代表当前实现。后续已经完成工具事务恢复、缺失/损坏
-> Session 隔离、运行关闭与删除并发、发送重试、Markdown、附件，以及 Agent 删除状态机；
+> Session 隔离、运行关闭与删除并发、发送重试、Markdown、附件、Agent 删除状态机、
+> 主动任务和 Agent-as-Tool 协作；
 > 当前边界与验证结果以 `docs/architecture/domain-boundaries.md`、
 > `docs/reviews/2026-09-15-reliability-fixes.md` 和 `REFACTOR_REPORT.md` 为准。
 

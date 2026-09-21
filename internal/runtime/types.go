@@ -68,6 +68,8 @@ type Event struct {
 
 	ModelID string `json:"modelID"`
 
+	ModelRole string `json:"modelRole,omitempty"`
+
 	ModelRevision uint64 `json:"modelRevision"`
 
 	ToolRevision         uint64   `json:"toolRevision"`
@@ -173,7 +175,8 @@ type RuntimeManifest struct {
 }
 
 // RuntimeModelRolesManifest 描述本次 Resolve 后各角色实际使用的模型。
-// Utility/Memory 字段已经应用回退链；ImageModelID 来自应用级多媒体设置。
+// Utility/Memory 字段已经应用回退链；ImageModelID 来自应用级多媒体设置并仅作为视觉辅助。
+// ActiveModelID/ActiveRole 为兼容现有 UI 保留；视觉桥接后它们始终指向 Chat Model。
 type RuntimeModelRolesManifest struct {
 	ChatModelID    string `json:"chatModelID"`
 	UtilityModelID string `json:"utilityModelID"`
@@ -379,6 +382,12 @@ type ExecutionLimits struct {
 	Deadline      time.Time
 	MaxModelCalls int
 	MaxToolCalls  int
+}
+
+// ResolveTurnOptions 只承载必须发生在 Snapshot 构建期间的运行控制。视觉辅助模型在
+// Provider Context 形成前执行，因此必须通过这里接入任务的模型调用上限。
+type ResolveTurnOptions struct {
+	BeforeAuxiliaryModel func() error
 }
 
 // StartTurnResult 是异步 Turn 启动结果。

@@ -10,13 +10,16 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/compose"
 	"github.com/google/uuid"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
+	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
@@ -29,6 +32,145 @@ import (
 type modelSnapshotResolver interface {
 	ResolveSnapshot(ctx context.Context, id string) (models.RuntimeSnapshot, error)
 	MultimediaConfig(ctx context.Context) (models.MultimediaConfig, error)
+}
+
+// BuildChildAgent 为 run_agent 构建一次性的独立 Eino Runtime。
+//
+// 子 Agent 不读取父 Session Transcript，也不创建 Humbert Session；输入只有父 Agent
+// 明确写入 task 的内容。它使用自己的模型、指令和能力选择，但 Workspace/Sandbox 与
+// Permission 身份受父 Runtime 上限制约，不能借协作越权。
+func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.BuildAgentInput) (collaboration.BuiltAgent, error) {
+	if ctx == nil {
+		return collaboration.BuiltAgent{}, errors.New("构建子 Agent 失败: context.Context 不能为空")
+	}
+	childInfo, err := r.agents.Get(ctx, strings.TrimSpace(input.ChildAgentID))
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("读取子 Agent Profile 失败: %w", err)
+	}
+	if !childInfo.Agent.SubagentEnabled {
+		return collaboration.BuiltAgent{}, errors.New("目标 Agent 未启用“允许作为子 Agent 调用”")
+	}
+	roles, err := r.resolveModelRoles(ctx, childInfo.Agent, turnInputRequirements{})
+	if err != nil {
+		return collaboration.BuiltAgent{}, err
+	}
+	modelSnapshot := roles.chat
+
+	// Tool/Skill/MCP 是子 Agent 的专业能力配置，不与父 Agent 的模型可见清单
+	// 取交集。安全上限由父 Runtime 的 Workspace、Sandbox、Network 和 Permission
+	// 继承保证；“有哪些能力”与“本次是否允许执行”是两个不同边界。
+	enabledBuiltins := cloneOptionalStrings(childInfo.Agent.EnabledBuiltinTools)
+	enabledSkills := append([]string(nil), childInfo.Agent.EnabledSkills...)
+	skillSnapshot, err := r.skills.ResolveRuntimeSnapshot(ctx, enabledSkills)
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("解析子 Agent Skill Snapshot 失败: %w", err)
+	}
+
+	toolScope := humberttools.Scope{
+		RequestID: input.ParentScope.RequestID, RunID: input.ParentScope.RunID,
+		SessionID: input.ParentScope.SessionID,
+		// AgentID 保持为父 Agent：子 Agent 是受托执行者，所有副作用仍必须经过
+		// 父 Runtime 的 Permission，并且在当前父会话中完成审批。
+		AgentID:   input.ParentScope.AgentID,
+		Workspace: input.ParentScope.Workspace, Sandbox: input.ParentScope.Sandbox,
+		EnabledBuiltinTools: enabledBuiltins,
+		EnabledMCPTools:     mcpSelectionMap(childInfo.Agent.EnabledMCPTools),
+		DisabledBuiltinTools: []string{
+			collaboration.ListAgentsToolName, collaboration.RunAgentToolName,
+			"session_history", "context_resource", "install_skill",
+		},
+		EnabledSkills: append([]string(nil), skillSnapshot.Names...), SkillRevision: skillSnapshot.Revision,
+		SkillIdentities: skillSnapshot.PackageIdentities(), SkillScriptCommands: skillSnapshot.ScriptRuntimeCommands(),
+		ToolResultMaxChars: toolResultMaxCharsForContext(modelSnapshot.ContextWindow),
+	}
+	resolvedTools, err := r.tools.Resolve(ctx, toolScope)
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("解析子 Agent Tool Snapshot 失败: %w", err)
+	}
+
+	mcpSnapshot, err := r.mcp.ResolveRuntimeSnapshotAvailable(ctx, childInfo.Agent.EnabledMCPTools, toolScope)
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("解析子 Agent MCP Tool Snapshot 失败: %w", err)
+	}
+	descriptors, err := mergeRuntimeDescriptors(resolvedTools.Descriptors, mcpSnapshot.Descriptors)
+	if err != nil {
+		return collaboration.BuiltAgent{}, err
+	}
+	if skillSnapshot.Enabled() {
+		descriptors, err = mergeRuntimeDescriptors(descriptors, []humberttools.Descriptor{{Name: skills.SkillToolName, Risk: humberttools.RiskRead}})
+		if err != nil {
+			return collaboration.BuiltAgent{}, err
+		}
+	}
+	exposedNames := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		exposedNames = append(exposedNames, descriptor.Name)
+	}
+	if err := validateToolCapability(modelSnapshot, modelRoleChat, exposedNames); err != nil {
+		return collaboration.BuiltAgent{}, err
+	}
+
+	instruction := buildRuntimeInstruction(childInfo.Agent.Name, childInfo.Agent.Instruction, input.ParentScope.Workspace, descriptors, time.Now())
+	instruction = strings.TrimSpace(instruction + `
+
+## 子 Agent 协作约束
+你正在作为主 Agent 调用的一次性专业子 Agent 运行。你看不到父会话历史；当前用户消息就是完整任务。
+独立完成调查或操作后，返回清晰、可核验的结果给主 Agent。不要假装直接向最终用户说话，也不要继续委派其它 Agent。`)
+	if skillSnapshot.Enabled() {
+		instruction = strings.TrimSpace(instruction + "\n\n" + skillSnapshot.Instruction)
+	}
+
+	childTools := mergeRuntimeTools(resolvedTools.Tools, mcpSnapshot.Tools)
+	estimateTools := append([]einotool.BaseTool(nil), childTools...)
+	if skillSnapshot.Enabled() {
+		estimateTools = append(estimateTools, skillSnapshot.ToolDefinition())
+	}
+	toolTokens, err := r.contextEngine.EstimateTools(ctx, estimateTools)
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("估算子 Agent Tool Context 占用失败: %w", err)
+	}
+	budget, err := r.contextEngine.BudgetForModel(modelSnapshot.ContextWindow, modelSnapshot.MaxOutputTokens)
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("计算子 Agent Context Budget 失败: %w", err)
+	}
+	compactModel := compactionModel(roles)
+	contextHandler, err := r.contextEngine.NewMidRunHandler(
+		input.ParentScope.SessionID+"/subagent/"+childInfo.Agent.ID,
+		instruction,
+		compactModel.Instance,
+		compactModel.ContextWindow,
+		compactModel.MaxOutputTokens,
+		budget,
+		toolTokens,
+	)
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("创建子 Agent Context Middleware 失败: %w", err)
+	}
+
+	handlers := make([]adk.ChatModelAgentMiddleware, 0, 2)
+	if skillSnapshot.Enabled() {
+		handlers = append(handlers, skillSnapshot.Middleware())
+	}
+	handlers = append(handlers, contextHandler)
+	eventSnapshot := &Snapshot{
+		RequestID: input.ParentScope.RequestID, RunID: input.ParentScope.RunID,
+		SessionID: input.ParentScope.SessionID, AgentID: childInfo.Agent.ID, AgentName: childInfo.Agent.Name,
+		ModelID: modelSnapshot.ModelConfigID, ModelRevision: modelSnapshot.Revision,
+		ToolRevision: resolvedTools.Revision, EventReporter: r.eventReporter,
+	}
+	child, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
+		Name:        childInfo.Agent.Name,
+		Description: "专业子 Agent：" + strings.TrimSpace(childInfo.Agent.Instruction),
+		Instruction: instruction, Model: modelSnapshot.Instance, Handlers: handlers, MaxIterations: 12,
+		ToolsConfig: adk.ToolsConfig{ToolsNodeConfig: compose.ToolsNodeConfig{
+			Tools: childTools, ExecuteSequentially: true,
+			ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: buildToolLifecycleMiddleware(eventSnapshot)}},
+		}},
+	})
+	if err != nil {
+		return collaboration.BuiltAgent{}, fmt.Errorf("创建子 Eino ChatModelAgent 失败: %w", err)
+	}
+	return collaboration.BuiltAgent{Agent: child, AgentID: childInfo.Agent.ID, AgentName: childInfo.Agent.Name}, nil
 }
 
 // resolvedContextBase 保存构建 Context 所需但尚未投影 Session Transcript 的依赖。
@@ -134,6 +276,7 @@ func (r *Resolver) ResolveTurn(
 	requestID string,
 	runID string,
 	sessionID string,
+	resolveOptions ...ResolveTurnOptions,
 ) (*Snapshot, error) {
 	requirements, err := r.currentTurnRequirements(ctx, sessionID)
 	if err != nil {
@@ -154,7 +297,7 @@ func (r *Resolver) ResolveTurn(
 	}
 
 	manifest := runtimeManifestFromBase(base)
-	if err := validateToolCapability(base.model, base.modelRoles.activeRole, manifest.ExposedToolNames); err != nil {
+	if err := validateToolCapability(base.model, modelRoleChat, manifest.ExposedToolNames); err != nil {
 		return nil, err
 	}
 
@@ -194,6 +337,59 @@ func (r *Resolver) ResolveTurn(
 		return nil, fmt.Errorf("恢复 Runtime 附件失败: %w", err)
 	}
 
+	// 主聊天模型不支持图片时，图片只交给视觉辅助模型做一次事实观察；观察结果作为
+	// 不可信文本注入当前 Provider Context，真正的 Agent 推理、工具调用和最终回答仍由
+	// Chat Model 完成。支持 Vision 的 Chat Model 则继续直接接收原图片。
+	if requirementsFromMessages(contextSnapshot.Messages).Vision && !base.modelRoles.chat.Capabilities.Vision {
+		if base.modelRoles.image == nil {
+			return nil, capabilityError(base.modelRoles.chat, modelRoleChat, []string{"Vision"})
+		}
+		var options ResolveTurnOptions
+		if len(resolveOptions) > 0 {
+			options = resolveOptions[0]
+		}
+		if options.BeforeAuxiliaryModel != nil {
+			if err := options.BeforeAuxiliaryModel(); err != nil {
+				return nil, err
+			}
+		}
+		if r.eventReporter != nil {
+			r.eventReporter.Report(ctx, Event{
+				Type: EventModelStarted, RequestID: requestID, RunID: runID,
+				SessionID: base.session.ID, AgentID: base.agentInfo.Agent.ID,
+				ModelID: base.modelRoles.image.ModelConfigID, ModelRevision: base.modelRoles.image.Revision,
+				ModelRole: modelRoleImage, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+			})
+		}
+
+		// 视觉观察必须使用主模型剩余的真实输入预算。按一个 Unicode 字符约一个 Token
+		// 保守截断，额外保留 256 Token 给桥接标题和 Provider 协议开销。
+		availableTokens := contextSnapshot.Usage.ThresholdTokens - contextSnapshot.Usage.UsedTokens - 256
+		if availableTokens < 256 {
+			return nil, errors.New("当前 Context 没有足够空间容纳视觉辅助结果，请先压缩或新建对话")
+		}
+		beforeBridgeTokens := r.contextEngine.EstimateMessages(providerMessages)
+		providerMessages, err = multimodal.BridgeImagesForTextModel(
+			ctx,
+			base.modelRoles.image.Instance,
+			providerMessages,
+			availableTokens,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("视觉辅助处理失败: %w", err)
+		}
+		afterBridgeTokens := r.contextEngine.EstimateMessages(providerMessages)
+		if delta := afterBridgeTokens - beforeBridgeTokens; delta > 0 {
+			contextSnapshot.Usage.MessageTokens += delta
+			contextSnapshot.Usage.UsedTokens += delta
+			if contextSnapshot.Usage.ContextWindow > 0 {
+				contextSnapshot.Usage.Percent = float64(contextSnapshot.Usage.UsedTokens) * 100 / float64(contextSnapshot.Usage.ContextWindow)
+			}
+			contextSnapshot.Usage.NeedsCompaction = contextSnapshot.Usage.UsedTokens >= contextSnapshot.Usage.ThresholdTokens
+			contextSnapshot.Usage.NeedsSoftCompaction = contextSnapshot.Usage.UsedTokens >= contextSnapshot.Usage.SoftThresholdTokens
+		}
+	}
+
 	return &Snapshot{
 		Manifest:                  manifest,
 		RequestID:                 requestID,
@@ -205,7 +401,7 @@ func (r *Resolver) ResolveTurn(
 		Instruction:               contextSnapshot.Instruction,
 		ModelID:                   manifest.ModelID,
 		ModelRevision:             manifest.ModelRevision,
-		ModelRole:                 base.modelRoles.activeRole,
+		ModelRole:                 modelRoleChat,
 		ModelCapabilities:         base.model.Capabilities,
 		CompactionModel:           compactionModel(base.modelRoles).Instance,
 		CompactionContextWindow:   compactionModel(base.modelRoles).ContextWindow,
@@ -255,10 +451,11 @@ func (r *Resolver) buildContextSnapshot(ctx context.Context, base resolvedContex
 	})
 }
 
-// alignModelToContext 让模型选择与 ContextEngine 最终会发送的消息保持一致。
-// 图片紧邻追问仍携带二进制并按需使用全局图片模型；更早图片会在水合时变成文本占位。
-// 若切换模型改变了 Context Window，则重新 Build 一次，并对重建后新增进入窗口的消息
-// 再次做 fail-closed 能力校验。
+// alignModelToContext 让模型角色与 ContextEngine 最终会发送的消息保持一致。
+//
+// Chat Model 始终是当前 Turn 的执行模型。这里唯一需要根据最终 Context 补解析的是
+// Vision Assistant：当前 User Message 可能只有文字，但紧邻的上一轮图片仍处于重放窗口，
+// 因此只有 Build 之后才能准确判断本轮是否需要视觉辅助。
 func (r *Resolver) alignModelToContext(
 	ctx context.Context,
 	base *resolvedContextBase,
@@ -269,26 +466,12 @@ func (r *Resolver) alignModelToContext(
 	}
 
 	requirements := requirementsFromMessages(snapshot.Messages)
-	if missing := missingInputCapabilities(base.model.Capabilities, requirements); len(missing) > 0 {
-		roles, err := r.resolveModelRoles(ctx, base.agentInfo.Agent, requirements)
-		if err != nil {
-			return contextengine.Snapshot{}, err
-		}
-		if roles.active.ModelConfigID != base.model.ModelConfigID {
-			base.modelRoles = roles
-			base.model = roles.active
-
-			rebuilt, err := r.buildContextSnapshot(ctx, *base)
-			if err != nil {
-				return contextengine.Snapshot{}, fmt.Errorf("按 %s Model 重建 Session Context 失败: %w", roles.activeRole, err)
-			}
-			snapshot = rebuilt
-		}
+	roles, err := r.resolveModelRoles(ctx, base.agentInfo.Agent, requirements)
+	if err != nil {
+		return contextengine.Snapshot{}, err
 	}
-
-	if missing := missingInputCapabilities(base.model.Capabilities, requirementsFromMessages(snapshot.Messages)); len(missing) > 0 {
-		return contextengine.Snapshot{}, capabilityError(base.model, base.modelRoles.activeRole, missing)
-	}
+	base.modelRoles = roles
+	base.model = roles.chat
 	return snapshot, nil
 }
 
@@ -575,7 +758,7 @@ func (r *Resolver) resolveContextBase(
 	if err != nil {
 		return resolvedContextBase{}, err
 	}
-	modelSnapshot := modelRoles.active
+	modelSnapshot := modelRoles.chat
 
 	agentWorkspace, err := r.workspaces.Resolve(
 		ctx,
@@ -606,6 +789,7 @@ func (r *Resolver) resolveContextBase(
 		Workspace:           agentWorkspace,
 		Sandbox:             sandboxPolicy,
 		EnabledBuiltinTools: cloneOptionalStrings(agentInfo.Agent.EnabledBuiltinTools),
+		EnabledMCPTools:     mcpSelectionMap(agentInfo.Agent.EnabledMCPTools),
 		EnabledSkills:       append([]string(nil), skillSnapshot.Names...),
 		SkillRevision:       skillSnapshot.Revision,
 		SkillIdentities:     skillSnapshot.PackageIdentities(),
@@ -705,7 +889,7 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 		ModelID:           base.model.ModelConfigID,
 		ModelDisplayName:  base.model.ModelDisplayName,
 		ModelRevision:     base.model.Revision,
-		ModelRole:         base.modelRoles.activeRole,
+		ModelRole:         modelRoleChat,
 		ModelCapabilities: base.model.Capabilities,
 		ModelRoles: RuntimeModelRolesManifest{
 			ChatModelID:    base.modelRoles.chat.ModelConfigID,
@@ -713,7 +897,7 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 			MemoryModelID:  base.modelRoles.memory.ModelConfigID,
 			ImageModelID:   imageModelID,
 			ActiveModelID:  base.model.ModelConfigID,
-			ActiveRole:     base.modelRoles.activeRole,
+			ActiveRole:     modelRoleChat,
 		},
 		ToolRevision:     base.tools.Revision,
 		BuiltinToolNames: append([]string(nil), base.tools.ToolNames...),
@@ -762,6 +946,14 @@ func cloneOptionalStrings(values []string) []string {
 		return nil
 	}
 	return append([]string{}, values...)
+}
+
+func mcpSelectionMap(values []humbertmcp.ToolSelection) map[string][]string {
+	result := make(map[string][]string, len(values))
+	for _, selection := range values {
+		result[selection.ServerID] = append([]string(nil), selection.Tools...)
+	}
+	return result
 }
 
 // mergeRuntimeDescriptors 合并不同 Tool Source 的模型侧名称，并在任何碰撞时 fail-closed。

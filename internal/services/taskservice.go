@@ -358,10 +358,22 @@ func scheduleDTO(value tasks.Schedule) TaskScheduleDTO {
 
 func taskRunDTO(value tasks.Run) TaskRunDTO {
 	result := TaskRunDTO{ID: value.ID, TaskID: value.TaskID, AgentID: value.AgentID, SessionID: value.SessionID, RequestID: value.RequestID, RuntimeRunID: value.RuntimeRunID, Trigger: string(value.Trigger), Execution: string(value.Execution), ParentRunID: value.ParentRunID, ScheduledFor: value.ScheduledFor.Format(time.RFC3339Nano), Attempt: value.Attempt, Status: string(value.Status), ToolCalls: value.ToolCalls, ModelCalls: value.ModelCalls, ResultMessageID: value.ResultMessageID, ResultPreview: value.ResultPreview, Error: value.Error, CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), StartedAt: formatOptionalTime(value.StartedAt), FinishedAt: formatOptionalTime(value.FinishedAt), DeadlineAt: formatOptionalTime(value.DeadlineAt)}
-	if value.Approval != nil {
-		result.Approval = &TaskApprovalDTO{ID: value.Approval.ID, ToolName: value.Approval.ToolName, Risk: value.Approval.Risk, Presentation: value.Approval.Presentation, CreatedAt: value.Approval.CreatedAt.Format(time.RFC3339Nano), ExpiresAt: value.Approval.ExpiresAt.Format(time.RFC3339Nano)}
-	}
+	result.Approval = taskApprovalDTO(value.Approval)
 	return result
+}
+
+// taskApprovalDTO 是后台任务页面使用的安全审批投影。ApprovalSnapshot 已经只包含
+// Permission Presenter 生成的脱敏信息；原始 Tool Arguments 始终留在 Eino checkpoint 中。
+func taskApprovalDTO(value *tasks.ApprovalSnapshot) *TaskApprovalDTO {
+	if value == nil {
+		return nil
+	}
+	return &TaskApprovalDTO{
+		ID: value.ID, ToolName: value.ToolName, Risk: value.Risk,
+		Presentation: value.Presentation,
+		CreatedAt:    value.CreatedAt.Format(time.RFC3339Nano),
+		ExpiresAt:    value.ExpiresAt.Format(time.RFC3339Nano),
+	}
 }
 
 func formatOptionalTime(value *time.Time) string {

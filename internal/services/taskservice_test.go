@@ -3,22 +3,7 @@ package services
 import (
 	"testing"
 	"time"
-
-	"github.com/sda1-hacker/humbert-agent/internal/tasks"
 )
-
-func TestTaskRunSessionIDsReturnsUniqueNonEmptyIDs(t *testing.T) {
-	runs := []tasks.Run{
-		{SessionID: " session-1 "},
-		{SessionID: ""},
-		{SessionID: "session-1"},
-		{SessionID: "session-2"},
-	}
-	got := taskRunSessionIDs(runs)
-	if len(got) != 2 || got[0] != "session-1" || got[1] != "session-2" {
-		t.Fatalf("taskRunSessionIDs() = %#v", got)
-	}
-}
 
 func TestScheduleFromDTOParsesOnceWallClockInSelectedTimeZone(t *testing.T) {
 	value, err := scheduleFromDTO(TaskScheduleDTO{

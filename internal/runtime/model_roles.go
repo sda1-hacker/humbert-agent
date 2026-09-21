@@ -31,9 +31,6 @@ type resolvedModelRoles struct {
 	memory       models.RuntimeSnapshot
 	imageModelID string
 	image        *models.RuntimeSnapshot
-
-	active     models.RuntimeSnapshot
-	activeRole string
 }
 
 // ModelCapabilityError 是 Runtime 在 Provider 调用前返回的稳定能力错误。
@@ -50,7 +47,7 @@ func (e *ModelCapabilityError) Error() string {
 	if name == "" {
 		name = e.ModelID
 	}
-	hint := "请在模型设置中启用对应 Capability，或在“设置 → 多媒体”中配置图片理解模型"
+	hint := "请在模型设置中启用对应 Capability，或在“设置 → 多媒体”中配置视觉辅助模型"
 	for _, capability := range e.Capabilities {
 		if capability == "Files" {
 			hint = "当前消息要求 Provider 原生 Files 能力；Humbert 目前只正式支持图片和可提取的 UTF-8 文本附件"
@@ -104,6 +101,12 @@ func (r *Resolver) resolveModelRoles(
 		}
 	}
 
+	// Files 是主聊天模型自身的输入能力。图片辅助模型只能补足 Vision，不能代替
+	// Chat Model 接管原生文件输入，因此异常的原生 file_url 仍然 fail closed。
+	if requirements.Files && !chat.Capabilities.Files {
+		return resolvedModelRoles{}, capabilityError(chat, modelRoleChat, []string{"Files"})
+	}
+
 	multimedia, err := r.models.MultimediaConfig(ctx)
 	if err != nil {
 		return resolvedModelRoles{}, fmt.Errorf("读取多媒体模型配置失败: %w", err)
@@ -111,11 +114,12 @@ func (r *Resolver) resolveModelRoles(
 	imageModelID := strings.TrimSpace(multimedia.ImageModelID)
 	var image *models.RuntimeSnapshot
 
-	active := chat
-	activeRole := modelRoleChat
-	if missing := missingInputCapabilities(chat.Capabilities, requirements); len(missing) > 0 {
+	// Vision 与 Turn 执行模型解耦：Chat Model 永远负责当前 Agent Turn。只有当真正
+	// 会发送给 Provider 的 Context 含图片且 Chat Model 不支持视觉时，才解析全局
+	// 视觉辅助模型只作为观察模型。它不需要 Tools Capability。
+	if requirements.Vision && !chat.Capabilities.Vision {
 		if imageModelID == "" {
-			return resolvedModelRoles{}, capabilityError(chat, modelRoleChat, missing)
+			return resolvedModelRoles{}, capabilityError(chat, modelRoleChat, []string{"Vision"})
 		}
 
 		var snapshot models.RuntimeSnapshot
@@ -129,21 +133,17 @@ func (r *Resolver) resolveModelRoles(
 		default:
 			snapshot, err = r.models.ResolveSnapshot(ctx, imageModelID)
 			if err != nil {
-				return resolvedModelRoles{}, fmt.Errorf("解析图片理解模型失败: %w", err)
+				return resolvedModelRoles{}, fmt.Errorf("解析视觉辅助模型失败: %w", err)
 			}
 		}
-		image = &snapshot
-
-		if imageMissing := missingInputCapabilities(snapshot.Capabilities, requirements); len(imageMissing) > 0 {
-			return resolvedModelRoles{}, capabilityError(snapshot, modelRoleImage, imageMissing)
+		if !snapshot.Capabilities.Vision {
+			return resolvedModelRoles{}, capabilityError(snapshot, modelRoleImage, []string{"Vision"})
 		}
-		active = snapshot
-		activeRole = modelRoleImage
+		image = &snapshot
 	}
 
 	return resolvedModelRoles{
 		chat: chat, utility: utility, memory: memoryModel, imageModelID: imageModelID, image: image,
-		active: active, activeRole: activeRole,
 	}, nil
 }
 
@@ -193,7 +193,7 @@ func stringMessagePartExtra(extra map[string]any, key string) string {
 
 // requirementsFromMessages 检查本次真正会发送给 Provider 的 Context。它与
 // sessions.HydrateMessages 使用同一个历史图片重放窗口：图片紧邻追问仍使用 Vision
-// Model，更早图片已经变为文本占位，不应继续锁定图片模型路由。
+// Model，更早图片已经变为文本占位，不应继续要求视觉辅助。
 func requirementsFromMessages(messages []*schema.Message) turnInputRequirements {
 	var result turnInputRequirements
 	imageReplayMask := multimodal.ImageReplayMask(messages)
@@ -203,17 +203,6 @@ func requirementsFromMessages(messages []*schema.Message) turnInputRequirements 
 		result.Files = result.Files || current.Files
 	}
 	return result
-}
-
-func missingInputCapabilities(capabilities models.Capabilities, requirements turnInputRequirements) []string {
-	missing := make([]string, 0, 2)
-	if requirements.Vision && !capabilities.Vision {
-		missing = append(missing, "Vision")
-	}
-	if requirements.Files && !capabilities.Files {
-		missing = append(missing, "Files")
-	}
-	return missing
 }
 
 func capabilityError(snapshot models.RuntimeSnapshot, role string, missing []string) error {
@@ -230,11 +219,11 @@ func validateToolCapability(snapshot models.RuntimeSnapshot, role string, expose
 	return capabilityError(snapshot, role, []string{"Tools"})
 }
 
-// compactionModel 优先使用 Utility Role；若它的上下文窗口小于当前执行模型，回退到
-// active model，避免为节省成本而把一个本来可处理的长上下文送进更小窗口模型。
+// compactionModel 优先使用 Utility Role；若它的上下文窗口小于主聊天模型，回退到
+// Chat Model，避免为节省成本而把一个本来可处理的长上下文送进更小窗口模型。
 func compactionModel(roles resolvedModelRoles) models.RuntimeSnapshot {
-	if roles.utility.ContextWindow >= roles.active.ContextWindow {
+	if roles.utility.ContextWindow >= roles.chat.ContextWindow {
 		return roles.utility
 	}
-	return roles.active
+	return roles.chat
 }

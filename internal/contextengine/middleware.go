@@ -191,7 +191,7 @@ func (m *MidRunCompactor) compactMessages(ctx context.Context, messages []*schem
 			prefixEnd++
 			continue
 		}
-		if message.Role == schema.System || isSessionMemoryReferenceMessage(message) {
+		if message.Role == schema.System || isInternalReferenceMessage(message) {
 			prefixEnd++
 			continue
 		}

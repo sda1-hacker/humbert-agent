@@ -36,3 +36,38 @@ func TestStorePersistsSettingsAndRecord(t *testing.T) {
 		t.Fatalf("record not persisted: %#v %v", got, ok)
 	}
 }
+
+func TestStorePersistsPendingEventUntilAcknowledged(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "config", "proactive.json")
+	store, err := NewStore(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := Event{Key: "pending-1", Kind: EventWorkspaceChanged, OccurredAt: time.Now().UTC()}
+	if enqueued, err := store.EnqueueEvent(ctx, event); err != nil || !enqueued {
+		t.Fatalf("first enqueue=(%v,%v), want (true,nil)", enqueued, err)
+	}
+	// 同一事件键只允许入队一次，防止 watcher 重试制造重复 Agent Run。
+	if enqueued, err := store.EnqueueEvent(ctx, event); err != nil || enqueued {
+		t.Fatalf("duplicate enqueue=(%v,%v), want (false,nil)", enqueued, err)
+	}
+
+	reloaded, err := NewStore(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.PendingEvents(); len(got) != 1 || got[0].Key != event.Key {
+		t.Fatalf("pending event not recovered: %#v", got)
+	}
+	if err := reloaded.RemovePendingEvent(ctx, event.Key); err != nil {
+		t.Fatal(err)
+	}
+	reloadedAgain, err := NewStore(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloadedAgain.PendingEventCount(); got != 0 {
+		t.Fatalf("pending event count = %d, want 0", got)
+	}
+}

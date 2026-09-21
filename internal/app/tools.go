@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/contextartifact"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
@@ -14,6 +15,28 @@ import (
 	builtin "github.com/sda1-hacker/humbert-agent/internal/tools/builtin"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
+
+// registerCollaborationTools 暴露同步 Agent-as-Tool 能力。Factory 持有应用级 Manager；
+// 每个 Turn 仍由 Registry.Build 创建隔离实例并冻结父 Runtime Scope。
+func registerCollaborationTools(registry *humberttools.Registry, manager *collaboration.Manager) error {
+	if registry == nil || manager == nil {
+		return fmt.Errorf("注册协作工具失败: 依赖不完整")
+	}
+	factories := []func(*collaboration.Manager) (humberttools.Factory, error){
+		builtin.NewListAgentsFactory,
+		builtin.NewRunAgentFactory,
+	}
+	for _, build := range factories {
+		factory, err := build(manager)
+		if err != nil {
+			return err
+		}
+		if err := registry.Register(factory); err != nil {
+			return fmt.Errorf("注册 Tool %q 失败: %w", factory.Descriptor().Name, err)
+		}
+	}
+	return nil
+}
 
 // buildToolRegistry 构建 Application 生命周期内唯一 ToolRegistry。
 //

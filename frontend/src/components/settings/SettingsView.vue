@@ -67,7 +67,7 @@ const navigationGroups = [
       {
         key: "multimedia",
         title: "多媒体",
-        description: "配置图片理解模型，并查看当前真正支持的附件类型。",
+        description: "配置视觉辅助模型，并查看当前真正支持的附件类型。",
         keywords: ["多媒体", "图片", "vision", "image", "附件", "pdf", "audio"],
         glyph: "图",
       },

@@ -156,6 +156,33 @@ func (s *Store) GetTask(ctx context.Context, id string) (Task, error) {
 	return s.getTaskLocked(ctx, id)
 }
 
+// FindInternalTaskByOrigin 按稳定来源键查找内部任务。Origin + OriginRef 是主动动作的
+// 幂等键，用来关闭“领域记录已落盘、内部 Task 已创建、关联 ID 尚未回写”这一崩溃窗口。
+func (s *Store) FindInternalTaskByOrigin(ctx context.Context, origin, originRef string) (Task, []Run, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	origin = strings.TrimSpace(origin)
+	originRef = strings.TrimSpace(originRef)
+	if origin == "" || originRef == "" {
+		return Task{}, nil, false, nil
+	}
+	values, err := s.listTasksLocked(ctx, true)
+	if err != nil {
+		return Task{}, nil, false, err
+	}
+	for _, task := range values {
+		if !task.Internal || task.Origin != origin || task.OriginRef != originRef {
+			continue
+		}
+		runs, readErr := s.listRunsLocked(ctx, task.AgentID, task.ID)
+		if readErr != nil {
+			return Task{}, nil, false, readErr
+		}
+		return task, runs, true, nil
+	}
+	return Task{}, nil, false, nil
+}
+
 func (s *Store) getTaskLocked(ctx context.Context, id string) (Task, error) {
 	id = strings.TrimSpace(id)
 	if uuid.Validate(id) != nil {
@@ -451,6 +478,41 @@ func (s *Store) RunBySession(ctx context.Context, sessionID string) (Run, bool, 
 		}
 	}
 	return Run{}, false, nil
+}
+
+// ReferencesBySession 返回所有引用指定 Session 的 Task 与 TaskRun。连续任务可能让多条
+// Run 共享一段对话，因此删除链路不能使用只返回任意一条记录的 RunBySession。
+func (s *Store) ReferencesBySession(ctx context.Context, sessionID string) ([]Task, []Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sessionID = strings.TrimSpace(sessionID)
+	if uuid.Validate(sessionID) != nil {
+		return nil, nil, nil
+	}
+	values, err := s.listTasksLocked(ctx, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	tasksResult := make([]Task, 0)
+	runsResult := make([]Run, 0)
+	for _, task := range values {
+		referenced := strings.TrimSpace(task.PersistentSessionID) == sessionID
+		runs, readErr := s.listRunsLocked(ctx, task.AgentID, task.ID)
+		if readErr != nil {
+			return nil, nil, readErr
+		}
+		for _, run := range runs {
+			if strings.TrimSpace(run.SessionID) != sessionID {
+				continue
+			}
+			referenced = true
+			runsResult = append(runsResult, run)
+		}
+		if referenced {
+			tasksResult = append(tasksResult, task)
+		}
+	}
+	return tasksResult, runsResult, nil
 }
 
 func (s *Store) deleteRunLocked(ctx context.Context, run Run) error {

@@ -16,6 +16,7 @@ import (
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
+	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -40,6 +41,8 @@ type AgentDTO struct {
 	Name string `json:"name"`
 
 	Avatar string `json:"avatar"`
+
+	SubagentEnabled bool `json:"subagentEnabled"`
 
 	Instruction string `json:"instruction"`
 
@@ -165,6 +168,7 @@ type SandboxDiagnosticsDTO struct {
 type CreateAgentRequest struct {
 	Name                   string             `json:"name"`
 	Avatar                 string             `json:"avatar"`
+	SubagentEnabled        bool               `json:"subagentEnabled"`
 	Instruction            string             `json:"instruction"`
 	ModelID                string             `json:"modelID"`
 	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
@@ -180,6 +184,7 @@ type CreateAgentRequest struct {
 type UpdateAgentRequest struct {
 	Name                   string             `json:"name"`
 	Avatar                 string             `json:"avatar"`
+	SubagentEnabled        bool               `json:"subagentEnabled"`
 	Instruction            string             `json:"instruction"`
 	ModelID                string             `json:"modelID"`
 	ModelRolesConfigured   bool               `json:"modelRolesConfigured"`
@@ -317,13 +322,13 @@ func (s *AgentService) CreateAgent(
 	defer cancel()
 
 	createInput := agents.CreateInput{
-		Sandbox: sandboxPolicyFromDTO(request.Sandbox),
+		Sandbox: sandboxPolicyFromDTO(request.Sandbox), SubagentEnabled: request.SubagentEnabled,
 	}
 	if request.BuiltinToolsConfigured {
 		if err := s.validateBuiltinToolNames(request.EnabledBuiltinTools); err != nil {
 			return AgentDTO{}, err
 		}
-		createInput.EnabledBuiltinTools = append([]string{}, request.EnabledBuiltinTools...)
+		createInput.EnabledBuiltinTools = filterRemovedBuiltinTools(request.EnabledBuiltinTools)
 	}
 
 	value, err :=
@@ -334,6 +339,8 @@ func (s *AgentService) CreateAgent(
 					Name: request.Name,
 
 					Avatar: request.Avatar,
+
+					SubagentEnabled: createInput.SubagentEnabled,
 
 					Instruction: request.Instruction,
 
@@ -395,9 +402,10 @@ func (s *AgentService) UpdateAgent(
 		if err := s.validateBuiltinToolNames(request.EnabledBuiltinTools); err != nil {
 			return AgentDTO{}, err
 		}
-		enabled := append([]string{}, request.EnabledBuiltinTools...)
+		enabled := filterRemovedBuiltinTools(request.EnabledBuiltinTools)
 		enabledBuiltinTools = &enabled
 	}
+	subagentEnabled := request.SubagentEnabled
 
 	value, err :=
 		s.core.Agents().
@@ -408,6 +416,8 @@ func (s *AgentService) UpdateAgent(
 					Name: request.Name,
 
 					Avatar: request.Avatar,
+
+					SubagentEnabled: &subagentEnabled,
 
 					Instruction: request.Instruction,
 
@@ -741,7 +751,7 @@ func errorDetail(err error, fallback string) string {
 func (s *AgentService) UpdateAgentSecurity(id string, request AgentSecurityRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	enabled := append([]string{}, request.EnabledBuiltinTools...)
+	enabled := filterRemovedBuiltinTools(request.EnabledBuiltinTools)
 	if err := s.validateBuiltinToolNames(enabled); err != nil {
 		return AgentDTO{}, err
 	}
@@ -770,7 +780,6 @@ func (s *AgentService) SelectSandboxDirectory(currentPath string) (string, error
 func (s *AgentService) DeleteAgent(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-
 	releaseTasks := s.core.Tasks().SuspendAgent(id)
 	defer releaseTasks()
 
@@ -855,6 +864,8 @@ func (s *AgentService) toDTO(
 
 		Avatar: value.Agent.Avatar,
 
+		SubagentEnabled: value.Agent.SubagentEnabled,
+
 		Instruction: value.Agent.Instruction,
 
 		ModelID: value.Agent.ModelID,
@@ -865,7 +876,7 @@ func (s *AgentService) toDTO(
 
 		EnabledSkills: append([]string(nil), value.Agent.EnabledSkills...),
 
-		EnabledBuiltinTools:    append([]string{}, value.Agent.EnabledBuiltinTools...),
+		EnabledBuiltinTools:    filterRemovedBuiltinTools(value.Agent.EnabledBuiltinTools),
 		BuiltinToolsConfigured: value.Agent.EnabledBuiltinTools != nil,
 		AvailableBuiltinTools:  s.ListBuiltinTools(),
 		Sandbox:                sandboxPolicyDTO(value.Agent.Sandbox),
@@ -937,6 +948,9 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 			continue
 		}
 		if _, ok := known[name]; !ok {
+			if humberttools.IsRemovedBuiltinTool(name) {
+				continue
+			}
 			return fmt.Errorf("Builtin Tool 不存在或当前配置未启用: %s", name)
 		}
 		if _, duplicate := seen[name]; duplicate {
@@ -945,6 +959,18 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 		seen[name] = struct{}{}
 	}
 	return nil
+}
+
+func filterRemovedBuiltinTools(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || humberttools.IsRemovedBuiltinTool(value) {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
 }
 
 func builtinToolCategory(name string) string {
@@ -959,6 +985,8 @@ func builtinToolCategory(name string) string {
 		return "web"
 	case "install_skill":
 		return "skills"
+	case "list_agents", "run_agent":
+		return "collaboration"
 	case "get_current_time", "update_plan":
 		return "agent"
 	default:
@@ -973,6 +1001,7 @@ func builtinToolLabel(name string) string {
 		"copy_file": "复制文件", "move_file": "移动文件", "delete_file": "删除文件", "run_command": "执行本地命令",
 		"git_status": "Git 状态", "git_diff": "Git Diff", "git_log": "Git 历史", "web_search": "网页搜索",
 		"web_fetch": "读取网页", "install_skill": "安装 Skill", "get_current_time": "当前时间", "update_plan": "更新计划",
+		"list_agents": "查看可用 Agent", "run_agent": "调用专业 Agent",
 	}
 	if label := labels[name]; label != "" {
 		return label

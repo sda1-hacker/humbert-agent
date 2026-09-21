@@ -101,8 +101,8 @@ const attachments =
       get() {
         return attachmentDrafts
             .value[
-                sessionStore.selectedID
-                ] ?? [];
+            sessionStore.selectedID
+            ] ?? [];
       },
       set(value) {
         const sessionID =
@@ -299,7 +299,7 @@ function attachmentCapabilityError(items) {
 
   const missing = [];
   if (needsVision) missing.push("Vision");
-  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的图片理解模型。请先在“设置 → 多媒体”中配置。`;
+  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的视觉辅助模型。请先在“设置 → 多媒体”中配置。`;
 }
 
 function isImageAttachment(file) {
@@ -788,7 +788,7 @@ watch(
               :title="`预览 ${attachment.name}`"
               @click="previewDraftImage(attachment)"
           >
-            <img :src="`data:${attachment.mimeType};base64,${attachment.base64Data}`" :alt="attachment.name" />
+            <img :src="`data:${attachment.mimeType};base64,${attachment.base64Data}`" :alt="attachment.name"/>
           </button>
           <span v-else class="composer-attachment__icon">📎</span>
           <span class="composer-attachment__body">
@@ -934,6 +934,11 @@ watch(
                       <div class="context-tooltip__row">
                         <span>Session Memory</span>
                         <span>{{ formatTokens(contextUsage.memoryTokens) }}</span>
+                      </div>
+
+                      <div v-if="contextUsage.referenceTokens" class="context-tooltip__row">
+                        <span>后台结果</span>
+                        <span>{{ formatTokens(contextUsage.referenceTokens) }}</span>
                       </div>
 
                       <div class="context-tooltip__row">

@@ -406,7 +406,6 @@ watch(
     {deep: true},
 );
 
-
 onMounted(() => {
   void scrollToBottom(
       true,

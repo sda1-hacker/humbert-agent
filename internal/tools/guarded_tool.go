@@ -97,6 +97,8 @@ type guardedInvokableTool struct {
 	archiver   ResultArchiver
 }
 
+const approvalCheckpointStatePrefix = "humbert-tool-approval-v1:"
+
 // Info 将底层 Tool Metadata 原样提供给 Eino ChatModel。
 func (t *guardedInvokableTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return t.tool.Info(ctx)
@@ -115,11 +117,19 @@ func (t *guardedInvokableTool) InvokableRun(
 		return "", fmt.Errorf("执行 Tool %q 被取消: %w", t.descriptor.Name, err)
 	}
 
-	wasInterrupted, hasState, rawState := einotool.GetInterruptState[string](ctx)
+	wasInterrupted, hasState, interruptState := einotool.GetInterruptState[any](ctx)
 	if wasInterrupted {
 		if !hasState {
 			return "", fmt.Errorf("恢复 Tool %q Approval 失败: checkpoint 缺少内部状态", t.descriptor.Name)
 		}
+		encodedState, stringState := interruptState.(string)
+		if !stringState || !strings.HasPrefix(encodedState, approvalCheckpointStatePrefix) {
+			// Guard 是一个透明的 Permission 边界。AgentTool/嵌套 Graph 会在同一
+			// Tool 地址上保存自己的强类型 checkpoint 状态；这不是 Guard 发起的
+			// Approval，必须交回底层 Tool 恢复，不能按 string 解码。
+			return t.invokeRealTool(ctx, argumentsInJSON, options...)
+		}
+		rawState := strings.TrimPrefix(encodedState, approvalCheckpointStatePrefix)
 		return t.resumeInvocation(ctx, rawState, options...)
 	}
 
@@ -174,7 +184,7 @@ func (t *guardedInvokableTool) InvokableRun(
 
 		// StatefulInterrupt 返回的 error 必须原样向 Eino 传播。不要包装成普通 Tool 错误，
 		// 否则编排层可能无法识别 InterruptSignal 并保存 checkpoint。
-		return "", einotool.StatefulInterrupt(ctx, infoJSON, stateJSON)
+		return "", einotool.StatefulInterrupt(ctx, infoJSON, approvalCheckpointStatePrefix+stateJSON)
 
 	default:
 		return "", fmt.Errorf("Tool %q Permission 返回未知 Action %q", t.descriptor.Name, decision.Action)
@@ -195,7 +205,7 @@ func (t *guardedInvokableTool) resumeInvocation(
 	if !isTarget {
 		// 多 Tool/未来 Parallel 场景中，恢复另一个 root-cause 时当前 Tool 必须重新中断，
 		// 否则会丢失自己的等待状态。
-		return "", einotool.StatefulInterrupt(ctx, state.InfoJSON, rawState)
+		return "", einotool.StatefulInterrupt(ctx, state.InfoJSON, approvalCheckpointStatePrefix+rawState)
 	}
 	if !hasData {
 		return "", fmt.Errorf("恢复 Tool %q Approval 失败: ResumeData 为空", t.descriptor.Name)

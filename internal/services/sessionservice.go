@@ -131,13 +131,9 @@ func (s *SessionService) Delete(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Task、TaskRun 与 Session 的生命周期现在彼此独立。
-	//
-	// 用户从会话侧栏手动删除一个任务 Session 时，只删除“这段对话”，不会反向删除
-	// TaskRun，更不会删除 Task。这样运行历史仍能保留当时的状态、耗时和结果摘要；
-	// 对连续任务而言，PersistentSessionID 只是弱引用，下次执行发现 Session 不存在后会
-	// 自动创建新的持续会话并更新引用。
-	if err := s.core.Runtime().DeleteSession(ctx, id); err != nil {
+	// 删除普通对话时这里只会移除 Session；如果 TaskRun 引用了它，Task Manager 会在
+	// 同一个调度临界区内同时删除全部对应运行历史并解除连续任务引用。
+	if _, err := s.core.Tasks().DeleteConversation(ctx, id); err != nil {
 		return fmt.Errorf("删除 Session 失败: %w", err)
 	}
 

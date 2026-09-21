@@ -23,6 +23,16 @@ const props =
         type: String,
         default: "",
       },
+
+      agentName: {
+        type: String,
+        default: "",
+      },
+
+      sessionLabel: {
+        type: String,
+        default: "本会话",
+      },
     });
 
 const emit =
@@ -96,15 +106,33 @@ const reusableAllowAvailable =
         props.approval?.toolName !== "install_skill"
     ));
 
+const agentScopeText =
+    computed(() => {
+      const name = String(props.agentName || "").trim();
+      return name
+          ? `子 Agent “${name}”`
+          : "当前 Agent";
+    });
+
+const sessionAllowText =
+    computed(() => `${props.sessionLabel || "本会话"}允许`);
+
+const sessionScopeText =
+    computed(() => (
+        props.sessionLabel === "本会话"
+            ? "当前会话"
+            : "这个子 Agent 会话"
+    ));
+
 const approvalHint =
     computed(() => {
       if (!reusableAllowAvailable.value) {
         return "远程 Skill 安装每次都需要单独确认；不会保存可自动安装其他 URL 的会话级或 Agent 级允许规则。";
       }
       if (isMCPApproval.value) {
-        return "MCP 的会话级/Agent 长期规则会绑定当前 Server 的安全指纹；Endpoint、启动命令或 Credential 引用变化后，旧规则不会继续自动生效。";
+        return `“${sessionAllowText.value}”只作用于${sessionScopeText.value}；Agent 长期规则只作用于${agentScopeText.value}。MCP 规则还会绑定当前 Server 的安全指纹，配置变化后旧规则不会继续自动生效。`;
       }
-      return "“本会话允许”仅在当前进程的 Session 中生效；“Agent 始终允许 / 拒绝”会保存为该 Agent 的长期规则。";
+      return `“${sessionAllowText.value}”只作用于${sessionScopeText.value}；“Agent 始终允许 / 拒绝”会保存为${agentScopeText.value}的长期规则。`;
     });
 
 function emitDecision(decision) {
@@ -135,7 +163,7 @@ function decide(decision) {
     Modal.warning({
       title: "长期允许执行程序？",
       content:
-          `将为当前 Agent 长期允许 ${persistentTarget.value}。这个授权在应用重启后仍然有效，你可以随时在「设置 → 操作确认」中撤销。`,
+          `将为${agentScopeText.value}长期允许 ${persistentTarget.value}。这个授权在应用重启后仍然有效，你可以随时在「设置 → 操作确认」中撤销。`,
       hideCancel: false,
       okText: "确认长期允许",
       cancelText: "取消",
@@ -148,9 +176,9 @@ function decide(decision) {
 
   if (decision === "deny_agent") {
     Modal.warning({
-      title: "让这个 Agent 始终拒绝？",
+      title: `让${agentScopeText.value}始终拒绝？`,
       content:
-          `后续该 Agent 对 ${persistentTarget.value} 的匹配调用将直接被拒绝，不再弹出审批。你可以在「设置 → 操作确认」中撤销这条拒绝规则。`,
+          `后续${agentScopeText.value}对 ${persistentTarget.value} 的匹配调用将直接被拒绝，不再弹出审批。你可以在「设置 → 操作确认」中撤销这条拒绝规则。`,
       hideCancel: false,
       okText: "确认始终拒绝",
       cancelText: "取消",
@@ -246,7 +274,7 @@ function decide(decision) {
           :disabled="resolving"
           @click="decide('allow_session')"
       >
-        本会话允许
+        {{ sessionAllowText }}
       </a-button>
 
       <a-button

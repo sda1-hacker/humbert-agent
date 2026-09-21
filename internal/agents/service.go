@@ -307,6 +307,8 @@ func (s *Service) Create(
 
 			Avatar: normalizedAvatar,
 
+			SubagentEnabled: input.SubagentEnabled,
+
 			Instruction: normalized.Instruction,
 
 			ModelID: normalized.ModelID,
@@ -544,6 +546,10 @@ func (s *Service) Update(
 
 	existing.Agent.Avatar =
 		normalizedAvatar
+
+	if input.SubagentEnabled != nil {
+		existing.Agent.SubagentEnabled = *input.SubagentEnabled
+	}
 
 	existing.Agent.Instruction =
 		normalized.Instruction

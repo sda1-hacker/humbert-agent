@@ -101,6 +101,7 @@ const builtinToolGroups = computed(() => {
       git: "Git",
       web: "网络",
       skills: "技能",
+      collaboration: "Agent 协作",
       agent: "Agent 辅助",
       other: "其他",
     })[key] ?? key,

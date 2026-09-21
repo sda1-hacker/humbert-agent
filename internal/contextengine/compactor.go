@@ -72,6 +72,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 			SystemTokens:        before.Usage.SystemTokens,
 			ToolTokens:          before.Usage.ToolTokens,
 			MemoryTokens:        before.Usage.MemoryTokens,
+			ReferenceTokens:     before.Usage.ReferenceTokens,
 			HistoryBudgetTokens: before.Budget.HistoryBudgetTokens,
 		}
 	}
@@ -142,12 +143,13 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 	if err != nil {
 		return CompactResult{}, err
 	}
-	// 使用压缩前 Snapshot 已经拆分好的 System/Tool/Memory 基础占用，而不是仅重新估算
+	// 使用压缩前 Snapshot 已经拆分好的 System/Tool/Memory/Reference 基础占用，而不是仅重新估算
 	// request.Instruction。这样 TokensAfter 在存在 Session Memory 时不会漏算 Key Facts，
 	// 同时与 Context Usage Breakdown 保持同一套分类口径。
 	tokensAfterEstimate := before.Usage.SystemTokens +
 		before.Usage.ToolTokens +
 		before.Usage.MemoryTokens +
+		before.Usage.ReferenceTokens +
 		e.estimator.EstimateMessage(schema.UserMessage(compactionCheckpointPrefix+summary)) +
 		e.estimator.EstimateMessages(retainedMessages)
 	if tokensAfterEstimate >= before.Usage.UsedTokens {

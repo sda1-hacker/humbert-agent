@@ -95,6 +95,8 @@ Leaf/Active Branch，并同步维护 Message ID/序号到 Active Branch 位置�
 - models/runtime：多媒体配置在模型增删改后保持、拒绝无 Vision/已禁用模型、保护正在使用的图片模型，以及 Chat Vision/全局图片回退路由选择。
 - sandbox：测试目录与生产路径一样先解析真实路径，修复 macOS `/var` 与 `/private/var` 别名导致的夹具错误，没有放宽沙盒规则。
 - tasks：Task/TaskRun 原子持久化、损坏记录隔离、计划时区与历史槽位跳过、并发计划幂等、暂停/归档队列收敛、重启中断恢复，以及模型/工具执行上限。
+- proactive：事件先进入持久化 Inbox，按 EventKey 去重；处理记录落盘后再确认，重启不会静默丢失尚未消费的事件。
+- collaboration：`run_agent` 在父 Turn 内创建隔离的 Eino AgentTool Runtime，结果作为 ToolResult 返回；不创建子 Session，审批沿父 checkpoint 恢复。
 
 验证命令：
 
@@ -114,5 +116,5 @@ npm run build
 
 1. 用真实 Provider、MCP 与桌面休眠/唤醒场景验收主动任务，并根据实际使用补系统级通知。
 2. 工作区产物预览。
-3. 多 Agent 与后台委派。
+3. Agent-as-Tool 协作闭环已完成；后续先用真实模型验收任务拆分和结果综合质量，再决定是否增加并行编排。
 4. 跨会话长期记忆的编辑、来源、置信度与遗忘策略（最后实施）。

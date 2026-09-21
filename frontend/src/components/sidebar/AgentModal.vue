@@ -109,6 +109,9 @@ const form =
 
       avatar: "",
 
+
+      subagentEnabled: false,
+
       instruction: "",
 
       modelID: "",
@@ -220,6 +223,9 @@ function resetForm(agent) {
 
           avatar: "",
 
+
+          subagentEnabled: false,
+
           instruction: "",
 
           modelID:
@@ -273,6 +279,9 @@ function resetForm(agent) {
 
         avatar:
             agent.avatar || "",
+
+        subagentEnabled:
+            Boolean(agent.subagentEnabled),
 
         instruction:
         agent.instruction,
@@ -519,6 +528,9 @@ async function save() {
       avatar:
       form.avatar,
 
+      subagentEnabled:
+      form.subagentEnabled,
+
       instruction:
       form.instruction,
 
@@ -740,6 +752,16 @@ async function removeAgent() {
             />
           </a-form-item>
 
+          <a-form-item label="子 Agent 协作">
+            <div class="subagent-option">
+              <div>
+                <strong>允许作为子 Agent 调用</strong>
+                <span>启用后，其他 Agent 可以通过 run_agent 把自包含任务交给这个 Agent。</span>
+              </div>
+              <a-switch v-model="form.subagentEnabled" />
+            </div>
+          </a-form-item>
+
           <a-form-item label="Chat 模型">
             <a-select
                 v-model="form.modelID"
@@ -767,7 +789,7 @@ async function removeAgent() {
           <div class="model-role-panel">
             <div class="model-role-panel__intro">
               <strong>模型角色</strong>
-              <span>留空会自动回退：Utility → Chat，Memory → Utility → Chat；Vision 只在 Chat 无法处理当前图片/文件输入时使用。</span>
+              <span>留空会自动回退：Utility → Chat，Memory → Utility → Chat；视觉辅助模型只在 Chat 无法直接处理当前图片输入时使用。</span>
             </div>
             <div class="model-role-grid">
               <a-form-item label="Utility 模型">
@@ -972,6 +994,34 @@ async function removeAgent() {
   color: var(--h-text-muted);
   font-size: 10px;
   line-height: 1.6;
+}
+
+.subagent-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 11px 12px;
+  border: 1px solid var(--h-border);
+  border-radius: 9px;
+  background: var(--h-surface-soft, var(--h-surface));
+}
+
+.subagent-option > div {
+  display: grid;
+  gap: 4px;
+}
+
+.subagent-option strong {
+  color: var(--h-text);
+  font-size: 12px;
+}
+
+.subagent-option span {
+  color: var(--h-text-muted);
+  font-size: 10px;
+  line-height: 1.55;
 }
 
 .model-role-extra {

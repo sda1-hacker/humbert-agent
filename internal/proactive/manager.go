@@ -34,13 +34,13 @@ type Manager struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 
-	mu              sync.RWMutex
-	running         bool
-	nextHeartbeatAt time.Time
-	queuedEvents    int
-	unsubscribers   []func()
+	mu               sync.RWMutex
+	running          bool
+	heartbeatRunning bool
+	nextHeartbeatAt  time.Time
+	unsubscribers    []func()
 
-	queue chan Event
+	wake chan struct{}
 }
 
 func NewManager(
@@ -65,7 +65,7 @@ func NewManager(
 		logger:        logger,
 		rootCtx:       ctx,
 		cancel:        cancel,
-		queue:         make(chan Event, 256),
+		wake:          make(chan struct{}, 1),
 		executors:     make(map[Action]Executor),
 	}
 	manager.registerExecutor(NewNotificationExecutor(notificationService))
@@ -83,9 +83,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context.Context 不能为空")
 	}
-	if err := m.reconcileRecords(ctx); err != nil {
-		return fmt.Errorf("恢复主动助手处理记录失败: %w", err)
-	}
+	// 先订阅后恢复，避免 Scheduler 在启动窗口内完成 Run 时丢失唯一的终态事件。
 	unsubTask, err := m.events.Subscribe(tasks.TopicEvent, m.handleTaskPayload)
 	if err != nil {
 		return fmt.Errorf("订阅 Task Event 失败: %w", err)
@@ -94,6 +92,11 @@ func (m *Manager) Start(ctx context.Context) error {
 	if err != nil {
 		unsubTask()
 		return fmt.Errorf("订阅 Runtime Event 失败: %w", err)
+	}
+	if err := m.reconcileRecords(ctx); err != nil {
+		unsubRuntime()
+		unsubTask()
+		return fmt.Errorf("恢复主动助手处理记录失败: %w", err)
 	}
 	settings := m.store.Settings()
 	m.mu.Lock()
@@ -108,6 +111,9 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.wg.Add(1)
 	go m.loop()
+	if m.store.PendingEventCount() > 0 {
+		m.signalWake()
+	}
 	m.publishStatus()
 	return nil
 }
@@ -162,7 +168,7 @@ func (m *Manager) Records(limit int) []Record { return m.store.Records(limit) }
 func (m *Manager) Status() Status {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	status := Status{Running: m.running, QueuedEvents: m.queuedEvents}
+	status := Status{Running: m.running, QueuedEvents: m.store.PendingEventCount()}
 	status.LastHeartbeatAt = m.store.LastHeartbeat()
 	if m.running && !m.nextHeartbeatAt.IsZero() {
 		next := m.nextHeartbeatAt
@@ -178,6 +184,10 @@ func (m *Manager) RunHeartbeat(ctx context.Context) error {
 	if !m.store.Settings().Enabled {
 		return errors.New("主动助手已关闭")
 	}
+	if !m.beginHeartbeat() {
+		return errors.New("主动助手巡检正在运行")
+	}
+	defer m.endHeartbeat()
 	return m.heartbeat(ctx, time.Now().UTC())
 }
 
@@ -189,22 +199,21 @@ func (m *Manager) loop() {
 		select {
 		case <-m.rootCtx.Done():
 			return
-		case event := <-m.queue:
-			m.mu.Lock()
-			if m.queuedEvents > 0 {
-				m.queuedEvents--
-			}
-			m.mu.Unlock()
-			m.processEvent(m.rootCtx, event)
+		case <-m.wake:
+			m.drainPendingEvents()
 		case <-ticker.C:
 			now := time.Now().UTC()
 			m.mu.RLock()
 			due := !m.nextHeartbeatAt.IsZero() && !now.Before(m.nextHeartbeatAt)
 			m.mu.RUnlock()
 			if due {
+				if !m.beginHeartbeat() {
+					continue
+				}
 				if err := m.heartbeat(m.rootCtx, now); err != nil {
 					m.logger.Warn(context.Background(), "主动助手心跳失败", "operation", "proactive.heartbeat", "error", err)
 				}
+				m.endHeartbeat()
 			}
 		}
 	}
@@ -214,14 +223,57 @@ func (m *Manager) enqueue(event Event) {
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()
 	}
-	select {
-	case m.queue <- event:
-		m.mu.Lock()
-		m.queuedEvents++
-		m.mu.Unlock()
-	default:
-		m.logger.Warn(context.Background(), "主动助手事件队列已满，事件已丢弃", "operation", "proactive.enqueue", "event_kind", event.Kind, "event_key", event.Key)
+	added, err := m.store.EnqueueEvent(context.Background(), event)
+	if err != nil {
+		m.logger.Warn(context.Background(), "持久化主动助手事件失败", "operation", "proactive.enqueue", "event_kind", event.Kind, "event_key", event.Key, "error", err)
+		return
 	}
+	if added {
+		m.signalWake()
+		m.publishStatus()
+	}
+}
+
+func (m *Manager) signalWake() {
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Manager) drainPendingEvents() {
+	for _, event := range m.store.PendingEvents() {
+		if err := m.rootCtx.Err(); err != nil {
+			return
+		}
+		m.processEvent(m.rootCtx, event)
+		// processEvent 在执行任何动作前都会创建 Record；只有看到记录后才确认 Inbox，
+		// 持久化失败时事件会留到下一次唤醒或重启继续处理。
+		if _, handled := m.store.FindByEventKey(event.Key); !handled {
+			continue
+		}
+		if err := m.store.RemovePendingEvent(context.Background(), event.Key); err != nil {
+			m.logger.Warn(context.Background(), "确认主动助手事件失败", "operation", "proactive.inbox.ack", "event_key", event.Key, "error", err)
+			return
+		}
+	}
+	m.publishStatus()
+}
+
+func (m *Manager) beginHeartbeat() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.running || m.heartbeatRunning {
+		return false
+	}
+	m.heartbeatRunning = true
+	return true
+}
+
+func (m *Manager) endHeartbeat() {
+	m.mu.Lock()
+	m.heartbeatRunning = false
+	m.mu.Unlock()
 }
 
 func (m *Manager) handleTaskPayload(_ context.Context, payload any) {
@@ -485,6 +537,24 @@ func (m *Manager) reconcileRecords(ctx context.Context) error {
 		record := value
 		if record.Status != RecordExecuting {
 			continue
+		}
+		if record.Decision.Action == ActionRunAgent && record.AutomationRunID == "" {
+			task, run, found, findErr := m.tasks.AutomationByOrigin(ctx, "proactive", record.Event.Key)
+			if findErr != nil {
+				return findErr
+			}
+			if found && run.ID != "" {
+				record.AutomationTaskID = task.ID
+				record.AutomationRunID = run.ID
+				record.UpdatedAt = time.Now().UTC()
+				if err := m.store.PutRecord(ctx, record); err != nil {
+					return err
+				}
+				if run.Status.Terminal() {
+					m.finalizeAutomationRun(run)
+				}
+				continue
+			}
 		}
 		if record.Decision.Action != ActionRunAgent || record.AutomationRunID == "" {
 			now := time.Now().UTC()

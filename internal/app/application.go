@@ -12,6 +12,7 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
+	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/contextartifact"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
@@ -122,6 +123,8 @@ type Application struct {
 	runtime *agentruntime.Service
 
 	tasks *tasks.Manager
+
+	collaboration *collaboration.Manager
 
 	notifications *notifications.Service
 
@@ -422,6 +425,17 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	}
 
 	runtimeExecutor := agentruntime.NewExecutor()
+	collaborationStore, err := collaboration.NewStore(sessionService)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Collaboration Store 失败: %w", err)
+	}
+	collaborationManager, err := collaboration.NewManager(agentService, collaborationStore, runtimeResolver)
+	if err != nil {
+		return nil, fmt.Errorf("初始化 Collaboration Manager 失败: %w", err)
+	}
+	if err := registerCollaborationTools(toolRegistry, collaborationManager); err != nil {
+		return nil, err
+	}
 	runtimeService := agentruntime.NewService(
 		runtimeResolver,
 		runtimeExecutor,
@@ -430,6 +444,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		logger,
 		approvalManager,
 	)
+	runtimeService.AddRunLifecycleObserver(collaborationManager)
 
 	taskStore, err := tasks.NewStore(ctx, cfg.Paths.AgentsDir)
 	if err != nil {
@@ -491,6 +506,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		memory:        memoryManager,
 		runtime:       runtimeService,
 		tasks:         taskManager,
+		collaboration: collaborationManager,
 		notifications: notificationService,
 		proactive:     proactiveManager,
 		startedAt:     time.Now().UTC(),
@@ -611,6 +627,11 @@ func (a *Application) Runtime() *agentruntime.Service {
 // Tasks 返回应用级主动任务管理器。Task 归属 Agent，不引入 Project 聚合。
 func (a *Application) Tasks() *tasks.Manager {
 	return a.tasks
+}
+
+// Collaboration 返回同步 Agent-as-Tool 协作管理器。
+func (a *Application) Collaboration() *collaboration.Manager {
+	return a.collaboration
 }
 
 // Proactive 返回主动助手运行时。它负责事件判断、心跳巡检、通知和内部 Agent 自动执行。

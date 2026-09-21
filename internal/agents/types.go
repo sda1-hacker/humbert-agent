@@ -28,6 +28,10 @@ type Agent struct {
 
 	Avatar string `json:"avatar,omitempty"`
 
+	// SubagentEnabled 表示该 Agent 可以被其它 Agent 通过 run_agent 调用。
+	// 默认 false，避免新建 Agent 在用户未确认前自动成为协作能力。
+	SubagentEnabled bool `json:"subagent_enabled"`
+
 	Instruction string `json:"instruction"`
 
 	ModelID string `json:"model_id,omitempty"`
@@ -88,6 +92,8 @@ type CreateInput struct {
 
 	Avatar string
 
+	SubagentEnabled bool
+
 	Instruction string
 
 	ModelID string
@@ -115,6 +121,8 @@ type UpdateInput struct {
 	Name string
 
 	Avatar string
+
+	SubagentEnabled *bool
 
 	Instruction string
 

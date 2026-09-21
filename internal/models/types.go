@@ -90,7 +90,7 @@ type Model struct {
 //
 // 当前 Humbert 只实现图片输入，因此这里只暴露 ImageModelID。PDF、音频和视频在
 // 拥有可靠的解析/Provider 适配之前不会以“可配置但不可用”的字段进入持久化协议。
-// ImageModelID 是 Chat Model 缺少 Vision 能力时使用的全局回退模型。
+// ImageModelID 是 Chat Model 缺少 Vision 能力时使用的视觉辅助模型；它只负责把图片观察结果转换成文本，不接管 Agent Turn。
 type MultimediaConfig struct {
 	ImageModelID string `json:"image_model_id,omitempty"`
 }

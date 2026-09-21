@@ -16,13 +16,15 @@ import (
 const (
 	storeSchemaVersion = 1
 	maxStoredRecords   = 500
+	maxPendingEvents   = 1000
 )
 
 type storeDocument struct {
 	SchemaVersion int `json:"schema_version"`
 
-	Settings Settings `json:"settings"`
-	Records  []Record `json:"records"`
+	Settings      Settings `json:"settings"`
+	Records       []Record `json:"records"`
+	PendingEvents []Event  `json:"pending_events,omitempty"`
 
 	Workspaces map[string]WorkspaceSnapshot `json:"workspaces"`
 
@@ -92,6 +94,68 @@ func normalizeDocument(doc *storeDocument) error {
 	}
 	if doc.Workspaces == nil {
 		doc.Workspaces = map[string]WorkspaceSnapshot{}
+	}
+	if doc.PendingEvents == nil {
+		doc.PendingEvents = []Event{}
+	}
+	if len(doc.PendingEvents) > maxPendingEvents {
+		doc.PendingEvents = append([]Event(nil), doc.PendingEvents[len(doc.PendingEvents)-maxPendingEvents:]...)
+	}
+	return nil
+}
+
+// EnqueueEvent 在事件进入内存唤醒队列之前先持久化。EventKey 同时对已处理记录和待处理
+// Inbox 去重，因此应用崩溃、重复事件订阅或多次工作区扫描都不会重复执行同一动作。
+func (s *Store) EnqueueEvent(ctx context.Context, value Event) (bool, error) {
+	value.Key = strings.TrimSpace(value.Key)
+	if value.Key == "" {
+		return false, errors.New("主动事件 key 不能为空")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, record := range s.doc.Records {
+		if record.Event.Key == value.Key {
+			return false, nil
+		}
+	}
+	for _, event := range s.doc.PendingEvents {
+		if event.Key == value.Key {
+			return false, nil
+		}
+	}
+	if len(s.doc.PendingEvents) >= maxPendingEvents {
+		return false, errors.New("主动事件 Inbox 已满")
+	}
+	s.doc.PendingEvents = append(s.doc.PendingEvents, value)
+	if err := s.persistLocked(ctx); err != nil {
+		s.doc.PendingEvents = s.doc.PendingEvents[:len(s.doc.PendingEvents)-1]
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) PendingEvents() []Event {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]Event(nil), s.doc.PendingEvents...)
+}
+
+func (s *Store) PendingEventCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.doc.PendingEvents)
+}
+
+func (s *Store) RemovePendingEvent(ctx context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key = strings.TrimSpace(key)
+	for index, event := range s.doc.PendingEvents {
+		if event.Key != key {
+			continue
+		}
+		s.doc.PendingEvents = append(s.doc.PendingEvents[:index], s.doc.PendingEvents[index+1:]...)
+		return s.persistLocked(ctx)
 	}
 	return nil
 }

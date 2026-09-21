@@ -42,6 +42,11 @@ type activeRun struct {
 	approvalDone      chan struct{}
 }
 
+// RunLifecycleObserver 观察父 Turn 的最终清理，用于收敛依附于该 Turn 的轻量运行状态。
+type RunLifecycleObserver interface {
+	ParentRunFinished(ctx context.Context, requestID string)
+}
+
 // Service 是 Humbert 唯一的 Agent Runtime Service。
 //
 // 它负责把一次用户操作串成清晰的运行链：
@@ -85,11 +90,22 @@ type Service struct {
 
 	// reservationAgents 记录 Session 占用所属 Agent，使删除 Agent 可以在同一把锁下
 	// 拒绝已有操作。deletingAgents 则阻止删除期间启动新的 Turn、压缩或 Session 删除。
-	reservationAgents map[string]string
-	deletingAgents    map[string]string
+	reservationAgents  map[string]string
+	deletingAgents     map[string]string
+	lifecycleObservers []RunLifecycleObserver
 
 	wg        sync.WaitGroup
 	closeDone chan struct{}
+}
+
+// AddRunLifecycleObserver 只在 Application Bootstrap 阶段调用。
+func (s *Service) AddRunLifecycleObserver(observer RunLifecycleObserver) {
+	if observer == nil {
+		return
+	}
+	s.mu.Lock()
+	s.lifecycleObservers = append(s.lifecycleObservers, observer)
+	s.mu.Unlock()
 }
 
 // NewService 创建 RuntimeService。
@@ -173,7 +189,14 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 	}
 	receipt := StartTurnResult{RequestID: requestID, RunID: runID, SessionID: sessionID, UserMessageID: userMessage.EntryID}
 
-	snapshot, err := s.resolver.ResolveTurn(ctx, requestID, runID, sessionID)
+	limitState, err := prepareExecutionLimitState(input.Limits)
+	if err != nil {
+		receipt.StartError = runtimeUserVisibleError(err)
+		return receipt, err
+	}
+	snapshot, err := s.resolver.ResolveTurn(ctx, requestID, runID, sessionID, ResolveTurnOptions{
+		BeforeAuxiliaryModel: limitState.beforeModelCall,
+	})
 	if err != nil {
 		s.logger.Warn(
 			ctx,
@@ -188,7 +211,7 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 		receipt.StartError = runtimeUserVisibleError(err)
 		return receipt, fmt.Errorf("解析 Agent Runtime Snapshot 失败: %w", err)
 	}
-	if err := configureExecutionLimits(snapshot, input.Limits); err != nil {
+	if err := configureExecutionLimits(snapshot, input.Limits, limitState); err != nil {
 		receipt.StartError = runtimeUserVisibleError(err)
 		return receipt, err
 	}
@@ -690,8 +713,10 @@ func (s *Service) registerInterruptedRun(active *activeRun, interrupted *Interru
 		return errors.New("InterruptedExecution 不能为空")
 	}
 	info := interrupted.Info
+	// Agent-as-Tool 的审批会携带子 Agent ID，因此不能再强制等于父 Snapshot AgentID。
+	// Request/Run/Session 必须严格匹配；AgentID 非空且来自受信 Tool Guard 的冻结 Scope。
 	if info.RequestID != active.RequestID || info.RunID != active.RunID ||
-		info.SessionID != active.SessionID || info.AgentID != active.snapshot.AgentID {
+		info.SessionID != active.SessionID || strings.TrimSpace(info.AgentID) == "" {
 		return errors.New("Approval Interrupt 身份与当前 Runtime Snapshot 不一致")
 	}
 
@@ -1165,6 +1190,13 @@ func (s *Service) cleanupRun(active *activeRun) {
 		delete(s.reservationAgents, active.SessionID)
 	}
 	s.mu.Unlock()
+
+	s.mu.Lock()
+	observers := append([]RunLifecycleObserver(nil), s.lifecycleObservers...)
+	s.mu.Unlock()
+	for _, observer := range observers {
+		observer.ParentRunFinished(context.Background(), active.RequestID)
+	}
 }
 
 func signalApprovalDoneLocked(active *activeRun) {

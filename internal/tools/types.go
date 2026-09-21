@@ -174,6 +174,14 @@ type Scope struct {
 	// 非 nil（包括空 slice）表示 Agent 的显式选择。
 	EnabledBuiltinTools []string
 
+	// DisabledBuiltinTools 是当前 Runtime 在 Agent Profile 选择之上施加的能力上限。
+	// 子 Agent 使用它移除会读取父会话、修改 Agent 配置或继续递归创建子 Agent 的工具。
+	DisabledBuiltinTools []string
+
+	// EnabledMCPTools 冻结 Agent 在本 Turn 选择的 ServerID -> raw tool names。
+	// 使用基础类型避免 Tool Domain 反向依赖 MCP Domain。
+	EnabledMCPTools map[string][]string
+
 	// EnabledSkills/SkillRevision 是本 Turn 已冻结的 Skill 身份摘要。只有依赖 Skill
 	// Snapshot 的 Builtin（例如 run_skill_script）会读取它们；普通 Tool 不需要知道 Skill。
 	EnabledSkills []string

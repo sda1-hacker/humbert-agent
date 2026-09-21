@@ -55,8 +55,10 @@ type UpdatePlanInput struct {
 	Items []PlanItem `json:"items" jsonschema:"description=The complete current plan. Replaces the previous plan for this tool instance."`
 }
 type UpdatePlanOutput struct {
-	Items   []PlanItem `json:"items"`
-	Summary string     `json:"summary"`
+	Items    []PlanItem `json:"items"`
+	Summary  string     `json:"summary"`
+	Adjusted bool       `json:"adjusted,omitempty"`
+	Notice   string     `json:"notice,omitempty"`
 }
 type UpdatePlanFactory struct{}
 
@@ -65,25 +67,32 @@ func (f *UpdatePlanFactory) Descriptor() humberttools.Descriptor {
 	return humberttools.Descriptor{Name: updatePlanToolName, Risk: humberttools.RiskRead}
 }
 func (f *UpdatePlanFactory) Build(ctx context.Context, scope humberttools.Scope) (einotool.InvokableTool, error) {
-	return utils.InferTool(updatePlanToolName, "Publish a concise structured plan for multi-step work. Send the complete plan each time; keep at most one item in_progress.", func(callCtx context.Context, input *UpdatePlanInput) (*UpdatePlanOutput, error) {
+	return utils.InferTool(updatePlanToolName, "Publish a concise structured plan for multi-step work. Send the complete plan each time. If multiple items are marked in_progress, only the first remains active and later ones are normalized to pending.", func(callCtx context.Context, input *UpdatePlanInput) (*UpdatePlanOutput, error) {
 		if input == nil {
 			return nil, errors.New("update_plan 输入不能为空")
 		}
 		if len(input.Items) > 30 {
 			return nil, errors.New("update_plan 最多 30 项")
 		}
-		inProgress := 0
+		inProgress := false
 		done := 0
+		adjusted := false
 		items := make([]PlanItem, len(input.Items))
 		for i, it := range input.Items {
 			it.Content = strings.TrimSpace(it.Content)
+			it.Status = strings.ToLower(strings.TrimSpace(it.Status))
 			if it.Content == "" {
 				return nil, fmt.Errorf("计划第 %d 项内容为空", i+1)
 			}
 			switch it.Status {
 			case "pending":
 			case "in_progress":
-				inProgress++
+				if inProgress {
+					it.Status = "pending"
+					adjusted = true
+				} else {
+					inProgress = true
+				}
 			case "completed":
 				done++
 			default:
@@ -91,9 +100,12 @@ func (f *UpdatePlanFactory) Build(ctx context.Context, scope humberttools.Scope)
 			}
 			items[i] = it
 		}
-		if inProgress > 1 {
-			return nil, errors.New("update_plan 最多只能有一个 in_progress 项")
+		result := &UpdatePlanOutput{
+			Items: items, Summary: fmt.Sprintf("%d/%d completed", done, len(items)), Adjusted: adjusted,
 		}
-		return &UpdatePlanOutput{Items: items, Summary: fmt.Sprintf("%d/%d completed", done, len(items))}, nil
+		if adjusted {
+			result.Notice = "检测到多个 in_progress；已保留第一项，其余自动调整为 pending"
+		}
+		return result, nil
 	})
 }

@@ -233,6 +233,8 @@ function normalizeContextUsage(value) {
         Number(value.toolTokens);
     const memoryTokens =
         Number(value.memoryTokens);
+    const referenceTokens =
+        Number(value.referenceTokens);
     const checkpointTokens =
         Number(value.checkpointTokens);
     const messageTokens =
@@ -269,6 +271,10 @@ function normalizeContextUsage(value) {
         memoryTokens:
             Number.isFinite(memoryTokens)
                 ? Math.max(0, memoryTokens)
+                : 0,
+        referenceTokens:
+            Number.isFinite(referenceTokens)
+                ? Math.max(0, referenceTokens)
                 : 0,
         checkpointTokens:
             Number.isFinite(checkpointTokens)

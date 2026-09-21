@@ -155,7 +155,7 @@ const settingsInitialKey =
  * skills     -> Skills 中心
  * connectors -> MCP 连接器
  * tasks      -> 主动任务
- * workspace  -> Agent / 项目工作区文件浏览
+ * workspace  -> Agent 工作区文件浏览
  *
  * Settings 仍然是覆盖整个业务区域的一级页面；关闭 Settings 后回到
  * 用户打开设置前所在的主工作区。
@@ -304,8 +304,8 @@ function openTasks() {
 /**
  * 从左侧导航打开工作区。
  *
- * WorkspaceStore 会保留用户上一次主动选择的 Agent/项目；只有第一次进入时才默认跟随
- * 当前聊天 Agent，因此浏览其它项目不会偷偷切换聊天上下文。
+ * WorkspaceStore 会保留用户上一次主动选择的 Agent；只有第一次进入时才默认跟随
+ * 当前聊天 Agent，因此浏览其它工作区不会偷偷切换聊天上下文。
  */
 function openWorkspace() {
   settingsVisible.value = false;

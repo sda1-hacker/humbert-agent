@@ -19,6 +19,17 @@ type executionLimitState struct {
 	toolCalls     atomic.Int64
 }
 
+func (s *executionLimitState) beforeModelCall() error {
+	if s == nil || s.maxModelCalls <= 0 {
+		return nil
+	}
+	current := s.modelCalls.Add(1)
+	if current > s.maxModelCalls {
+		return fmt.Errorf("%w: 模型调用次数超过 %d", ErrExecutionLimitExceeded, s.maxModelCalls)
+	}
+	return nil
+}
+
 func (s *executionLimitState) beforeToolCall() error {
 	if s == nil || s.maxToolCalls <= 0 {
 		return nil
@@ -40,11 +51,8 @@ func (m *executionLimitMiddleware) BeforeModelRewriteState(ctx context.Context, 
 	if err := ctx.Err(); err != nil {
 		return ctx, state, err
 	}
-	if m.state != nil && m.state.maxModelCalls > 0 {
-		current := m.state.modelCalls.Add(1)
-		if current > m.state.maxModelCalls {
-			return ctx, state, fmt.Errorf("%w: 模型调用次数超过 %d", ErrExecutionLimitExceeded, m.state.maxModelCalls)
-		}
+	if err := m.state.beforeModelCall(); err != nil {
+		return ctx, state, err
 	}
 	if m.snapshot != nil {
 		reportToolLifecycleEvent(ctx, m.snapshot, Event{
@@ -57,18 +65,34 @@ func (m *executionLimitMiddleware) BeforeModelRewriteState(ctx context.Context, 
 
 var _ adk.ChatModelAgentMiddleware = (*executionLimitMiddleware)(nil)
 
-func configureExecutionLimits(snapshot *Snapshot, limits ExecutionLimits) error {
+func prepareExecutionLimitState(limits ExecutionLimits) (*executionLimitState, error) {
+	if limits.MaxDuration < 0 || limits.MaxModelCalls < 0 || limits.MaxToolCalls < 0 {
+		return nil, errors.New("Execution Limits 不能为负数")
+	}
+	if limits.MaxModelCalls == 0 && limits.MaxToolCalls == 0 {
+		return nil, nil
+	}
+	return &executionLimitState{maxModelCalls: int64(limits.MaxModelCalls), maxToolCalls: int64(limits.MaxToolCalls)}, nil
+}
+
+func configureExecutionLimits(snapshot *Snapshot, limits ExecutionLimits, prepared ...*executionLimitState) error {
 	if snapshot == nil {
 		return errors.New("Runtime Snapshot 不能为空")
 	}
-	if limits.MaxDuration < 0 || limits.MaxModelCalls < 0 || limits.MaxToolCalls < 0 {
-		return errors.New("Execution Limits 不能为负数")
-	}
 	snapshot.ExecutionLimits = limits
-	if limits.MaxModelCalls == 0 && limits.MaxToolCalls == 0 {
+	var state *executionLimitState
+	if len(prepared) > 0 {
+		state = prepared[0]
+	} else {
+		var err error
+		state, err = prepareExecutionLimitState(limits)
+		if err != nil {
+			return err
+		}
+	}
+	if state == nil {
 		return nil
 	}
-	state := &executionLimitState{maxModelCalls: int64(limits.MaxModelCalls), maxToolCalls: int64(limits.MaxToolCalls)}
 	snapshot.limitState = state
 	snapshot.AgentHandlers = append(snapshot.AgentHandlers, &executionLimitMiddleware{
 		BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{},

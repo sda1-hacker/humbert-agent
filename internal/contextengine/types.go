@@ -97,6 +97,10 @@ type Usage struct {
 	// Timeline 不注入主模型，因此不会计入该字段。
 	MemoryTokens int `json:"memoryTokens"`
 
+	// ReferenceTokens 保留给未来低权限 Session Reference；当前同步子 Agent 结果已经作为
+	// 标准 ToolResult 存在于父 Session，不需要额外注入。
+	ReferenceTokens int `json:"referenceTokens"`
+
 	// CheckpointTokens 是最新持久化 Compaction Checkpoint 的模型可见占用。没有发生过
 	// durable compaction 时为 0。旧 checkpoint 已被最新 checkpoint 递归吸收，不重复计。
 	CheckpointTokens int `json:"checkpointTokens"`
@@ -266,13 +270,14 @@ type CompactResult struct {
 
 // FixedContextBudgetError 表示无需读取/压缩更多历史就能确定“固定占用”已经让当前模型
 // 没有足够的对话工作空间。调用方可以 errors.Is(err, ErrContextBudgetExceeded)，同时把
-// System/Tool/Memory 的具体占用展示给用户，避免无意义地重复压缩。
+// System/Tool/Memory/Reference 的具体占用展示给用户，避免无意义地重复压缩。
 type FixedContextBudgetError struct {
 	ContextWindow       int
 	ThresholdTokens     int
 	SystemTokens        int
 	ToolTokens          int
 	MemoryTokens        int
+	ReferenceTokens     int
 	HistoryBudgetTokens int
 }
 
@@ -281,8 +286,8 @@ func (e *FixedContextBudgetError) Error() string {
 		return ErrContextBudgetExceeded.Error()
 	}
 	return fmt.Sprintf(
-		"%v: 固定上下文占用过大: threshold=%d system=%d tools=%d memory=%d history_budget=%d window=%d",
-		ErrContextBudgetExceeded, e.ThresholdTokens, e.SystemTokens, e.ToolTokens, e.MemoryTokens, e.HistoryBudgetTokens, e.ContextWindow,
+		"%v: 固定上下文占用过大: threshold=%d system=%d tools=%d memory=%d references=%d history_budget=%d window=%d",
+		ErrContextBudgetExceeded, e.ThresholdTokens, e.SystemTokens, e.ToolTokens, e.MemoryTokens, e.ReferenceTokens, e.HistoryBudgetTokens, e.ContextWindow,
 	)
 }
 

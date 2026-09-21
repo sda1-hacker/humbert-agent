@@ -237,6 +237,73 @@ func TestStoreDeleteRunRemovesSessionReference(t *testing.T) {
 	}
 }
 
+func TestStoreReferencesBySessionReturnsAllSharedRunsAndPersistentTask(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	sessionID := uuid.NewString()
+	task.ConversationMode = ConversationContinuous
+	task.PersistentSessionID = sessionID
+	if err := store.UpdateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	for index := 0; index < 2; index++ {
+		_, _, err := store.CreateRun(context.Background(), Run{
+			ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID, SessionID: sessionID,
+			Trigger: TriggerManual, ScheduledFor: now, Attempt: 1, Status: RunSucceeded,
+			CreatedAt: now, FinishedAt: timePointer(now),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	tasks, runs, err := store.ReferencesBySession(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 || tasks[0].ID != task.ID {
+		t.Fatalf("tasks=%+v want task %s", tasks, task.ID)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("runs=%+v want 2", runs)
+	}
+}
+
+func TestStoreFindInternalTaskByOriginRestoresIdempotencyLink(t *testing.T) {
+	store, agentID := newTestStore(t)
+	now := time.Now().UTC()
+	task := Task{
+		ID: uuid.NewString(), AgentID: agentID, Internal: true,
+		Origin: "proactive", OriginRef: uuid.NewString(),
+		Name: "主动·核对", Prompt: "核对内容", Execution: ExecutionAgent,
+		Status: TaskStatusActive, Schedule: Schedule{Type: ScheduleManual, MisfirePolicy: MisfireRunOnce, OverlapPolicy: OverlapSkip},
+		Limits:    Limits{MaxDurationSeconds: 60, MaxModelCalls: 2, MaxToolCalls: 3, MaxAttempts: 1, RetryDelaySeconds: 1},
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	childSessionID := uuid.NewString()
+	run, _, err := store.CreateRun(context.Background(), Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+		SessionID: childSessionID,
+		Trigger:   TriggerAutomation, Execution: ExecutionAgent, ScheduledFor: now,
+		Attempt: 1, Status: RunQueued, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundTask, runs, found, err := store.FindInternalTaskByOrigin(context.Background(), task.Origin, task.OriginRef)
+	if err != nil || !found || foundTask.ID != task.ID || len(runs) != 1 || runs[0].ID != run.ID {
+		t.Fatalf("origin lookup=(%+v,%+v,%v,%v)", foundTask, runs, found, err)
+	}
+	manager := &Manager{store: store}
+	bySessionTask, bySessionRun, found, err := manager.AutomationBySession(context.Background(), childSessionID, "proactive")
+	if err != nil || !found || bySessionTask.ID != task.ID || bySessionRun.ID != run.ID {
+		t.Fatalf("session automation lookup=(%+v,%+v,%v,%v)", bySessionTask, bySessionRun, found, err)
+	}
+}
+
 func TestStoreDeleteRejectsNonTerminalRun(t *testing.T) {
 	store, agentID := newTestStore(t)
 	task := createTestTask(t, store, agentID)
