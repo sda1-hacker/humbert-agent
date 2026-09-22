@@ -66,6 +66,10 @@ func (r *blockedMaintenanceRepository) LoadTranscript(ctx context.Context, _ str
 	return transcript.Document{}, ctx.Err()
 }
 
+func (r *blockedMaintenanceRepository) LoadContextTranscript(ctx context.Context, sessionID string) (transcript.Document, error) {
+	return r.LoadTranscript(ctx, sessionID)
+}
+
 func (*blockedMaintenanceRepository) AppendCompaction(context.Context, string, transcript.AppendCompactionInput) (transcript.Entry, error) {
 	return transcript.Entry{}, errors.New("unexpected compaction write")
 }

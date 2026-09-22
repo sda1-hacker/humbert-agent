@@ -283,6 +283,8 @@ type Snapshot struct {
 
 	ModelCapabilities models.Capabilities
 
+	ReasoningPolicy contextengine.ReasoningReplayPolicy
+
 	CompactionModel einomodel.ToolCallingChatModel
 
 	CompactionContextWindow int

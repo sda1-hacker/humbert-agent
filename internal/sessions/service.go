@@ -345,6 +345,11 @@ func (s *Service) LoadTranscript(ctx context.Context, sessionID string) (transcr
 	return document, nil
 }
 
+// LoadContextTranscript 只供 ContextEngine 读取；返回的分支和消息 payload 是只读视图。
+func (s *Service) LoadContextTranscript(ctx context.Context, sessionID string) (transcript.Document, error) {
+	return s.store.LoadContextTranscript(ctx, sessionID)
+}
+
 // AppendCompaction 持久化一次已经生成的 Context Checkpoint。
 func (s *Service) AppendCompaction(
 	ctx context.Context,

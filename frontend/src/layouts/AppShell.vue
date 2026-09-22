@@ -33,6 +33,10 @@ const SettingsView =
             ),
     );
 
+const FirstRunGuide = defineAsyncComponent(
+    () => import("../components/onboarding/FirstRunGuide.vue"),
+);
+
 const SkillWorkspaceView =
     defineAsyncComponent(
         () => import(
@@ -122,6 +126,20 @@ const preferenceStore =
 
 const proactiveStore =
     useProactiveStore();
+
+const bootstrapReady = ref(false);
+const bootstrapError = ref("");
+const needsFirstRun = computed(() =>
+  bootstrapReady.value && !agentStore.items.some((agent) =>
+    modelStore.enabledModels.some((model) => model.id === agent.modelID),
+  ),
+);
+
+const dismissedTaskNotificationID = ref("");
+const taskNotification = computed(() => {
+  const value = proactiveStore.notification;
+  return value?.taskID && value.id !== dismissedTaskNotificationID.value ? value : null;
+});
 
 const workspaceStore =
     useWorkspaceStore();
@@ -248,9 +266,10 @@ watch(
           globalThis.Notification.permission === "granted"
       ) {
         try {
-          new globalThis.Notification(notification.title, {
+          const desktopNotification = new globalThis.Notification(notification.title, {
             body: notification.body || "",
           });
+          if (notification.taskID) desktopNotification.onclick = () => { void openTask(notification.taskID); };
         } catch (error) {
           console.warn("[Proactive] 系统通知发送失败，已使用应用内通知", error);
         }
@@ -299,6 +318,19 @@ function openConnectors() {
 function openTasks() {
   settingsVisible.value = false;
   mainView.value = "tasks";
+}
+
+async function openTask(taskID) {
+  if (!taskID) return;
+  try {
+    await taskStore.refresh();
+    if (!taskStore.items.some((task) => task.id === taskID)) {
+      Message.warning("任务已不存在或已归档");
+      return;
+    }
+    await taskStore.select(taskID);
+    openTasks();
+  } catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
 /**
@@ -368,39 +400,33 @@ async function openTaskSession(payload) {
   }
 }
 
-onMounted(async () => {
-  runtimeStore.initialiseEvents();
-  taskStore.initialiseEvents();
-  proactiveStore.initialiseEvents();
-  workspaceStore.initialiseEvents();
-
+async function bootstrap() {
+  bootstrapError.value = "";
   try {
+    await Promise.all([modelStore.load(), agentStore.load()]);
+    bootstrapReady.value = true;
     await Promise.all([
-      modelStore.load(),
-
-      agentStore.load(),
-
       preferenceStore.load().catch((error) => {
         console.warn("[Preferences] 用户资料加载失败，继续使用默认身份", error);
       }),
-
       taskStore.load(),
-
       proactiveStore.load().catch((error) => {
         console.warn("[Proactive] 主动助手状态加载失败", error);
       }),
     ]);
-
-    await sessionStore
-        .loadForAgent(
-            agentStore.selectedID,
-        );
+    await sessionStore.loadForAgent(agentStore.selectedID);
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    if (!bootstrapReady.value) bootstrapError.value = error?.message ?? String(error);
+    Message.error(error?.message ?? String(error));
   }
+}
+
+onMounted(() => {
+  runtimeStore.initialiseEvents();
+  taskStore.initialiseEvents();
+  proactiveStore.initialiseEvents();
+  workspaceStore.initialiseEvents();
+  void bootstrap();
 });
 
 onUnmounted(() => {
@@ -414,6 +440,11 @@ onUnmounted(() => {
 <template>
   <div class="app-shell">
     <WindowChrome />
+    <div v-if="taskNotification" class="task-notification" role="status">
+      <div><strong>{{ taskNotification.title }}</strong><p>{{ taskNotification.body }}</p></div>
+      <a-button size="small" @click="openTask(taskNotification.taskID)">查看任务</a-button>
+      <a-button size="small" type="text" @click="dismissedTaskNotificationID = taskNotification.id">关闭</a-button>
+    </div>
 
     <!--
       Settings 是一级页面，不再使用 Drawer。
@@ -427,6 +458,19 @@ onUnmounted(() => {
         :initial-key="settingsInitialKey"
         @close="closeSettings"
         @open-skills="openSkills"
+    />
+
+    <div v-else-if="bootstrapError" class="app-shell__bootstrap">
+      <p>读取本地配置失败：{{ bootstrapError }}</p>
+      <a-button @click="bootstrap">重试</a-button>
+    </div>
+
+    <div v-else-if="!bootstrapReady" class="app-shell__bootstrap">正在加载本地配置…</div>
+
+    <FirstRunGuide
+        v-else-if="needsFirstRun"
+        @open-settings="openSettings"
+        @complete="openChat"
     />
 
     <div
@@ -470,12 +514,16 @@ onUnmounted(() => {
       <ChatView
           v-else
           @open-workspace-file="openWorkspaceFile"
+          @open-task="openTask"
       />
     </div>
   </div>
 </template>
 
 <style scoped>
+.task-notification { position: fixed; right: 20px; bottom: 20px; z-index: 1000; display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 40px)); padding: 12px; border: 1px solid var(--h-border); border-radius: 10px; background: var(--h-surface); box-shadow: 0 10px 30px rgba(0,0,0,.14); }
+.task-notification div { min-width: 0; }
+.task-notification p { margin: 4px 0 0; max-height: 4.5em; overflow: hidden; color: var(--h-text-muted); font-size: 12px; }
 .app-shell {
   display: grid;
 
@@ -495,7 +543,8 @@ onUnmounted(() => {
 }
 
 .app-shell__main,
-.app-shell__settings {
+.app-shell__settings,
+.app-shell__bootstrap {
   width: 100%;
   height: 100%;
 
@@ -504,6 +553,8 @@ onUnmounted(() => {
 
   overflow: hidden;
 }
+
+.app-shell__bootstrap { display: grid; place-content: center; gap: 12px; color: var(--h-text-muted); }
 
 .app-shell__main {
   display: grid;

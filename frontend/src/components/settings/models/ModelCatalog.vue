@@ -37,6 +37,8 @@ const saving =
 const testingID =
     ref("");
 
+const diagnostics = ref({});
+
 const capabilityFields = [
   {key: "tools", label: "Tool Calling", help: "模型是否支持函数/工具调用。Agent 暴露 Tool 时必须开启。"},
   {key: "vision", label: "Vision", help: "模型是否支持图片输入。"},
@@ -266,16 +268,14 @@ async function save() {
 async function test(model) {
   testingID.value =
       model.id;
+  diagnostics.value = { ...diagnostics.value, [model.id]: null };
 
   try {
     const result =
-        await store.testModel(
+        await store.diagnoseModel(
             model.id,
         );
-
-    Message.success(
-        `连接成功 · ${result.durationMS} ms`,
-    );
+    diagnostics.value = { ...diagnostics.value, [model.id]: result };
   } catch (error) {
     Message.error(
         error?.message ??
@@ -384,9 +384,8 @@ watch(
       />
 
       <div v-else class="model-items">
+        <template v-for="model in store.models" :key="model.id">
         <article
-            v-for="model in store.models"
-            :key="model.id"
             class="model-item h-list-row"
             :class="{
               'model-item--editing': form.id === model.id,
@@ -422,6 +421,12 @@ watch(
             </a-button>
           </div>
         </article>
+        <div v-if="diagnostics[model.id]" :key="`${model.id}-diagnostic`" class="model-diagnostic" :class="{ 'model-diagnostic--error': !diagnostics[model.id].success }" role="status">
+          <strong>{{ diagnostics[model.id].summary }}</strong>
+          <span v-if="diagnostics[model.id].durationMS"> · {{ diagnostics[model.id].durationMS }} ms</span>
+          <p>{{ diagnostics[model.id].action }}</p>
+        </div>
+        </template>
       </div>
     </SectionCard>
 
@@ -523,6 +528,9 @@ watch(
 </template>
 
 <style scoped>
+.model-diagnostic { margin: 0 12px 8px 20px; padding: 10px 12px; border-left: 2px solid var(--h-success); background: var(--h-bg); font-size: 12px; }
+.model-diagnostic--error { border-left-color: var(--h-danger); }
+.model-diagnostic p { margin: 4px 0 0; color: var(--h-text-muted); }
 .model-catalog {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);

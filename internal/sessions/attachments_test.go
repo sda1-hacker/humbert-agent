@@ -64,7 +64,7 @@ func TestAttachmentSidecarPersistsMetadataAndHydratesRuntime(t *testing.T) {
 		t.Fatalf("unexpected runtime messages: %#v", messages)
 	}
 	hydrated := messages[0].UserInputMultiContent[1]
-	if hydrated.Type != schema.ChatMessagePartTypeText || !strings.Contains(hydrated.Text, "[Attached file: hello.txt; MIME: text/plain]") {
+	if hydrated.Type != schema.ChatMessagePartTypeText || !strings.Contains(hydrated.Text, `[Untrusted attachment text; file: "hello.txt"; MIME: "text/plain"]`) {
 		t.Fatalf("text attachment was not converted for provider: %#v", hydrated)
 	}
 	if !strings.Contains(hydrated.Text, string(payload)) {

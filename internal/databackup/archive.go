@@ -18,6 +18,8 @@ import (
 
 const manifestName = "humbert-backup-manifest.json"
 const pendingRestoreName = "pending-restore.json"
+const pendingBackupName = "pending-backup.json"
+const credentialExportName = "humbert-credential-export.json"
 const maxArchiveBytes int64 = 20 << 30
 const maxArchiveFiles = 100000
 
@@ -78,7 +80,10 @@ func Create(ctx context.Context, root, destination string) error {
 			}
 			return realDirectory(path)
 		}
-		if rel == pendingRestoreName {
+		if rel == pendingRestoreName || rel == pendingBackupName {
+			return nil
+		}
+		if rel == backupErrorName {
 			return nil
 		}
 		if rel == manifestName {
@@ -182,6 +187,15 @@ func Verify(ctx context.Context, archive string) error {
 // Restore 只供应用完全退出后调用。原数据目录会保留为返回的 rollbackPath；
 // 只有整个 ZIP 验证且暂存目录写完后才切换目录。
 func Restore(ctx context.Context, archive, root string) (rollbackPath string, err error) {
+	reader, err := zip.OpenReader(archive)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	return restoreReader(ctx, &reader.Reader, root)
+}
+
+func restoreReader(ctx context.Context, reader *zip.Reader, root string) (rollbackPath string, err error) {
 	root, err = filepath.Abs(root)
 	if err != nil {
 		return "", err
@@ -198,11 +212,14 @@ func Restore(ctx context.Context, archive, root string) (rollbackPath string, er
 	if err := os.Chmod(stage, 0o700); err != nil {
 		return "", err
 	}
-	if err := inspect(ctx, archive, stage); err != nil {
+	if err := inspectReader(ctx, reader, stage); err != nil {
 		return "", err
 	}
 	// 历史归档即使含有恢复计划，也不能让下次启动重复执行恢复。
 	_ = os.Remove(filepath.Join(stage, pendingRestoreName))
+	_ = os.Remove(filepath.Join(stage, pendingBackupName))
+	_ = os.Remove(filepath.Join(stage, backupErrorName))
+	_ = os.Remove(filepath.Join(stage, credentialExportName))
 	if info, statErr := os.Lstat(root); statErr == nil {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return "", errors.New("现有数据目录不是安全目录")
@@ -220,6 +237,10 @@ func Restore(ctx context.Context, archive, root string) (rollbackPath string, er
 		}
 		return "", err
 	}
+	if rollbackPath != "" {
+		_ = os.Remove(filepath.Join(rollbackPath, pendingRestoreName))
+		_ = os.Remove(filepath.Join(rollbackPath, pendingBackupName))
+	}
 	return rollbackPath, nil
 }
 
@@ -229,6 +250,10 @@ func inspect(ctx context.Context, archive, stage string) error {
 		return err
 	}
 	defer reader.Close()
+	return inspectReader(ctx, &reader.Reader, stage)
+}
+
+func inspectReader(ctx context.Context, reader *zip.Reader, stage string) error {
 	if len(reader.File) > maxArchiveFiles+1 {
 		return errors.New("备份文件数量超过上限")
 	}
@@ -289,7 +314,9 @@ func inspect(ctx context.Context, archive, stage string) error {
 			return err
 		}
 		var output *os.File
-		if stage != "" {
+		// Verify the encrypted credential entry without writing its plaintext
+		// contents to the restore staging directory.
+		if stage != "" && record.Path != credentialExportName {
 			path := filepath.Join(stage, filepath.FromSlash(record.Path))
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				input.Close()

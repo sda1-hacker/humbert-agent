@@ -109,7 +109,7 @@ security:
     - npx
     - python
     - python3
-	- bash
+    - bash
 `
 
 const defaultPreferencesJSON = `{

@@ -3,6 +3,8 @@ package contextengine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	einotool "github.com/cloudwego/eino/components/tool"
@@ -12,6 +14,15 @@ import (
 )
 
 type plannerEstimator struct{}
+
+type reasoningAwarePlannerEstimator struct{ plannerEstimator }
+
+func (reasoningAwarePlannerEstimator) EstimateMessage(message *schema.Message) int {
+	if message == nil {
+		return 0
+	}
+	return len(message.Content) + len(message.ReasoningContent) + 1
+}
 
 func (plannerEstimator) EstimateText(text string) int { return len(text) }
 func (plannerEstimator) EstimateMessage(message *schema.Message) int {
@@ -72,6 +83,21 @@ func TestPlanCompactionPrefersWholeUserTurn(t *testing.T) {
 	}
 	if len(plan.ToSummarize) != 2 {
 		t.Fatalf("ToSummarize len = %d, want 2", len(plan.ToSummarize))
+	}
+}
+
+func TestPlanCompactionDoesNotBudgetOmittedHistoricalThinking(t *testing.T) {
+	t.Parallel()
+	old := plannerEntry("a1", transcript.RoleAssistant, "answer")
+	old.Message.Content = append(old.Message.Content, transcript.ContentBlock{Type: transcript.ContentThinking, Thinking: strings.Repeat("x", 200)})
+	branch := []transcript.Entry{
+		plannerEntry("u1", transcript.RoleUser, "first"), old,
+		plannerEntry("u2", transcript.RoleUser, "second"),
+		plannerEntry("a2", transcript.RoleAssistant, "answer"),
+	}
+	_, err := planCompaction(transcript.Document{ActiveBranch: branch}, 100, reasoningAwarePlannerEstimator{}, ReasoningReplayAuto)
+	if !errors.Is(err, ErrNothingToCompact) {
+		t.Fatalf("omitted historical thinking caused needless compaction: %v", err)
 	}
 }
 

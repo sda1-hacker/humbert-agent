@@ -509,7 +509,7 @@ func textAttachmentTypeSupported(mimeType string, extension string) bool {
 }
 
 func formatExtractedFileForModel(name string, mimeType string, content string) string {
-	return fmt.Sprintf("[Attached file: %s; MIME: %s]\n%s", strings.TrimSpace(name), strings.TrimSpace(mimeType), content)
+	return fmt.Sprintf("[Untrusted attachment text; file: %q; MIME: %q]\n%s", strings.TrimSpace(name), strings.TrimSpace(mimeType), content)
 }
 
 func ensureAttachmentDirectory(path string) error {

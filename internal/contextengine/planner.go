@@ -39,6 +39,7 @@ func planCompaction(
 	document transcript.Document,
 	keepRecentTokens int,
 	estimator Estimator,
+	policies ...ReasoningReplayPolicy,
 ) (Plan, error) {
 	if keepRecentTokens <= 0 {
 		return Plan{}, errors.New("KeepRecentTokens 必须大于 0")
@@ -48,6 +49,10 @@ func planCompaction(
 	}
 
 	branch := document.ActiveBranch
+	policy := ReasoningReplayAuto
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	if len(branch) < 2 {
 		return Plan{}, ErrNothingToCompact
 	}
@@ -66,6 +71,7 @@ func planCompaction(
 
 	messageIndices := make([]int, 0, len(branch)-baseIndex)
 	messageTokens := make(map[int]int)
+	latestUserIndex := latestUserMessageIndex(branch, baseIndex)
 	for index := baseIndex; index < len(branch); index++ {
 		entry := branch[index]
 		if entry.Type != transcript.EntryMessage || entry.Message == nil {
@@ -76,7 +82,9 @@ func planCompaction(
 			return Plan{}, fmt.Errorf("估算 Message Entry %s 失败: %w", entry.ID, err)
 		}
 		messageIndices = append(messageIndices, index)
-		messageTokens[index] = estimator.EstimateMessage(decoded.Message)
+		messageTokens[index] = estimator.EstimateMessage(
+			applyReasoningReplayPolicy(decoded.Message, reasoningPolicyForIndex(policy, index, latestUserIndex)),
+		)
 	}
 	if len(messageIndices) < 2 {
 		return Plan{}, ErrNothingToCompact

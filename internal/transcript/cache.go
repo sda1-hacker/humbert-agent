@@ -116,6 +116,9 @@ func (c *documentCache) advance(path string, before os.FileInfo, after os.FileIn
 	item.document.Entries = append(item.document.Entries, entry)
 	item.document.ActiveBranch = append(item.document.ActiveBranch, entry)
 	item.document.LeafID = entry.ID
+	if entry.Type == EntryCompaction {
+		item.document.ContextWindow = contextWindowIndex(item.document.ActiveBranch)
+	}
 	if entry.Type == EntryMessage && entry.Message != nil {
 		position := len(item.messageIndexes)
 		item.messageIndexes = append(item.messageIndexes, len(item.document.ActiveBranch)-1)
@@ -223,11 +226,12 @@ func cloneDocument(source Document) Document {
 		}
 	}
 	return Document{
-		Header:       source.Header,
-		Entries:      entries,
-		ActiveBranch: activeBranch,
-		LeafID:       source.LeafID,
-		Repair:       source.Repair,
+		Header:        source.Header,
+		Entries:       entries,
+		ActiveBranch:  activeBranch,
+		LeafID:        source.LeafID,
+		Repair:        source.Repair,
+		ContextWindow: source.ContextWindow,
 	}
 }
 

@@ -4,6 +4,12 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 名字Humbert来自于作者喜欢的一个日本民谣组合ハンバート ハンバート。
 作者也是刚接触Agent开发，功能正在逐渐完善,希望大家一起来学习，有什么好的建议多多issues
 
+## 首次使用
+
+首次启动且没有绑定可用模型的 Agent 时，应用会引导创建或选择 Provider、配置模型、发送一条短消息验证连接，然后创建默认 Agent。连接测试可能产生少量 Token 费用。已有可用 Agent 的用户会直接进入聊天。
+
+诊断会分别提示凭据、接口地址、网络、超时、额度和模型能力问题；模型设置页中的“测试”也会显示同样的诊断。短消息只验证文本对话，工具调用是否可用仍需按模型实际能力确认。首次创建 Agent 时可以选择启用全部内置工具；未选择时可在 Agent 设置中逐项配置。
+
 ## 数据目录
 
 默认数据根目录：
@@ -61,6 +67,10 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 - `logs/`：运行审计；实时 `turn.*` 事件不追加到消息 JSONL。
 - `workspaces/`：Managed Agent Workspace。
 
+## Thinking 与模型上下文
+
+会话 Transcript 保存模型返回的 thinking，供当前会话展示和排障。发送下一次模型请求时，OpenAI 与 OpenAI 兼容接口只回放可见回答及工具调用/结果；Ollama 仅在当前用户轮次内回放 thinking。较早轮次的 thinking 不进入模型上下文，也不计入压缩预算。压缩摘要和派生记忆不收录 thinking。
+
 ## 多 Agent 协作
 
 Agent 可以按需启用 `list_agents` 与 `run_agent`。`run_agent` 使用 Eino AgentTool 在当前
@@ -76,6 +86,12 @@ Agent 默认不接受子 Agent 调用。只有在 Agent 设置中显式打开“
 综合，再生成面向用户的回答。子 Agent 的高风险操作通过 Eino CompositeInterrupt 在当前父会话
 审批。父 Session 的 ToolCall/ToolResult 是对话事实来源，`subagents/*.json` 只记录运行身份、
 目标、状态和最终结果，便于排障，不形成第二套聊天历史。
+
+## 从对话安排任务
+
+用户可以在普通对话中要求“明天九点提醒我喝水”或“每周五总结工作区”。Agent 会调用 `get_current_time` 确认当前时间，并提交 `schedule_task` 计划。审批卡片展示任务名称、内容、执行方式、时间和时区；用户逐次确认后才创建任务。完成后，聊天记录显示“查看任务”入口。由聊天创建的 Agent 任务完成或失败时会发送带任务入口的通知；仅提醒任务在触发时直接发送通知。
+
+新建 Agent 默认提供该工具；已显式限定内置工具的 Agent 需要在 Agent 安全设置中启用“安排提醒或任务”。任务只在 Humbert 进程运行时触发；错过的单次计划按现有补跑策略在下次启动处理。
 
 ## 开发环境
 
@@ -119,15 +135,15 @@ wails3 dev
 
 ## 数据备份与恢复
 
-在“设置 → 数据”中导出 ZIP 备份，或在应用完全退出后运行：
+在“设置 → 数据”中输入至少 12 个字符的口令并安排加密备份。完全退出并重新启动 Humbert 后，应用会在加载数据服务前创建 `.age` 备份；若备份失败，应用仍会启动，失败原因会显示在数据设置页，下一次启动时重试，也可取消。模型密钥保存在系统凭据库中，备份时才写入加密归档。也可在应用完全退出后用 CLI 操作：
 
 ```bash
-go run ./cmd/data backup -output /path/to/humbert-backup.zip
-go run ./cmd/data verify -archive /path/to/humbert-backup.zip
-go run ./cmd/data restore -archive /path/to/humbert-backup.zip -offline
+go run ./cmd/data backup -output /path/to/humbert-backup.age -passphrase-file /path/to/passphrase -offline
+go run ./cmd/data verify -archive /path/to/humbert-backup.age -passphrase-file /path/to/passphrase
+go run ./cmd/data restore -archive /path/to/humbert-backup.age -passphrase-file /path/to/passphrase -offline
 ```
 
-备份包含模型密钥、会话、附件、任务、技能和工作区，请妥善保管。界面导出时请确保没有正在运行的任务或聊天，以免跨文件数据发生变化。应用内恢复先验证归档，再在下次启动、加载数据前切换目录；原数据保留为 `~/.humbert-agent.before-restore-*` 供回退。CLI 恢复只在应用完全退出时使用。
+口令文件应位于数据目录之外，权限为 `0600` 或更严格；请保管好备份口令，遗失后无法恢复。备份包含模型密钥、会话、附件、任务、技能和工作区。应用内恢复先验证归档，再在下次启动、加载数据前切换目录；原数据保留为 `~/.humbert-agent.before-restore-*` 供回退。旧版未加密 ZIP 仍可校验和恢复。CLI 备份与恢复都只在应用完全退出时使用。
 
 ## 当前运行边界
 

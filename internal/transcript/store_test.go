@@ -89,6 +89,119 @@ func TestLoadSessionCacheIsIsolatedFromCallerMutation(t *testing.T) {
 	}
 }
 
+func TestLoadContextSessionTracksCompactionWindowAndAppend(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, CreateSessionInput{ID: "session", AgentID: "agent", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := store.LoadContextSession(ctx, "agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !empty.ContextWindow.Valid || empty.ContextWindow.LatestCompactionIndex != -1 {
+		t.Fatalf("new session has no context index: %#v", empty.ContextWindow)
+	}
+	if _, err := store.AppendMessage(ctx, "agent", "session", testUserWireMessage("old")); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := store.AppendMessage(ctx, "agent", "session", testUserWireMessage("kept"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, err := store.AppendCompaction(ctx, "agent", "session", AppendCompactionInput{
+		ExpectedLeafID: kept.ID, Summary: "summary", FirstKeptEntryID: kept.ID,
+		TokensBefore: 100, TokensAfter: 50, Details: CompactionDetails{Reason: "test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := store.LoadContextSession(ctx, "agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Entries != nil {
+		t.Fatal("context view copied the complete transcript tree")
+	}
+	if !view.ContextWindow.Valid || view.ContextWindow.FirstKeptIndex != 1 ||
+		view.ContextWindow.LatestCompactionIndex != 2 || view.ContextWindow.Generation != 1 {
+		t.Fatalf("unexpected context window index: %#v", view.ContextWindow)
+	}
+	if view.ActiveBranch[view.ContextWindow.LatestCompactionIndex].ID != checkpoint.ID {
+		t.Fatal("context index did not point to the latest checkpoint")
+	}
+	added, err := store.AppendMessage(ctx, "agent", "session", testUserWireMessage("new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.ActiveBranch) != 3 || view.LeafID != checkpoint.ID {
+		t.Fatal("previously returned view changed after append")
+	}
+	next, err := store.LoadContextSession(ctx, "agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.ActiveBranch) != 4 || next.LeafID != added.ID || next.ContextWindow.FirstKeptIndex != 1 {
+		t.Fatalf("new context view did not advance: %#v", next)
+	}
+	second, err := store.AppendCompaction(ctx, "agent", "session", AppendCompactionInput{
+		ExpectedLeafID: added.ID, Summary: "new summary", FirstKeptEntryID: added.ID,
+		TokensBefore: 100, TokensAfter: 50, Details: CompactionDetails{Reason: "test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := store.LoadContextSession(ctx, "agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.ContextWindow.FirstKeptIndex != 3 || latest.ContextWindow.LatestCompactionIndex != 4 ||
+		latest.ContextWindow.Generation != 2 || latest.ActiveBranch[4].ID != second.ID {
+		t.Fatalf("second checkpoint did not replace the context window: %#v", latest.ContextWindow)
+	}
+}
+
+func TestLoadContextSessionViewRemainsStableDuringAppend(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, CreateSessionInput{ID: "session", AgentID: "agent", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendMessage(ctx, "agent", "session", testUserWireMessage("original")); err != nil {
+		t.Fatal(err)
+	}
+	view, err := store.LoadContextSession(ctx, "agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		for range 20 {
+			if _, appendErr := store.AppendMessage(ctx, "agent", "session", testUserWireMessage("new")); appendErr != nil {
+				done <- appendErr
+				return
+			}
+		}
+		done <- nil
+	}()
+	for range 100 {
+		if len(view.ActiveBranch) != 1 || view.ActiveBranch[0].Message.Content[0].Text != "original" {
+			t.Fatal("active context view changed while another turn appended")
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoadSessionCacheInvalidatesAfterExternalCompleteCorruption(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -216,6 +329,38 @@ func BenchmarkLoadMessagePageCached(b *testing.B) {
 			b.Fatalf("page=%d err=%v", len(page.Entries), err)
 		}
 	}
+}
+
+func BenchmarkLoadContextSessionCached(b *testing.B) {
+	ctx := context.Background()
+	store, err := NewStore(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, CreateSessionInput{ID: "session", AgentID: "agent", CreatedAt: time.Now()}); err != nil {
+		b.Fatal(err)
+	}
+	for range 1000 {
+		if _, err := store.AppendMessage(ctx, "agent", "session", testUserWireMessage("benchmark message")); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.Run("full_document", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := store.LoadSession(ctx, "agent", "session"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("context_view", func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			if _, err := store.LoadContextSession(ctx, "agent", "session"); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func TestLoadSessionFastTailCheckStillRejectsCompleteCorruptLine(t *testing.T) {

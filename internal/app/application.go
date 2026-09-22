@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -33,8 +32,10 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	"github.com/sda1-hacker/humbert-agent/internal/tasks"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
+	builtin "github.com/sda1-hacker/humbert-agent/internal/tools/builtin"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
+	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 )
 
 const Version = "0.1.0"
@@ -186,7 +187,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		"data_dir", cfg.Paths.HomeDir,
 	)
 
-	credentials, err := credential.New(cfg.Paths.SecretsDir)
+	credentials, err := credential.NewSystem(cfg.Paths.SecretsDir)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 CredentialStore 失败: %w", err)
 	}
@@ -457,6 +458,13 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	taskManager, err := tasks.NewManager(taskStore, agentService, sessionService, runtimeService, events, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Task Manager 失败: %w", err)
+	}
+	scheduleTaskFactory, err := builtin.NewScheduleTaskFactory(taskManager)
+	if err != nil {
+		return nil, err
+	}
+	if err := toolRegistry.Register(scheduleTaskFactory); err != nil {
+		return nil, fmt.Errorf("注册对话任务工具失败: %w", err)
 	}
 	notificationService := notifications.New(notifications.NewEventProvider(events))
 	taskManager.SetNotificationService(notificationService)

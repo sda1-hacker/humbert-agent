@@ -11,10 +11,8 @@ import (
 
 // ReasoningReplayPolicy 决定历史 Assistant Thinking 是否继续发送给主模型。
 //
-// Transcript 永远完整保存 Thinking；本策略只影响“当前模型请求看到什么”。默认 Auto
-// 采用兼容优先策略：保留 Eino schema.Message.ReasoningContent，让现有 Provider Adapter
-// 自己决定如何编码。未来如果某个 Provider 明确不能回放 Reasoning，可在 Provider 能力层
-// 将其解析为 Omit，而不需要修改 Session JSONL。
+// Transcript 永远完整保存 Thinking；本策略只影响“当前模型请求看到什么”。Auto
+// 仅适用于明确支持原生 thinking 回放的 Provider；不确定时调用方必须选择 Omit。
 type ReasoningReplayPolicy string
 
 const (
@@ -228,6 +226,9 @@ type BuildRequest struct {
 // CompactRequest 描述一次持久化 Compaction。
 type CompactRequest struct {
 	SessionID string
+
+	// 与 Build 使用相同的投影策略，压缩规划和压缩后估算才能反映真实请求。
+	ReasoningPolicy ReasoningReplayPolicy
 
 	// Model 使用当前 Turn 已冻结的基础模型实例生成内部 Checkpoint。调用时不绑定
 	// Tool，因此摘要模型无法在压缩过程中触发副作用。

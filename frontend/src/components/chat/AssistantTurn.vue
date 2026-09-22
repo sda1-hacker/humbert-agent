@@ -20,10 +20,12 @@ import IdentityAvatar
 
 import {
   fileChangesOfCalls,
+  scheduledTasksOfCalls,
 } from "../../utils/toolTrace.js";
 
 const emit = defineEmits([
   "open-workspace-file",
+  "open-task",
 ]);
 
 const props =
@@ -118,6 +120,14 @@ const fileChanges =
         ),
     );
 
+const scheduledTasks = computed(() => scheduledTasksOfCalls(props.trace?.calls || []));
+
+function taskTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 function fileOperationLabel(operation) {
   switch (operation) {
     case "created":
@@ -175,6 +185,14 @@ const incomplete =
         v-if="trace"
         :trace="trace"
     />
+
+    <section v-if="scheduledTasks.length" class="turn-tasks" aria-label="已安排的任务">
+      <button v-for="task in scheduledTasks" :key="task.id" type="button" class="turn-task" @click="emit('open-task', task.id)">
+        <strong>已安排：{{ task.name }}</strong>
+        <span v-if="task.nextRunAt">下次：{{ taskTime(task.nextRunAt) }}</span>
+        <span>查看任务 ›</span>
+      </button>
+    </section>
 
     <!--
       文件变化属于“本轮回答结果”，而不是工作区的永久审计面板。
@@ -243,6 +261,10 @@ const incomplete =
 </template>
 
 <style scoped>
+.turn-tasks { display: grid; gap: 8px; margin: 10px 0; }
+.turn-task { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; border: 1px solid var(--h-border); border-radius: 9px; background: var(--h-surface); color: var(--h-text); cursor: pointer; text-align: left; }
+.turn-task:hover { background: var(--h-surface-hover); }
+.turn-task span { color: var(--h-text-muted); font-size: 12px; }
 .assistant-turn {
   display: flex;
 

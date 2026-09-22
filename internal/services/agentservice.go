@@ -987,7 +987,7 @@ func builtinToolCategory(name string) string {
 		return "skills"
 	case "list_agents", "run_agent":
 		return "collaboration"
-	case "get_current_time", "update_plan":
+	case "get_current_time", "update_plan", "schedule_task":
 		return "agent"
 	default:
 		return "other"
@@ -1000,7 +1000,7 @@ func builtinToolLabel(name string) string {
 		"glob_files": "按名称查找文件", "grep_files": "搜索文件内容", "apply_patch": "批量应用补丁",
 		"copy_file": "复制文件", "move_file": "移动文件", "delete_file": "删除文件", "run_command": "执行本地命令",
 		"git_status": "Git 状态", "git_diff": "Git Diff", "git_log": "Git 历史", "web_search": "网页搜索",
-		"web_fetch": "读取网页", "install_skill": "安装 Skill", "get_current_time": "当前时间", "update_plan": "更新计划",
+		"web_fetch": "读取网页", "install_skill": "安装 Skill", "get_current_time": "当前时间", "update_plan": "更新计划", "schedule_task": "安排提醒或任务",
 		"list_agents": "查看可用 Agent", "run_agent": "调用专业 Agent",
 	}
 	if label := labels[name]; label != "" {

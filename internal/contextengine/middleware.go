@@ -42,6 +42,8 @@ type ContextMiddlewareConfig struct {
 
 	ToolTokenEstimate int
 
+	ReasoningPolicy ReasoningReplayPolicy
+
 	SerializerMaxChars int
 
 	OperationTimeout time.Duration
@@ -100,6 +102,15 @@ func (m *MidRunCompactor) beforeChatModel(ctx context.Context, state *adk.ChatMo
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("MidRun Compaction 被取消: %w", err)
+	}
+	// Eino 的同轮工具循环会把刚生成的 Assistant thinking 放回 State。
+	// 在预算与下一次请求前统一剔除不支持回放的 Provider 的 thinking。
+	if m.config.ReasoningPolicy == ReasoningReplayOmit {
+		projected := make([]*schema.Message, len(state.Messages))
+		for index, message := range state.Messages {
+			projected[index] = applyReasoningReplayPolicy(message, ReasoningReplayOmit)
+		}
+		state.Messages = projected
 	}
 
 	instructionTokens := m.config.Estimator.EstimateText(m.config.Instruction)

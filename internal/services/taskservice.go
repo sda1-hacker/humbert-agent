@@ -43,6 +43,8 @@ type TaskLimitsDTO struct {
 type TaskDTO struct {
 	ID        string `json:"id"`
 	AgentID   string `json:"agentID"`
+	Origin    string `json:"origin,omitempty"`
+	OriginRef string `json:"originRef,omitempty"`
 	Name      string `json:"name"`
 	Prompt    string `json:"prompt"`
 	Execution string `json:"execution"`
@@ -342,6 +344,7 @@ func limitsFromDTO(value TaskLimitsDTO) tasks.Limits {
 func taskDTO(value tasks.Task) TaskDTO {
 	return TaskDTO{
 		ID: value.ID, AgentID: value.AgentID, Name: value.Name, Prompt: value.Prompt,
+		Origin: value.Origin, OriginRef: value.OriginRef,
 		Execution:           string(value.EffectiveExecution()),
 		ConversationMode:    string(value.EffectiveConversationMode()),
 		PersistentSessionID: value.PersistentSessionID,

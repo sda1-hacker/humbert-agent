@@ -665,6 +665,7 @@ onMounted(async () => {
           </details>
 
           <div class="editor-actions">
+            <a-button v-if="!creating && selectedTask?.origin === 'chat' && selectedTask?.originRef" @click="emit('open-session', { agentID: selectedTask.agentID, sessionID: selectedTask.originRef })">来源对话</a-button>
             <a-button v-if="creating" @click="cancelCreating">取消</a-button>
             <a-button v-else status="danger" :loading="deletingTask" @click="deleteSelected">删除任务</a-button>
             <span class="editor-actions__spacer"></span>

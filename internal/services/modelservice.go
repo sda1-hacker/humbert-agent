@@ -2,7 +2,11 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
@@ -146,6 +150,17 @@ type TestModelResponse struct {
 	DurationMS int64 `json:"durationMS"`
 
 	ResponsePreview string `json:"responsePreview"`
+}
+
+// ModelDiagnostic 是供首次引导和设置页展示的可操作诊断结果。
+// 不包含底层响应正文或错误原文，避免把服务端回显的凭据带入 UI。
+type ModelDiagnostic struct {
+	Success        bool   `json:"success"`
+	Category       string `json:"category"`
+	Summary        string `json:"summary"`
+	Action         string `json:"action"`
+	DurationMS     int64  `json:"durationMS"`
+	ToolsSupported bool   `json:"toolsSupported"`
 }
 
 // ModelService 是 Model Registry 的 Wails Adapter。
@@ -496,6 +511,74 @@ func (s *ModelService) TestModel(
 
 		ResponsePreview: result.ResponsePreview,
 	}, nil
+}
+
+// DiagnoseModel 发送最小请求，并把常见连接故障转换成可处理的提示。
+func (s *ModelService) DiagnoseModel(id string) (ModelDiagnostic, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	model, err := s.modelDTOByID(ctx, id)
+	if err != nil {
+		return ModelDiagnostic{}, fmt.Errorf("读取待诊断模型失败: %w", err)
+	}
+	result := ModelDiagnostic{ToolsSupported: model.Capabilities.Tools}
+	if !model.Enabled {
+		result.Category, result.Summary, result.Action = "model_disabled", "模型未启用", "在模型设置中启用该模型后重试。"
+		return result, nil
+	}
+	providers, err := s.core.Models().ListProviders(ctx)
+	if err != nil {
+		return ModelDiagnostic{}, fmt.Errorf("读取供应商失败: %w", err)
+	}
+	for _, provider := range providers {
+		if provider.ID == model.ProviderID && provider.Type == models.ProviderTypeOpenAI && provider.CredentialID == "" {
+			result.Category, result.Summary, result.Action = "credential", "尚未配置 API Key", "在供应商设置中填写 API Key 后重试。"
+			return result, nil
+		}
+	}
+
+	started := time.Now()
+	test, err := s.core.Models().TestModel(ctx, id)
+	result.DurationMS = time.Since(started).Milliseconds()
+	if err != nil {
+		result.Category, result.Summary, result.Action = classifyModelDiagnostic(err)
+		return result, nil
+	}
+	result.Success = test.Success
+	result.DurationMS = test.DurationMS
+	result.Category = "ok"
+	result.Summary = "模型连接成功"
+	if model.Capabilities.Tools {
+		result.Action = "文本对话已验证；工具调用能力依据模型配置推断，尚未实际测试。"
+	} else {
+		result.Action = "文本对话已验证。当前未启用工具调用能力；需要工具时请确认模型支持并在模型设置中开启。"
+	}
+	return result, nil
+}
+
+func classifyModelDiagnostic(err error) (category, summary, action string) {
+	var urlErr *url.Error
+	var netErr net.Error
+	lower := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout(), strings.Contains(lower, "timeout"):
+		return "timeout", "模型请求超时", "检查网络和服务状态，或适当增加模型请求超时。"
+	case strings.Contains(lower, "401"), strings.Contains(lower, "403"), strings.Contains(lower, "unauthorized"), strings.Contains(lower, "invalid api key"), strings.Contains(lower, "incorrect api key"), strings.Contains(lower, "credential"), strings.Contains(lower, "api key"):
+		return "credential", "凭据被服务拒绝", "检查 API Key、账户权限与供应商地址。"
+	case strings.Contains(lower, "404"), strings.Contains(lower, "model not found"), strings.Contains(lower, "model_not_found"):
+		return "endpoint", "模型或接口未找到", "检查模型标识和 Base URL；兼容接口通常需要正确的 /v1 路径。"
+	case strings.Contains(lower, "429"), strings.Contains(lower, "rate limit"), strings.Contains(lower, "quota"):
+		return "quota", "请求受到额度或频率限制", "检查账户额度和频率限制，稍后重试。"
+	case strings.Contains(lower, "tool"), strings.Contains(lower, "function call"), strings.Contains(lower, "unsupported parameter"):
+		return "capability", "模型能力或请求参数不匹配", "核对模型实际支持的能力及参数，在模型设置中调整能力配置。"
+	case strings.Contains(lower, "unsupported protocol scheme"), strings.Contains(lower, "invalid url"), strings.Contains(lower, "no host"):
+		return "endpoint", "供应商地址无效", "检查 Base URL 的协议、主机和 API 路径。"
+	case errors.As(err, &urlErr), strings.Contains(lower, "connection refused"), strings.Contains(lower, "no such host"), strings.Contains(lower, "certificate"), strings.Contains(lower, "tls"):
+		return "network", "无法连接模型服务", "检查 Base URL、网络、代理及本地服务是否运行。"
+	default:
+		return "unknown", "模型请求失败", "检查供应商日志、模型标识和连接配置后重试。"
+	}
 }
 
 func (s *ModelService) modelDTOByID(

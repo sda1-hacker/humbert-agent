@@ -213,6 +213,9 @@ export function toolDisplayName(
 
         run_agent:
             "调用专业 Agent",
+
+        schedule_task:
+            "安排提醒或任务",
     };
 
     return (
@@ -1317,4 +1320,24 @@ export function fileChangesOfCalls(calls) {
     }
 
     return [...changes.values()];
+}
+
+// 只根据成功的 schedule_task ToolResult 展示可点击的任务入口。
+// 模型在普通回答中写出的 ID 不会被当成已创建任务。
+export function scheduledTasksOfCalls(calls) {
+    const result = [];
+    const seen = new Set();
+    for (const call of Array.isArray(calls) ? calls : []) {
+        if (call?.name !== "schedule_task" || call?.status !== "completed") continue;
+        const output = parseToolResultObject(call);
+        const id = readStringProperty(output, "task_id");
+        if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) || seen.has(id)) continue;
+        seen.add(id);
+        result.push({
+            id,
+            name: readStringProperty(output, "name") || "已安排的任务",
+            nextRunAt: readStringProperty(output, "next_run_at"),
+        });
+    }
+    return result;
 }

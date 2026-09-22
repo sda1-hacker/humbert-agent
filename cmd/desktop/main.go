@@ -11,6 +11,7 @@ import (
 	"time"
 
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
+	"github.com/sda1-hacker/humbert-agent/internal/credential"
 	"github.com/sda1-hacker/humbert-agent/internal/databackup"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 
@@ -28,13 +29,40 @@ import (
 
 func main() {
 	if home, err := os.UserHomeDir(); err == nil {
-		rollback, restoreErr := databackup.ApplyPendingRestore(context.Background(), filepath.Join(home, ".humbert-agent"))
+		root := filepath.Join(home, ".humbert-agent")
+		vault := credential.BackupVault{}
+		rollback, restoreErr := databackup.ApplyPendingRestore(context.Background(), root, databackup.RestoreOptions{
+			Vault: vault,
+			ImportCredentials: func(ctx context.Context, restoredRoot string, values map[string]string) error {
+				store, err := credential.NewSystem(filepath.Join(restoredRoot, "secrets"))
+				if err != nil {
+					return err
+				}
+				return store.ImportAll(ctx, values)
+			},
+		})
 		if restoreErr != nil {
 			fmt.Fprintln(os.Stderr, "Humbert 数据恢复失败:", restoreErr)
 			os.Exit(1)
 		}
 		if rollback != "" {
 			fmt.Fprintln(os.Stderr, "Humbert 数据已恢复，原数据位于:", rollback)
+		}
+		backupPath, backupErr := databackup.ApplyPendingBackup(context.Background(), root, vault, func(ctx context.Context) (map[string]string, error) {
+			store, err := credential.NewSystem(filepath.Join(root, "secrets"))
+			if err != nil {
+				return nil, err
+			}
+			return store.ExportAll(ctx)
+		})
+		if backupErr != nil {
+			fmt.Fprintln(os.Stderr, "Humbert 数据备份失败，将在下次启动重试:", backupErr)
+			if err := databackup.RecordBackupFailure(context.Background(), root, backupErr); err != nil {
+				fmt.Fprintln(os.Stderr, "记录备份失败原因失败:", err)
+			}
+		}
+		if backupPath != "" {
+			fmt.Fprintln(os.Stderr, "Humbert 加密备份已保存:", backupPath)
 		}
 	}
 	bootstrapLogger :=

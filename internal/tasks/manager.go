@@ -219,6 +219,7 @@ func (m *Manager) Create(ctx context.Context, input CreateInput) (Task, error) {
 	}
 	value := Task{
 		ID: uuid.NewString(), AgentID: strings.TrimSpace(input.AgentID),
+		Origin: input.Origin, OriginRef: input.OriginRef,
 		Name: name, Prompt: prompt, Execution: execution, ConversationMode: conversationMode,
 		Status: status, Schedule: schedule, Limits: limits, NextRunAt: next,
 		CreatedAt: now, UpdatedAt: now,
@@ -1156,11 +1157,45 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 	}
 	m.publish(Event{Type: "run." + string(run.Status), TaskID: run.TaskID, RunID: run.ID, Task: taskSnapshot, Run: &run})
 	if run.Status.Terminal() {
+		if taskSnapshot != nil {
+			m.notifyChatTaskResult(*taskSnapshot, run)
+		}
 		m.releaseActive(run)
 		m.maybeRetry(run)
 		go m.runCycle()
 	}
 	_ = ctx
+}
+
+func (m *Manager) notifyChatTaskResult(task Task, run Run) {
+	if task.Origin != "chat" || task.OriginRef == "" || task.EffectiveExecution() != ExecutionAgent {
+		return
+	}
+	if run.Status != RunSucceeded && run.Status != RunFailed && run.Status != RunTimedOut && run.Status != RunInterrupted {
+		return
+	}
+	m.mu.Lock()
+	notifier := m.notifications
+	m.mu.Unlock()
+	if notifier == nil {
+		return
+	}
+	level, title, body := notifications.LevelSuccess, "任务已完成："+task.Name, strings.TrimSpace(run.ResultPreview)
+	if run.Status != RunSucceeded {
+		level, title, body = notifications.LevelError, "任务未完成："+task.Name, strings.TrimSpace(run.Error)
+	}
+	if body == "" {
+		body = "请打开主动任务查看运行记录。"
+	}
+	if len([]rune(body)) > 300 {
+		body = string([]rune(body)[:300]) + "…"
+	}
+	if err := notifier.Send(context.Background(), notifications.Notification{
+		Level: level, Title: title, Body: body,
+		AgentID: task.AgentID, SessionID: task.OriginRef, TaskID: task.ID, RunID: run.ID,
+	}); err != nil {
+		m.logger.Warn(context.Background(), "发送对话任务结果通知失败", "task_id", task.ID, "run_id", run.ID, "error", err)
+	}
 }
 
 func (m *Manager) resultPreview(sessionID, messageID string) string {
@@ -1195,6 +1230,9 @@ func (m *Manager) failRun(ctx context.Context, run Run, err error) {
 		taskSnapshot = &task
 	}
 	m.publish(Event{Type: "run.failed", TaskID: run.TaskID, RunID: run.ID, Task: taskSnapshot, Run: &run})
+	if taskSnapshot != nil {
+		m.notifyChatTaskResult(*taskSnapshot, run)
+	}
 	m.maybeRetry(run)
 }
 

@@ -183,7 +183,10 @@ func (s *Store) CreateSession(ctx context.Context, input CreateSessionInput) err
 	}
 	closed = true
 	if info, statErr := os.Stat(path); statErr == nil {
-		s.cache.putOwned(path, Document{Header: header, Entries: []Entry{}, ActiveBranch: []Entry{}}, info)
+		s.cache.putOwned(path, Document{
+			Header: header, Entries: []Entry{}, ActiveBranch: []Entry{},
+			ContextWindow: ContextWindowIndex{Valid: true, LatestCompactionIndex: -1},
+		}, info)
 	}
 	return nil
 }
@@ -270,6 +273,38 @@ func (s *Store) LoadSession(
 	document = cloneDocument(document)
 	document.Repair = repair
 	return document, nil
+}
+
+// LoadContextSession 返回只读的当前分支视图，供一次模型请求构建 Context。
+//
+// Entry 及其嵌套 payload 均属于进程内缓存，调用方不得修改。Append 只会添加新的
+// Entry，不会改写既有 Entry；这里截断 slice capacity，避免调用方 append 到缓存
+// 的底层数组。对外需要可修改的完整历史时仍使用 LoadSession 的深拷贝。
+func (s *Store) LoadContextSession(
+	ctx context.Context,
+	agentID string,
+	sessionID string,
+) (Document, error) {
+	path, err := s.sessionPath(agentID, sessionID)
+	if err != nil {
+		return Document{}, err
+	}
+	unlock := s.locks.lock(path)
+	defer unlock()
+	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
+		return Document{}, err
+	}
+	document, _, _, err := s.documentForReadLocked(ctx, path, sessionID)
+	if err != nil {
+		return Document{}, err
+	}
+	branch := document.ActiveBranch
+	return Document{
+		Header:        document.Header,
+		ActiveBranch:  branch[:len(branch):len(branch)],
+		LeafID:        document.LeafID,
+		ContextWindow: document.ContextWindow,
+	}, nil
 }
 
 // LoadMessagePage 从 Active Branch 的 Message 索引读取一页 Wire Entry。
@@ -1207,11 +1242,32 @@ func loadLocked(ctx context.Context, path string, sessionID string) (Document, e
 	}
 
 	return Document{
-		Header:       header,
-		Entries:      entries,
-		ActiveBranch: activeBranch,
-		LeafID:       leafID,
+		Header:        header,
+		Entries:       entries,
+		ActiveBranch:  activeBranch,
+		LeafID:        leafID,
+		ContextWindow: contextWindowIndex(activeBranch),
 	}, nil
+}
+
+func contextWindowIndex(branch []Entry) ContextWindowIndex {
+	result := ContextWindowIndex{Valid: true, LatestCompactionIndex: -1}
+	positions := make(map[string]int, len(branch))
+	for index, entry := range branch {
+		positions[entry.ID] = index
+		if entry.Type != EntryCompaction {
+			continue
+		}
+		result.Generation++
+		result.LatestCompactionIndex = index
+		firstKeptIndex, found := positions[entry.FirstKeptEntryID]
+		if !found || firstKeptIndex >= index {
+			result.FirstKeptIndex = -1
+		} else {
+			result.FirstKeptIndex = firstKeptIndex
+		}
+	}
+	return result
 }
 
 func validateHeader(header SessionHeader, expectedSessionID string) error {

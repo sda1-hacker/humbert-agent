@@ -2,6 +2,7 @@ package permission
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -40,6 +41,54 @@ func BuildPresentation(request Request) (Presentation, error) {
 	}
 
 	switch request.ToolName {
+	case "schedule_task":
+		var input struct {
+			Name            string `json:"name"`
+			Prompt          string `json:"prompt"`
+			Execution       string `json:"execution"`
+			ScheduleType    string `json:"schedule_type"`
+			TimeZone        string `json:"time_zone"`
+			RunAt           string `json:"run_at"`
+			TimeOfDay       string `json:"time_of_day"`
+			Weekdays        []int  `json:"weekdays"`
+			IntervalMinutes int    `json:"interval_minutes"`
+		}
+		if err := json.Unmarshal([]byte(request.Arguments), &input); err != nil {
+			return Presentation{}, fmt.Errorf("解析 schedule_task 审批参数失败: %w", err)
+		}
+		if strings.TrimSpace(input.Name) == "" || strings.TrimSpace(input.Prompt) == "" || len([]rune(strings.TrimSpace(input.Prompt))) > 500 {
+			return Presentation{}, errors.New("任务名称或执行内容无效，执行内容最多 500 个字符")
+		}
+		when := strings.TrimSpace(input.ScheduleType)
+		switch when {
+		case "once":
+			when = input.RunAt
+		case "daily":
+			when = "每天 " + input.TimeOfDay
+		case "weekly":
+			when = fmt.Sprintf("每周 %v 的 %s", input.Weekdays, input.TimeOfDay)
+		case "interval":
+			when = fmt.Sprintf("每 %d 分钟", input.IntervalMinutes)
+		}
+		execution := "由 Agent 执行"
+		if input.Execution == "notification" {
+			execution = "仅发送提醒"
+		}
+		zone := strings.TrimSpace(input.TimeZone)
+		if zone == "" {
+			zone = "本机时区"
+		}
+		return Presentation{
+			Title:       "确认安排任务",
+			Description: "确认后会创建并启用该计划。每次安排都需要单独确认；应用退出期间不会运行。",
+			Fields: []PresentationField{
+				{Label: "名称", Value: safeField(input.Name)},
+				{Label: "执行方式", Value: execution},
+				{Label: "时间", Value: safeField(when)},
+				{Label: "时区", Value: safeField(zone)},
+				{Label: "内容", Value: safeField(input.Prompt)},
+			},
+		}, nil
 	case "write_file":
 		var input struct {
 			Path      string `json:"path"`

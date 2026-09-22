@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 var (
@@ -27,13 +28,12 @@ var (
 // Provider 在 providers.json 中只保存 credential_id，真正 API Key 不进入
 // 普通配置文件。
 //
-// v0.1 使用 ~/.humbert-agent/secrets 中的权限受限文件。
-// 后续可以在完全不影响 Model Registry 的情况下替换为：
-//   - macOS Keychain；
-//   - Windows Credential Manager；
-//   - Linux Secret Service。
+// 桌面应用使用系统凭据库，目录内仅保留凭据 ID 索引。New 保留旧文件
+// 存储接口供迁移和兼容测试使用；生产入口应使用 NewSystem。
 type Store struct {
-	root string
+	root   string
+	system systemKeyring
+	mu     sync.Mutex
 }
 
 // New 创建 CredentialStore。
@@ -121,6 +121,9 @@ func (s *Store) Put(
 			"保存凭据被取消: %w",
 			err,
 		)
+	}
+	if s.system != nil {
+		return s.putSystem(ctx, id, value)
 	}
 
 	target, err := s.pathFor(id)
@@ -236,6 +239,9 @@ func (s *Store) Get(
 			err,
 		)
 	}
+	if s.system != nil {
+		return s.getSystem(ctx, id)
+	}
 
 	path, err := s.pathFor(id)
 	if err != nil {
@@ -301,6 +307,9 @@ func (s *Store) Delete(
 			"删除凭据被取消: %w",
 			err,
 		)
+	}
+	if s.system != nil {
+		return s.deleteSystem(ctx, id)
 	}
 
 	path, err := s.pathFor(id)

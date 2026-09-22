@@ -358,4 +358,17 @@ type Document struct {
 	LeafID string
 
 	Repair RepairResult
+
+	// ContextWindow 是从当前 ActiveBranch 预先计算的投影边界。缓存命中时，
+	// ContextEngine 可直接从 FirstKeptIndex 开始解码，无需每轮重新扫描旧历史。
+	ContextWindow ContextWindowIndex
+}
+
+// ContextWindowIndex 只记录当前分支上的位置，不持有消息正文。
+// LatestCompactionIndex 为 -1 时，FirstKeptIndex 为 0。
+type ContextWindowIndex struct {
+	Valid                 bool
+	LatestCompactionIndex int
+	FirstKeptIndex        int
+	Generation            int
 }

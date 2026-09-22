@@ -41,6 +41,10 @@ export function testModel(id) {
     return Call.ByName(`${serviceName}.TestModel`, id);
 }
 
+export function diagnoseModel(id) {
+    return Call.ByName(`${serviceName}.DiagnoseModel`, id);
+}
+
 export function updateMultimediaConfig(request) {
     return Call.ByName(`${serviceName}.UpdateMultimediaConfig`, request);
 }

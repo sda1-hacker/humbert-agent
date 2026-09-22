@@ -21,10 +21,18 @@ export function getAppStatus() {
     return Call.ByName(`${appServiceName}.Status`);
 }
 
-export function exportBackup() {
-    return Call.ByName(`${appServiceName}.ExportBackup`);
+export function exportBackup(passphrase) {
+    return Call.ByName(`${appServiceName}.ExportBackup`, passphrase);
 }
 
-export function scheduleRestore() {
-    return Call.ByName(`${appServiceName}.ScheduleRestore`);
+export function scheduleRestore(passphrase) {
+    return Call.ByName(`${appServiceName}.ScheduleRestore`, passphrase);
+}
+
+export function getPendingBackupStatus() {
+    return Call.ByName(`${appServiceName}.PendingBackupStatus`);
+}
+
+export function cancelPendingBackup() {
+    return Call.ByName(`${appServiceName}.CancelPendingBackup`);
 }

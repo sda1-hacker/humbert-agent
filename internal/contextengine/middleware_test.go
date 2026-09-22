@@ -43,3 +43,23 @@ func TestMidRunHandlerKeepsStateWhenBelowThreshold(t *testing.T) {
 		t.Fatalf("unexpected state mutation: %#v", returnedState.Messages)
 	}
 }
+
+func TestMidRunHandlerOmitsUnsupportedReasoningBeforeBudget(t *testing.T) {
+	t.Parallel()
+	assistant := &schema.Message{Role: schema.Assistant, Content: "answer", ReasoningContent: "private reasoning"}
+	handler := &MidRunCompactor{
+		BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{},
+		config: ContextMiddlewareConfig{
+			SessionID: "session-omit", Budget: Budget{ThresholdTokens: 1000},
+			ReasoningPolicy: ReasoningReplayOmit,
+			Estimator:       plannerEstimator{}, Logger: logging.NewBootstrap(),
+		},
+	}
+	state := &adk.ChatModelAgentState{Messages: []*schema.Message{schema.UserMessage("question"), assistant}}
+	if err := handler.beforeChatModel(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if state.Messages[1].ReasoningContent != "" || assistant.ReasoningContent != "private reasoning" {
+		t.Fatal("mid-run context must omit reasoning without mutating the recorded message")
+	}
+}

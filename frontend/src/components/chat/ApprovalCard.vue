@@ -103,7 +103,7 @@ const persistentTarget =
 
 const reusableAllowAvailable =
     computed(() => (
-        props.approval?.toolName !== "install_skill"
+        !["install_skill", "schedule_task"].includes(props.approval?.toolName)
     ));
 
 const agentScopeText =
@@ -126,6 +126,9 @@ const sessionScopeText =
 
 const approvalHint =
     computed(() => {
+      if (props.approval?.toolName === "schedule_task") {
+        return "请核对时间、时区和执行内容。确认只创建这一项任务；后续安排仍需单独确认。";
+      }
       if (!reusableAllowAvailable.value) {
         return "远程 Skill 安装每次都需要单独确认；不会保存可自动安装其他 URL 的会话级或 Agent 级允许规则。";
       }
@@ -252,6 +255,7 @@ function decide(decision) {
       </a-button>
 
       <a-button
+          v-if="props.approval?.toolName !== 'schedule_task'"
           size="small"
           status="danger"
           :disabled="resolving"
@@ -265,7 +269,7 @@ function decide(decision) {
           :loading="resolving"
           @click="decide('allow_once')"
       >
-        允许一次
+        {{ props.approval?.toolName === "schedule_task" ? "确认创建" : "允许一次" }}
       </a-button>
 
       <a-button

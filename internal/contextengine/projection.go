@@ -52,23 +52,47 @@ func projectActiveBranch(
 		}, nil
 	}
 
-	latestIndex, latest := latestCompaction(branch)
-	startIndex := 0
-	result := projectionResult{
-		RecentMessages: make([]*schema.Message, 0, len(branch)),
+	var latestIndex int
+	var latest *transcript.Entry
+	if document.ContextWindow.Valid {
+		latestIndex = document.ContextWindow.LatestCompactionIndex
+		if latestIndex >= 0 && latestIndex < len(branch) && branch[latestIndex].Type == transcript.EntryCompaction {
+			latest = &branch[latestIndex]
+		} else if latestIndex >= 0 {
+			return projectionResult{}, fmt.Errorf("Context Window 的 Compaction Index 无效: %d", latestIndex)
+		}
+	} else {
+		latestIndex, latest = latestCompaction(branch)
 	}
+	startIndex := 0
+	result := projectionResult{}
 
 	if latest != nil {
 		result.LatestCompactionID = latest.ID
 		result.Retained = retainedStateFromCompaction(latest)
 		result.Window.CheckpointID = latest.ID
-		result.Window.Generation = compactionGeneration(branch, latestIndex, latest)
+		if document.ContextWindow.Valid {
+			result.Window.Generation = document.ContextWindow.Generation
+		} else {
+			result.Window.Generation = compactionGeneration(branch, latestIndex, latest)
+		}
+		if latest.Details != nil && latest.Details.WindowGeneration > 0 {
+			result.Window.Generation = latest.Details.WindowGeneration
+		}
 		if latest.Details != nil {
 			result.Window.SourceFirstEntryID = latest.Details.SourceFirstEntryID
 			result.Window.SourceLastEntryID = latest.Details.SourceLastEntryID
 			result.Window.SourceEntryCount = latest.Details.SourceEntryCount
 		}
-		firstKeptIndex := findEntryIndex(branch, latest.FirstKeptEntryID)
+		firstKeptIndex := -1
+		if document.ContextWindow.Valid {
+			firstKeptIndex = document.ContextWindow.FirstKeptIndex
+			if firstKeptIndex >= 0 && firstKeptIndex < len(branch) && branch[firstKeptIndex].ID != latest.FirstKeptEntryID {
+				firstKeptIndex = -1
+			}
+		} else {
+			firstKeptIndex = findEntryIndex(branch, latest.FirstKeptEntryID)
+		}
 		if firstKeptIndex < 0 || firstKeptIndex >= latestIndex {
 			return projectionResult{}, fmt.Errorf(
 				"Compaction Entry %s 的 firstKeptEntryId %s 不在有效历史区域",
@@ -90,6 +114,7 @@ func projectActiveBranch(
 		}
 		result.Checkpoint = schema.UserMessage(checkpointText)
 	}
+	result.RecentMessages = make([]*schema.Message, 0, len(branch)-startIndex)
 
 	if latest == nil {
 		for index := 0; index < len(branch); index++ {
@@ -103,16 +128,7 @@ func projectActiveBranch(
 	// Auto 模式只保留“当前用户轮次”之后仍在进行中的推理内容。已经完成的旧轮次只回放
 	// 最终回答/工具事务，避免历史 Thinking 在长会话中反复占用大量上下文。显式 Include/Omit
 	// 仍保持原有语义。
-	latestUserIndex := -1
-	if policy == "" || policy == ReasoningReplayAuto {
-		for index := len(branch) - 1; index >= startIndex; index-- {
-			entry := branch[index]
-			if entry.Type == transcript.EntryMessage && entry.Message != nil && entry.Message.Role == transcript.RoleUser {
-				latestUserIndex = index
-				break
-			}
-		}
-	}
+	latestUserIndex := latestUserMessageIndex(branch, startIndex)
 
 	for index := startIndex; index < len(branch); index++ {
 		entry := branch[index]
@@ -127,14 +143,7 @@ func projectActiveBranch(
 			return projectionResult{}, fmt.Errorf("Context Message Entry %s 解码为空", entry.ID)
 		}
 
-		effectivePolicy := policy
-		if effectivePolicy == "" || effectivePolicy == ReasoningReplayAuto {
-			if latestUserIndex >= 0 && index < latestUserIndex {
-				effectivePolicy = ReasoningReplayOmit
-			} else {
-				effectivePolicy = ReasoningReplayInclude
-			}
-		}
+		effectivePolicy := reasoningPolicyForIndex(policy, index, latestUserIndex)
 		message := applyReasoningReplayPolicy(decoded.Message, effectivePolicy)
 		message = normalizeLegacyContextToolGuidance(message)
 		result.RecentMessages = append(result.RecentMessages, message)
@@ -148,6 +157,26 @@ func projectActiveBranch(
 		result.Messages = append([]*schema.Message{result.Checkpoint}, result.RecentMessages...)
 	}
 	return result, nil
+}
+
+func latestUserMessageIndex(branch []transcript.Entry, start int) int {
+	for index := len(branch) - 1; index >= start; index-- {
+		entry := branch[index]
+		if entry.Type == transcript.EntryMessage && entry.Message != nil && entry.Message.Role == transcript.RoleUser {
+			return index
+		}
+	}
+	return -1
+}
+
+func reasoningPolicyForIndex(policy ReasoningReplayPolicy, index, latestUserIndex int) ReasoningReplayPolicy {
+	if policy != "" && policy != ReasoningReplayAuto {
+		return policy
+	}
+	if latestUserIndex >= 0 && index < latestUserIndex {
+		return ReasoningReplayOmit
+	}
+	return ReasoningReplayInclude
 }
 
 func compactionGeneration(branch []transcript.Entry, latestIndex int, latest *transcript.Entry) int {

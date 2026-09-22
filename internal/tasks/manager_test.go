@@ -9,6 +9,7 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/eventbus"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	"github.com/sda1-hacker/humbert-agent/internal/notifications"
 )
 
 func testManagerForSchedule(store *Store) *Manager {
@@ -21,6 +22,22 @@ func testManagerForSchedule(store *Store) *Manager {
 		activeAgents:    make(map[string]int),
 		deletingAgents:  make(map[string]int),
 		cancelPending:   make(map[string]bool),
+	}
+}
+
+func TestChatTaskResultNotificationPointsToTaskAndSourceSession(t *testing.T) {
+	manager := testManagerForSchedule(nil)
+	manager.notifications = notifications.New()
+	task := Task{ID: "task-one", AgentID: "agent-one", Name: "周报", Execution: ExecutionAgent, Origin: "chat", OriginRef: "source-session"}
+	manager.notifyChatTaskResult(task, Run{ID: "run-one", Status: RunSucceeded, ResultPreview: "总结完成"})
+	values := manager.notifications.Recent(10)
+	if len(values) != 1 || values[0].TaskID != task.ID || values[0].SessionID != task.OriginRef || values[0].Body != "总结完成" {
+		t.Fatalf("notifications=%#v", values)
+	}
+	task.Origin = ""
+	manager.notifyChatTaskResult(task, Run{ID: "run-two", Status: RunSucceeded})
+	if len(manager.notifications.Recent(10)) != 1 {
+		t.Fatal("ordinary task should not emit chat result notification")
 	}
 }
 

@@ -186,6 +186,8 @@ type Run struct {
 
 type CreateInput struct {
 	AgentID          string
+	Origin           string
+	OriginRef        string
 	Name             string
 	Prompt           string
 	Execution        ExecutionType

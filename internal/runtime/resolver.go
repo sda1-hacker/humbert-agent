@@ -78,7 +78,7 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 		EnabledMCPTools:     mcpSelectionMap(childInfo.Agent.EnabledMCPTools),
 		DisabledBuiltinTools: []string{
 			collaboration.ListAgentsToolName, collaboration.RunAgentToolName,
-			"session_history", "context_resource", "install_skill",
+			"session_history", "context_resource", "install_skill", "schedule_task",
 		},
 		EnabledSkills: append([]string(nil), skillSnapshot.Names...), SkillRevision: skillSnapshot.Revision,
 		SkillIdentities: skillSnapshot.PackageIdentities(), SkillScriptCommands: skillSnapshot.ScriptRuntimeCommands(),
@@ -147,6 +147,7 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 		compactModel.MaxOutputTokens,
 		budget,
 		toolTokens,
+		reasoningReplayPolicyForProvider(modelSnapshot.ProviderType),
 	)
 	if err != nil {
 		return collaboration.BuiltAgent{}, fmt.Errorf("创建子 Agent Context Middleware 失败: %w", err)
@@ -326,6 +327,7 @@ func (r *Resolver) ResolveTurn(
 		compactionModel(base.modelRoles).MaxOutputTokens,
 		budget,
 		base.toolTokenEstimate,
+		reasoningReplayPolicyForProvider(base.model.ProviderType),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("创建 MidRun Context Middleware 失败: %w", err)
@@ -411,6 +413,7 @@ func (r *Resolver) ResolveTurn(
 		ModelRevision:             manifest.ModelRevision,
 		ModelRole:                 modelRoleChat,
 		ModelCapabilities:         base.model.Capabilities,
+		ReasoningPolicy:           reasoningReplayPolicyForProvider(base.model.ProviderType),
 		CompactionModel:           compactionModel(base.modelRoles).Instance,
 		CompactionContextWindow:   compactionModel(base.modelRoles).ContextWindow,
 		CompactionMaxOutputTokens: compactionModel(base.modelRoles).MaxOutputTokens,
@@ -455,7 +458,7 @@ func (r *Resolver) buildContextSnapshot(ctx context.Context, base resolvedContex
 		ContextWindow:     base.model.ContextWindow,
 		MaxOutputTokens:   base.model.MaxOutputTokens,
 		ToolTokenEstimate: base.toolTokenEstimate,
-		ReasoningPolicy:   contextengine.ReasoningReplayAuto,
+		ReasoningPolicy:   reasoningReplayPolicyForProvider(base.model.ProviderType),
 	})
 }
 
@@ -510,6 +513,7 @@ func (r *Resolver) compactUntilSafe(
 			CompactionContextWindow:   compactModel.ContextWindow,
 			CompactionMaxOutputTokens: compactModel.MaxOutputTokens,
 			Reason:                    contextengine.CompactionReasonThreshold,
+			ReasoningPolicy:           reasoningReplayPolicyForProvider(base.model.ProviderType),
 		})
 		if err != nil {
 			if errors.Is(err, contextengine.ErrNothingToCompact) {
@@ -540,7 +544,7 @@ func (r *Resolver) compactUntilSafe(
 			ContextWindow:     base.model.ContextWindow,
 			MaxOutputTokens:   base.model.MaxOutputTokens,
 			ToolTokenEstimate: base.toolTokenEstimate,
-			ReasoningPolicy:   contextengine.ReasoningReplayAuto,
+			ReasoningPolicy:   reasoningReplayPolicyForProvider(base.model.ProviderType),
 		})
 		if err != nil {
 			return contextengine.Snapshot{}, compacted, fmt.Errorf("重建自动压缩后的 Session Context 失败: %w", err)
@@ -622,6 +626,7 @@ func (r *Resolver) ManualCompact(
 		CompactionContextWindow:   compactModel.ContextWindow,
 		CompactionMaxOutputTokens: compactModel.MaxOutputTokens,
 		Reason:                    contextengine.CompactionReasonManual,
+		ReasoningPolicy:           reasoningReplayPolicyForProvider(base.model.ProviderType),
 		Force:                     true,
 	})
 	if compactErr != nil && !errors.Is(compactErr, contextengine.ErrNothingToCompact) {
@@ -679,6 +684,7 @@ func (r *Resolver) MaintainAfterTurn(ctx context.Context, snapshot *Snapshot) er
 			CompactionContextWindow:   snapshot.CompactionContextWindow,
 			CompactionMaxOutputTokens: snapshot.CompactionMaxOutputTokens,
 			Reason:                    contextengine.CompactionReasonThreshold,
+			ReasoningPolicy:           snapshot.ReasoningPolicy,
 			UseSoftLimit:              true,
 		})
 		if err != nil && !errors.Is(err, contextengine.ErrNothingToCompact) {

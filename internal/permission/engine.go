@@ -73,7 +73,7 @@ func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error
 	}
 
 	cfg := e.Config()
-	if !cfg.Enabled {
+	if !cfg.Enabled && request.ToolName != "schedule_task" {
 		return Decision{Action: ActionAllow, Reason: "Permission 系统已在配置中关闭"}, nil
 	}
 
@@ -104,7 +104,7 @@ func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error
 	// install_skill 的远程来源当前没有参数级 Rule 约束，因此即使旧版本已经留下
 	// Session/Agent Allow，也不能继续自动放行。Deny 仍然在上方优先生效。这样升级后
 	// 不需要用户先手工清理旧 permissions.json 才能获得新的安全语义。
-	if request.ToolName != "install_skill" {
+	if request.ToolName != "install_skill" && request.ToolName != "schedule_task" {
 		if rule, ok := newestRuleWithAction(sessionMatches, nil, ActionAllow); ok {
 			return Decision{
 				Action:       ActionAllow,
@@ -132,6 +132,10 @@ func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error
 		// 被配置为 allow 就静默下载安装网络内容。显式 Deny 已在上方优先处理。
 		action = ActionAsk
 		reason = "远程 Skill 安装要求逐次审批"
+	}
+	if request.ToolName == "schedule_task" {
+		action = ActionAsk
+		reason = "对话安排任务要求逐次确认"
 	}
 	decision := Decision{
 		Action:       action,
@@ -166,10 +170,11 @@ func (e *Engine) Grant(ctx context.Context, grant ApprovalGrant) (*Rule, error) 
 	// install_skill 的 source_url 每次都可能指向完全不同的远程内容。当前 Permission
 	// CapabilityIdentity 当前没有绑定远程仓库内容身份，因此不能把一次安装批准扩大成整个
 	// Session 或 Agent 对所有未来 URL 的 Allow。长期 Deny 仍然允许，因为它只会收紧权限。
-	if grant.Request.ToolName == "install_skill" {
+	if grant.Request.ToolName == "install_skill" || grant.Request.ToolName == "schedule_task" {
 		return nil, fmt.Errorf(
-			"%w: install_skill 只允许单次批准，不能创建 Session/Agent Allow Rule",
+			"%w: %s 只允许单次批准，不能创建 Session/Agent Allow Rule",
 			ErrInvalidApprovalScope,
+			grant.Request.ToolName,
 		)
 	}
 

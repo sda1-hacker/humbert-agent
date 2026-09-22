@@ -19,9 +19,10 @@ import (
 
 // SessionRepository 是 ContextEngine 与 Session Domain 的最小边界。
 //
-// ContextEngine 需要读取完整 ActiveBranch 和提交 CompactionEntry，但不应该知道
+// ContextEngine 需要读取只读的当前分支、压缩时的完整历史，并提交 CompactionEntry，但不应该知道
 // agents/<id>/sessions/<id> 的磁盘路径或 Session config.json 格式。
 type SessionRepository interface {
+	LoadContextTranscript(ctx context.Context, sessionID string) (transcript.Document, error)
 	LoadTranscript(ctx context.Context, sessionID string) (transcript.Document, error)
 
 	AppendCompaction(
@@ -97,7 +98,7 @@ func (e *Engine) Build(ctx context.Context, request BuildRequest) (Snapshot, err
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("计算 Context Budget 失败: %w", err)
 	}
-	document, err := e.sessions.LoadTranscript(ctx, request.SessionID)
+	document, err := e.sessions.LoadContextTranscript(ctx, request.SessionID)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("读取 Session Transcript 失败: %w", err)
 	}
@@ -350,7 +351,12 @@ func (e *Engine) NewMidRunHandler(
 	compactionMaxOutputTokens int,
 	budget Budget,
 	toolTokenEstimate int,
+	policies ...ReasoningReplayPolicy,
 ) (adk.ChatModelAgentMiddleware, error) {
+	policy := ReasoningReplayAuto
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	compactor, err := NewMidRunCompactor(ContextMiddlewareConfig{
 		SessionID:                 sessionID,
 		Instruction:               instruction,
@@ -359,6 +365,7 @@ func (e *Engine) NewMidRunHandler(
 		CompactionMaxOutputTokens: compactionMaxOutputTokens,
 		Budget:                    budget,
 		ToolTokenEstimate:         toolTokenEstimate,
+		ReasoningPolicy:           policy,
 		SerializerMaxChars:        e.config.SerializerMaxChars,
 		OperationTimeout:          time.Duration(e.config.OperationTimeoutMS) * time.Millisecond,
 		Estimator:                 e.estimator,

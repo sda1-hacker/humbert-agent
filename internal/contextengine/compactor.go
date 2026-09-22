@@ -49,7 +49,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		ContextWindow:     request.ContextWindow,
 		MaxOutputTokens:   request.MaxOutputTokens,
 		ToolTokenEstimate: request.ToolTokenEstimate,
-		ReasoningPolicy:   ReasoningReplayAuto,
+		ReasoningPolicy:   request.ReasoningPolicy,
 	}, budget, document)
 	if err != nil {
 		return CompactResult{}, err
@@ -83,7 +83,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		// 降到阈值，后续 tokensAfterEstimate 会返回明确的固定开销诊断。
 		targetRecent = 1
 	}
-	plan, err := planCompaction(document, targetRecent, e.estimator)
+	plan, err := planCompaction(document, targetRecent, e.estimator, request.ReasoningPolicy)
 	if err != nil {
 		return CompactResult{}, err
 	}
@@ -139,7 +139,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 
 	// TokensAfter 是提交前的估算：summary + retained + instruction + tools。真正提交后再
 	// Build 一次得到 After Usage；持久化该值主要用于历史诊断，不作为下一次阈值事实源。
-	retainedMessages, err := decodeEntries(plan.Retained, ReasoningReplayAuto)
+	retainedMessages, err := decodeEntries(plan.Retained, request.ReasoningPolicy)
 	if err != nil {
 		return CompactResult{}, err
 	}
@@ -188,7 +188,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		ContextWindow:     request.ContextWindow,
 		MaxOutputTokens:   request.MaxOutputTokens,
 		ToolTokenEstimate: request.ToolTokenEstimate,
-		ReasoningPolicy:   ReasoningReplayAuto,
+		ReasoningPolicy:   request.ReasoningPolicy,
 	})
 	if err != nil {
 		return CompactResult{}, fmt.Errorf("重建压缩后 Context 失败: %w", err)
@@ -218,7 +218,8 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 
 func decodeEntries(entries []transcript.Entry, policy ReasoningReplayPolicy) ([]*schema.Message, error) {
 	result := make([]*schema.Message, 0, len(entries))
-	for _, entry := range entries {
+	latestUserIndex := latestUserMessageIndex(entries, 0)
+	for index, entry := range entries {
 		if entry.Message == nil {
 			continue
 		}
@@ -226,7 +227,7 @@ func decodeEntries(entries []transcript.Entry, policy ReasoningReplayPolicy) ([]
 		if err != nil {
 			return nil, fmt.Errorf("恢复 Compaction Entry %s 失败: %w", entry.ID, err)
 		}
-		result = append(result, applyReasoningReplayPolicy(decoded.Message, policy))
+		result = append(result, applyReasoningReplayPolicy(decoded.Message, reasoningPolicyForIndex(policy, index, latestUserIndex)))
 	}
 	return result, nil
 }

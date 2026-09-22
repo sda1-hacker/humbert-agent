@@ -83,7 +83,7 @@ func (f *Factory) Create(
 			return nil, fmt.Errorf("创建 OpenAI ChatModel 失败: %w", err)
 		}
 
-		return value, nil
+		return &reasoningOmittingModel{inner: value}, nil
 
 	case ProviderTypeOpenAICompatible:
 		apiKey := ""
@@ -111,7 +111,7 @@ func (f *Factory) Create(
 			return nil, fmt.Errorf("创建 OpenAI-Compatible ChatModel 失败: %w", err)
 		}
 
-		return value, nil
+		return &reasoningOmittingModel{inner: value}, nil
 
 	case ProviderTypeOllama:
 		value, err := ollama.NewChatModel(

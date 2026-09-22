@@ -7,6 +7,7 @@ import {
     deleteProvider as apiDeleteProvider,
     getModelState,
     testModel as apiTestModel,
+    diagnoseModel as apiDiagnoseModel,
     updateModel as apiUpdateModel,
     updateProvider as apiUpdateProvider,
     updateMultimediaConfig as apiUpdateMultimediaConfig,
@@ -175,6 +176,10 @@ export const useModelStore =
 
                 async testModel(id) {
                     return apiTestModel(id);
+                },
+
+                async diagnoseModel(id) {
+                    return apiDiagnoseModel(id);
                 },
 
                 async updateMultimediaConfig(request) {

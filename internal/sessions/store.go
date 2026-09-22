@@ -435,6 +435,20 @@ func (s *Store) LoadTranscript(ctx context.Context, sessionID string) (transcrip
 	return document, nil
 }
 
+// LoadContextTranscript 返回 Transcript 缓存中的只读 ActiveBranch，避免每轮构建模型
+// Context 时深拷贝完整 Tree。调用方不得修改返回的 Entry 或嵌套 payload。
+func (s *Store) LoadContextTranscript(ctx context.Context, sessionID string) (transcript.Document, error) {
+	session, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return transcript.Document{}, err
+	}
+	document, err := s.transcripts.LoadContextSession(ctx, session.AgentID, sessionID)
+	if err != nil {
+		return transcript.Document{}, translateTranscriptError(err)
+	}
+	return document, nil
+}
+
 // AppendCompaction 把 ContextEngine 生成的 CompactionEntry 追加到 Session Tree。
 func (s *Store) AppendCompaction(
 	ctx context.Context,

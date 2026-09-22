@@ -53,6 +53,7 @@ import MessageItem
 
 const emit = defineEmits([
   "open-workspace-file",
+  "open-task",
 ]);
 
 const viewport =
@@ -513,6 +514,7 @@ onUnmounted(() => {
               )
             "
               @open-workspace-file="openWorkspaceFile"
+              @open-task="emit('open-task', $event)"
           />
         </template>
 

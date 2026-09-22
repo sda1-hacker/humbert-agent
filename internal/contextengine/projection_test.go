@@ -63,6 +63,40 @@ func TestProjectionActiveBranchUsesLatestCheckpointAndRecentRawMessages(t *testi
 	}
 }
 
+func TestProjectionCachedWindowMatchesFullBranch(t *testing.T) {
+	t.Parallel()
+	branch := []transcript.Entry{
+		projectionUser("u1", "old"),
+		projectionUser("u2", "kept"),
+		{Type: transcript.EntryCompaction, ID: "cmp1", Summary: "first", FirstKeptEntryID: "u2"},
+		projectionAssistant("a2", "answer", "thinking"),
+		{Type: transcript.EntryCompaction, ID: "cmp2", Summary: "latest", FirstKeptEntryID: "a2"},
+		projectionUser("u3", "current"),
+	}
+	full, err := projectActiveBranch(transcript.Document{ActiveBranch: branch}, ReasoningReplayAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := projectActiveBranch(transcript.Document{
+		ActiveBranch: branch,
+		ContextWindow: transcript.ContextWindowIndex{
+			Valid: true, LatestCompactionIndex: 4, FirstKeptIndex: 3, Generation: 2,
+		},
+	}, ReasoningReplayAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached.Window != full.Window || cached.LatestCompactionID != full.LatestCompactionID || len(cached.Messages) != len(full.Messages) {
+		t.Fatalf("cached context differs from full scan: cached=%#v full=%#v", cached, full)
+	}
+	for index := range full.Messages {
+		if cached.Messages[index].Role != full.Messages[index].Role || cached.Messages[index].Content != full.Messages[index].Content ||
+			cached.Messages[index].ReasoningContent != full.Messages[index].ReasoningContent {
+			t.Fatalf("message %d differs between cached index and full scan", index)
+		}
+	}
+}
+
 func TestProjectionActiveBranchCanOmitReasoning(t *testing.T) {
 	t.Parallel()
 
@@ -114,6 +148,29 @@ func TestProjectionAutoDropsCompletedHistoricalReasoning(t *testing.T) {
 	}
 	if projection.RecentMessages[3].ReasoningContent != "current-thinking" {
 		t.Fatalf("current turn reasoning should remain available: %q", projection.RecentMessages[3].ReasoningContent)
+	}
+}
+
+func TestRetainedCompactionEstimateUsesSameReasoningProjection(t *testing.T) {
+	t.Parallel()
+	entries := []transcript.Entry{
+		projectionUser("u1", "first"),
+		projectionAssistant("a1", "answer", "old-thinking"),
+		projectionUser("u2", "second"),
+		projectionAssistant("a2", "answer", "current-thinking"),
+	}
+	projected, err := projectActiveBranch(transcript.Document{ActiveBranch: entries}, ReasoningReplayAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, err := decodeEntries(entries, ReasoningReplayAuto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range retained {
+		if retained[index].ReasoningContent != projected.RecentMessages[index].ReasoningContent {
+			t.Fatalf("retained estimate differs from provider context at %d", index)
+		}
 	}
 }
 
