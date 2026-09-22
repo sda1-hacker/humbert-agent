@@ -1,7 +1,8 @@
 .idea
 .task
 bin
-frontend/dist
+frontend/dist/*
+!frontend/dist/.gitkeep
 frontend/node_modules
 build/linux/appimage/build
 build/windows/nsis/MicrosoftEdgeWebview2Setup.exe

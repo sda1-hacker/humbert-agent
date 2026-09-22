@@ -35,6 +35,7 @@ type TaskLimitsDTO struct {
 	MaxDurationSeconds int `json:"maxDurationSeconds"`
 	MaxModelCalls      int `json:"maxModelCalls"`
 	MaxToolCalls       int `json:"maxToolCalls"`
+	MaxTotalTokens     int `json:"maxTotalTokens"`
 	MaxAttempts        int `json:"maxAttempts"`
 	RetryDelaySeconds  int `json:"retryDelaySeconds"`
 }
@@ -84,6 +85,9 @@ type TaskRunDTO struct {
 	Status           string           `json:"status"`
 	ToolCalls        int              `json:"toolCalls"`
 	ModelCalls       int              `json:"modelCalls"`
+	InputTokens      int              `json:"inputTokens"`
+	OutputTokens     int              `json:"outputTokens"`
+	TotalTokens      int              `json:"totalTokens"`
 	Approval         *TaskApprovalDTO `json:"approval,omitempty"`
 	ResultMessageID  string           `json:"resultMessageID,omitempty"`
 	ResultPreview    string           `json:"resultPreview,omitempty"`
@@ -332,7 +336,7 @@ func scheduleFromDTO(value TaskScheduleDTO) (tasks.Schedule, error) {
 }
 
 func limitsFromDTO(value TaskLimitsDTO) tasks.Limits {
-	return tasks.Limits{MaxDurationSeconds: value.MaxDurationSeconds, MaxModelCalls: value.MaxModelCalls, MaxToolCalls: value.MaxToolCalls, MaxAttempts: value.MaxAttempts, RetryDelaySeconds: value.RetryDelaySeconds}
+	return tasks.Limits{MaxDurationSeconds: value.MaxDurationSeconds, MaxModelCalls: value.MaxModelCalls, MaxToolCalls: value.MaxToolCalls, MaxTotalTokens: value.MaxTotalTokens, MaxAttempts: value.MaxAttempts, RetryDelaySeconds: value.RetryDelaySeconds}
 }
 
 func taskDTO(value tasks.Task) TaskDTO {
@@ -344,7 +348,7 @@ func taskDTO(value tasks.Task) TaskDTO {
 		Status:              string(value.Status), Schedule: scheduleDTO(value.Schedule),
 		Limits: TaskLimitsDTO{
 			MaxDurationSeconds: value.Limits.MaxDurationSeconds, MaxModelCalls: value.Limits.MaxModelCalls,
-			MaxToolCalls: value.Limits.MaxToolCalls, MaxAttempts: value.Limits.MaxAttempts,
+			MaxToolCalls: value.Limits.MaxToolCalls, MaxTotalTokens: value.Limits.MaxTotalTokens, MaxAttempts: value.Limits.MaxAttempts,
 			RetryDelaySeconds: value.Limits.RetryDelaySeconds,
 		},
 		NextRunAt: formatOptionalTime(value.NextRunAt),
@@ -357,7 +361,7 @@ func scheduleDTO(value tasks.Schedule) TaskScheduleDTO {
 }
 
 func taskRunDTO(value tasks.Run) TaskRunDTO {
-	result := TaskRunDTO{ID: value.ID, TaskID: value.TaskID, AgentID: value.AgentID, SessionID: value.SessionID, RequestID: value.RequestID, RuntimeRunID: value.RuntimeRunID, Trigger: string(value.Trigger), Execution: string(value.Execution), ParentRunID: value.ParentRunID, ScheduledFor: value.ScheduledFor.Format(time.RFC3339Nano), Attempt: value.Attempt, Status: string(value.Status), ToolCalls: value.ToolCalls, ModelCalls: value.ModelCalls, ResultMessageID: value.ResultMessageID, ResultPreview: value.ResultPreview, Error: value.Error, CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), StartedAt: formatOptionalTime(value.StartedAt), FinishedAt: formatOptionalTime(value.FinishedAt), DeadlineAt: formatOptionalTime(value.DeadlineAt)}
+	result := TaskRunDTO{ID: value.ID, TaskID: value.TaskID, AgentID: value.AgentID, SessionID: value.SessionID, RequestID: value.RequestID, RuntimeRunID: value.RuntimeRunID, Trigger: string(value.Trigger), Execution: string(value.Execution), ParentRunID: value.ParentRunID, ScheduledFor: value.ScheduledFor.Format(time.RFC3339Nano), Attempt: value.Attempt, Status: string(value.Status), ToolCalls: value.ToolCalls, ModelCalls: value.ModelCalls, InputTokens: value.InputTokens, OutputTokens: value.OutputTokens, TotalTokens: value.TotalTokens, ResultMessageID: value.ResultMessageID, ResultPreview: value.ResultPreview, Error: value.Error, CreatedAt: value.CreatedAt.Format(time.RFC3339Nano), StartedAt: formatOptionalTime(value.StartedAt), FinishedAt: formatOptionalTime(value.FinishedAt), DeadlineAt: formatOptionalTime(value.DeadlineAt)}
 	result.Approval = taskApprovalDTO(value.Approval)
 	return result
 }

@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
+	"github.com/sda1-hacker/humbert-agent/internal/databackup"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -102,4 +104,49 @@ func (s *AppService) Status() (AppStatus, error) {
 		StartedAt:     status.StartedAt.Format(time.RFC3339),
 		UptimeSeconds: int64(status.Uptime.Seconds()),
 	}, nil
+}
+
+// ExportBackup 通过原生保存对话框导出完整用户数据，包含 Secrets。
+// 运行中备份应在没有活跃任务时执行；恢复始终使用离线工具。
+func (s *AppService) ExportBackup() (string, error) {
+	app := application.Get()
+	if app == nil {
+		return "", fmt.Errorf("Wails Application 尚未初始化")
+	}
+	path, err := app.Dialog.SaveFile().SetMessage("导出 Humbert 数据备份").SetFilename("humbert-backup-"+time.Now().Format("2006-01-02")+".zip").AddFilter("ZIP 备份", "*.zip").PromptForSingleSelection()
+	if err != nil {
+		return "", fmt.Errorf("选择备份位置失败: %w", err)
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := databackup.Create(ctx, s.core.Config().Paths.HomeDir, path); err != nil {
+		return "", fmt.Errorf("导出备份失败: %w", err)
+	}
+	return path, nil
+}
+
+// ScheduleRestore 验证用户选择的备份，下次启动时在 Core 初始化前恢复。
+func (s *AppService) ScheduleRestore() (string, error) {
+	app := application.Get()
+	if app == nil {
+		return "", fmt.Errorf("Wails Application 尚未初始化")
+	}
+	path, err := app.Dialog.OpenFile().SetTitle("选择要恢复的 Humbert 备份").AddFilter("ZIP 备份", "*.zip").PromptForSingleSelection()
+	if err != nil {
+		return "", fmt.Errorf("选择备份文件失败: %w", err)
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	if err := databackup.ScheduleRestore(ctx, s.core.Config().Paths.HomeDir, path); err != nil {
+		return "", fmt.Errorf("安排数据恢复失败: %w", err)
+	}
+	return path, nil
 }

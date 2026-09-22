@@ -16,6 +16,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
@@ -111,7 +112,7 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 			}
 		} else {
 			var extractErr error
-			extractedText, mimeType, extractErr = extractTextAttachment(name, mimeType, data)
+			extractedText, mimeType, extractErr = extractTextAttachment(ctx, name, mimeType, data)
 			if extractErr != nil {
 				cleanup()
 				return Message{}, extractErr
@@ -232,7 +233,7 @@ func (s *Service) userInputMatchesStoredMessage(ctx context.Context, sessionID s
 			}
 		}
 		if !strings.HasPrefix(mimeType, "image/") {
-			_, normalizedMIME, extractErr := extractTextAttachment(name, mimeType, provided)
+			_, normalizedMIME, extractErr := extractTextAttachment(ctx, name, mimeType, provided)
 			if extractErr != nil {
 				return false, nil
 			}
@@ -459,7 +460,10 @@ func validateImageAttachment(name string, claimedMIME string, data []byte) error
 	return nil
 }
 
-func extractTextAttachment(name string, mimeType string, data []byte) (string, string, error) {
+func extractTextAttachment(ctx context.Context, name string, mimeType string, data []byte) (string, string, error) {
+	if documenttext.MIMEForName(name) != "" {
+		return documenttext.Extract(ctx, name, mimeType, data)
+	}
 	if int64(len(data)) > maxTextAttachmentBytes {
 		return "", "", fmt.Errorf("文本附件 %s 超过 512 KiB 限制", name)
 	}

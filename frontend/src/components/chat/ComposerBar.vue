@@ -58,6 +58,7 @@ const TEXT_ATTACHMENT_EXTENSIONS = new Set([
 ]);
 
 const IMAGE_ATTACHMENT_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+const DOCUMENT_ATTACHMENT_EXTENSIONS = new Set([".pdf", ".docx", ".xlsx", ".pptx"]);
 
 const sending =
     ref(false);
@@ -319,6 +320,12 @@ function isTextAttachment(file) {
   return dot >= 0 && TEXT_ATTACHMENT_EXTENSIONS.has(name.slice(dot));
 }
 
+function isDocumentAttachment(file) {
+  const name = String(file?.name || "").toLowerCase();
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 && DOCUMENT_ATTACHMENT_EXTENSIONS.has(name.slice(dot));
+}
+
 function formatSandbox(manifest) {
   const profile =
       manifest?.sandbox?.profile ||
@@ -532,10 +539,11 @@ async function addAttachments(files) {
       if (file.size <= 0) throw new Error(`${name} 是空文件`);
       if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${name} 超过 12 MiB 限制`);
       const image = isImageAttachment(file);
-      if (!image && !isTextAttachment(file)) {
-        throw new Error(`${name} 暂不支持；当前文件附件仅支持图片、UTF-8 文本、源码和 JSON/YAML/XML 等文本格式`);
+      const document = isDocumentAttachment(file);
+      if (!image && !document && !isTextAttachment(file)) {
+        throw new Error(`${name} 暂不支持；当前文件附件仅支持图片、PDF、Office 和 UTF-8 文本`);
       }
-      if (!image && file.size > MAX_TEXT_ATTACHMENT_BYTES) {
+      if (!image && !document && file.size > MAX_TEXT_ATTACHMENT_BYTES) {
         throw new Error(`${name} 超过文本附件 512 KiB 限制`);
       }
       total += file.size;

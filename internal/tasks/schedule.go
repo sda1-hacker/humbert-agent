@@ -13,6 +13,7 @@ const (
 	defaultMaxDurationSeconds = 30 * 60
 	defaultMaxModelCalls      = 20
 	defaultMaxToolCalls       = 50
+	defaultMaxTotalTokens     = 100000
 	defaultMaxAttempts        = 1
 	defaultRetryDelaySeconds  = 30
 )
@@ -53,6 +54,9 @@ func normalizeLimits(value Limits) (Limits, error) {
 	if value.MaxToolCalls == 0 {
 		value.MaxToolCalls = defaultMaxToolCalls
 	}
+	if value.MaxTotalTokens == 0 {
+		value.MaxTotalTokens = defaultMaxTotalTokens
+	}
 	if value.MaxAttempts == 0 {
 		value.MaxAttempts = defaultMaxAttempts
 	}
@@ -67,6 +71,9 @@ func normalizeLimits(value Limits) (Limits, error) {
 	}
 	if value.MaxToolCalls < 1 || value.MaxToolCalls > 500 {
 		return Limits{}, errors.New("最大工具调用次数必须位于 1-500")
+	}
+	if value.MaxTotalTokens < 1000 || value.MaxTotalTokens > 10000000 {
+		return Limits{}, errors.New("最大 Token 用量必须位于 1000-10000000")
 	}
 	if value.MaxAttempts < 1 || value.MaxAttempts > 5 {
 		return Limits{}, errors.New("最大尝试次数必须位于 1-5")

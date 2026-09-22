@@ -94,8 +94,8 @@ async function save() {
           <p>按 UTF-8 提取为受控文本片段，不依赖 Provider 的原生 Files API。</p></div>
         <div>
           <dt>PDF / Office</dt>
-          <dd>暂不支持</dd>
-          <p>尚未接入可靠的文档解析、分页和引用定位链路。</p></div>
+          <dd class="supported">已支持文本提取</dd>
+          <p>支持 PDF、DOCX、XLSX、PPTX 的原生文本。扫描版 PDF 尚需 OCR；提取结果限 512 KiB。</p></div>
         <div>
           <dt>音频 / 视频</dt>
           <dd>暂不支持</dd>

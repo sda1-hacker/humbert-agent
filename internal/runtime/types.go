@@ -43,6 +43,7 @@ const (
 	EventAssistantReasoningDelta EventType = "assistant.reasoning.delta"
 	EventAssistantDelta          EventType = "assistant.delta"
 	EventModelStarted            EventType = "model.started"
+	EventModelUsage              EventType = "model.usage"
 	EventToolStarted             EventType = "tool.started"
 	EventToolCompleted           EventType = "tool.completed"
 	EventToolFailed              EventType = "tool.failed"
@@ -99,7 +100,10 @@ type Event struct {
 
 	ToolArguments string `json:"toolArguments,omitempty"`
 
-	DurationMS int64 `json:"durationMS,omitempty"`
+	DurationMS   int64 `json:"durationMS,omitempty"`
+	InputTokens  int   `json:"inputTokens,omitempty"`
+	OutputTokens int   `json:"outputTokens,omitempty"`
+	TotalTokens  int   `json:"totalTokens,omitempty"`
 
 	Error string `json:"error,omitempty"`
 
@@ -378,10 +382,11 @@ type StartTurnInput struct {
 // ExecutionLimits 是后台 Task 对单次 Runtime Turn 施加的硬边界。普通聊天使用零值，
 // 保持现有交互语义；TaskRunner 会显式设置这些值。
 type ExecutionLimits struct {
-	MaxDuration   time.Duration
-	Deadline      time.Time
-	MaxModelCalls int
-	MaxToolCalls  int
+	MaxDuration    time.Duration
+	Deadline       time.Time
+	MaxModelCalls  int
+	MaxToolCalls   int
+	MaxTotalTokens int
 }
 
 // ResolveTurnOptions 只承载必须发生在 Snapshot 构建期间的运行控制。视觉辅助模型在

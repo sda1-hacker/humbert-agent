@@ -20,3 +20,11 @@ const appServiceName =
 export function getAppStatus() {
     return Call.ByName(`${appServiceName}.Status`);
 }
+
+export function exportBackup() {
+    return Call.ByName(`${appServiceName}.ExportBackup`);
+}
+
+export function scheduleRestore() {
+    return Call.ByName(`${appServiceName}.ScheduleRestore`);
+}

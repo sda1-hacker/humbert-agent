@@ -418,6 +418,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		mcpManager,
 		contextEngine,
 		memoryManager,
+		preferenceStore,
 		runtimeReporter,
 	)
 	if err := runtimeResolver.Validate(); err != nil {

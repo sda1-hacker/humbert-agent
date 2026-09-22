@@ -20,6 +20,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
+	"github.com/sda1-hacker/humbert-agent/internal/preferences"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
@@ -111,6 +112,10 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 	}
 
 	instruction := buildRuntimeInstruction(childInfo.Agent.Name, childInfo.Agent.Instruction, input.ParentScope.Workspace, descriptors, time.Now())
+	instruction, err = r.withPersonalMemory(ctx, instruction)
+	if err != nil {
+		return collaboration.BuiltAgent{}, err
+	}
 	instruction = strings.TrimSpace(instruction + `
 
 ## 子 Agent 协作约束
@@ -232,7 +237,8 @@ type Resolver struct {
 
 	contextEngine *contextengine.Engine
 
-	memory *memory.Manager
+	memory         *memory.Manager
+	personalMemory *preferences.Store
 
 	eventReporter EventReporter
 }
@@ -249,20 +255,22 @@ func NewResolver(
 	mcpManager *humbertmcp.Manager,
 	contextEngine *contextengine.Engine,
 	memoryManager *memory.Manager,
+	personalMemory *preferences.Store,
 	eventReporter EventReporter,
 ) *Resolver {
 	return &Resolver{
-		agents:        agentService,
-		sessions:      sessionService,
-		models:        modelResolver,
-		workspaces:    workspaceManager,
-		sandbox:       sandboxManager,
-		tools:         toolRegistry,
-		skills:        skillManager,
-		mcp:           mcpManager,
-		contextEngine: contextEngine,
-		memory:        memoryManager,
-		eventReporter: eventReporter,
+		agents:         agentService,
+		sessions:       sessionService,
+		models:         modelResolver,
+		workspaces:     workspaceManager,
+		sandbox:        sandboxManager,
+		tools:          toolRegistry,
+		skills:         skillManager,
+		mcp:            mcpManager,
+		contextEngine:  contextEngine,
+		memory:         memoryManager,
+		personalMemory: personalMemory,
+		eventReporter:  eventReporter,
 	}
 }
 
@@ -848,6 +856,10 @@ func (r *Resolver) resolveContextBase(
 		descriptors,
 		time.Now(),
 	)
+	instruction, err = r.withPersonalMemory(ctx, instruction)
+	if err != nil {
+		return resolvedContextBase{}, err
+	}
 	if len(mcpSnapshot.Failures) > 0 {
 		serverNames := make([]string, 0, len(mcpSnapshot.Failures))
 		for _, failure := range mcpSnapshot.Failures {
@@ -939,6 +951,31 @@ func uniqueSortedStrings(values []string) []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// withPersonalMemory 只注入用户明确保存的短事实。每轮读取一次并冻结在 Snapshot 中；
+// 单条和总条数由 Store 控制，避免无界长期记忆挤占 Context。
+func (r *Resolver) withPersonalMemory(ctx context.Context, instruction string) (string, error) {
+	if r.personalMemory == nil {
+		return "", errors.New("个人记忆 Store 未初始化")
+	}
+	items, err := r.personalMemory.ListMemories(ctx)
+	if err != nil {
+		return "", fmt.Errorf("读取跨会话个人记忆失败: %w", err)
+	}
+	if len(items) == 0 {
+		return instruction, nil
+	}
+	var builder strings.Builder
+	builder.WriteString(instruction)
+	builder.WriteString("\n\n<user_managed_memory>\n以下是用户明确保存、可在设置中修订或删除的跨会话事实。它们可能过时；与当前用户陈述冲突时以当前陈述为准。\n")
+	for _, item := range items {
+		builder.WriteString("- ")
+		builder.WriteString(escapePromptText(item.Text))
+		builder.WriteByte('\n')
+	}
+	builder.WriteString("</user_managed_memory>")
+	return builder.String(), nil
 }
 
 func cloneOptionalStrings(values []string) []string {
@@ -1043,6 +1080,9 @@ func (r *Resolver) Validate() error {
 	}
 	if r.memory == nil {
 		return errors.New("RuntimeResolver MemoryManager 不能为空")
+	}
+	if r.personalMemory == nil {
+		return errors.New("RuntimeResolver PersonalMemory Store 不能为空")
 	}
 	if r.eventReporter == nil {
 		return errors.New("RuntimeResolver EventReporter 不能为空")

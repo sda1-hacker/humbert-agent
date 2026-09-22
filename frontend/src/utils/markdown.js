@@ -8,6 +8,11 @@ export function safeUrl(value) {
     return normalized;
 }
 
+export function safeInlineImageUrl(value) {
+    const url = safeUrl(value);
+    return /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(url) ? url : "";
+}
+
 export function parseInline(source) {
     const text = String(source ?? "");
     const tokens = [];
@@ -31,7 +36,12 @@ export function parseInline(source) {
             if (!match) continue;
             if (pattern.type === "image") {
                 const url = safeUrl(match[2]);
-                tokens.push(url ? { type: "image", alt: match[1], url } : { type: "text", text: match[0] });
+                const inlineUrl = safeInlineImageUrl(url);
+                tokens.push(inlineUrl
+                    ? { type: "image", alt: match[1], url: inlineUrl }
+                    : url && /^https?:/i.test(url)
+                        ? { type: "remote-image", alt: match[1], url }
+                        : { type: "text", text: match[0] });
             } else if (pattern.type === "link") {
                 const url = safeUrl(match[2]);
                 tokens.push(url ? { type: "link", text: match[1], url } : { type: "text", text: match[0] });

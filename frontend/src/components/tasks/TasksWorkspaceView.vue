@@ -79,6 +79,7 @@ function emptyForm() {
     maxDurationSeconds: 1800,
     maxModelCalls: 20,
     maxToolCalls: 50,
+    maxTotalTokens: 100000,
     maxAttempts: 1,
     retryDelaySeconds: 30,
   };
@@ -138,6 +139,7 @@ function applyTask(task) {
     maxDurationSeconds: task.limits?.maxDurationSeconds || 1800,
     maxModelCalls: task.limits?.maxModelCalls || 20,
     maxToolCalls: task.limits?.maxToolCalls || 50,
+    maxTotalTokens: task.limits?.maxTotalTokens || 100000,
     maxAttempts: task.limits?.maxAttempts || 1,
     retryDelaySeconds: task.limits?.retryDelaySeconds || 30,
   });
@@ -213,6 +215,7 @@ function requestFromForm() {
       maxDurationSeconds: Number(form.maxDurationSeconds),
       maxModelCalls: Number(form.maxModelCalls),
       maxToolCalls: Number(form.maxToolCalls),
+      maxTotalTokens: Number(form.maxTotalTokens),
       maxAttempts: Number(form.maxAttempts),
       retryDelaySeconds: Number(form.retryDelaySeconds),
     },
@@ -485,7 +488,7 @@ onMounted(async () => {
     <header class="tasks-header">
       <div>
         <h1>任务</h1>
-        <p>按计划运行 Agent，或直接发送不需要模型参与的提醒通知。</p>
+        <p>按计划运行 Agent，或直接发送不需要模型参与的提醒通知。当前调度仅在 Humbert 应用运行期间生效；关闭应用期间错过的计划会在下次启动时按任务的错过策略处理。</p>
       </div>
       <a-button type="primary" @click="startCreating">新建任务</a-button>
     </header>
@@ -655,6 +658,7 @@ onMounted(async () => {
               <div class="field"><span>最长秒数</span><a-input-number v-model="form.maxDurationSeconds" :min="30" :max="86400" aria-label="最长秒数" /></div>
               <div class="field"><span>最多模型调用</span><a-input-number v-model="form.maxModelCalls" :min="1" :max="100" aria-label="最多模型调用" /></div>
               <div class="field"><span>最多工具调用</span><a-input-number v-model="form.maxToolCalls" :min="1" :max="500" aria-label="最多工具调用" /></div>
+              <div class="field"><span>最多 Token 用量</span><a-input-number v-model="form.maxTotalTokens" :min="1000" :max="10000000" aria-label="最多 Token 用量" /></div>
               <div class="field"><span>最多尝试次数</span><a-input-number v-model="form.maxAttempts" :min="1" :max="5" aria-label="最多尝试次数" /></div>
               <div class="field"><span>重试延迟秒数</span><a-input-number v-model="form.retryDelaySeconds" :min="1" :max="21600" aria-label="重试延迟秒数" /></div>
             </div>
@@ -700,6 +704,7 @@ onMounted(async () => {
             <div class="run-metrics">
               <span>模型 {{ run.modelCalls }}</span>
               <span>工具 {{ run.toolCalls }}</span>
+              <span>Token {{ run.totalTokens || 0 }}（入 {{ run.inputTokens || 0 }} / 出 {{ run.outputTokens || 0 }}）</span>
               <span>{{ run.trigger === "manual" ? "手动" : run.trigger === "retry" ? "重试" : "计划" }}</span>
             </div>
             <p v-if="run.resultPreview" class="run-result">{{ run.resultPreview }}</p>

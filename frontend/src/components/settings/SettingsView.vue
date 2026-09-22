@@ -19,6 +19,7 @@ import SkillPackageSettings from "./SkillPackageSettings.vue";
 import MCPSettings from "./MCPSettings.vue";
 import AppPageHeader from "../ui/AppPageHeader.vue";
 import UserProfileSettings from "./UserProfileSettings.vue";
+import DataSettings from "./DataSettings.vue";
 
 const props = defineProps({
   initialKey: {
@@ -43,6 +44,13 @@ const navigationGroups = [
         description: "设置你在聊天中显示的名称和头像。",
         keywords: ["个人", "用户", "名称", "头像", "profile", "avatar"],
         glyph: "我",
+      },
+      {
+        key: "data",
+        title: "数据与备份",
+        description: "导出并校验个人数据备份。",
+        keywords: ["数据", "备份", "恢复", "backup", "restore"],
+        glyph: "数",
       },
     ],
   },
@@ -240,6 +248,7 @@ function selectItem(key) {
 
           <section class="settings-content__body">
             <UserProfileSettings v-if="activeKey === 'profile'"/>
+            <DataSettings v-else-if="activeKey === 'data'"/>
             <ModelCatalog v-else-if="activeKey === 'models'"/>
             <ProviderSettings v-else-if="activeKey === 'providers'"/>
             <MultimediaSettings v-else-if="activeKey === 'multimedia'"/>

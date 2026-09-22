@@ -10,3 +10,19 @@ export function getUserProfile() {
 export function updateUserProfile(request) {
     return Call.ByName(`${serviceName}.UpdateUserProfile`, request);
 }
+
+export function listPersonalMemories() {
+    return Call.ByName(`${serviceName}.ListPersonalMemories`);
+}
+
+export function addPersonalMemory(text) {
+    return Call.ByName(`${serviceName}.AddPersonalMemory`, text);
+}
+
+export function updatePersonalMemory(id, text) {
+    return Call.ByName(`${serviceName}.UpdatePersonalMemory`, id, text);
+}
+
+export function deletePersonalMemory(id) {
+    return Call.ByName(`${serviceName}.DeletePersonalMemory`, id);
+}

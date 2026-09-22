@@ -47,3 +47,28 @@ func (s *PreferenceService) UpdateUserProfile(request UserProfileDTO) (UserProfi
 func userProfileDTO(value preferences.UserProfile) UserProfileDTO {
 	return UserProfileDTO{Name: value.Name, Avatar: value.Avatar}
 }
+
+// ListPersonalMemories 返回用户可查看、修订和遗忘的跨会话事实。
+func (s *PreferenceService) ListPersonalMemories() ([]preferences.PersonalMemory, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.core.Preferences().ListMemories(ctx)
+}
+
+func (s *PreferenceService) AddPersonalMemory(text string) (preferences.PersonalMemory, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.core.Preferences().AddMemory(ctx, text)
+}
+
+func (s *PreferenceService) UpdatePersonalMemory(id string, text string) (preferences.PersonalMemory, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.core.Preferences().UpdateMemory(ctx, id, text)
+}
+
+func (s *PreferenceService) DeletePersonalMemory(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return s.core.Preferences().DeleteMemory(ctx, id)
+}

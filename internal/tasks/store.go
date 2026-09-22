@@ -696,6 +696,12 @@ func (s *Store) readTaskLocked(ctx context.Context, agentID, taskID string) (Tas
 	if err := validateStoredTask(document.Task); err != nil {
 		return Task{}, fmt.Errorf("Task config.json 内容无效: %w", err)
 	}
+	// 历史任务没有 Token 上限字段；读取时补齐默认值，保证未重新保存的任务也受限。
+	limits, err := normalizeLimits(document.Task.Limits)
+	if err != nil {
+		return Task{}, err
+	}
+	document.Task.Limits = limits
 	return document.Task, nil
 }
 

@@ -7,9 +7,11 @@ import (
 	"github.com/sda1-hacker/humbert-agent/frontend"
 	"github.com/sda1-hacker/humbert-agent/internal/services"
 	"os"
+	"path/filepath"
 	"time"
 
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
+	"github.com/sda1-hacker/humbert-agent/internal/databackup"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -25,6 +27,16 @@ import (
 //
 
 func main() {
+	if home, err := os.UserHomeDir(); err == nil {
+		rollback, restoreErr := databackup.ApplyPendingRestore(context.Background(), filepath.Join(home, ".humbert-agent"))
+		if restoreErr != nil {
+			fmt.Fprintln(os.Stderr, "Humbert 数据恢复失败:", restoreErr)
+			os.Exit(1)
+		}
+		if rollback != "" {
+			fmt.Fprintln(os.Stderr, "Humbert 数据已恢复，原数据位于:", rollback)
+		}
+	}
 	bootstrapLogger :=
 		logging.NewBootstrap()
 

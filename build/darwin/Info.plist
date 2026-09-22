@@ -4,15 +4,15 @@
         <key>CFBundlePackageType</key>
             <string>APPL</string>
         <key>CFBundleName</key>
-            <string>My Product</string>
+            <string>Humbert Agent</string>
         <key>CFBundleExecutable</key>
             <string>humbert-agent</string>
         <key>CFBundleIdentifier</key>
-            <string>com.example.humbertagent</string>
+            <string>com.sda1hacker.humbertagent</string>
         <key>CFBundleVersion</key>
             <string>0.1.0</string>
         <key>CFBundleGetInfoString</key>
-            <string>This is a comment</string>
+            <string>Local-first personal AI agent</string>
         <key>CFBundleShortVersionString</key>
             <string>0.1.0</string>
         <key>CFBundleIconFile</key>
@@ -22,6 +22,6 @@
         <key>NSHighResolutionCapable</key>
             <string>true</string>
         <key>NSHumanReadableCopyright</key>
-            <string>© 2026, My Company</string>
+            <string>© 2026 Humbert Agent</string>
     </dict>
 </plist>

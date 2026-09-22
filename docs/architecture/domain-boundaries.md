@@ -1,7 +1,8 @@
 # Humbert Domain Boundaries
 
-本文档描述当前开发版本的领域边界。数据可以在开发阶段重建，因此各 Store 只支持最新
-schema，不维护旧版本迁移或双协议读取。
+本文档描述当前开发版本的领域边界。Session config v1/v2 会在首次读取时升级到 v3，
+旧文件保留为同目录的 `.pre-v3.<version>` 副本。其它 Store 目前只支持当前 schema，
+发布后改变其结构前必须增加逐版本迁移，不能直接拒绝已有用户数据。
 
 ## Agent
 
@@ -128,8 +129,9 @@ JSONL 保存稳定引用、元数据，以及文本类文件的确定性 UTF-8 �
 近期图片引用恢复为 Eino Base64 多模态内容，并保留到紧邻的一次用户追问；再早的图片在
 Provider 请求中变为包含名称、MIME 和 Attachment ID 的文本占位，避免每轮重复读取、
 Base64 膨胀及上传同一二进制。文本、源码和 JSON/YAML/XML 等文件转换为普通 text part，
-从而不依赖 OpenAI Chat Completions/Ollama Adapter 尚未实现的原生 `file_url`。PDF、Office
-和其他二进制文件在写入 Session 前拒绝。Base64 不进入 transcript、memory 或 compaction
+从而不依赖 OpenAI Chat Completions/Ollama Adapter 尚未实现的原生 `file_url`。PDF、DOCX、
+XLSX、PPTX 的原生文本由受限文档解析器提取；扫描版 PDF 在未配置 OCR 时明确拒绝。
+其它二进制文件在写入 Session 前拒绝。Base64 不进入 transcript、memory 或 compaction
 记录，压缩与 Memory 会保留附件名称、类型和文本提取结果。
 
 模型自身的 Vision/Files/Audio 等 Capability 在“设置 → 模型”维护。应用级图片路由保存在
@@ -137,5 +139,5 @@ Base64 膨胀及上传同一二进制。文本、源码和 JSON/YAML/XML 等文�
 为 true 的模型。Agent Profile 不再保存 Vision Model；当前 Chat 模型缺少 Vision 时，Runtime
 会先调用全局图片模型生成受长度和 Context 预算限制的“不可信视觉观察”，移除发给主模型的
 图片二进制，再由 Chat 模型结合观察结果继续推理和调用工具。辅助图片模型和主 Chat 模型共享
-同一次 Task 的模型调用次数上限。PDF/Office、音频与视频
+同一次 Task 的模型调用次数上限。音频与视频
 在完整解析链路落地前不提供虚假的应用级模型选择器。

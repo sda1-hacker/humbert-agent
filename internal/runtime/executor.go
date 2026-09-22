@@ -220,6 +220,15 @@ func (e *Executor) consumeEvents(
 						}
 						return result, fmt.Errorf("持久化 AssistantMessage 失败: %w", persistErr)
 					}
+					if usage := message.ResponseMeta; usage != nil && usage.Usage != nil {
+						input, output := usage.Usage.PromptTokens, usage.Usage.CompletionTokens
+						total := usage.Usage.TotalTokens
+						if total <= 0 {
+							total = input + output
+						}
+						snapshot.limitState.addTokens(total)
+						reportToolLifecycleEvent(context.WithoutCancel(ctx), snapshot, Event{Type: EventModelUsage, InputTokens: input, OutputTokens: output, TotalTokens: total, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)})
+					}
 					if len(message.ToolCalls) == 0 {
 						result.Content = assistantText(message)
 						result.MessageID = stored.EntryID

@@ -77,6 +77,7 @@ type Limits struct {
 	MaxDurationSeconds int `json:"max_duration_seconds"`
 	MaxModelCalls      int `json:"max_model_calls"`
 	MaxToolCalls       int `json:"max_tool_calls"`
+	MaxTotalTokens     int `json:"max_total_tokens"`
 	MaxAttempts        int `json:"max_attempts"`
 	RetryDelaySeconds  int `json:"retry_delay_seconds"`
 }
@@ -166,8 +167,11 @@ type Run struct {
 	Attempt      int           `json:"attempt"`
 	Status       RunStatus     `json:"status"`
 
-	ToolCalls  int `json:"tool_calls"`
-	ModelCalls int `json:"model_calls"`
+	ToolCalls    int `json:"tool_calls"`
+	ModelCalls   int `json:"model_calls"`
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+	TotalTokens  int `json:"total_tokens"`
 
 	Approval        *ApprovalSnapshot `json:"approval,omitempty"`
 	ResultMessageID string            `json:"result_message_id,omitempty"`

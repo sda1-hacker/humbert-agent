@@ -5,11 +5,11 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "A humbert-agent application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"CompanyName": "Humbert Agent",
+			"FileDescription": "Humbert Agent desktop application",
+			"LegalCopyright": "© 2026 Humbert Agent",
+			"ProductName": "Humbert Agent",
+			"Comments": "Local-first personal AI agent"
 		}
 	}
 }

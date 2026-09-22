@@ -971,10 +971,11 @@ func (m *Manager) startRun(ctx context.Context, task Task, run Run) error {
 		SessionID: session.ID,
 		Input:     sessions.UserInput{Text: task.Prompt},
 		Limits: agentruntime.ExecutionLimits{
-			MaxDuration:   time.Duration(task.Limits.MaxDurationSeconds) * time.Second,
-			Deadline:      deadline,
-			MaxModelCalls: task.Limits.MaxModelCalls,
-			MaxToolCalls:  task.Limits.MaxToolCalls,
+			MaxDuration:    time.Duration(task.Limits.MaxDurationSeconds) * time.Second,
+			Deadline:       deadline,
+			MaxModelCalls:  task.Limits.MaxModelCalls,
+			MaxToolCalls:   task.Limits.MaxToolCalls,
+			MaxTotalTokens: task.Limits.MaxTotalTokens,
 		},
 	})
 	if err != nil {
@@ -1114,6 +1115,10 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 		run.ToolCalls++
 	case agentruntime.EventModelStarted:
 		run.ModelCalls++
+	case agentruntime.EventModelUsage:
+		run.InputTokens += event.InputTokens
+		run.OutputTokens += event.OutputTokens
+		run.TotalTokens += event.TotalTokens
 	case agentruntime.EventApprovalRequested:
 		run.Status = RunWaitingApproval
 		if event.Approval != nil {

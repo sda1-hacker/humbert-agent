@@ -1,7 +1,9 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -611,11 +613,28 @@ func (s *Store) readSessionDocument(
 	expectedAgentID string,
 	expectedSessionID string,
 ) (sessionDocument, error) {
-	var document sessionDocument
-	if err := atomicfile.ReadJSON(ctx, path, &document); err != nil {
+	// v1/v2 曾保存已移除的 project_id。只迁移这两个已知结构，保留原文件
+	// 的一次性副本，避免升级失败时丢失用户会话控制面。
+	var raw json.RawMessage
+	if err := atomicfile.ReadJSON(ctx, path, &raw); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return sessionDocument{}, fmt.Errorf("Session config.json 不存在: %w", err)
 		}
+		return sessionDocument{}, fmt.Errorf("读取 Session config.json 失败: %w", err)
+	}
+	var version struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(raw, &version); err != nil {
+		return sessionDocument{}, fmt.Errorf("解析 Session config.json 版本失败: %w", err)
+	}
+	if version.SchemaVersion == 1 || version.SchemaVersion == 2 {
+		if err := migrateLegacySessionConfig(ctx, path, raw, expectedAgentID, expectedSessionID); err != nil {
+			return sessionDocument{}, fmt.Errorf("迁移 Session config.json 失败: %w", err)
+		}
+	}
+	var document sessionDocument
+	if err := atomicfile.ReadJSON(ctx, path, &document); err != nil {
 		return sessionDocument{}, fmt.Errorf("读取 Session config.json 失败: %w", err)
 	}
 	if document.SchemaVersion != sessionConfigSchemaVersion {
@@ -646,6 +665,59 @@ func (s *Store) readSessionDocument(
 	}
 
 	return document, nil
+}
+
+func migrateLegacySessionConfig(ctx context.Context, path string, raw json.RawMessage, agentID string, sessionID string) error {
+	var legacy struct {
+		SchemaVersion int `json:"schema_version"`
+		Session       struct {
+			ID        string    `json:"id"`
+			AgentID   string    `json:"agent_id"`
+			Title     string    `json:"title"`
+			CWD       string    `json:"cwd"`
+			CreatedAt time.Time `json:"created_at"`
+			ProjectID string    `json:"project_id,omitempty"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &legacy); err != nil {
+		return err
+	}
+	if legacy.Session.ID != sessionID || legacy.Session.AgentID != agentID || strings.TrimSpace(legacy.Session.Title) == "" || legacy.Session.CreatedAt.IsZero() {
+		return errors.New("旧 Session 配置身份或必填字段无效")
+	}
+	backupPath := path + fmt.Sprintf(".pre-v3.%d", legacy.SchemaVersion)
+	backup, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("创建升级前副本失败: %w", err)
+		}
+		existing, readErr := os.ReadFile(backupPath)
+		var normalizedExisting, normalizedCurrent bytes.Buffer
+		if readErr != nil || json.Compact(&normalizedExisting, existing) != nil || json.Compact(&normalizedCurrent, raw) != nil || !bytes.Equal(normalizedExisting.Bytes(), normalizedCurrent.Bytes()) {
+			return errors.New("既有升级前副本无法校验，拒绝继续迁移")
+		}
+	} else {
+		if _, err := backup.Write(raw); err != nil {
+			_ = backup.Close()
+			_ = os.Remove(backupPath)
+			return fmt.Errorf("保存升级前副本失败: %w", err)
+		}
+		if err := backup.Sync(); err != nil {
+			_ = backup.Close()
+			_ = os.Remove(backupPath)
+			return fmt.Errorf("同步升级前副本失败: %w", err)
+		}
+		if err := backup.Close(); err != nil {
+			return fmt.Errorf("关闭升级前副本失败: %w", err)
+		}
+	}
+	document := sessionDocument{SchemaVersion: sessionConfigSchemaVersion, Session: sessionConfig{
+		ID: sessionID, AgentID: agentID, Title: legacy.Session.Title, CWD: legacy.Session.CWD, CreatedAt: legacy.Session.CreatedAt,
+	}}
+	if err := atomicfile.WriteJSON(ctx, path, 0o600, document); err != nil {
+		return fmt.Errorf("写入新版 Session 配置失败: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) configPath(agentID string, sessionID string) (string, error) {

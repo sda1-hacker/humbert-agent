@@ -51,3 +51,21 @@ func TestConfigureExecutionLimitsRejectsNegativeValues(t *testing.T) {
 		t.Fatal("expected negative execution limit to fail")
 	}
 }
+
+func TestExecutionLimitStopsAfterReportedTokenBudget(t *testing.T) {
+	state := &executionLimitState{maxTotalTokens: 1000}
+	if err := state.beforeModelCall(); err != nil {
+		t.Fatal(err)
+	}
+	state.addTokens(600)
+	if err := state.beforeToolCall(); err != nil {
+		t.Fatal(err)
+	}
+	state.addTokens(400)
+	if err := state.beforeToolCall(); !errors.Is(err, ErrExecutionLimitExceeded) {
+		t.Fatalf("tool error=%v", err)
+	}
+	if err := state.beforeModelCall(); !errors.Is(err, ErrExecutionLimitExceeded) {
+		t.Fatalf("model error=%v", err)
+	}
+}

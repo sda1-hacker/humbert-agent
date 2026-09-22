@@ -93,7 +93,7 @@ func TestAttachmentRejectsUnsupportedBinaryBeforePersistence(t *testing.T) {
 	_, err = service.AppendUserInput(ctx, session.ID, UserInput{Attachments: []AttachmentInput{{
 		Name: "document.pdf", MIMEType: "application/pdf", Base64Data: base64.StdEncoding.EncodeToString([]byte("%PDF-fake")),
 	}}})
-	if err == nil || !strings.Contains(err.Error(), "暂不支持") {
+	if err == nil || !strings.Contains(err.Error(), "提取文档文本失败") {
 		t.Fatalf("unsupported binary error = %v", err)
 	}
 	messages, listErr := store.ListMessages(ctx, session.ID, 0)
