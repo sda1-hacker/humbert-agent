@@ -18,7 +18,8 @@ type Session struct {
 
 	AgentID string
 
-	Title string
+	Title    string
+	Archived bool
 
 	CWD string
 

@@ -48,7 +48,8 @@ type sessionConfig struct {
 
 	AgentID string `json:"agent_id"`
 
-	Title string `json:"title"`
+	Title    string `json:"title"`
+	Archived bool   `json:"archived,omitempty"`
 
 	CWD string `json:"cwd"`
 
@@ -292,6 +293,26 @@ func (s *Store) RenameSession(ctx context.Context, id string, title string) erro
 		return fmt.Errorf("更新 Session config.json 失败: %w", err)
 	}
 	return nil
+}
+
+// SetArchived updates only the session control plane; its transcript remains intact.
+func (s *Store) SetArchived(ctx context.Context, id string, archived bool) error {
+	session, err := s.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	path, err := s.configPath(session.AgentID, id)
+	if err != nil {
+		return err
+	}
+	unlock := s.configLocks.lock(path)
+	defer unlock()
+	document, err := s.readSessionDocument(ctx, path, session.AgentID, id)
+	if err != nil {
+		return err
+	}
+	document.Session.Archived = archived
+	return atomicfile.WriteJSON(ctx, path, 0o600, document)
 }
 
 // DeleteSession 删除 Session 整个目录，包括 config.json、session.jsonl 与未来 sidecar。
@@ -604,6 +625,7 @@ func (s *Store) readSessionConfig(ctx context.Context, agentID string, sessionID
 		ID:        document.Session.ID,
 		AgentID:   document.Session.AgentID,
 		Title:     document.Session.Title,
+		Archived:  document.Session.Archived,
 		CWD:       document.Session.CWD,
 		CreatedAt: document.Session.CreatedAt.UTC(),
 		UpdatedAt: updatedAt,

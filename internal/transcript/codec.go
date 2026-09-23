@@ -312,12 +312,13 @@ func encodeUserMessageContent(message *schema.Message) ([]ContentBlock, error) {
 				name = extraString(part.Extra, "name")
 			}
 			blocks = append(blocks, ContentBlock{
-				Type:          ContentFile,
-				AttachmentID:  id,
-				Name:          name,
-				MIMEType:      part.File.MIMEType,
-				SizeBytes:     extraInt64(part.Extra, "size_bytes"),
-				ExtractedText: extraString(part.Extra, "extracted_text"),
+				Type:             ContentFile,
+				AttachmentID:     id,
+				Name:             name,
+				MIMEType:         part.File.MIMEType,
+				SizeBytes:        extraInt64(part.Extra, "size_bytes"),
+				ExtractedText:    extraString(part.Extra, "extracted_text"),
+				DocumentOnDemand: part.Extra["document_on_demand"] == true,
 			})
 		default:
 			return nil, fmt.Errorf("UserInputMultiContent[%d] 类型暂不支持持久化: %q", index, part.Type)
@@ -350,10 +351,11 @@ func decodeUserMessage(blocks []ContentBlock) (*schema.Message, error) {
 				Type: schema.ChatMessagePartTypeFileURL,
 				File: &schema.MessageInputFile{MessagePartCommon: schema.MessagePartCommon{URL: &url, MIMEType: block.MIMEType}, Name: block.Name},
 				Extra: map[string]any{
-					"name":           block.Name,
-					"size_bytes":     block.SizeBytes,
-					"attachment_id":  block.AttachmentID,
-					"extracted_text": block.ExtractedText,
+					"name":               block.Name,
+					"size_bytes":         block.SizeBytes,
+					"attachment_id":      block.AttachmentID,
+					"extracted_text":     block.ExtractedText,
+					"document_on_demand": block.DocumentOnDemand,
 				},
 			})
 		default:

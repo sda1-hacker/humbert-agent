@@ -177,6 +177,17 @@ func buildToolRegistry(
 	if err := register(contextResourceFactory); err != nil {
 		return nil, err
 	}
+	attachmentReader, ok := historyRepository.(builtin.DocumentAttachmentReader)
+	if !ok {
+		return nil, fmt.Errorf("创建 extract_document Factory 失败: Session 不支持读取附件")
+	}
+	extractDocumentFactory, err := builtin.NewExtractDocumentFactory(historyRepository, attachmentReader, toolConfig.Files.Enabled)
+	if err != nil {
+		return nil, fmt.Errorf("创建 extract_document Factory 失败: %w", err)
+	}
+	if err := register(extractDocumentFactory); err != nil {
+		return nil, err
+	}
 
 	// install_skill 是 Skills 控制面的唯一 Agent 可写入口。它只负责下载安装并可选择修改
 	// 当前 Agent 的 enabled_skills，不会执行包内 scripts。RiskWrite 让默认 Permission Policy
@@ -243,7 +254,6 @@ func buildToolRegistry(
 			); err != nil {
 			return nil, err
 		}
-
 		writeFileFactory, err :=
 			builtin.NewWriteFileFactory(
 				workspaceManager,
@@ -314,6 +324,9 @@ func buildToolRegistry(
 		if err := register(applyPatchFactory); err != nil {
 			return nil, err
 		}
+	}
+	if err := register(builtin.NewBrowserFactory()); err != nil {
+		return nil, err
 	}
 
 	if toolConfig.WebSearch.Enabled {

@@ -169,6 +169,17 @@ func (s *Service) Rename(ctx context.Context, sessionID string, title string) (S
 	return s.store.GetSession(ctx, sessionID)
 }
 
+// SetArchived 修改会话归档状态，不影响对话树。
+func (s *Service) SetArchived(ctx context.Context, sessionID string, archived bool) (Session, error) {
+	if _, err := s.Get(ctx, sessionID); err != nil {
+		return Session{}, err
+	}
+	if err := s.store.SetArchived(ctx, sessionID, archived); err != nil {
+		return Session{}, err
+	}
+	return s.store.GetSession(ctx, sessionID)
+}
+
 // Delete 删除一个 Session 及完整 Tree 历史。
 func (s *Service) Delete(ctx context.Context, sessionID string) error {
 	session, err := s.store.GetSession(ctx, sessionID)

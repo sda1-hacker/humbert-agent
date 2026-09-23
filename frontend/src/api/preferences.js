@@ -19,6 +19,10 @@ export function addPersonalMemory(text) {
     return Call.ByName(`${serviceName}.AddPersonalMemory`, text);
 }
 
+export function addPersonalMemoryFromMessage(text, sessionID, entryID) {
+    return Call.ByName(`${serviceName}.AddPersonalMemoryFromMessage`, text, sessionID, entryID);
+}
+
 export function updatePersonalMemory(id, text) {
     return Call.ByName(`${serviceName}.UpdatePersonalMemory`, id, text);
 }

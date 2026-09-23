@@ -744,6 +744,9 @@ func (a *Application) Shutdown(ctx context.Context) error {
 				"error", err,
 			)
 		}
+		if err := a.tools.Close(); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭内置工具失败: %w", err))
+		}
 
 		if err := a.workspaces.Close(); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 WorkspaceManager 失败: %w", err))

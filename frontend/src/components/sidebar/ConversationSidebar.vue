@@ -33,6 +33,7 @@ import {
 import {
   useSessionStore,
 } from "../../stores/sessions.js";
+import { searchSessionMessages } from "../../api/sessions.js";
 
 import AgentModal
   from "./AgentModal.vue";
@@ -66,6 +67,48 @@ const agentStore =
 
 const sessionStore =
     useSessionStore();
+
+const contentResults = ref([]);
+const contentSearching = ref(false);
+const showArchived = ref(false);
+let searchSequence = 0;
+let searchTimer = null;
+
+watch(() => sessionStore.search, (value) => {
+  clearTimeout(searchTimer);
+  const sequence = ++searchSequence;
+  const query = value.trim();
+  if (query.length < 2) { contentResults.value = []; contentSearching.value = false; return; }
+  contentSearching.value = true;
+  searchTimer = setTimeout(async () => {
+    try {
+      const results = await searchSessionMessages(query);
+      if (sequence === searchSequence) contentResults.value = Array.isArray(results) ? results : [];
+    } catch (error) {
+      if (sequence === searchSequence) Message.error(error?.message ?? String(error));
+    } finally {
+      if (sequence === searchSequence) contentSearching.value = false;
+    }
+  }, 350);
+});
+
+async function openSearchResult(result) {
+  const agent = agentStore.items.find((item) => item.id === result.agentID);
+  if (!agent) return;
+  try {
+    await sessionStore.loadAgentSessions(agent.id, {force: true});
+    const session = sessionStore.sessionsForAgent(agent.id).find((item) => item.id === result.sessionID);
+    if (!session) return;
+    if (!(await selectSession(agent, session))) return;
+    sessionStore.jumpTargetID = result.entryID;
+  } catch (error) { Message.error(error?.message ?? String(error)); }
+}
+
+async function archiveSession(session) {
+  if (runtimeStore.isSessionRunning(session.id)) { Message.warning("请先停止当前对话"); return; }
+  try { await sessionStore.setArchived(session.id, !session.archived); }
+  catch (error) { Message.error(error?.message ?? String(error)); }
+}
 
 const runtimeStore =
     useRuntimeStore();
@@ -353,11 +396,13 @@ async function selectSession(
     );
 
     emit("open-chat");
+    return true;
   } catch (error) {
     Message.error(
         error?.message ??
         String(error),
     );
+    return false;
   }
 }
 
@@ -500,7 +545,7 @@ function sessionsForAgent(
       sessionStore
           .sessionsForAgent(
               agent.id,
-          );
+          ).filter((session) => showArchived.value || !session.archived);
 
   const keyword =
       searchKeyword.value;
@@ -822,6 +867,15 @@ watch(
       </a-input>
     </div>
 
+    <div v-if="searchKeyword.length >= 2" class="sidebar-content-results">
+      <small>{{ contentSearching ? '正在搜索消息…' : `消息正文 · ${contentResults.length} 条结果` }}</small>
+      <button v-for="result in contentResults" :key="`${result.sessionID}:${result.entryID}`" type="button" class="sidebar-content-result" @click="openSearchResult(result)">
+        <strong>{{ result.title }}{{ result.archived ? '（已归档）' : '' }}</strong>
+        <span>{{ result.snippet }}</span>
+      </button>
+    </div>
+    <button type="button" class="sidebar-archive-toggle" @click="showArchived = !showArchived">{{ showArchived ? '隐藏已归档会话' : '显示已归档会话' }}</button>
+
     <!-- Agent -> Session Tree -->
     <div class="agent-tree">
       <div
@@ -1137,6 +1191,15 @@ watch(
               <a-button
                   type="text"
                   size="mini"
+                  :title="session.archived ? '恢复会话' : '归档会话'"
+                  @click.stop="archiveSession(session)"
+              >
+                {{ session.archived ? '恢复' : '归档' }}
+              </a-button>
+
+              <a-button
+                  type="text"
+                  size="mini"
                   status="danger"
                   @click.stop="
                   removeSession(
@@ -1273,6 +1336,19 @@ watch(
 .sidebar-search--sessions {
   margin-top: 10px;
 }
+
+.sidebar-content-results {
+  max-height: 230px;
+  overflow: auto;
+  padding: 0 12px 8px;
+}
+
+.sidebar-content-results small { color: var(--h-text-muted); }
+.sidebar-content-result { display: flex; width: 100%; flex-direction: column; gap: 3px; padding: 7px; border: 0; border-radius: 6px; background: transparent; color: var(--h-text-secondary); text-align: left; cursor: pointer; }
+.sidebar-content-result:hover { background: var(--h-bg-hover); }
+.sidebar-content-result strong { color: var(--h-text); font-size: 12px; }
+.sidebar-content-result span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 11px; }
+.sidebar-archive-toggle { margin: 0 12px 8px; border: 0; background: transparent; color: var(--h-text-muted); cursor: pointer; text-align: left; font-size: 11px; }
 
 .sidebar-primary-nav {
   flex: 0 0 auto;

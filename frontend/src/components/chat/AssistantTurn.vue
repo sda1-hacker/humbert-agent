@@ -169,7 +169,7 @@ const incomplete =
 </script>
 
 <template>
-  <article class="assistant-turn">
+  <article class="assistant-turn" :data-entry-id="message.id">
     <header class="assistant-header">
       <IdentityAvatar :src="agentAvatar" :name="agentName" :size="30" />
       <span>{{ authorText }}</span>
@@ -247,6 +247,7 @@ const incomplete =
     </div>
 
     <MessageActions
+        :message-id="message.id"
         :content="content"
         :session-id="message?.sessionID || ''"
     />

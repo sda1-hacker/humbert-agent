@@ -23,6 +23,14 @@ export function renameSession(
     return Call.ByName(`${sessionServiceName}.Rename`, id, title);
 }
 
+export function setSessionArchived(id, archived) {
+    return Call.ByName(`${sessionServiceName}.SetArchived`, id, archived);
+}
+
+export function searchSessionMessages(query) {
+    return Call.ByName(`${sessionServiceName}.Search`, query);
+}
+
 export function deleteSession(
     id,
 ) {
@@ -47,6 +55,10 @@ export function listMessagePage(
         beforeEntryID,
         limit,
     );
+}
+
+export function getMessageWindow(sessionID, entryID) {
+    return Call.ByName(`${sessionServiceName}.MessageWindow`, sessionID, entryID);
 }
 
 export function readAttachment(sessionID, attachmentID) {

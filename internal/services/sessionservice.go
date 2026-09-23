@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
 
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
+	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
+	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
 // SessionDTO 是返回给 Vue 的 Session。
@@ -19,7 +23,8 @@ type SessionDTO struct {
 
 	AgentID string `json:"agentID"`
 
-	Title string `json:"title"`
+	Title    string `json:"title"`
+	Archived bool   `json:"archived"`
 
 	CreatedAt string `json:"createdAt"`
 
@@ -74,12 +79,100 @@ type AttachmentContentDTO struct {
 
 // SessionService 是 Session Domain 的 Wails Adapter。
 type SessionService struct {
-	core *coreapp.Application
+	core     *coreapp.Application
+	searchMu sync.Mutex
+	search   *searchindex.Index
 }
 
 // NewSessionService 创建 SessionService。
 func NewSessionService(core *coreapp.Application) *SessionService {
 	return &SessionService{core: core}
+}
+
+// Search indexes visible messages from the active branch on demand. The SQLite
+// file is disposable and never replaces the session transcript.
+func (s *SessionService) Search(query string) ([]searchindex.Result, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return []searchindex.Result{}, nil
+	}
+	if len([]rune(query)) > 200 {
+		return nil, fmt.Errorf("搜索词不能超过 200 字")
+	}
+	s.searchMu.Lock()
+	defer s.searchMu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if s.search == nil {
+		index, err := searchindex.Open(filepath.Join(s.core.Config().Paths.CacheDir, "conversation-search.sqlite"))
+		if err != nil {
+			return nil, err
+		}
+		s.search = index
+	}
+	agents, err := s.core.Agents().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	keep := make(map[string]bool)
+	for _, agent := range agents {
+		sessions, err := s.core.Sessions().List(ctx, agent.Agent.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, session := range sessions {
+			keep[session.ID] = true
+			revision := session.UpdatedAt.UnixNano()
+			cached, exists, err := s.search.CachedSession(ctx, session.ID)
+			if err != nil {
+				return nil, err
+			}
+			indexed := searchindex.Session{ID: session.ID, AgentID: session.AgentID, Title: session.Title, Archived: session.Archived, Revision: revision}
+			if exists && cached.Revision == revision {
+				if cached.Title != indexed.Title || cached.Archived != indexed.Archived || cached.AgentID != indexed.AgentID {
+					if err := s.search.UpdateSessionMetadata(ctx, indexed); err != nil {
+						return nil, err
+					}
+				}
+				continue
+			}
+			if err := s.search.ReplaceStream(ctx, indexed, func(add func(searchindex.Message) error) error {
+				var insertErr error
+				visitErr := s.core.Sessions().VisitActiveBranchReverse(ctx, session.ID, func(entry transcript.Entry) bool {
+					if entry.Type != transcript.EntryMessage || entry.Message == nil {
+						return true
+					}
+					role := entry.Message.Role
+					if role != transcript.RoleUser && role != transcript.RoleAssistant {
+						return true
+					}
+					var content strings.Builder
+					for _, block := range entry.Message.Content {
+						if block.Type == transcript.ContentText {
+							content.WriteString(block.Text)
+							content.WriteByte('\n')
+						}
+						if block.Type == transcript.ContentFile {
+							content.WriteString(block.ExtractedText)
+							content.WriteByte('\n')
+						}
+					}
+					insertErr = add(searchindex.Message{EntryID: entry.ID, Role: string(role), Timestamp: entry.Timestamp, Content: content.String()})
+					return insertErr == nil
+				})
+				if visitErr != nil {
+					return visitErr
+				}
+				return insertErr
+			}); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if err := s.search.Prune(ctx, keep); err != nil {
+		return nil, err
+	}
+	return s.search.Search(ctx, query, 50)
 }
 
 // List 返回 Agent 的 Sessions。
@@ -122,6 +215,16 @@ func (s *SessionService) Rename(id string, title string) (SessionDTO, error) {
 	value, err := s.core.Sessions().Rename(ctx, id, title)
 	if err != nil {
 		return SessionDTO{}, fmt.Errorf("修改 Session 失败: %w", err)
+	}
+	return sessionDTO(value), nil
+}
+
+func (s *SessionService) SetArchived(id string, archived bool) (SessionDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	value, err := s.core.Sessions().SetArchived(ctx, id, archived)
+	if err != nil {
+		return SessionDTO{}, fmt.Errorf("更新会话归档状态失败: %w", err)
 	}
 	return sessionDTO(value), nil
 }
@@ -195,6 +298,46 @@ func (s *SessionService) MessagePage(sessionID string, beforeEntryID string, lim
 	}, nil
 }
 
+// MessageWindow locates a search hit through the transcript location index and
+// reads only its nearby active-branch entries.
+func (s *SessionService) MessageWindow(sessionID, entryID string) (MessagePageDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	entries, err := s.core.Sessions().ReadActiveBranchRange(ctx, sessionID, entryID, 80, 80)
+	if err != nil {
+		return MessagePageDTO{}, err
+	}
+	messages := make([]MessageDTO, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type != transcript.EntryMessage || entry.Message == nil {
+			continue
+		}
+		decoded, err := transcript.DecodeMessage(entry.Message)
+		if err != nil {
+			return MessagePageDTO{}, err
+		}
+		createdAt, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
+		if err != nil {
+			return MessagePageDTO{}, err
+		}
+		value := sessions.Message{EntryID: entry.ID, ParentID: entry.ParentID, SessionID: sessionID, Message: decoded.Message, Persistence: decoded.Options, StopReason: decoded.StopReason, CreatedAt: createdAt}
+		dto, err := messageDTO(value, int64(len(messages)+1))
+		if err != nil {
+			return MessagePageDTO{}, err
+		}
+		messages = append(messages, dto)
+	}
+	if len(messages) == 0 {
+		return MessagePageDTO{}, fmt.Errorf("目标消息不存在")
+	}
+	beforeID := messages[0].ID
+	older, err := s.core.Sessions().MessagePage(ctx, sessionID, beforeID, 1)
+	if err != nil {
+		return MessagePageDTO{}, err
+	}
+	return MessagePageDTO{Messages: messages, HasMore: len(older.Messages) > 0, NextBeforeID: beforeID}, nil
+}
+
 // ReadAttachment 按需读取 Session sidecar。前端只在图片进入历史视图时调用。
 func (s *SessionService) ReadAttachment(sessionID string, attachmentID string) (AttachmentContentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -211,6 +354,7 @@ func sessionDTO(value sessions.Session) SessionDTO {
 		ID:        value.ID,
 		AgentID:   value.AgentID,
 		Title:     value.Title,
+		Archived:  value.Archived,
 		CreatedAt: value.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: value.UpdatedAt.Format(time.RFC3339),
 	}

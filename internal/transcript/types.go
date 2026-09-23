@@ -126,6 +126,9 @@ type ContentBlock struct {
 	// 原始文件仍保存在 sidecar；Runtime 使用该字段构造普通文本输入，不把 Eino
 	// Adapter 当前不支持的 file_url 发送给 Provider。图片保持为空。
 	ExtractedText string `json:"extractedText,omitempty"`
+
+	// DocumentOnDemand 表示原件按需转换成 Markdown，正文不写入 Transcript。
+	DocumentOnDemand bool `json:"documentOnDemand,omitempty"`
 }
 
 // UsageCost 保存 Provider 明确返回的货币成本。

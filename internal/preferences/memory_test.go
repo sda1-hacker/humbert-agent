@@ -36,3 +36,28 @@ func TestPersonalMemoryPersistsAndDeletes(t *testing.T) {
 		t.Fatalf("delete=%+v err=%v", items, err)
 	}
 }
+
+func TestConversationMemorySurvivesReload(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "config", "preferences.json")
+	store, err := NewStore(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := store.AddMemoryWithSource(ctx, "偏好简短回答", "session-1", "entry-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.ListMemories(ctx)
+	if err != nil || len(items) != 1 || items[0].ID != added.ID || items[0].SourceSessionID != "session-1" {
+		t.Fatalf("memory=%+v err=%v", items, err)
+	}
+	reopened, err := NewStore(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err = reopened.ListMemories(ctx)
+	if err != nil || len(items) != 1 || items[0].SourceEntryID != "entry-1" {
+		t.Fatalf("reloaded=%+v err=%v", items, err)
+	}
+}

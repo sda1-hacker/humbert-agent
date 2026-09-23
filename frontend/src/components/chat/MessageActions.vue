@@ -11,6 +11,8 @@ import {
 import {
   useSessionStore,
 } from "../../stores/sessions.js";
+import { addPersonalMemoryFromMessage } from "../../api/preferences.js";
+import { ref } from "vue";
 
 const props =
     defineProps({
@@ -22,6 +24,7 @@ const props =
         type: String,
         default: "",
       },
+      messageId: { type: String, default: "" },
       allowReuse: {
         type: Boolean,
         default: false,
@@ -30,6 +33,30 @@ const props =
 
 const sessionStore =
     useSessionStore();
+const memoryVisible = ref(false);
+const memoryText = ref("");
+
+function quoteContent() {
+  if (!props.sessionID) return;
+  const selected = window.getSelection()?.toString().trim() || "";
+  const quote = selected && props.content.includes(selected) ? selected : props.content;
+  const existing = sessionStore.draftForSession(props.sessionID);
+  sessionStore.setDraft(props.sessionID, `${existing ? existing + '\n\n' : ''}> ${quote.replaceAll('\n', '\n> ')}\n\n`);
+  document.querySelector('.composer-textarea textarea')?.focus();
+}
+
+function proposeMemory() {
+  const selected = window.getSelection()?.toString().trim() || "";
+  memoryText.value = (selected && props.content.includes(selected) ? selected : props.content).slice(0, 300);
+  memoryVisible.value = true;
+}
+
+async function saveMemory() {
+  const value = memoryText.value.trim();
+  if (!value) { Message.warning('请填写要保存的记忆'); return false; }
+  try { await addPersonalMemoryFromMessage(value, props.sessionID, props.messageId); Message.success('已保存为跨会话个人记忆'); return true; }
+  catch (error) { Message.error(error?.message ?? String(error)); return false; }
+}
 
 async function copyContent() {
   if (!props.content) {
@@ -112,6 +139,12 @@ function reuseContent() {
       <IconEdit />
       <span>再次编辑</span>
     </button>
+    <button type="button" class="message-action" title="引用选中文本或整条消息" @click="quoteContent">引用</button>
+    <button type="button" class="message-action" title="确认保存到跨会话个人记忆" @click="proposeMemory">记住</button>
+    <a-modal v-model:visible="memoryVisible" title="保存个人记忆" :on-before-ok="saveMemory">
+      <p>请确认或修改要长期记住的内容。以后可在设置中编辑或删除。</p>
+      <a-textarea v-model="memoryText" :max-length="300" :auto-size="{minRows: 2, maxRows: 5}" />
+    </a-modal>
   </div>
 </template>
 

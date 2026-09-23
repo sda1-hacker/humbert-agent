@@ -975,8 +975,11 @@ func validateContentBlock(block ContentBlock) error {
 		if block.SizeBytes < 0 {
 			return errors.New("attachment sizeBytes 非法")
 		}
-		if block.Type == ContentFile && strings.TrimSpace(block.ExtractedText) == "" {
+		if block.Type == ContentFile && strings.TrimSpace(block.ExtractedText) == "" && !block.DocumentOnDemand {
 			return errors.New("file attachment 缺少 extractedText")
+		}
+		if block.DocumentOnDemand && (block.Type != ContentFile || block.ExtractedText != "") {
+			return errors.New("documentOnDemand 只能用于未提取的文件附件")
 		}
 		if block.Type == ContentImage && block.ExtractedText != "" {
 			return errors.New("image attachment 不允许 extractedText")

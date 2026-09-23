@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
 
@@ -43,6 +44,25 @@ type Registry struct {
 	authorizer Authorizer
 
 	resultArchiver ResultArchiver
+}
+
+// Close releases resources owned by long-lived built-in factories.
+func (r *Registry) Close() error {
+	r.mu.RLock()
+	closers := make([]io.Closer, 0)
+	for _, factory := range r.factories {
+		if closer, ok := factory.(io.Closer); ok {
+			closers = append(closers, closer)
+		}
+	}
+	r.mu.RUnlock()
+	var failures []error
+	for _, closer := range closers {
+		if err := closer.Close(); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // NewRegistry 创建 Tool Registry。

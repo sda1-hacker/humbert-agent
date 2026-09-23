@@ -19,3 +19,7 @@ export function listWorkspaceDirectory(agentID, path = ".") {
 export function previewWorkspaceFile(agentID, path) {
     return Call.ByName(`${workspaceServiceName}.PreviewFile`, agentID, path);
 }
+
+export function searchWorkspaceDocuments(agentID, query) {
+    return Call.ByName(`${workspaceServiceName}.SearchDocuments`, agentID, query);
+}

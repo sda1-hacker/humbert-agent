@@ -41,6 +41,31 @@ func BuildPresentation(request Request) (Presentation, error) {
 	}
 
 	switch request.ToolName {
+	case "browser":
+		var input struct {
+			Action   string `json:"action"`
+			URL      string `json:"url"`
+			Selector string `json:"selector"`
+			Text     string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(request.Arguments), &input); err != nil {
+			return Presentation{}, fmt.Errorf("解析 browser 审批参数失败: %w", err)
+		}
+		fields := []PresentationField{{Label: "操作", Value: safeField(input.Action)}}
+		if input.URL != "" {
+			parsed, err := url.Parse(input.URL)
+			if err != nil {
+				return Presentation{}, fmt.Errorf("解析 browser URL 失败: %w", err)
+			}
+			fields = append(fields, PresentationField{Label: "站点", Value: safeField(parsed.Scheme + "://" + parsed.Host)})
+		}
+		if input.Selector != "" {
+			fields = append(fields, PresentationField{Label: "元素", Value: safeField(input.Selector)})
+		}
+		if input.Action == "type" {
+			fields = append(fields, PresentationField{Label: "输入内容", Value: fmt.Sprintf("%d 字符（内容已隐藏）", len([]rune(input.Text)))})
+		}
+		return Presentation{Title: "请求操作浏览器", Description: "网页内容来自外部站点。批准后可在隔离的临时浏览器中执行本次操作；输入内容不会显示在审批卡片中。", Fields: fields}, nil
 	case "schedule_task":
 		var input struct {
 			Name            string `json:"name"`

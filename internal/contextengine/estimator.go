@@ -172,7 +172,7 @@ func (e *ApproxEstimator) estimateMessageWithAttachments(message *schema.Message
 			if extracted := extraStringValue(part.Extra, "extracted_text"); extracted != "" {
 				tokens += 12 + e.EstimateText(extracted)
 			} else {
-				tokens += 2048
+				tokens += e.EstimateText(multimodal.HistoricalFilePlaceholder(part))
 			}
 		}
 	}

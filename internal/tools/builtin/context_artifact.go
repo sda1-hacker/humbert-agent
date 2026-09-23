@@ -158,6 +158,9 @@ func (f *ContextResourceFactory) readAttachment(ctx context.Context, scope humbe
 	if found == nil {
 		return nil, fmt.Errorf("attachment resource_id 不在当前有效会话分支中: %s", id)
 	}
+	if found.DocumentOnDemand {
+		return nil, errors.New("文档附件请使用 extract_document 和相同的 attachment_id 按需读取 Markdown")
+	}
 	runes := []rune(found.ExtractedText)
 	end, err := contextResourceRange(offset, limit, len(runes), "附件")
 	if err != nil {

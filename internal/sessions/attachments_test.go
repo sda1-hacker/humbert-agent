@@ -1,6 +1,8 @@
 package sessions
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"os"
@@ -13,6 +15,65 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
+
+func testDocumentAttachment(t *testing.T) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	archive := zip.NewWriter(&buffer)
+	files := map[string]string{
+		"[Content_Types].xml": `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`,
+		"_rels/.rels":         `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+		"word/document.xml":   `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Lazy document body</w:t></w:r></w:p></w:body></w:document>`,
+	}
+	for name, content := range files {
+		entry, err := archive.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
+func TestDocumentAttachmentIsStoredWithoutEagerExtraction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	root := t.TempDir()
+	transcripts, err := transcript.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, transcripts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{store: store, logger: logging.NewBootstrap()}
+	session := Session{ID: "session-document", AgentID: "agent-a", Title: "test", CWD: root, CreatedAt: time.Now().UTC()}
+	if err := store.CreateSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := service.AppendUserInput(ctx, session.ID, UserInput{Attachments: []AttachmentInput{{Name: "memo.docx", MIMEType: "application/octet-stream", Base64Data: base64.StdEncoding.EncodeToString(testDocumentAttachment(t))}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := stored.Message.UserInputMultiContent[0]
+	if part.Extra["extracted_text"] != "" || part.Extra["document_on_demand"] != true {
+		t.Fatalf("document metadata = %#v", part.Extra)
+	}
+	messages, err := service.BuildContext(ctx, session.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hydrated := messages[0].UserInputMultiContent[0]
+	if hydrated.Type != schema.ChatMessagePartTypeText || !strings.Contains(hydrated.Text, "extract_document") || strings.Contains(hydrated.Text, "Lazy document body") {
+		t.Fatalf("document was eagerly hydrated: %#v", hydrated)
+	}
+}
 
 func TestAttachmentSidecarPersistsMetadataAndHydratesRuntime(t *testing.T) {
 	t.Parallel()
@@ -91,9 +152,9 @@ func TestAttachmentRejectsUnsupportedBinaryBeforePersistence(t *testing.T) {
 	}
 
 	_, err = service.AppendUserInput(ctx, session.ID, UserInput{Attachments: []AttachmentInput{{
-		Name: "document.pdf", MIMEType: "application/pdf", Base64Data: base64.StdEncoding.EncodeToString([]byte("%PDF-fake")),
+		Name: "document.pdf", MIMEType: "application/pdf", Base64Data: base64.StdEncoding.EncodeToString([]byte("not a PDF")),
 	}}})
-	if err == nil || !strings.Contains(err.Error(), "提取文档文本失败") {
+	if err == nil || !strings.Contains(err.Error(), "PDF 文件签名无效") {
 		t.Fatalf("unsupported binary error = %v", err)
 	}
 	messages, listErr := store.ListMessages(ctx, session.ID, 0)

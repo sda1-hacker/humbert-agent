@@ -62,5 +62,6 @@ func All(
 		application.NewService(
 			NewWorkspaceService(core),
 		),
+		application.NewService(NewDeskService(core)),
 	}
 }

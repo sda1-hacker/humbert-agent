@@ -61,6 +61,22 @@ func (s *PreferenceService) AddPersonalMemory(text string) (preferences.Personal
 	return s.core.Preferences().AddMemory(ctx, text)
 }
 
+func (s *PreferenceService) AddPersonalMemoryFromMessage(text, sessionID, entryID string) (preferences.PersonalMemory, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := s.core.Sessions().Get(ctx, sessionID); err != nil {
+		return preferences.PersonalMemory{}, err
+	}
+	entries, err := s.core.Sessions().ReadActiveBranchRange(ctx, sessionID, entryID, 0, 0)
+	if err != nil {
+		return preferences.PersonalMemory{}, err
+	}
+	if len(entries) != 1 || entries[0].ID != entryID || entries[0].Message == nil {
+		return preferences.PersonalMemory{}, fmt.Errorf("来源消息不在当前会话分支中")
+	}
+	return s.core.Preferences().AddMemoryWithSource(ctx, text, sessionID, entryID)
+}
+
 func (s *PreferenceService) UpdatePersonalMemory(id string, text string) (preferences.PersonalMemory, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

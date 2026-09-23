@@ -1,158 +1,191 @@
 # Humbert Agent
 
-Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Personal Agent 项目。
-名字Humbert来自于作者喜欢的一个日本民谣组合ハンバート ハンバート。
-作者也是刚接触Agent开发，功能正在逐渐完善,希望大家一起来学习，有什么好的建议多多issues
+Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，使用 **Go + Eino** 运行 Agent，使用 **Wails 3 + Vue 3** 提供桌面界面。它把对话、工作区、工具、Skills、MCP 连接器和定时任务放在同一个应用中：用户可以与 Agent 讨论问题，也可以让它读取工作区文件、检索资料、操作网页或按计划执行任务。
 
-## 首次使用
+项目名称来自作者喜欢的日本民谣组合「ハンバート ハンバート」。项目仍在持续开发中，欢迎通过 Issue 交流使用问题和改进建议。
 
-首次启动且没有绑定可用模型的 Agent 时，应用会引导创建或选择 Provider、配置模型、发送一条短消息验证连接，然后创建默认 Agent。连接测试可能产生少量 Token 费用。已有可用 Agent 的用户会直接进入聊天。
+> **项目状态**：当前版本为 0.1.0，适合开发、体验和个人场景。外部网页、工具和模型输出仍应按不可信输入对待；涉及文件修改、命令执行或网页交互时，请检查授权内容。
 
-诊断会分别提示凭据、接口地址、网络、超时、额度和模型能力问题；模型设置页中的“测试”也会显示同样的诊断。短消息只验证文本对话，工具调用是否可用仍需按模型实际能力确认。首次创建 Agent 时可以选择启用全部内置工具；未选择时可在 Agent 设置中逐项配置。
+## 主要功能
 
-## 数据目录
+| 领域 | 当前能力 |
+| --- | --- |
+| 对话与模型 | 多 Agent、多会话；OpenAI、OpenAI 兼容接口和 Ollama；模型能力配置、连接测试与首次使用引导；流式对话和工具调用展示 |
+| 附件与图片 | 支持图片，以及文本、源码、PDF、DOCX、XLSX、PPTX 等可提取文本的附件；聊天模型有视觉能力时直接处理图片，否则由配置的视觉模型先生成观察文本，再交给聊天模型完成本轮对话 |
+| 上下文与记忆 | 自动压缩长对话、保留最近原始消息、按需回查旧历史；会话派生记忆与用户确认后保存的跨会话个人记忆 |
+| 工作区与工具 | 文件浏览和预览、文件读写与检索、补丁、Git 查询、网页搜索与抓取、浏览器操作；命令和 Skill 脚本受配置及权限控制 |
+| 扩展能力 | 按 Agent 配置内置工具、Skills 和 MCP 连接器；可将显式开放的其他 Agent 作为一次性子 Agent 调用 |
+| 主动任务 | 一次性、间隔、每日、每周及手动任务；聊天中安排提醒；运行记录、重试、通知、审批与执行限额 |
+| 数据管理 | 跨会话正文搜索、工作区文档搜索、会话归档、加密备份与恢复 |
 
-默认数据根目录：
+## 快速开始
 
-```text
-~/.humbert-agent/
-├── config.yaml
-├── config/
-│   ├── providers.json
-│   ├── models.json
-│   ├── preferences.json
-│   ├── personal-memory.json
-│   └── proactive.json
-├── secrets/
-├── agents/
-│   └── <agent-id>/
-│       ├── config.json
-│       ├── sessions/
-│       │   └── <session-id>/
-│       │       ├── config.json
-│       │       ├── session.jsonl
-│       │       ├── session.locations.jsonl
-│       │       ├── memory.json
-│       │       ├── attachments/
-│       │       └── subagents/
-│       │           └── <subrun-id>.json
-│       ├── tasks/
-│       │   └── <task-id>/
-│       │       ├── config.json
-│       │       └── runs/
-│       │           └── <run-id>.json
-├── workspaces/
-├── skills/
-├── mcp/
-├── cache/
-├── tmp/
-└── logs/
-```
+### 开发环境
 
-各类数据的职责：
+- go.mod 声明 **Go 1.27.1**。请使用能满足该版本要求的 Go 工具链。
+- 安装 Node.js、npm 和 Wails 3 CLI（命令名为 wails3）；桌面构建还需要相应平台的 Wails 系统依赖。
+- 模型连接需要可用的服务地址及凭据；使用本机 Ollama 时，需要另行运行 Ollama 服务。
+- browser 工具需要本机 Google Chrome；可通过 HUMBERT_BROWSER_CHROME_PATH 指定其可执行文件。
 
-- `config.yaml`：通过 Viper 加载的启动级配置；支持 `HUMBERT_*` 环境变量覆盖。
-- `config/providers.json`：Provider 非敏感元数据；API Key 不写入该文件。
-- `config/models.json`：Model Registry 与应用级多媒体模型路由的持久化数据。
-- `config/preferences.json`：用户偏好预留入口。
-- `config/personal-memory.json`：用户手动保存、可编辑和删除的跨会话个人记忆。
-- `config/proactive.json`：主动助手设置、可靠待处理事件与处理记录。
-- `secrets/`：本地 Credential 文件。
-- `agents/<id>/config.json`：Agent Profile。
-- `agents/<id>/sessions/<id>/config.json`：会话标题、工作目录等配置。
-- `agents/<id>/sessions/<id>/session.jsonl`：消息、工具调用/结果与压缩检查点的事实来源。
-- `agents/<id>/sessions/<id>/session.locations.jsonl`：按需生成的 Entry 字节位置索引；可从 `session.jsonl` 重建。
-- `agents/<id>/sessions/<id>/memory.json`：从会话历史派生的记忆，按需创建。
-- `agents/<id>/tasks/<id>/config.json`：主动任务、结构化日程、重叠/错过策略与执行限制。
-- `agents/<id>/tasks/<id>/runs/<id>.json`：每次运行的持久化状态、计数、审批投影与结果摘要。
-- `agents/<id>/sessions/<id>/subagents/<id>.json`：当前会话内一次 Agent-as-Tool 调用的轻量审计；不保存独立聊天历史。
-- `logs/`：运行审计；实时 `turn.*` 事件不追加到消息 JSONL。
-- `workspaces/`：Managed Agent Workspace。
+在仓库根目录运行：
 
-## Thinking 与模型上下文
-
-会话 Transcript 保存模型返回的 thinking，供当前会话展示和排障。发送下一次模型请求时，OpenAI 与 OpenAI 兼容接口只回放可见回答及工具调用/结果；Ollama 仅在当前用户轮次内回放 thinking。较早轮次的 thinking 不进入模型上下文，也不计入压缩预算。压缩摘要和派生记忆不收录 thinking。
-
-上下文压缩保留完整的 `session.jsonl` 原文，只追加检查点。摘要模型失败时，检查点标记为 `degraded`，保留开头与最近线索；后续维护会从原始来源重新生成摘要。多次压缩会继承已确认的文件读写元数据。图片检查点保留附件身份与对话中已有的观察，不会凭文本推断未见过的视觉内容。
-
-## 多 Agent 协作
-
-Agent 可以按需启用 `list_agents` 与 `run_agent`。`run_agent` 使用 Eino AgentTool 在当前
-Turn 内同步创建一次性的独立子 Runtime：子 Agent 只接收主 Agent 写出的自包含任务，不读取
-父会话历史，也不创建普通 Session 或侧栏对话。它使用自己的 Profile、模型、指令、
-Tool、Skill 和 MCP，不与父 Agent 的能力清单取交集。Workspace、Sandbox、Network 和
-Permission 则继承父 Runtime 的安全边界，所有审批仍在父对话内完成。
-
-Agent 默认不接受子 Agent 调用。只有在 Agent 设置中显式打开“允许作为子 Agent 调用”后，
-它才会出现在 `list_agents` 结果中，`run_agent` 后端也会再次校验该开关。
-
-子 Agent 完成后，最终文本作为标准 ToolResult 返回给主 Agent；主 Agent 必须继续判断、核验和
-综合，再生成面向用户的回答。子 Agent 的高风险操作通过 Eino CompositeInterrupt 在当前父会话
-审批。父 Session 的 ToolCall/ToolResult 是对话事实来源，`subagents/*.json` 只记录运行身份、
-目标、状态和最终结果，便于排障，不形成第二套聊天历史。
-
-## 从对话安排任务
-
-用户可以在普通对话中要求“明天九点提醒我喝水”或“每周五总结工作区”。Agent 会调用 `get_current_time` 确认当前时间，并提交 `schedule_task` 计划。审批卡片展示任务名称、内容、执行方式、时间和时区；用户逐次确认后才创建任务。完成后，聊天记录显示“查看任务”入口。由聊天创建的 Agent 任务完成或失败时会发送带任务入口的通知；仅提醒任务在触发时直接发送通知。
-
-新建 Agent 默认提供该工具；已显式限定内置工具的 Agent 需要在 Agent 安全设置中启用“安排提醒或任务”。任务只在 Humbert 进程运行时触发；错过的单次计划按现有补跑策略在下次启动处理。
-
-## 开发环境
-
-项目 `go.mod` 当前要求：
-
-```text
-Go 1.27.1
-```
-
-桌面端使用 Wails 3，前端位于 `frontend/`，采用 Vue + JavaScript。
-
-本地检查：
-
-```bash
-cd frontend && npm ci && npm test && npm run build
-cd .. && go test ./... && go vet ./...
-```
-
-从干净检出运行 Go 检查也无需预先构建前端；`frontend/dist/.gitkeep` 为 Go embed 保留目录。
-
-## 配置
-
-第一次启动会自动创建 `~/.humbert-agent/config.yaml`。仓库中的 `config.example.yaml` 可作为配置参考。
-
-配置覆盖示例：
-
-```bash
-export HUMBERT_LOGGING_LEVEL=debug
-export HUMBERT_SECURITY_SHELL_ENABLED=false
-```
-
-
-## 生成 Wails Binding
-
-在项目根目录执行：
-
-```bash
+~~~bash
+cd frontend
+npm ci
+cd ..
 wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings
 wails3 dev
-```
+~~~
 
-## 数据备份与恢复
+wails3 dev 会启动桌面应用和前端开发服务。构建桌面程序可运行 wails3 build；平台打包任务定义在根目录的 Taskfile.yml 与 build/ 中。
 
-在“设置 → 数据”中输入至少 12 个字符的口令并安排加密备份。完全退出并重新启动 Humbert 后，应用会在加载数据服务前创建 `.age` 备份；若备份失败，应用仍会启动，失败原因会显示在数据设置页，下一次启动时重试，也可取消。模型密钥保存在系统凭据库中，备份时才写入加密归档。也可在应用完全退出后用 CLI 操作：
+### 首次使用
 
-```bash
-go run ./cmd/data backup -output /path/to/humbert-backup.age -passphrase-file /path/to/passphrase -offline
-go run ./cmd/data verify -archive /path/to/humbert-backup.age -passphrase-file /path/to/passphrase
+首次启动时，Humbert 会在用户主目录创建 ~/.humbert-agent/。如果还没有绑定可用模型的 Agent，界面会引导你：
+
+1. 创建或选择 Provider，配置 API 地址和凭据。
+2. 添加模型并设置其工具、视觉等能力。
+3. 发送短消息测试文本连接，然后创建默认 Agent。
+4. 为 Agent 选择工作区及允许使用的工具、Skills、MCP 连接器。
+
+连接测试可能产生少量模型费用。文本测试通过只说明基础对话可用，工具调用和视觉能力仍取决于所选模型及其配置。已有可用 Agent 时，应用直接进入聊天。
+
+## 日常使用
+
+### 对话、附件与记忆
+
+每个 Agent 可以有多个会话。消息保留用户输入、可见回答、工具调用与结果，便于查看和回溯。聊天支持引用选中的文字或整条消息；“记住”会先让用户编辑确认，再写入可管理的个人记忆。
+
+上传图片时，如果当前聊天模型支持视觉，它直接接收图片并完成本轮对话；否则需要在模型设置中配置一个具备视觉能力的图片模型。图片模型产生受限的观察文本，聊天模型继续负责推理、工具调用和最终回答。普通 UTF-8 文本附件会直接提供给模型；PDF、DOCX、XLSX、PPTX 保留原件和附件编号，Agent 可用 `extract_document` 按需转换成 Markdown，并使用 `offset`、`limit` 分段读取。该工具也可读取 Sandbox 允许的工作区文档，需启用文件工具。单份文档上限 12 MiB，Markdown 提取结果上限 512 KiB；扫描版 PDF 当前没有 OCR。音频、视频尚未形成完整的输入处理链路。
+
+长对话会在需要时追加压缩检查点，并继续保留完整原始记录。构造模型上下文时，使用最近的有效检查点和其后的原始消息；较旧内容可由历史查询工具按需读取。模型的 thinking 会保存用于当前会话展示和排障，但不写进压缩摘要或派生记忆；历史 thinking 不作为一般聊天上下文反复发送。工具调用及结果作为会话事实保留，进入模型上下文时会受到窗口与输出预算约束。
+
+### 工作区、搜索与浏览器
+
+Agent 可使用应用管理的工作区，也可指向用户选择的目录。工作区页面提供文件树、受限预览和文档 Markdown 搜索；支持有可提取文本的 PDF、DOCX、XLSX、PPTX。搜索结果提供相对路径与提取结果行号。单次搜索最多遍历 5000 个文件、索引 1000 份文档；超过范围时可缩小工作区。侧栏可搜索跨会话的用户和助手消息，并跳转到对应消息；归档会话不会删除其记录。
+
+开启 browser 内置工具后，Agent 可通过 Chrome DevTools Protocol 使用独立临时浏览器配置执行 open、snapshot、click、type、close。该工具基于网页文本和 CSS 选择器，不提供视觉定位、下载管理或操作整个电脑桌面的能力。它只接受经过公网地址检查的 HTTP/HTTPS 页面，操作按写入风险经过权限策略；网页内容仍是不可信信息。关闭浏览器或应用退出时会清理临时配置。
+
+工作区便签可创建持久化的手动任务并立即运行，任务页面可查看结果及重试失败任务。
+
+### Skills、MCP 与多 Agent
+
+Skills 使用 SKILL.md 定义能力；MCP 连接器支持 stdio 和 Streamable HTTP。Agent Profile 决定其可用的内置工具、Skills 与 MCP 工具，工具执行还会经过权限、工作区和运行时限制。
+
+启用 list_agents / run_agent 后，主 Agent 可以把自包含任务交给其他 Agent。被调用方必须在设置中显式开启“允许作为子 Agent 调用”。子 Agent 使用自己的模型、指令和能力配置，在当前父会话内同步运行；文件、网络和审批边界沿用父运行环境。其最终结果作为工具结果回到主 Agent，由主 Agent 继续整理答复。子运行只有轻量审计记录，不会额外创建侧栏会话。
+
+### 提醒与主动任务
+
+可在任务页面创建手动、一次性或周期任务，也可以在对话中让 Agent 使用 get_current_time 与 schedule_task 安排提醒。通过对话创建任务时，审批卡会展示任务内容、执行方式、时间和时区，确认后才会创建。任务运行可设置时长、模型调用次数、工具调用次数及 Token 限额；运行记录保存状态和结果摘要，执行过程仍记录在对应会话中。
+
+**定时任务依赖 Humbert 进程运行。** 应用关闭期间不会按时执行；重新启动后，错过的运行按任务的错过策略处理。模型报告的 Token 用量用于限额判断，单次请求可能越过阈值；不同供应商的货币费用不统一计算。
+
+## 架构与数据
+
+~~~text
+Vue 3 / Pinia / Wails 桌面界面
+               │
+        Wails Application Services
+               │
+Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
+               │
+本地文件与系统凭据库；SQLite 仅用于可重建搜索索引
+~~~
+
+每次 Turn 都固定当时的 Agent、模型、工作区、工具、Skills、MCP、权限与上下文配置，避免运行中配置变化影响正在执行的调用。主要代码位置：
+
+| 路径 | 职责 |
+| --- | --- |
+| cmd/desktop/、cmd/data/ | 桌面应用入口；离线备份、校验与恢复 CLI |
+| internal/app/、internal/services/ | Core 组装与 Wails 服务边界 |
+| internal/runtime/、internal/contextengine/ | Eino Turn 执行、模型路由、上下文构造与压缩 |
+| internal/agents/、internal/sessions/、internal/transcript/ | Agent 配置、会话与追加式记录 |
+| internal/tools/、internal/skills/、internal/mcp/ | 内置工具与扩展能力 |
+| internal/tasks/、internal/proactive/ | 任务调度、运行与主动事件 |
+| internal/searchindex/、internal/databackup/ | SQLite 搜索投影与加密备份 |
+| frontend/ | Vue 3 桌面界面与 Wails bindings |
+
+设计边界详见 [领域边界文档](docs/architecture/domain-boundaries.md)。
+
+### 默认数据目录
+
+~~~text
+~/.humbert-agent/
+├── config.yaml                     # 启动配置
+├── config/
+│   ├── providers.json              # Provider 非敏感元数据
+│   ├── models.json                 # 模型与图片模型路由
+│   ├── preferences.json            # 用户偏好
+│   ├── permissions.json            # 权限决策
+│   ├── personal-memory.json        # 用户确认的跨会话记忆
+│   └── proactive.json              # 主动助手状态
+├── secrets/                        # 系统凭据库索引及迁移数据
+├── agents/<agent-id>/
+│   ├── config.json                 # Agent Profile
+│   ├── sessions/<session-id>/
+│   │   ├── config.json             # 会话元数据
+│   │   ├── session.jsonl           # 消息、工具事务、压缩检查点
+│   │   ├── session.locations.jsonl # 可重建的字节位置索引
+│   │   ├── memory.json             # 派生会话记忆
+│   │   ├── attachments/            # 附件原件
+│   │   ├── context-artifacts/      # 被移出窗口的大段内容
+│   │   └── subagents/              # 子 Agent 运行摘要
+│   └── tasks/<task-id>/
+│       ├── config.json             # 计划及执行限制
+│       └── runs/<run-id>.json      # 运行状态与摘要
+├── workspaces/                     # 应用管理的工作区
+├── skills/                         # 本地 Skills
+├── mcp/servers.json                # MCP 连接器配置
+├── cache/
+│   ├── conversation-search.sqlite # 会话正文搜索索引
+│   └── document-search.sqlite     # 工作区文档搜索索引
+├── tmp/
+└── logs/humbert.log
+~~~
+
+部分文件会在首次使用对应功能时才创建。session.jsonl 是会话消息与工具事务的事实来源；长会话使用内存缓存或 session.locations.jsonl 的字节位置按需读取，不要求每次构造上下文时把整份 JSONL 加载进内存。memory.json、位置索引及 cache/*.sqlite 是可重建的派生数据。两个 SQLite 文件只用于搜索，不保存会话事实或承担 Runtime 状态存储；删除缓存后会在后续搜索时重建。自定义工作区位于用户指定路径，不一定在上述数据目录内。
+
+## 配置与安全
+
+首次启动自动生成 ~/.humbert-agent/config.yaml；可参考仓库中的 [配置示例](config.example.yaml)。启动配置由 Viper 读取，支持 HUMBERT_* 环境变量覆盖，例如：
+
+~~~bash
+export HUMBERT_LOGGING_LEVEL=debug
+export HUMBERT_SECURITY_SHELL_ENABLED=false
+~~~
+
+Provider 和模型等动态配置在应用设置中管理。桌面应用的模型密钥存于系统凭据库，普通 Provider JSON 不保存 API Key。文件写入、命令执行和浏览器操作受 Agent 能力选择、权限策略与运行环境共同约束；默认命令工具需要显式启用。与远程模型或 MCP 服务交互时，发送给对方的对话和工具数据仍受该服务自身的数据处理方式影响。
+
+## 备份与恢复
+
+在“设置 → 数据”中设置至少 12 个字符的口令并安排加密备份。完全退出后再次启动，Humbert 会在加载数据服务前生成 .age 归档；如失败，原因会显示在设置页，并在下次启动重试或由用户取消。备份可包含模型密钥、会话、附件、任务、Skills 与托管工作区，请妥善保存归档及口令。
+
+应用完全退出后，也可使用离线 CLI：
+
+~~~bash
+go run ./cmd/data backup  -output /path/to/humbert-backup.age -passphrase-file /path/to/passphrase -offline
+go run ./cmd/data verify  -archive /path/to/humbert-backup.age -passphrase-file /path/to/passphrase
 go run ./cmd/data restore -archive /path/to/humbert-backup.age -passphrase-file /path/to/passphrase -offline
-```
+~~~
 
-口令文件应位于数据目录之外，权限为 `0600` 或更严格；请保管好备份口令，遗失后无法恢复。备份包含模型密钥、会话、附件、任务、技能和工作区。应用内恢复先验证归档，再在下次启动、加载数据前切换目录；原数据保留为 `~/.humbert-agent.before-restore-*` 供回退。旧版未加密 ZIP 仍可校验和恢复。CLI 备份与恢复都只在应用完全退出时使用。
+口令文件须位于数据目录之外，在 Unix 系统上权限为 0600 或更严格。恢复会先校验归档，并把原数据目录保留为 ~/.humbert-agent.before-restore-* 供回退；旧版未加密 ZIP 也可校验和恢复。应用内恢复安排在下次启动执行。
 
-## 当前运行边界
+## 开发与验证
 
-- 定时任务只在 Humbert 进程运行时执行。关闭应用期间错过的计划按任务所选策略在下次启动处理。
-- 定时任务可设置模型调用、工具调用、Token 用量和时长上限。Token 用量依赖模型提供的 Usage，达到阈值后阻止下一次模型或工具调用；单次请求可能越过阈值。运行记录展示输入和输出 Token。货币费用因不同供应商定价而不统一计算。
-- 聊天支持 PDF、DOCX、XLSX、PPTX 的文本提取。扫描版 PDF 暂无 OCR，图片中的文字不会被提取。
-- Markdown 中的远程图片需要用户点击后才会打开，避免查看历史消息时自动请求外部地址。
-- 会话配置 v1/v2 会在读取时迁移到 v3，原配置保留为 `.pre-v3.*` 文件。
+~~~bash
+cd frontend
+npm ci
+npm test
+npm run build
+cd ..
+go test ./...
+go vet ./...
+~~~
+
+frontend/dist/.gitkeep 让未构建前端的干净检出也能通过 Go 的嵌入资源检查。修改 Wails 服务签名后，重新执行：
+
+~~~bash
+wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings
+~~~
+
+工程约束见 [DEVELOPMENT.md](DEVELOPMENT.md)；目前的核心边界见 [领域边界文档](docs/architecture/domain-boundaries.md)。

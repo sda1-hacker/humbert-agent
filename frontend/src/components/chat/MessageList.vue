@@ -59,6 +59,40 @@ const emit = defineEmits([
 const viewport =
     ref(null);
 
+async function jumpToSearchResult() {
+  const target = sessionStore.jumpTargetID;
+  if (!target || !sessionStore.selectedID) return;
+  followLatest.value = false;
+  await nextTick();
+  let element = Array.from(viewport.value?.querySelectorAll('[data-entry-id]') || [])
+      .find((node) => node.dataset.entryId === target);
+  if (!element) {
+    try { await sessionStore.loadSearchWindow(target); }
+    catch (error) { Message.error(error?.message ?? String(error)); }
+    await nextTick();
+    element = Array.from(viewport.value?.querySelectorAll('[data-entry-id]') || [])
+        .find((node) => node.dataset.entryId === target);
+  }
+  if (sessionStore.jumpTargetID !== target) return;
+  if (element) {
+    element.scrollIntoView({block: 'center'});
+    element.classList.add('message-search-highlight');
+    setTimeout(() => element.classList.remove('message-search-highlight'), 2500);
+  } else Message.warning('无法定位这条消息');
+  sessionStore.jumpTargetID = '';
+}
+
+watch(() => sessionStore.jumpTargetID, () => { void jumpToSearchResult(); });
+
+async function returnToLatest() {
+  try {
+    await sessionStore.refreshMessages();
+    followLatest.value = true;
+    await nextTick();
+    await scrollToBottom(true);
+  } catch (error) { Message.error(error?.message ?? String(error)); }
+}
+
 const followLatest =
     ref(true);
 
@@ -408,9 +442,8 @@ watch(
 );
 
 onMounted(() => {
-  void scrollToBottom(
-      true,
-  );
+  if (sessionStore.jumpTargetID) void jumpToSearchResult();
+  else void scrollToBottom(true);
 });
 
 onUnmounted(() => {
@@ -438,6 +471,9 @@ onUnmounted(() => {
       <div
           class="message-container"
       >
+        <div v-if="sessionStore.searchWindowActive" class="message-history-more">
+          <a-button size="small" type="text" @click="returnToLatest">返回最新消息</a-button>
+        </div>
         <div
             v-if="sessionStore.messageHasMore"
             class="message-history-more"
@@ -593,6 +629,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.message-viewport :deep(.message-search-highlight) { outline: 2px solid var(--h-primary); outline-offset: 4px; border-radius: 8px; }
 .message-list {
   position: relative;
 

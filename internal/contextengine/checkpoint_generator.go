@@ -227,13 +227,8 @@ func serializeMessagesForCheckpoint(messages []*schema.Message, argumentMaxRunes
 					builder.WriteString(multimodal.HistoricalImagePlaceholder(part))
 					builder.WriteString(" Visual details are unavailable to this text-only checkpoint; retain any observations stated in nearby messages, and do not invent image contents.")
 				case schema.ChatMessagePartTypeFileURL:
-					name := "file"
-					if part.File != nil && strings.TrimSpace(part.File.Name) != "" {
-						name = part.File.Name
-					}
-					builder.WriteString("\n[File attachment: ")
-					builder.WriteString(name)
-					builder.WriteString("]")
+					builder.WriteString("\n")
+					builder.WriteString(multimodal.HistoricalFilePlaceholder(part))
 					if extracted := extraStringValue(part.Extra, "extracted_text"); strings.TrimSpace(extracted) != "" {
 						builder.WriteString("\n[Extracted file text]\n")
 						builder.WriteString(extracted)

@@ -19,11 +19,13 @@ const maxPersonalMemoryRunes = 300
 
 // PersonalMemory 是由用户明确保存并可随时编辑/删除的跨会话事实。
 type PersonalMemory struct {
-	ID        string    `json:"id"`
-	Text      string    `json:"text"`
-	Source    string    `json:"source"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID              string    `json:"id"`
+	Text            string    `json:"text"`
+	Source          string    `json:"source"`
+	SourceSessionID string    `json:"source_session_id,omitempty"`
+	SourceEntryID   string    `json:"source_entry_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type memoryDocument struct {
@@ -47,6 +49,12 @@ func (s *Store) ListMemories(ctx context.Context) ([]PersonalMemory, error) {
 }
 
 func (s *Store) AddMemory(ctx context.Context, text string) (PersonalMemory, error) {
+	return s.AddMemoryWithSource(ctx, text, "", "")
+}
+
+// AddMemoryWithSource records the user's confirmed source without importing
+// the surrounding conversation into persistent model context.
+func (s *Store) AddMemoryWithSource(ctx context.Context, text, sessionID, entryID string) (PersonalMemory, error) {
 	text, err := normalizeMemoryText(text)
 	if err != nil {
 		return PersonalMemory{}, err
@@ -61,7 +69,11 @@ func (s *Store) AddMemory(ctx context.Context, text string) (PersonalMemory, err
 		return PersonalMemory{}, fmt.Errorf("个人记忆最多 %d 条", maxPersonalMemories)
 	}
 	now := time.Now().UTC()
-	item := PersonalMemory{ID: uuid.NewString(), Text: text, Source: "manual", CreatedAt: now, UpdatedAt: now}
+	source := "manual"
+	if sessionID != "" && entryID != "" {
+		source = "conversation"
+	}
+	item := PersonalMemory{ID: uuid.NewString(), Text: text, Source: source, SourceSessionID: sessionID, SourceEntryID: entryID, CreatedAt: now, UpdatedAt: now}
 	doc.Items = append(doc.Items, item)
 	if err := atomicfile.WriteJSON(ctx, s.memoryPath(), 0o600, doc); err != nil {
 		return PersonalMemory{}, err
@@ -124,8 +136,11 @@ func (s *Store) readMemories(ctx context.Context) (memoryDocument, error) {
 	}
 	seen := make(map[string]bool, len(doc.Items))
 	for _, item := range doc.Items {
-		if item.ID == "" || seen[item.ID] || item.Source != "manual" || item.CreatedAt.IsZero() || item.UpdatedAt.IsZero() {
+		if item.ID == "" || seen[item.ID] || (item.Source != "manual" && item.Source != "conversation") || item.CreatedAt.IsZero() || item.UpdatedAt.IsZero() {
 			return memoryDocument{}, errors.New("个人记忆文件记录无效")
+		}
+		if item.Source == "conversation" && (item.SourceSessionID == "" || item.SourceEntryID == "") {
+			return memoryDocument{}, errors.New("个人记忆来源无效")
 		}
 		seen[item.ID] = true
 		if _, err := normalizeMemoryText(item.Text); err != nil {

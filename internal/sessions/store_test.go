@@ -70,6 +70,45 @@ func TestStoreRecoversMissingConfigWithoutChangingTranscript(t *testing.T) {
 	}
 }
 
+func TestArchivePersistsWithoutChangingTranscript(t *testing.T) {
+	ctx := context.Background()
+	tr, err := transcript.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().UTC()
+	if err := store.CreateSession(ctx, Session{ID: "archived", AgentID: "agent", Title: "归档测试", CWD: t.TempDir(), CreatedAt: created}); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := tr.SessionDirectory("agent", "archived")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetArchived(ctx, "archived", true); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := reopened.GetSession(ctx, "archived")
+	if err != nil || !got.Archived {
+		t.Fatalf("archive=%+v err=%v", got, err)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "session.jsonl"))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("archive changed transcript: %v", err)
+	}
+}
+
 func TestRetryReusesOnlyTheLastUnansweredUserMessage(t *testing.T) {
 	ctx := context.Background()
 	tr, err := transcript.NewStore(t.TempDir())

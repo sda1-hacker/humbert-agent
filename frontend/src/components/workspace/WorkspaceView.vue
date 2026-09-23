@@ -15,6 +15,10 @@ import WorkspaceFileTree
   from "./WorkspaceFileTree.vue";
 import WorkspacePreview
   from "./WorkspacePreview.vue";
+import DeskNotes from "./DeskNotes.vue";
+import { searchWorkspaceDocuments } from "../../api/workspace.js";
+
+const emit = defineEmits(['open-session']);
 
 import {
   useAgentStore,
@@ -30,6 +34,40 @@ const agentStore = useAgentStore();
 const workspaceStore = useWorkspaceStore();
 
 const refreshing = ref(false);
+const documentQuery = ref("");
+const documentResults = ref([]);
+const documentSearching = ref(false);
+const documentSearched = ref(false);
+let documentSearchSequence = 0;
+
+watch(() => workspaceStore.agentID, () => {
+  documentSearchSequence += 1;
+  documentResults.value = [];
+  documentSearched.value = false;
+});
+
+async function searchDocuments() {
+  const query = documentQuery.value.trim();
+  if (!query || !workspaceStore.agentID) return;
+  const sequence = ++documentSearchSequence;
+  documentSearching.value = true;
+  try {
+    const results = await searchWorkspaceDocuments(workspaceStore.agentID, query);
+    if (sequence === documentSearchSequence) {
+      documentResults.value = Array.isArray(results) ? results : [];
+      documentSearched.value = true;
+    }
+  } catch (error) {
+    if (sequence === documentSearchSequence) Message.error(error?.message ?? String(error));
+  } finally {
+    if (sequence === documentSearchSequence) documentSearching.value = false;
+  }
+}
+
+async function openDocumentResult(result) {
+  try { await workspaceStore.openPath(result.path); }
+  catch (error) { Message.error(error?.message ?? String(error)); }
+}
 
 /**
  * 文件树折叠状态属于纯 UI 偏好，不应该写入 Agent Profile 或 Workspace 配置。
@@ -310,6 +348,22 @@ async function selectEntry(entry) {
       </div>
     </header>
 
+    <DeskNotes :agent-id="workspaceStore.agentID" @open-session="emit('open-session', $event)" />
+
+    <section v-if="workspaceStore.agentID" class="workspace-view__document-search">
+      <div class="workspace-view__document-query">
+        <a-input v-model="documentQuery" placeholder="搜索工作区 PDF / Office 文档正文" @press-enter="searchDocuments" />
+        <a-button :loading="documentSearching" :disabled="!documentQuery.trim()" @click="searchDocuments">检索资料</a-button>
+      </div>
+      <div v-if="documentSearched" class="workspace-view__document-results">
+        <span v-if="!documentResults.length">没有找到匹配的文档内容</span>
+        <button v-for="result in documentResults" :key="`${result.path}:${result.line}`" type="button" @click="openDocumentResult(result)">
+          <strong>{{ result.path }}:{{ result.line }}</strong>
+          <span>{{ result.snippet }}</span>
+        </button>
+      </div>
+    </section>
+
     <div
         v-if="agentStore.items.length === 0"
         class="workspace-view__empty"
@@ -385,6 +439,14 @@ async function selectEntry(entry) {
   overflow: hidden;
   background: var(--h-bg);
 }
+
+.workspace-view__document-search { flex: 0 0 auto; padding: 10px 24px; border-bottom: 1px solid var(--h-border); }
+.workspace-view__document-query { display: flex; gap: 8px; }
+.workspace-view__document-query :deep(.arco-input-wrapper) { flex: 1; }
+.workspace-view__document-results { display: flex; gap: 6px; overflow: auto; margin-top: 8px; }
+.workspace-view__document-results > button { display: grid; flex: 0 0 250px; gap: 4px; padding: 7px; border: 1px solid var(--h-border); border-radius: 6px; background: var(--h-bg); color: var(--h-text-secondary); cursor: pointer; text-align: left; }
+.workspace-view__document-results > button strong { overflow: hidden; color: var(--h-text); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-view__document-results > button span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .workspace-view__topbar {
   display: flex;

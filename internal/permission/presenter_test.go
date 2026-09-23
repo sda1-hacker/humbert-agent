@@ -30,6 +30,27 @@ func TestBuildPresentationHidesWriteBody(t *testing.T) {
 	}
 }
 
+func TestBrowserPresentationHidesTypedTextAndQuery(t *testing.T) {
+	presentation, err := BuildPresentation(Request{
+		AgentID: "a", SessionID: "s", ToolName: "browser", Risk: RiskWrite,
+		Arguments: `{"action":"type","url":"https://example.com/?token=secret-query","selector":"#password","text":"secret-password"}`,
+		Identity:  CapabilityIdentity{Version: CapabilityIdentityVersion, Kind: CapabilityBuiltin, Tool: "browser", Risk: RiskWrite, SandboxFingerprint: "sbx1:test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := presentation.Title + presentation.Description
+	for _, field := range presentation.Fields {
+		joined += field.Label + field.Value
+	}
+	if strings.Contains(joined, "secret-password") || strings.Contains(joined, "secret-query") {
+		t.Fatal("浏览器审批泄漏了输入内容或 URL 查询参数")
+	}
+	if !strings.Contains(joined, "example.com") || !strings.Contains(joined, "#password") {
+		t.Fatal("浏览器审批缺少站点或元素信息")
+	}
+}
+
 func TestBuildPresentationRedactsCommandSecrets(t *testing.T) {
 	presentation, err := BuildPresentation(Request{
 		AgentID: "a", SessionID: "s", ToolName: "run_command", Risk: RiskExec,

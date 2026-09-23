@@ -47,6 +47,19 @@ func TestExtractedTextFileDoesNotRequireNativeFileCapability(t *testing.T) {
 	}
 }
 
+func TestOnDemandDocumentDoesNotRequireNativeFileCapability(t *testing.T) {
+	t.Parallel()
+	fileURL := "humbert-attachment://document-1"
+	message := &schema.Message{Role: schema.User, UserInputMultiContent: []schema.MessageInputPart{{
+		Type:  schema.ChatMessagePartTypeFileURL,
+		File:  &schema.MessageInputFile{MessagePartCommon: schema.MessagePartCommon{URL: &fileURL, MIMEType: "application/pdf"}, Name: "report.pdf"},
+		Extra: map[string]any{"attachment_id": "document-1", "document_on_demand": true},
+	}}}
+	if requirements := requirementsFromMessage(message); requirements.Files || requirements.Vision {
+		t.Fatalf("document reference should be plain text for provider: %#v", requirements)
+	}
+}
+
 func TestHistoricalImageOnlyRequiresVisionForImmediateFollowUp(t *testing.T) {
 	t.Parallel()
 	imageURL := "humbert-attachment://image-1"

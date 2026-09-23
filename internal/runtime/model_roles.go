@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 )
@@ -172,10 +173,9 @@ func requirementsFromMessageWithImages(message *schema.Message, includeImages bo
 		case schema.ChatMessagePartTypeImageURL:
 			result.Vision = result.Vision || includeImages
 		case schema.ChatMessagePartTypeFileURL:
-			// 当前文件附件在接收时已提取为受控 UTF-8 文本，Provider 请求阶段会转换成
-			// text part，不依赖 Eino Adapter 尚未实现的原生 file_url。只有缺少提取结果
-			// 的异常消息才需要原生 Files Capability，并由后续水合 fail closed。
-			if stringMessagePartExtra(part.Extra, "extracted_text") == "" {
+			// 文本附件送入提取正文，文档附件送入按需提取引用；两者都转成
+			// text part。仅异常的其他文件消息需要原生 Files Capability。
+			if stringMessagePartExtra(part.Extra, "extracted_text") == "" && (part.File == nil || documenttext.MIMEForName(part.File.Name) == "") {
 				result.Files = true
 			}
 		}

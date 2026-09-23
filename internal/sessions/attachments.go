@@ -110,6 +110,13 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 				cleanup()
 				return Message{}, err
 			}
+		} else if documenttext.MIMEForName(name) != "" {
+			var validateErr error
+			mimeType, validateErr = documenttext.Validate(ctx, name, mimeType, data)
+			if validateErr != nil {
+				cleanup()
+				return Message{}, validateErr
+			}
 		} else {
 			var extractErr error
 			extractedText, mimeType, extractErr = extractTextAttachment(ctx, name, mimeType, data)
@@ -132,6 +139,9 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeImageURL, Image: &schema.MessageInputImage{MessagePartCommon: schema.MessagePartCommon{URL: &url, MIMEType: mimeType}}, Extra: extra})
 		} else {
 			extra["extracted_text"] = extractedText
+			if documenttext.MIMEForName(name) != "" {
+				extra["document_on_demand"] = true
+			}
 			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeFileURL, File: &schema.MessageInputFile{MessagePartCommon: schema.MessagePartCommon{URL: &url, MIMEType: mimeType}, Name: name}, Extra: extra})
 		}
 	}
@@ -233,11 +243,19 @@ func (s *Service) userInputMatchesStoredMessage(ctx context.Context, sessionID s
 			}
 		}
 		if !strings.HasPrefix(mimeType, "image/") {
-			_, normalizedMIME, extractErr := extractTextAttachment(ctx, name, mimeType, provided)
-			if extractErr != nil {
-				return false, nil
+			if documenttext.MIMEForName(name) != "" {
+				var validateErr error
+				mimeType, validateErr = documenttext.Validate(ctx, name, mimeType, provided)
+				if validateErr != nil {
+					return false, nil
+				}
+			} else {
+				_, normalizedMIME, extractErr := extractTextAttachment(ctx, name, mimeType, provided)
+				if extractErr != nil {
+					return false, nil
+				}
+				mimeType = normalizedMIME
 			}
-			mimeType = normalizedMIME
 		}
 		id := stringExtra(part.Extra, "attachment_id")
 		storedName := stringExtra(part.Extra, "name")
@@ -347,7 +365,11 @@ func (s *Service) hydrateUserAttachmentsWithBudget(
 			}
 			extractedText := stringExtra(part.Extra, "extracted_text")
 			if extractedText == "" {
-				return nil, fmt.Errorf("文件附件 %q 缺少可发送给模型的提取文本", part.File.Name)
+				if documenttext.MIMEForName(part.File.Name) == "" {
+					return nil, fmt.Errorf("文件附件 %q 缺少可发送给模型的提取文本", part.File.Name)
+				}
+				next = schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: multimodal.HistoricalFilePlaceholder(part)}
+				break
 			}
 			next = schema.MessageInputPart{
 				Type: schema.ChatMessagePartTypeText,
@@ -461,8 +483,8 @@ func validateImageAttachment(name string, claimedMIME string, data []byte) error
 }
 
 func extractTextAttachment(ctx context.Context, name string, mimeType string, data []byte) (string, string, error) {
-	if documenttext.MIMEForName(name) != "" {
-		return documenttext.Extract(ctx, name, mimeType, data)
+	if err := ctx.Err(); err != nil {
+		return "", "", err
 	}
 	if int64(len(data)) > maxTextAttachmentBytes {
 		return "", "", fmt.Errorf("文本附件 %s 超过 512 KiB 限制", name)

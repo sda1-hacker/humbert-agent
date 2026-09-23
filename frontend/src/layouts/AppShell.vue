@@ -509,6 +509,7 @@ onUnmounted(() => {
 
       <WorkspaceView
           v-else-if="mainView === 'workspace'"
+          @open-session="openTaskSession"
       />
 
       <ChatView

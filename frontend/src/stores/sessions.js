@@ -6,8 +6,10 @@ import {
     createSession,
     deleteSession,
     listMessagePage,
+    getMessageWindow,
     listSessions,
     renameSession,
+    setSessionArchived,
 } from "../api/sessions.js";
 
 const DRAFT_STORAGE_KEY =
@@ -197,6 +199,9 @@ export const useSessionStore =
                 drafts: loadDrafts(),
 
                 search: "",
+
+                jumpTargetID: "",
+                searchWindowActive: false,
 
                 loading: false,
             }),
@@ -663,6 +668,8 @@ export const useSessionStore =
                             result?.nextBeforeID ??
                             "";
 
+                        this.searchWindowActive = false;
+
                         const selected =
                             this.items.find(
                                 (session) =>
@@ -778,10 +785,23 @@ export const useSessionStore =
                     }
                 },
 
+                async loadSearchWindow(entryID) {
+                    const sessionID = this.selectedID;
+                    if (!sessionID || !entryID) return false;
+                    const result = await getMessageWindow(sessionID, entryID);
+                    if (sessionID !== this.selectedID || this.jumpTargetID !== entryID) return false;
+                    this.messages = Array.isArray(result?.messages) ? result.messages : [];
+                    this.messageHasMore = Boolean(result?.hasMore);
+                    this.messageBeforeID = result?.nextBeforeID ?? "";
+                    this.searchWindowActive = true;
+                    return true;
+                },
+
                 resetMessagePage() {
                     this.messageHasMore = false;
                     this.messageBeforeID = "";
                     this.loadingOlderMessages = false;
+                    this.searchWindowActive = false;
                 },
 
                 setDraft(sessionID, text) {
@@ -910,6 +930,21 @@ export const useSessionStore =
                             );
                     }
 
+                    return result;
+                },
+
+                async setArchived(id, archived) {
+                    const result = await setSessionArchived(id, archived);
+                    this.items = this.items.map((session) => session.id === id ? result : session);
+                    for (const agentID of Object.keys(this.itemsByAgent)) {
+                        this.itemsByAgent[agentID] = this.itemsByAgent[agentID].map((session) => session.id === id ? result : session);
+                    }
+                    if (archived && this.selectedID === id) {
+                        const next = this.items.find((session) => !session.archived && session.id !== id);
+                        this.selectedID = next?.id || "";
+                        this.messages = [];
+                        if (next) await this.refreshMessages(next.id);
+                    }
                     return result;
                 },
 

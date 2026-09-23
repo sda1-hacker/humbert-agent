@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tsawler/tabula"
+	"github.com/tsawler/tabula/rag"
 )
 
 const maxInputBytes = 12 << 20
@@ -26,12 +27,16 @@ const workerEnv = "HUMBERT_DOCUMENT_WORKER_FILE"
 // 同一二进制在受控环境中作为一次性文档解析进程启动。解析超时由父进程终止。
 func init() {
 	if path := os.Getenv(workerEnv); path != "" {
-		text, _, err := tabula.Open(path).Text()
+		options := rag.DefaultMarkdownOptions()
+		if strings.EqualFold(filepath.Ext(path), ".pdf") {
+			options.IncludePageNumbers = true
+		}
+		markdown, _, err := tabula.Open(path).ToMarkdownWithOptions(options)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		if _, err := io.WriteString(os.Stdout, text); err != nil {
+		if _, err := io.WriteString(os.Stdout, markdown); err != nil {
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -48,29 +53,39 @@ var supported = map[string]string{
 // MIMEForName 只将明确的 PDF/Office 扩展名交给文档解析器。
 func MIMEForName(name string) string { return supported[strings.ToLower(filepath.Ext(name))] }
 
-// Extract 从受限大小的二进制文档提取纯文本。图片扫描 PDF 没有原生文本时明确报错。
-func Extract(ctx context.Context, name, mimeType string, data []byte) (string, string, error) {
+// Validate 校验文档类型、大小和容器结构；上传时调用它而不提前解析正文。
+func Validate(ctx context.Context, name, mimeType string, data []byte) (string, error) {
 	ext := strings.ToLower(filepath.Ext(name))
 	want := supported[ext]
 	if want == "" {
-		return "", "", errors.New("不支持的文档格式")
+		return "", errors.New("不支持的文档格式")
 	}
 	if mimeType != "" && mimeType != "application/octet-stream" && mimeType != want {
-		return "", "", errors.New("文件扩展名与 MIME 类型不一致")
+		return "", errors.New("文件扩展名与 MIME 类型不一致")
 	}
 	if len(data) == 0 || len(data) > maxInputBytes {
-		return "", "", errors.New("文档大小超出 12 MiB 限制")
+		return "", errors.New("文档大小超出 12 MiB 限制")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", "", err
+		return "", err
 	}
 	if ext == ".pdf" {
 		if !bytes.HasPrefix(data, []byte("%PDF-")) {
-			return "", "", errors.New("PDF 文件签名无效")
+			return "", errors.New("PDF 文件签名无效")
 		}
 	} else if err := preflightOffice(data); err != nil {
+		return "", err
+	}
+	return want, nil
+}
+
+// Extract 在一次性受限进程中将 PDF/Office 文档转换成 Markdown。
+func Extract(ctx context.Context, name, mimeType string, data []byte) (string, string, error) {
+	want, err := Validate(ctx, name, mimeType, data)
+	if err != nil {
 		return "", "", err
 	}
+	ext := strings.ToLower(filepath.Ext(name))
 	file, err := os.CreateTemp("", "humbert-document-*"+ext)
 	if err != nil {
 		return "", "", err
@@ -88,21 +103,21 @@ func Extract(ctx context.Context, name, mimeType string, data []byte) (string, s
 	}
 	workerCtx, cancel := context.WithTimeout(ctx, parseTimeout)
 	defer cancel()
-	text, err := parseInWorker(workerCtx, file.Name())
+	markdown, err := parseInWorker(workerCtx, file.Name())
 	if err != nil {
-		return "", "", fmt.Errorf("提取文档文本失败: %w", err)
+		return "", "", fmt.Errorf("提取文档 Markdown 失败: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return "", "", err
 	}
-	text = strings.TrimSpace(text)
-	if !utf8.ValidString(text) || text == "" {
+	markdown = strings.TrimSpace(markdown)
+	if !utf8.ValidString(markdown) || markdown == "" {
 		return "", "", errors.New("文档没有可读取的文本；扫描版 PDF 需要 OCR")
 	}
-	if len(text) > maxOutputBytes {
-		return "", "", errors.New("文档提取文本超过 512 KiB，请拆分后上传")
+	if len(markdown) > maxOutputBytes {
+		return "", "", errors.New("文档 Markdown 超过 512 KiB，请拆分文档")
 	}
-	return text, want, nil
+	return markdown, want, nil
 }
 
 func parseInWorker(ctx context.Context, path string) (string, error) {
@@ -121,12 +136,12 @@ func parseInWorker(ctx context.Context, path string) (string, error) {
 			return "", ctx.Err()
 		}
 		if output.exceeded {
-			return "", errors.New("文档提取文本超过 512 KiB，请拆分后上传")
+			return "", errors.New("文档 Markdown 超过 512 KiB，请拆分文档")
 		}
 		return "", fmt.Errorf("文档解析子进程失败: %s: %w", strings.TrimSpace(errorsOutput.String()), err)
 	}
 	if output.exceeded {
-		return "", errors.New("文档提取文本超过 512 KiB，请拆分后上传")
+		return "", errors.New("文档 Markdown 超过 512 KiB，请拆分文档")
 	}
 	return output.String(), nil
 }

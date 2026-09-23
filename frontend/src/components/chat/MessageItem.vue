@@ -114,6 +114,7 @@ const assistantName =
       v-if="
       message.role === 'user'
     "
+      :data-entry-id="message.id"
       class="
       message-row
       message-row--user
@@ -148,6 +149,7 @@ const assistantName =
       </div>
 
       <MessageActions
+          :message-id="message.id"
           :content="message.content"
           :session-id="message.sessionID"
           allow-reuse
@@ -163,6 +165,7 @@ const assistantName =
       v-else-if="
       message.role === 'assistant'
     "
+      :data-entry-id="message.id"
       class="
       message-row
       message-row--assistant
@@ -216,6 +219,7 @@ const assistantName =
 
 
       <MessageActions
+          :message-id="message.id"
           :content="message.content"
           :session-id="message.sessionID"
       />

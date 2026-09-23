@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"path/filepath"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
@@ -121,7 +123,7 @@ func (f *GrepFilesFactory) Build(ctx context.Context, scope humberttools.Scope) 
 		return nil, err
 	}
 	return utils.InferTool(grepFilesToolName,
-		"Search UTF-8/text files with a regular expression inside directories allowed by the Agent Sandbox. Does not follow symbolic-link directories.",
+		"Search UTF-8 files and Markdown extracted from PDF/Office documents with a regular expression inside directories allowed by the Agent Sandbox. Results include file path and extracted-Markdown line number; cite path:line when answering from a result. Does not follow symbolic-link directories.",
 		func(callCtx context.Context, input *GrepFilesInput) (*GrepFilesOutput, error) {
 			if input == nil || strings.TrimSpace(input.Pattern) == "" {
 				return nil, errors.New("grep_files pattern 不能为空")
@@ -168,6 +170,34 @@ func (f *GrepFilesFactory) Build(ctx context.Context, scope humberttools.Scope) 
 					return nil
 				}
 				defer f.Close()
+				if mime := documenttext.MIMEForName(entry.Name()); mime != "" {
+					info, statErr := f.Stat()
+					if statErr != nil || info.Size() > 12<<20 {
+						return nil
+					}
+					data, readErr := io.ReadAll(io.LimitReader(f, (12<<20)+1))
+					if readErr != nil {
+						return nil
+					}
+					plain, _, extractErr := documenttext.Extract(callCtx, entry.Name(), mime, data)
+					if extractErr != nil {
+						return nil
+					}
+					for index, lineText := range strings.Split(plain, "\n") {
+						if !re.MatchString(lineText) {
+							continue
+						}
+						if len(lineText) > 2000 {
+							lineText = lineText[:2000] + "…"
+						}
+						matches = append(matches, GrepMatch{Path: displayRootChild(target, rel), Line: index + 1, Text: lineText})
+						if len(matches) >= limit {
+							truncated = true
+							return errStopWalk
+						}
+					}
+					return nil
+				}
 				scanner := bufio.NewScanner(f)
 				scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 				line := 0
