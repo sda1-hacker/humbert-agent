@@ -652,6 +652,13 @@ async function send() {
   }
 }
 
+function handleEnter(event) {
+  // IME candidate confirmation also presses Enter. Keep it in the draft.
+  if (event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  void send();
+}
+
 /**
  * 停止当前 Session Turn。
  */
@@ -829,9 +836,7 @@ watch(
         "
           class="composer-textarea"
           @paste="pasteAttachments"
-          @keydown.enter.exact.prevent="
-          send
-        "
+          @keydown.enter.exact="handleEnter"
       />
 
       <ImagePreviewDialog

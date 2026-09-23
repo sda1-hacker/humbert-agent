@@ -435,12 +435,12 @@ onMounted(async () => {
         <AppPageHeader
             eyebrow="Agent Connectors"
             title="连接器"
-            description="选择 Agent，为它启用 MCP Server 提供的 Tool。Server 的安装与连接参数统一放在设置中管理。"
+            description="选择 Agent，开启需要的连接器工具。添加连接器请前往设置。"
         >
           <template #aside>
             <div class="mcp-workspace__legend">
               <span class="mcp-workspace__legend-dot"></span>
-              <span>Tool 开关从下一轮 Runtime Snapshot 开始生效</span>
+              <span>开关从下一次对话开始生效</span>
             </div>
           </template>
         </AppPageHeader>

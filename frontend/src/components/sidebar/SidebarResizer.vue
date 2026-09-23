@@ -134,6 +134,19 @@ function resetWidth() {
   layoutStore.resetSidebarWidth();
 }
 
+function handleKeydown(event) {
+  if (event.key === "Home") {
+    event.preventDefault();
+    resetWidth();
+    return;
+  }
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  layoutStore.setSidebarWidth(
+      layoutStore.sidebarWidth + (event.key === "ArrowRight" ? 20 : -20),
+  );
+}
+
 onUnmounted(() => {
   stopDrag();
 });
@@ -147,10 +160,15 @@ onUnmounted(() => {
         dragging,
     }"
       role="separator"
+      tabindex="0"
       aria-orientation="vertical"
       aria-label="调整侧边栏宽度"
+      :aria-valuemin="220"
+      :aria-valuemax="420"
+      :aria-valuenow="layoutStore.sidebarWidth"
       @pointerdown="startDrag"
       @dblclick="resetWidth"
+      @keydown="handleKeydown"
   ></div>
 </template>
 
@@ -188,8 +206,10 @@ onUnmounted(() => {
 }
 
 .sidebar-resizer:hover::before,
-.sidebar-resizer--dragging::before {
+.sidebar-resizer--dragging::before,
+.sidebar-resizer:focus-visible::before {
   background:
       var(--h-accent);
 }
+.sidebar-resizer:focus-visible { outline: 2px solid var(--h-accent); outline-offset: -2px; }
 </style>

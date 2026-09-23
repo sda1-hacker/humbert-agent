@@ -488,7 +488,7 @@ onMounted(async () => {
     <header class="tasks-header">
       <div>
         <h1>任务</h1>
-        <p>按计划运行 Agent，或直接发送不需要模型参与的提醒通知。当前调度仅在 Humbert 应用运行期间生效；关闭应用期间错过的计划会在下次启动时按任务的错过策略处理。</p>
+        <p>让 Agent 按计划运行，或发送提醒。定时任务仅在 Humbert 运行时执行。</p>
       </div>
       <a-button type="primary" @click="startCreating">新建任务</a-button>
     </header>

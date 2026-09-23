@@ -43,14 +43,14 @@ const navigationGroups = [
         title: "个人资料",
         description: "设置你在聊天中显示的名称和头像。",
         keywords: ["个人", "用户", "名称", "头像", "profile", "avatar"],
-        glyph: "我",
+        glyph: "U",
       },
       {
         key: "data",
         title: "数据与备份",
         description: "导出并校验个人数据备份。",
         keywords: ["数据", "备份", "恢复", "backup", "restore"],
-        glyph: "数",
+        glyph: "D",
       },
     ],
   },
@@ -77,7 +77,7 @@ const navigationGroups = [
         title: "多媒体",
         description: "配置视觉辅助模型，并查看当前真正支持的附件类型。",
         keywords: ["多媒体", "图片", "vision", "image", "附件", "pdf", "audio"],
-        glyph: "图",
+        glyph: "V",
       },
     ],
   },
@@ -90,7 +90,7 @@ const navigationGroups = [
         title: "技能",
         description: "管理本地 Skill Package 的安装与维护；Agent 的启用与停用在左侧「技能」工作区配置。",
         keywords: ["skill", "skills", "技能", "工作流", "prompt"],
-        glyph: "K",
+        glyph: "S",
       },
       {
         key: "connectors",
@@ -110,14 +110,14 @@ const navigationGroups = [
         title: "安全",
         description: "控制 Humbert 的文件保护与联网范围。普通情况下保持安全沙盒开启即可。",
         keywords: ["安全", "沙盒", "隔离", "sandbox", "seatbelt", "bubblewrap", "windows"],
-        glyph: "安",
+        glyph: "G",
       },
       {
         key: "permissions",
         title: "操作确认",
         description: "设置高风险操作是否需要确认，并管理已经记住的临时或长期授权。",
         keywords: ["确认", "授权", "权限", "审批", "permission", "approval"],
-        glyph: "确",
+        glyph: "A",
       },
     ],
   },
@@ -232,9 +232,6 @@ function selectItem(key) {
         </div>
       </nav>
 
-      <div class="settings-sidebar__hint">
-        全局连接信息放在设置中；Agent 实际启用哪些 Skill / MCP Tool，则在左侧对应工作区管理。
-      </div>
     </aside>
 
     <main class="settings-content">
@@ -405,11 +402,12 @@ function selectItem(key) {
 }
 
 .settings-nav-label {
+  flex: 0 0 auto;
   padding: 0 20px 8px;
 
   color: var(--h-text-muted);
 
-  font-size: 10px;
+  font-size: 12px;
 
   font-weight: 500;
 
@@ -420,12 +418,15 @@ function selectItem(key) {
 
 .settings-nav {
   display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
 
   flex-direction: column;
 
   gap: 4px;
 
-  padding: 0 10px;
+  padding: 0 10px 18px;
+  overflow-y: auto;
 }
 
 .settings-nav .settings-nav-label {
@@ -438,6 +439,7 @@ function selectItem(key) {
 
 .settings-nav-item {
   display: flex;
+  flex: 0 0 42px;
 
   width: 100%;
   height: 42px;
@@ -495,7 +497,7 @@ function selectItem(key) {
 
   font-family: var(--h-mono);
 
-  font-size: 9px;
+  font-size: 12px;
 
   font-weight: 500;
 }
@@ -522,21 +524,9 @@ function selectItem(key) {
 
   color: var(--h-text-muted);
 
-  font-size: 11px;
+  font-size: 12px;
 
   text-align: center;
-}
-
-.settings-sidebar__hint {
-  margin-top: auto;
-
-  padding: 16px 20px 20px;
-
-  color: var(--h-text-muted);
-
-  font-size: 9px;
-
-  line-height: 1.65;
 }
 
 /* =============================

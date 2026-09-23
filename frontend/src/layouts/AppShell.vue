@@ -58,14 +58,9 @@ const TasksWorkspaceView =
             ),
     );
 
-// 工作区页包含文件树与安全文件预览，属于低频一级页面，因此保持按需加载，
-// 不把目录浏览组件加入聊天首屏主包。
-const WorkspaceView =
-    defineAsyncComponent(
-        () => import(
-            "../components/workspace/WorkspaceView.vue"
-            ),
-    );
+const ContextPanel = defineAsyncComponent(
+    () => import("../components/workspace/ContextPanel.vue"),
+);
 
 import {
   useAgentStore,
@@ -102,6 +97,7 @@ import {
 import {
   useWorkspaceStore,
 } from "../stores/workspace.js";
+import { useContextPanelStore } from "../stores/contextPanel.js";
 
 const layoutStore =
     useLayoutStore();
@@ -143,6 +139,12 @@ const taskNotification = computed(() => {
 
 const workspaceStore =
     useWorkspaceStore();
+const contextPanel = useContextPanelStore();
+const viewportWidth = ref(typeof window === "undefined" ? 1320 : window.innerWidth);
+
+function updateViewportWidth() {
+  viewportWidth.value = window.innerWidth;
+}
 
 /**
  * 设置页是否处于打开状态。
@@ -173,7 +175,6 @@ const settingsInitialKey =
  * skills     -> Skills 中心
  * connectors -> MCP 连接器
  * tasks      -> 主动任务
- * workspace  -> Agent 工作区文件浏览
  *
  * Settings 仍然是覆盖整个业务区域的一级页面；关闭 Settings 后回到
  * 用户打开设置前所在的主工作区。
@@ -188,20 +189,87 @@ const skillsViewRevision =
     ref(0);
 
 /**
- * 主聊天业务区域使用三个 Grid Column：
+ * 主聊天业务区域有左侧会话导航和右侧工作区。
  *
  * Sidebar
  * Resize Handle
  * Chat
+ * Context resize handle + Context panel (chat 时可见)
  *
+ * 两侧均占据 Grid 列，不覆盖聊天。窄窗口打开右侧时收起左侧。
  * SettingsView 不使用这套 Grid。
  * 设置打开后会替换整个业务区域，获得完整可用宽度。
  */
 const mainGridStyle =
     computed(() => ({
-      gridTemplateColumns:
-          `${layoutStore.sidebarWidth}px 5px minmax(0, 1fr)`,
+      gridTemplateColumns: [
+        ...(layoutStore.sidebarOpen ? [`${layoutStore.sidebarWidth}px`, "5px"] : []),
+        "minmax(0, 1fr)",
+        ...(mainView.value === "chat" && contextPanel.open
+          ? ["5px", `${contextPanel.width}px`] : []),
+      ].join(" "),
     }));
+
+const contextVisible = computed(() => mainView.value === "chat" && contextPanel.open);
+let resizingContext = false;
+
+function beginContextResize(event) {
+  if (event.button !== 0) return;
+  resizingContext = true;
+  event.currentTarget.setPointerCapture(event.pointerId);
+}
+
+function moveContextResize(event) {
+  if (resizingContext) setContextWidth(window.innerWidth - event.clientX);
+}
+
+function endContextResize() {
+  resizingContext = false;
+}
+
+function keyContextResize(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  event.preventDefault();
+  setContextWidth(contextPanel.width + (event.key === "ArrowLeft" ? 20 : -20));
+}
+
+function ensureRoomForPanel() {
+  if (layoutStore.sidebarOpen && viewportWidth.value - layoutStore.sidebarWidth - contextPanel.width - 10 < 420) {
+    layoutStore.setSidebarOpen(false);
+  }
+  contextPanel.setWidth(Math.min(contextPanel.width, Math.max(380, viewportWidth.value - 425)));
+}
+
+function setContextWidth(value) {
+  if (layoutStore.sidebarOpen && viewportWidth.value - layoutStore.sidebarWidth - value - 10 < 420) {
+    layoutStore.setSidebarOpen(false);
+  }
+  const leftWidth = layoutStore.sidebarOpen ? layoutStore.sidebarWidth + 5 : 0;
+  contextPanel.setWidth(Math.min(value, Math.max(380, viewportWidth.value - leftWidth - 425)));
+}
+
+function toggleRightPanel() {
+  if (!contextPanel.open) ensureRoomForPanel();
+  contextPanel.setOpen(!contextPanel.open);
+}
+
+function toggleLeftPanel() {
+  if (!layoutStore.sidebarOpen && contextVisible.value && viewportWidth.value - layoutStore.sidebarWidth - contextPanel.width - 10 < 420) {
+    contextPanel.setOpen(false);
+  }
+  layoutStore.toggleSidebar();
+}
+
+watch([viewportWidth, contextVisible], () => {
+  if (contextVisible.value) ensureRoomForPanel();
+}, { immediate: true });
+
+function showWorkspacePanel() {
+  settingsVisible.value = false;
+  mainView.value = "chat";
+  ensureRoomForPanel();
+  contextPanel.setOpen(true);
+}
 
 /**
  * 当前 Agent 切换时自动加载该 Agent 的 Session。
@@ -334,21 +402,7 @@ async function openTask(taskID) {
 }
 
 /**
- * 从左侧导航打开工作区。
- *
- * WorkspaceStore 会保留用户上一次主动选择的 Agent；只有第一次进入时才默认跟随
- * 当前聊天 Agent，因此浏览其它工作区不会偷偷切换聊天上下文。
- */
-function openWorkspace() {
-  settingsVisible.value = false;
-  mainView.value = "workspace";
-}
-
-/**
- * 从聊天里的“本轮文件”直接跳到工作区预览。
- *
- * 这里由 AppShell 负责跨一级页面导航：先加载文件所属 Agent 的 Workspace，再打开相对路径，
- * 最后切换主视图。这样 Chat 组件不需要知道 WorkspaceView 的实现细节。
+ * 聊天文件入口始终打开右侧工作区。历史消息所属 Agent 不同时先切换 Agent。
  */
 async function openWorkspaceFile(payload) {
   const agentID = payload?.agentID ?? "";
@@ -359,9 +413,12 @@ async function openWorkspaceFile(payload) {
 
   try {
     await workspaceStore.load(agentID);
+    if (agentID !== agentStore.selectedID) {
+      agentStore.select(agentID);
+      await sessionStore.loadForAgent(agentID);
+    }
+    showWorkspacePanel();
     await workspaceStore.openPath(path);
-    settingsVisible.value = false;
-    mainView.value = "workspace";
   } catch (error) {
     Message.error(
         error?.message ?? String(error),
@@ -422,10 +479,12 @@ async function bootstrap() {
 }
 
 onMounted(() => {
+  updateViewportWidth();
   runtimeStore.initialiseEvents();
   taskStore.initialiseEvents();
   proactiveStore.initialiseEvents();
   workspaceStore.initialiseEvents();
+  window.addEventListener("resize", updateViewportWidth);
   void bootstrap();
 });
 
@@ -434,12 +493,20 @@ onUnmounted(() => {
   taskStore.disposeEvents();
   proactiveStore.disposeEvents();
   workspaceStore.disposeEvents();
+  window.removeEventListener("resize", updateViewportWidth);
 });
 </script>
 
 <template>
   <div class="app-shell">
-    <WindowChrome />
+    <WindowChrome
+        :left-open="layoutStore.sidebarOpen"
+        :right-open="contextVisible"
+        :left-disabled="settingsVisible || !bootstrapReady || needsFirstRun"
+        :right-disabled="settingsVisible || mainView !== 'chat' || !bootstrapReady || needsFirstRun"
+        @toggle-left="toggleLeftPanel"
+        @toggle-right="toggleRightPanel"
+    />
     <div v-if="taskNotification" class="task-notification" role="status">
       <div><strong>{{ taskNotification.title }}</strong><p>{{ taskNotification.body }}</p></div>
       <a-button size="small" @click="openTask(taskNotification.taskID)">查看任务</a-button>
@@ -479,16 +546,16 @@ onUnmounted(() => {
         :style="mainGridStyle"
     >
       <ConversationSidebar
+          v-if="layoutStore.sidebarOpen"
           :active-view="mainView"
           @open-chat="openChat"
           @open-skills="openSkills"
           @open-connectors="openConnectors"
           @open-tasks="openTasks"
-          @open-workspace="openWorkspace"
           @open-settings="openSettings"
       />
 
-      <SidebarResizer />
+      <SidebarResizer v-if="layoutStore.sidebarOpen" />
 
       <MCPWorkspaceView
           v-if="mainView === 'connectors'"
@@ -507,16 +574,30 @@ onUnmounted(() => {
           @manage-packages="openSettings('skills')"
       />
 
-      <WorkspaceView
-          v-else-if="mainView === 'workspace'"
-          @open-session="openTaskSession"
-      />
-
       <ChatView
           v-else
           @open-workspace-file="openWorkspaceFile"
           @open-task="openTask"
       />
+      <template v-if="contextVisible">
+        <div
+            class="app-shell__context-resizer"
+            role="separator"
+            tabindex="0"
+            aria-label="调整右侧工作区宽度"
+            aria-orientation="vertical"
+            :aria-valuemin="380"
+            :aria-valuemax="800"
+            :aria-valuenow="contextPanel.width"
+            @pointerdown="beginContextResize"
+            @pointermove="moveContextResize"
+            @pointerup="endContextResize"
+            @pointercancel="endContextResize"
+            @keydown="keyContextResize"
+        ></div>
+        <ContextPanel
+        />
+      </template>
     </div>
   </div>
 </template>
@@ -559,5 +640,8 @@ onUnmounted(() => {
 
 .app-shell__main {
   display: grid;
+  position: relative;
 }
+.app-shell__context-resizer { z-index: 2; width: 5px; cursor: col-resize; background: var(--h-border); }
+.app-shell__context-resizer:hover, .app-shell__context-resizer:focus-visible { background: var(--h-accent-border); outline: none; }
 </style>

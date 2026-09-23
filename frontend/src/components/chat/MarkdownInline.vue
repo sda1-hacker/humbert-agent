@@ -1,12 +1,23 @@
 <script setup>
 import { safeUrl } from "../../utils/markdown.js";
+import { Browser } from "@wailsio/runtime";
+import { Message } from "@arco-design/web-vue";
 
 defineProps({ tokens: { type: Array, default: () => [] } });
 
 function openLink(url) {
   const safe = safeUrl(url);
   if (!safe) return;
-  window.open(safe, "_blank", "noopener,noreferrer");
+  if (/^https?:/i.test(safe)) {
+    void Browser.OpenURL(safe).catch((error) => Message.error(error?.message || String(error)));
+  } else {
+    window.open(safe, "_blank", "noopener,noreferrer");
+  }
+}
+
+function openImage(url) {
+  const safe = safeUrl(url);
+  if (safe) window.open(safe, "_blank", "noopener,noreferrer");
 }
 </script>
 
@@ -18,7 +29,7 @@ function openLink(url) {
     <del v-else-if="token.type === 'strike'">{{ token.text }}</del>
     <button v-else-if="token.type === 'link'" type="button" class="md-link" @click="openLink(token.url)">{{ token.text }}</button>
     <img v-else-if="token.type === 'image'" class="md-inline-image" :src="token.url" :alt="token.alt" loading="lazy" />
-    <button v-else-if="token.type === 'remote-image'" type="button" class="md-link" @click="openLink(token.url)">打开远程图片{{ token.alt ? `：${token.alt}` : '' }}</button>
+    <button v-else-if="token.type === 'remote-image'" type="button" class="md-link" @click="openImage(token.url)">打开远程图片{{ token.alt ? `：${token.alt}` : '' }}</button>
     <template v-else>{{ token.text }}</template>
   </template>
 </template>

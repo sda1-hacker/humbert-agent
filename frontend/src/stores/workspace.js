@@ -27,10 +27,7 @@ function normalizeArray(value) {
 export const useWorkspaceStore = defineStore("workspace", {
     state: () => ({
         /**
-         * 当前工作区正在浏览哪个 Agent。
-         *
-         * 这个值故意和 agentStore.selectedID 分离：聊天区可以停留在 Agent A，用户仍然
-         * 可以在“工作区”页面临时查看 Agent B 对应的项目目录，而不会因此切换聊天 Agent。
+         * 右侧文件面板当前加载的 Agent。它由面板监听选中的聊天 Agent 更新。
          */
         agentID: "",
         overview: null,
@@ -49,7 +46,7 @@ export const useWorkspaceStore = defineStore("workspace", {
         loadingPreview: false,
         error: "",
 
-        // revision 只表示“底层 Workspace 可能变化了”。真正刷新由 WorkspaceView 在可见时触发。
+        // revision 只表示“底层 Workspace 可能变化了”。可见的右侧文件面板按需刷新。
         revision: 0,
     }),
 
@@ -64,7 +61,7 @@ export const useWorkspaceStore = defineStore("workspace", {
          * 监听 Runtime 完成事件和主动助手的工作区变化事件。
          *
          * Tool 执行期间文件可能连续变化很多次，所以这里不直接发 IPC，而是把多次事件合并
-         * 成一次 revision 增量；可见的 WorkspaceView 会再做一次短延迟刷新。
+         * 成一次 revision 增量；可见的右侧文件面板会再做一次短延迟刷新。
          */
         initialiseEvents() {
             if (!unsubscribeRuntime) {
@@ -124,13 +121,15 @@ export const useWorkspaceStore = defineStore("workspace", {
             this.selectedEntry = null;
             this.preview = null;
             this.loadingDirectories = {};
+            this.loadingOverview = false;
+            this.loadingPreview = false;
             this.error = "";
         },
 
         /**
          * 加载一个 Agent 对应的 Workspace。
          *
-         * 工作区页面不再加载“产物/最近修改”记录，只读取当前文件系统：总览 + 根目录。
+         * 右侧文件面板只读取当前文件系统：总览 + 根目录。
          */
         async load(agentID) {
             if (!agentID) {
@@ -146,56 +145,61 @@ export const useWorkspaceStore = defineStore("workspace", {
                 this.loadDirectory(".", true),
             ]);
             const rejected = results.find((item) => item.status === "rejected");
-            if (rejected) {
+            if (rejected && this.agentID === agentID) {
                 this.error = rejected.reason?.message ?? String(rejected.reason);
             }
         },
 
         async loadOverview() {
             if (!this.agentID) return null;
+            const agentID = this.agentID;
             this.loadingOverview = true;
             try {
-                this.overview = await getWorkspaceOverview(this.agentID);
-                return this.overview;
+                const value = await getWorkspaceOverview(agentID);
+                if (this.agentID === agentID) this.overview = value;
+                return value;
             } finally {
-                this.loadingOverview = false;
+                if (this.agentID === agentID) this.loadingOverview = false;
             }
         },
 
         async loadDirectory(path = ".", force = false) {
             if (!this.agentID) return null;
+            const agentID = this.agentID;
             if (!force && this.directories[path]) {
                 return this.directories[path];
             }
             this.loadingDirectories = { ...this.loadingDirectories, [path]: true };
             try {
-                const value = await listWorkspaceDirectory(this.agentID, path);
-                this.directories = {
-                    ...this.directories,
-                    [path]: {
-                        ...value,
-                        entries: normalizeArray(value?.entries),
-                    },
-                };
-                return this.directories[path];
+                const value = await listWorkspaceDirectory(agentID, path);
+                const normalized = { ...value, entries: normalizeArray(value?.entries) };
+                if (this.agentID === agentID) {
+                    this.directories = { ...this.directories, [path]: normalized };
+                }
+                return normalized;
             } finally {
-                this.loadingDirectories = { ...this.loadingDirectories, [path]: false };
+                if (this.agentID === agentID) {
+                    this.loadingDirectories = { ...this.loadingDirectories, [path]: false };
+                }
             }
         },
 
         /** 展开目录时才向后端请求它的子项；收起只改变 UI 状态，不删除缓存。 */
         async toggleDirectory(path) {
+            const agentID = this.agentID;
             const expanded = this.expandedPaths.includes(path);
             if (expanded) {
                 this.expandedPaths = this.expandedPaths.filter((item) => item !== path);
                 return;
             }
             await this.loadDirectory(path);
+            if (this.agentID !== agentID) return;
             this.expandedPaths = [...this.expandedPaths, path];
         },
 
         /** 文件点击后读取预览；目录点击只更新选中信息，不读取文件内容。 */
         async selectEntry(entry) {
+            const agentID = this.agentID;
             this.selectedEntry = entry ?? null;
             this.selectedPath = entry?.path ?? "";
             this.preview = null;
@@ -204,10 +208,15 @@ export const useWorkspaceStore = defineStore("workspace", {
             }
             this.loadingPreview = true;
             try {
-                this.preview = await previewWorkspaceFile(this.agentID, entry.path);
-                return this.preview;
+                const value = await previewWorkspaceFile(agentID, entry.path);
+                if (this.agentID === agentID && this.selectedPath === entry.path) {
+                    this.preview = value;
+                }
+                return value;
             } finally {
-                this.loadingPreview = false;
+                if (this.agentID === agentID && this.selectedPath === entry.path) {
+                    this.loadingPreview = false;
+                }
             }
         },
 
@@ -232,6 +241,7 @@ export const useWorkspaceStore = defineStore("workspace", {
          */
         async refresh() {
             if (!this.agentID) return;
+            const agentID = this.agentID;
             const expanded = [...this.expandedPaths];
             const selectedPath = this.selectedPath;
             const selectedEntry = this.selectedEntry;
@@ -241,11 +251,12 @@ export const useWorkspaceStore = defineStore("workspace", {
                     this.loadOverview(),
                     ...expanded.map((path) => this.loadDirectory(path, true)),
                 ]);
+                if (this.agentID !== agentID) return;
                 if (selectedPath && selectedEntry?.type === "file") {
                     await this.openPath(selectedPath);
                 }
             } catch (error) {
-                this.error = error?.message ?? String(error);
+                if (this.agentID === agentID) this.error = error?.message ?? String(error);
                 throw error;
             }
         },

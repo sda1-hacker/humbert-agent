@@ -173,12 +173,12 @@ onMounted(() => {
             v-if="!selectedSkill"
             eyebrow="Agent Skills"
             title="技能"
-            description="选择 Agent，为它启用需要的 Skill。点击任意 Skill 可以进入独立详情页，查看 Package 内容并修改显示名称。"
+            description="选择 Agent，开启需要的技能。点击技能可查看详情。"
         >
           <template #aside>
             <div class="skill-workspace__legend">
               <span class="skill-workspace__legend-dot"></span>
-              <span>Skill 开关从下一轮 Runtime Snapshot 开始生效</span>
+              <span>开关从下一次对话开始生效</span>
             </div>
           </template>
         </AppPageHeader>

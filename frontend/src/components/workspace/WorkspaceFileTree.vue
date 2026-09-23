@@ -93,7 +93,7 @@ function handleEntryClick(entry) {
     <header class="workspace-tree__header">
       <div class="workspace-tree__heading">
         <strong>文件</strong>
-        <span>按目录懒加载</span>
+        <span>选择文件查看</span>
       </div>
 
       <button
@@ -215,7 +215,7 @@ function handleEntryClick(entry) {
 .workspace-tree__heading span {
   color: var(--h-text-muted);
   font-family: var(--h-ui);
-  font-size: 10px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -316,7 +316,7 @@ function handleEntryClick(entry) {
   margin-left: 6px;
   color: var(--h-text-muted);
   font-family: var(--h-ui);
-  font-size: 9px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -328,7 +328,7 @@ function handleEntryClick(entry) {
 .workspace-tree__notice {
   padding: 18px 12px;
   color: var(--h-text-muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.7;
 }
 

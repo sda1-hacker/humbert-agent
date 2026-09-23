@@ -40,10 +40,10 @@ onUnmounted(() => clearInterval(timer));
 
 <template>
   <section v-if="agentId" class="desk-notes">
-    <div class="desk-notes__header"><strong>留给 Agent 的便签</strong><span>提交后在后台运行，可在这里查看结果</span></div>
+    <div class="desk-notes__header"><strong>交办任务</strong><span>提交后由当前 Agent 在后台执行</span></div>
     <div class="desk-notes__compose">
       <a-textarea v-model="text" :max-length="4000" :auto-size="{minRows: 2, maxRows: 5}" placeholder="例如：整理工作区里的会议记录，列出需要跟进的事项" />
-      <a-button type="primary" :loading="submitting" :disabled="!text.trim()" @click="submit">交给 Agent</a-button>
+      <a-button type="primary" :loading="submitting" :disabled="!text.trim()" @click="submit">交办</a-button>
     </div>
     <div v-if="loading && !notes.length" class="desk-notes__empty">正在读取便签…</div>
     <div v-if="notes.length" class="desk-notes__list">
@@ -61,17 +61,17 @@ onUnmounted(() => clearInterval(timer));
 
 <style scoped>
 .desk-notes { flex: 0 0 auto; padding: 12px 24px; border-bottom: 1px solid var(--h-border); }
-.desk-notes__header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+.desk-notes__header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; }
 .desk-notes__header strong { font-size: 13px; }
-.desk-notes__header span { color: var(--h-text-muted); font-size: 11px; }
+.desk-notes__header span { color: var(--h-text-muted); font: 12px/1.45 var(--h-ui); }
 .desk-notes__compose { display: flex; gap: 8px; }
 .desk-notes__compose :deep(.arco-textarea-wrapper) { flex: 1; }
 .desk-notes__list { display: flex; flex-direction: column; gap: 4px; max-height: 160px; overflow: auto; margin-top: 8px; }
-.desk-notes__item { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; }
+.desk-notes__item { display: flex; align-items: center; gap: 8px; min-width: 0; font: 12px/1.45 var(--h-ui); }
 .desk-notes__status { flex: 0 0 auto; color: var(--h-text-muted); }
 .desk-notes__text,.desk-notes__result,.desk-notes__error { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .desk-notes__text { flex: 1; }
 .desk-notes__result { flex: 1; color: var(--h-text-secondary); }
 .desk-notes__error { color: var(--h-danger); }
-.desk-notes__empty { margin-top: 8px; color: var(--h-text-muted); font-size: 11px; }
+.desk-notes__empty { margin-top: 8px; color: var(--h-text-muted); font: 12px/1.45 var(--h-ui); }
 </style>

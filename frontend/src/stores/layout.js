@@ -8,6 +8,7 @@ const MAX_SIDEBAR_WIDTH = 420;
 
 const STORAGE_KEY =
     "humbert.ui.sidebar-width";
+const OPEN_STORAGE_KEY = "humbert.ui.sidebar-open";
 
 /**
  * 将 Sidebar 宽度限制在桌面 UI 的合理范围。
@@ -89,6 +90,7 @@ export const useLayoutStore =
             state: () => ({
                 sidebarWidth:
                     readStoredWidth(),
+                sidebarOpen: window.localStorage.getItem(OPEN_STORAGE_KEY) !== "false",
             }),
 
             actions: {
@@ -107,6 +109,12 @@ export const useLayoutStore =
                         DEFAULT_SIDEBAR_WIDTH,
                     );
                 },
+                setSidebarOpen(value) {
+                    this.sidebarOpen = Boolean(value);
+                    try { window.localStorage.setItem(OPEN_STORAGE_KEY, String(this.sidebarOpen)); }
+                    catch { /* UI state is optional. */ }
+                },
+                toggleSidebar() { this.setSidebarOpen(!this.sidebarOpen); },
             },
         },
     );

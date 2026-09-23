@@ -158,8 +158,8 @@ func runDesktop(
 		application.WebviewWindowOptions{
 			Name:      "main",
 			Title:     cfg.App.Name,
-			Width:     1120,
-			Height:    760,
+			Width:     1500,
+			Height:    820,
 			MinWidth:  860,
 			MinHeight: 600,
 			BackgroundColour: application.NewRGB(

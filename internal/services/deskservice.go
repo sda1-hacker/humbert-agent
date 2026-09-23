@@ -65,7 +65,7 @@ func (s *DeskService) List(agentID string) ([]DeskNote, error) {
 func (s *DeskService) Add(agentID, text string) (DeskNote, error) {
 	text = strings.TrimSpace(text)
 	if text == "" || utf8.RuneCountInString(text) > 4000 {
-		return DeskNote{}, errors.New("便签内容需要 1 到 4000 字")
+		return DeskNote{}, errors.New("交办内容需要 1 到 4000 字")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -74,17 +74,17 @@ func (s *DeskService) Add(agentID, text string) (DeskNote, error) {
 		name = name[:36]
 	}
 	task, err := s.core.Tasks().Create(ctx, tasks.CreateInput{
-		AgentID: agentID, Origin: "desk_note", Name: "便签：" + string(name), Prompt: text,
+		AgentID: agentID, Origin: "desk_note", Name: "交办：" + string(name), Prompt: text,
 		Execution: tasks.ExecutionAgent, ConversationMode: tasks.ConversationIsolated,
 		Status: tasks.TaskStatusActive, Schedule: tasks.Schedule{Type: tasks.ScheduleManual},
 		Limits: tasks.Limits{MaxDurationSeconds: 600, MaxModelCalls: 30, MaxToolCalls: 50, MaxTotalTokens: 50000, MaxAttempts: 1},
 	})
 	if err != nil {
-		return DeskNote{}, fmt.Errorf("保存便签失败: %w", err)
+		return DeskNote{}, fmt.Errorf("保存交办任务失败: %w", err)
 	}
 	run, err := s.core.Tasks().RunNow(ctx, task.ID)
 	if err != nil {
-		return DeskNote{}, fmt.Errorf("便签已保存但启动失败: %w", err)
+		return DeskNote{}, fmt.Errorf("交办任务已保存但启动失败: %w", err)
 	}
 	return DeskNote{TaskID: task.ID, AgentID: agentID, Text: text, Status: string(run.Status), RunID: run.ID, SessionID: run.SessionID, CreatedAt: task.CreatedAt.Format(time.RFC3339)}, nil
 }

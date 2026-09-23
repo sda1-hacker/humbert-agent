@@ -59,7 +59,6 @@ const emit =
       "open-skills",
       "open-connectors",
       "open-tasks",
-      "open-workspace",
     ]);
 
 const agentStore =
@@ -755,31 +754,8 @@ watch(
 
     <nav
         class="sidebar-primary-nav"
-        aria-label="工作区导航"
+        aria-label="主导航"
     >
-      <button
-          type="button"
-          class="sidebar-primary-entry"
-          :class="{
-            'sidebar-primary-entry--active': props.activeView === 'workspace',
-          }"
-          @click="emit('open-workspace')"
-      >
-        <svg
-            class="sidebar-primary-entry__icon"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-        >
-          <path d="M3 6.5h7l2 2h9v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-12Z"/>
-          <path d="M7 13h10M7 16h6"/>
-        </svg>
-
-        <span class="sidebar-primary-entry__text">
-          <strong>工作区</strong>
-          <small>浏览 Agent 工作区文件</small>
-        </span>
-      </button>
-
       <button
           type="button"
           class="sidebar-primary-entry"
@@ -1352,17 +1328,17 @@ watch(
 
 .sidebar-primary-nav {
   flex: 0 0 auto;
-  padding: 0 8px 8px;
+  padding: 0 8px 6px;
 }
 
 .sidebar-primary-entry {
   display: flex;
   width: 100%;
   min-width: 0;
-  min-height: 46px;
+  min-height: 36px;
   align-items: center;
   gap: 9px;
-  padding: 6px 10px 6px 12px;
+  padding: 5px 10px 5px 12px;
   cursor: pointer;
   border: 0;
   border-left: 2px solid transparent;
@@ -1412,11 +1388,7 @@ watch(
 }
 
 .sidebar-primary-entry__text small {
-  overflow: hidden;
-  color: var(--h-text-muted);
-  font-size: 9px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: none;
 }
 
 .sidebar-divider {
