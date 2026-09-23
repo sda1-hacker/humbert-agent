@@ -163,3 +163,32 @@ func TestPlanCompactionCarriesPreviousSummary(t *testing.T) {
 		t.Fatal("repeated compaction must not re-summarize history older than previous firstKept")
 	}
 }
+
+func TestPlanCompactionRepairsDegradedCheckpointAndKeepsArtifactMetadata(t *testing.T) {
+	t.Parallel()
+	branch := []transcript.Entry{
+		plannerEntry("u1", transcript.RoleUser, "old user"),
+		plannerEntry("a1", transcript.RoleAssistant, "old answer"),
+		plannerEntry("u2", transcript.RoleUser, "important source"),
+		plannerEntry("a2", transcript.RoleAssistant, "decision"),
+		{Type: transcript.EntryCompaction, ID: "healthy", Summary: "healthy summary", FirstKeptEntryID: "u2", Details: &transcript.CompactionDetails{ReadFiles: []string{"earlier.txt"}}},
+		plannerEntry("u3", transcript.RoleUser, "retained turn"),
+		plannerEntry("a3", transcript.RoleAssistant, "retained answer"),
+		{Type: transcript.EntryCompaction, ID: "degraded", Summary: "incomplete fallback", FirstKeptEntryID: "u3", Details: &transcript.CompactionDetails{Degraded: true, SourceFirstEntryID: "u2", ReadFiles: []string{"earlier.txt"}, ModifiedFiles: []string{"changed.txt"}}},
+		plannerEntry("u4", transcript.RoleUser, "new turn"),
+		plannerEntry("a4", transcript.RoleAssistant, "new answer"),
+	}
+	plan, err := planCompaction(transcript.Document{ActiveBranch: branch, LeafID: "a4"}, 10000, plannerEstimator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PreviousSummary != "healthy summary" || plan.FirstKeptEntryID != "u3" {
+		t.Fatalf("repair plan lost last healthy checkpoint or boundary: %#v", plan)
+	}
+	if len(plan.ToSummarize) != 2 || plan.ToSummarize[0].ID != "u2" {
+		t.Fatalf("repair did not reread original source: %#v", plan.ToSummarize)
+	}
+	if len(plan.ReadFiles) != 1 || plan.ReadFiles[0] != "earlier.txt" || len(plan.ModifiedFiles) != 1 || plan.ModifiedFiles[0] != "changed.txt" {
+		t.Fatalf("prior artifact metadata was lost: read=%v modified=%v", plan.ReadFiles, plan.ModifiedFiles)
+	}
+}

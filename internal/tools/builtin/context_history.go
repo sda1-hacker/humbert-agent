@@ -26,6 +26,11 @@ type HistoryRepository interface {
 	LoadTranscript(ctx context.Context, sessionID string) (transcript.Document, error)
 }
 
+type indexedHistoryRepository interface {
+	VisitActiveBranchReverse(context.Context, string, func(transcript.Entry) bool) error
+	ReadActiveBranchRange(context.Context, string, string, int, int) ([]transcript.Entry, error)
+}
+
 // SessionHistoryFactory 把“定位旧历史”和“读取旧历史”收敛为一个内部工具。
 //
 // 两个动作共享同一份完整会话记录，但职责仍然分开：search 只返回少量定位信息，read
@@ -126,17 +131,11 @@ func (f *SessionHistoryFactory) search(ctx context.Context, scope humberttools.S
 		limit = 20
 	}
 
-	document, err := f.repository.LoadTranscript(ctx, scope.SessionID)
-	if err != nil {
-		return nil, err
-	}
 	matches := make([]SessionHistoryMatch, 0, limit)
-	// 从最近历史向前搜索，更符合 Agent 恢复当前任务的需要。
-	for i := len(document.ActiveBranch) - 1; i >= 0 && len(matches) < limit; i-- {
-		entry := document.ActiveBranch[i]
+	visit := func(entry transcript.Entry) bool {
 		text, role := historyEntryText(entry)
 		if text == "" || !strings.Contains(strings.ToLower(text), query) {
-			continue
+			return true
 		}
 		matches = append(matches, SessionHistoryMatch{
 			EntryID:   entry.ID,
@@ -144,6 +143,22 @@ func (f *SessionHistoryFactory) search(ctx context.Context, scope humberttools.S
 			Timestamp: entry.Timestamp,
 			Snippet:   historySnippet(text, 600),
 		})
+		return len(matches) < limit
+	}
+	if indexed, ok := f.repository.(indexedHistoryRepository); ok {
+		if err := indexed.VisitActiveBranchReverse(ctx, scope.SessionID, visit); err != nil {
+			return nil, err
+		}
+	} else {
+		document, err := f.repository.LoadTranscript(ctx, scope.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		for i := len(document.ActiveBranch) - 1; i >= 0; i-- {
+			if !visit(document.ActiveBranch[i]) {
+				break
+			}
+		}
 	}
 	return matches, nil
 }
@@ -174,30 +189,39 @@ func (f *SessionHistoryFactory) read(ctx context.Context, scope humberttools.Sco
 		return nil, errors.New("limit 必须在 1-20000 之间")
 	}
 
-	document, err := f.repository.LoadTranscript(ctx, scope.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	index := -1
-	for i := range document.ActiveBranch {
-		if document.ActiveBranch[i].ID == id {
-			index = i
-			break
+	var historyEntries []transcript.Entry
+	if indexed, ok := f.repository.(indexedHistoryRepository); ok {
+		var err error
+		historyEntries, err = indexed.ReadActiveBranchRange(ctx, scope.SessionID, id, before, after)
+		if err != nil {
+			return nil, err
 		}
+	} else {
+		document, err := f.repository.LoadTranscript(ctx, scope.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		index := -1
+		for i := range document.ActiveBranch {
+			if document.ActiveBranch[i].ID == id {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return nil, fmt.Errorf("entry_id 不在当前有效会话分支中: %s", id)
+		}
+		start, end := index-before, index+after+1
+		if start < 0 {
+			start = 0
+		}
+		if end > len(document.ActiveBranch) {
+			end = len(document.ActiveBranch)
+		}
+		historyEntries = document.ActiveBranch[start:end]
 	}
-	if index < 0 {
-		return nil, fmt.Errorf("entry_id 不在当前有效会话分支中: %s", id)
-	}
-
-	start, end := index-before, index+after+1
-	if start < 0 {
-		start = 0
-	}
-	if end > len(document.ActiveBranch) {
-		end = len(document.ActiveBranch)
-	}
-	entries := make([]SessionHistoryEntry, 0, end-start)
-	for _, entry := range document.ActiveBranch[start:end] {
+	entries := make([]SessionHistoryEntry, 0, len(historyEntries))
+	for _, entry := range historyEntries {
 		text, role := historyEntryText(entry)
 		runes := []rune(text)
 		offset, entryLimit := 0, 2000
@@ -242,7 +266,13 @@ func historyEntryText(entry transcript.Entry) (string, string) {
 			builder.WriteString(block.ExtractedText)
 			builder.WriteByte('\n')
 		case transcript.ContentImage:
-			builder.WriteString("[image attachment]\n")
+			builder.WriteString("[image attachment name=")
+			builder.WriteString(block.Name)
+			builder.WriteString(" id=")
+			builder.WriteString(block.AttachmentID)
+			builder.WriteString(" MIME=")
+			builder.WriteString(block.MIMEType)
+			builder.WriteString("; visual details are not represented in text history]\n")
 		case transcript.ContentToolCall:
 			builder.WriteString("[tool call " + block.Name + " id=" + block.ID + "]\n")
 		}

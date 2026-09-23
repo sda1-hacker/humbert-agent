@@ -231,3 +231,53 @@ func TestProjectionMigratesLegacyContextArtifactGuidance(t *testing.T) {
 		t.Fatalf("legacy context artifact guidance was not migrated: %q", migrated.Content)
 	}
 }
+
+func TestLongDialogueProjectionKeepsTransactionsAndRecoverableResults(t *testing.T) {
+	toolResult := func(id, callID, text string) transcript.Entry {
+		return transcript.Entry{Type: transcript.EntryMessage, ID: id, Message: &transcript.AgentMessage{Role: transcript.RoleToolResult, ToolCallID: callID, ToolName: "read_file", Timestamp: 1, Content: []transcript.ContentBlock{{Type: transcript.ContentText, Text: text}}}}
+	}
+	call := func(id, callID, thinking string) transcript.Entry {
+		return projectionAssistant(id, "", thinking, transcript.ContentBlock{Type: transcript.ContentToolCall, ID: callID, Name: "read_file", Arguments: []byte(`{}`)})
+	}
+	branch := []transcript.Entry{
+		projectionUser("u1", "old user"), projectionAssistant("a1", "old answer", "old thinking"),
+		projectionUser("u2", "first kept"), {Type: transcript.EntryCompaction, ID: "cp1", Summary: "first checkpoint", FirstKeptEntryID: "u2", Details: &transcript.CompactionDetails{WindowGeneration: 1}},
+		projectionUser("u3", "second kept"), projectionAssistant("a3", "previous answer", "previous thinking"),
+		{Type: transcript.EntryCompaction, ID: "cp2", Summary: "latest checkpoint", FirstKeptEntryID: "u3", Details: &transcript.CompactionDetails{WindowGeneration: 2, SourceFirstEntryID: "u1", SourceLastEntryID: "a3", SourceEntryCount: 5}},
+		{Type: transcript.EntryMessage, ID: "u4", Message: &transcript.AgentMessage{Role: transcript.RoleUser, Timestamp: 1, Content: []transcript.ContentBlock{{Type: transcript.ContentFile, AttachmentID: "attachment-1", Name: "notes.txt", MIMEType: "text/plain", SizeBytes: 12, ExtractedText: "latest evidence"}}}},
+		call("a4", "call-big", "current thinking"), toolResult("t-big", "call-big", strings.Repeat("B", 300)),
+		call("a5", "call-small", ""), toolResult("t-small", "call-small", "recent result"),
+		call("a6", "call-interrupted", ""),
+	}
+	projected, err := projectActiveBranch(transcript.Document{ActiveBranch: branch}, ReasoningReplayAuto, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateProjectedToolTransactions(projected.Messages); err != nil {
+		t.Fatal(err)
+	}
+	if projected.Window.Generation != 2 || projected.Window.CheckpointID != "cp2" || projected.Window.StartEntryID != "u3" {
+		t.Fatalf("wrong latest window: %#v", projected.Window)
+	}
+	byCall := make(map[string]*schema.Message)
+	for _, message := range projected.Messages {
+		if message.Role == schema.Tool {
+			byCall[message.ToolCallID] = message
+		}
+	}
+	if len(byCall) != 3 || !strings.Contains(byCall["call-big"].Content, "entry_id=t-big") || byCall["call-small"].Content != "recent result" || !strings.Contains(byCall["call-interrupted"].Content, `"status":"unknown"`) {
+		t.Fatalf("tool transactions lost: %#v", byCall)
+	}
+	if !strings.Contains(projected.Messages[0].Content, "latest checkpoint") || strings.Contains(projected.Messages[0].Content, "first checkpoint") {
+		t.Fatal("wrong checkpoint")
+	}
+	if projected.Messages[2].ReasoningContent != "" || projected.Messages[4].ReasoningContent != "current thinking" {
+		t.Fatal("thinking replay policy changed across turns")
+	}
+	if branch[9].Message.Content[0].Text != strings.Repeat("B", 300) {
+		t.Fatal("projection mutated archived source")
+	}
+	if !strings.Contains(projected.Messages[3].Content, "latest evidence") && len(projected.Messages[3].UserInputMultiContent) == 0 {
+		t.Fatal("attachment disappeared")
+	}
+}

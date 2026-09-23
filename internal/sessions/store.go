@@ -449,6 +449,26 @@ func (s *Store) LoadContextTranscript(ctx context.Context, sessionID string) (tr
 	return document, nil
 }
 
+func (s *Store) VisitActiveBranchReverse(ctx context.Context, sessionID string, visit func(transcript.Entry) bool) error {
+	session, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	return translateTranscriptError(s.transcripts.VisitActiveBranchReverse(ctx, session.AgentID, sessionID, visit))
+}
+
+func (s *Store) ReadActiveBranchRange(ctx context.Context, sessionID, entryID string, before, after int) ([]transcript.Entry, error) {
+	session, err := s.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := s.transcripts.ReadActiveBranchRange(ctx, session.AgentID, sessionID, entryID, before, after)
+	if err != nil {
+		return nil, translateTranscriptError(err)
+	}
+	return entries, nil
+}
+
 // AppendCompaction 把 ContextEngine 生成的 CompactionEntry 追加到 Session Tree。
 func (s *Store) AppendCompaction(
 	ctx context.Context,

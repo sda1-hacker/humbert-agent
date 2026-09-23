@@ -5,6 +5,7 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
@@ -139,8 +140,9 @@ func localFallbackCheckpoint(previous string, messages []*schema.Message, maxCha
 		return value
 	}
 
-	var evidence strings.Builder
-	evidenceRunes := 0
+	// Keep both the beginning and the most recent decisions. A prefix-only
+	// fallback can hide the latest user instruction while retiring its raw turn.
+	lines := make([]string, 0, len(messages))
 	for _, message := range messages {
 		if message == nil {
 			continue
@@ -157,6 +159,24 @@ func localFallbackCheckpoint(previous string, messages []*schema.Message, maxCha
 			continue
 		}
 		text := strings.TrimSpace(messageVisibleText(message))
+		if message.Role == schema.User {
+			var attachments []string
+			for _, part := range message.UserInputMultiContent {
+				switch part.Type {
+				case schema.ChatMessagePartTypeImageURL:
+					attachments = append(attachments, multimodal.HistoricalImagePlaceholder(part))
+				case schema.ChatMessagePartTypeFileURL:
+					name := extraStringValue(part.Extra, "name")
+					if name == "" && part.File != nil {
+						name = part.File.Name
+					}
+					attachments = append(attachments, "[File attachment name="+name+" id="+extraStringValue(part.Extra, "attachment_id")+"]")
+				}
+			}
+			if len(attachments) > 0 {
+				text = strings.Join(attachments, " ") + " " + text
+			}
+		}
 		if text == "" && message.Role == schema.Assistant && len(message.ToolCalls) > 0 {
 			names := make([]string, 0, len(message.ToolCalls))
 			for _, call := range message.ToolCalls {
@@ -172,13 +192,35 @@ func localFallbackCheckpoint(previous string, messages []*schema.Message, maxCha
 			continue
 		}
 		text = truncateText(text, 600)
-		line := "- [" + label + "] " + text + "\n"
-		lineRunes := len([]rune(line))
-		if evidenceRunes+lineRunes > maxChars/2 {
+		lines = append(lines, "- ["+label+"] "+text+"\n")
+	}
+	limit := maxChars / 2
+	selected := make(map[int]bool)
+	used := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		cost := len([]rune(lines[i]))
+		if used+cost > limit*2/3 {
 			break
 		}
-		evidence.WriteString(line)
-		evidenceRunes += lineRunes
+		selected[i], used = true, used+cost
+	}
+	for i := 0; i < len(lines); i++ {
+		if selected[i] {
+			continue
+		}
+		cost := len([]rune(lines[i]))
+		if used+cost > limit {
+			break
+		}
+		selected[i], used = true, used+cost
+	}
+	var evidence strings.Builder
+	for i, line := range lines {
+		if selected[i] {
+			evidence.WriteString(line)
+		} else if i > 0 && selected[i-1] {
+			evidence.WriteString("- [中间历史省略；可通过 session_history 回查]\n")
+		}
 	}
 	if evidence.Len() == 0 {
 		evidence.WriteString("- 本次新增历史未能由压缩模型归纳；需要旧细节时请回查完整会话记录。\n")

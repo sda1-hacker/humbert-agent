@@ -205,12 +205,22 @@ func extraStringValue(extra map[string]any, key string) string {
 // EstimateMessages 估算完整消息序列。
 func (e *ApproxEstimator) EstimateMessages(messages []*schema.Message) int {
 	total := 0
+	for _, cost := range e.EstimateMessageCosts(messages) {
+		total += cost
+	}
+	return total
+}
+
+// EstimateMessageCosts uses the same attachment replay masks as EstimateMessages,
+// so a compaction planner can select a boundary from the actual prompt costs.
+func (e *ApproxEstimator) EstimateMessageCosts(messages []*schema.Message) []int {
+	costs := make([]int, len(messages))
 	imageReplayMask := multimodal.ImageReplayMask(messages)
 	fileReplayMask := multimodal.FileReplayMask(messages)
 	for index, message := range messages {
-		total += e.estimateMessageWithAttachments(message, imageReplayMask[index], fileReplayMask[index])
+		costs[index] = e.estimateMessageWithAttachments(message, imageReplayMask[index], fileReplayMask[index])
 	}
-	return total
+	return costs
 }
 
 // EstimateTools 读取 Eino ToolInfo，并估算 Tool Definition 在模型请求中的占用。

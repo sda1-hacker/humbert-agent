@@ -251,7 +251,11 @@ func (t *guardedInvokableTool) invokeRealTool(
 
 func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result string) (string, error) {
 	limit := t.scope.ToolResultMaxChars
-	if limit <= 0 || utf8.RuneCountInString(result) <= limit || t.archiver == nil || strings.TrimSpace(t.scope.SessionID) == "" {
+	chars := utf8.RuneCountInString(result)
+	if t.archiver == nil || strings.TrimSpace(t.scope.SessionID) == "" {
+		return result, nil
+	}
+	if (limit <= 0 || chars <= limit) && t.scope.ToolResultBudget.reserveFull(chars) {
 		return result, nil
 	}
 	id, err := t.archiver.Archive(ctx, t.scope.SessionID, t.descriptor.Name, result)
@@ -259,6 +263,13 @@ func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result st
 		return "", fmt.Errorf("保存 Tool %q 超大完整结果失败: %w", t.descriptor.Name, err)
 	}
 	runes := []rune(result)
+	if limit <= 0 {
+		limit = chars
+	}
+	if limit > chars {
+		limit = chars
+	}
+	limit = t.scope.ToolResultBudget.reservePreview(limit)
 	headCount := limit / 2
 	tailCount := limit - headCount
 	head := string(runes[:headCount])

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
 
@@ -43,6 +44,7 @@ type projectionResult struct {
 func projectActiveBranch(
 	document transcript.Document,
 	policy ReasoningReplayPolicy,
+	toolResultBudget ...int,
 ) (projectionResult, error) {
 	branch := document.ActiveBranch
 	if len(branch) == 0 {
@@ -102,17 +104,7 @@ func projectActiveBranch(
 		}
 		startIndex = firstKeptIndex
 		result.Window.StartEntryID = latest.FirstKeptEntryID
-		checkpointText := compactionCheckpointPrefix + strings.TrimSpace(latest.Summary)
-		if strings.Contains(checkpointText, "history_search") || strings.Contains(checkpointText, "history_read") {
-			checkpointText += "\n\n[工具兼容说明]\n旧检查点中提到的 history_search/history_read 已合并为 session_history：先 action=search 定位，再 action=read 读取原文。"
-		}
-		if latest.Details != nil && latest.Details.SourceEntryCount > 0 {
-			checkpointText += fmt.Sprintf(
-				"\n\n[History recovery]\n这个检查点由 %d 条原始历史生成，来源范围 %s .. %s。若需要检查点未保留的旧细节，请使用 session_history：先 action=search 定位 entry_id，再 action=read 回查完整会话记录。",
-				latest.Details.SourceEntryCount, latest.Details.SourceFirstEntryID, latest.Details.SourceLastEntryID,
-			)
-		}
-		result.Checkpoint = schema.UserMessage(checkpointText)
+		result.Checkpoint = schema.UserMessage(compactionCheckpointText(latest))
 	}
 	result.RecentMessages = make([]*schema.Message, 0, len(branch)-startIndex)
 
@@ -129,6 +121,7 @@ func projectActiveBranch(
 	// 最终回答/工具事务，避免历史 Thinking 在长会话中反复占用大量上下文。显式 Include/Omit
 	// 仍保持原有语义。
 	latestUserIndex := latestUserMessageIndex(branch, startIndex)
+	entryIDs := make([]string, 0, len(branch)-startIndex)
 
 	for index := startIndex; index < len(branch); index++ {
 		entry := branch[index]
@@ -147,6 +140,10 @@ func projectActiveBranch(
 		message := applyReasoningReplayPolicy(decoded.Message, effectivePolicy)
 		message = normalizeLegacyContextToolGuidance(message)
 		result.RecentMessages = append(result.RecentMessages, message)
+		entryIDs = append(entryIDs, entry.ID)
+	}
+	if len(toolResultBudget) > 0 && toolResultBudget[0] > 0 {
+		limitWindowToolResults(result.RecentMessages, entryIDs, toolResultBudget[0])
 	}
 
 	// 历史可能在审批、工具执行或结果落盘时中断。只修复模型投影，不伪造真实执行结果，
@@ -157,6 +154,43 @@ func projectActiveBranch(
 		result.Messages = append([]*schema.Message{result.Checkpoint}, result.RecentMessages...)
 	}
 	return result, nil
+}
+
+func compactionCheckpointText(entry *transcript.Entry) string {
+	if entry == nil {
+		return ""
+	}
+	checkpointText := compactionCheckpointPrefix + strings.TrimSpace(entry.Summary)
+	if strings.Contains(checkpointText, "history_search") || strings.Contains(checkpointText, "history_read") {
+		checkpointText += "\n\n[工具兼容说明]\n旧检查点中提到的 history_search/history_read 已合并为 session_history：先 action=search 定位，再 action=read 读取原文。"
+	}
+	if entry.Details != nil && entry.Details.SourceEntryCount > 0 {
+		checkpointText += fmt.Sprintf(
+			"\n\n[History recovery]\n这个检查点由 %d 条原始历史生成，来源范围 %s .. %s。若需要检查点未保留的旧细节，请使用 session_history：先 action=search 定位 entry_id，再 action=read 回查完整会话记录。",
+			entry.Details.SourceEntryCount, entry.Details.SourceFirstEntryID, entry.Details.SourceLastEntryID,
+		)
+	}
+	return checkpointText
+}
+
+// Keep the most recent tool outputs within one window-wide content allowance.
+// Replaced results retain their ToolCallID and can be read verbatim from JSONL.
+func limitWindowToolResults(messages []*schema.Message, entryIDs []string, limit int) {
+	used := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		message := messages[i]
+		if message == nil || message.Role != schema.Tool {
+			continue
+		}
+		chars := utf8.RuneCountInString(message.Content)
+		if used+chars <= limit {
+			used += chars
+			continue
+		}
+		clone := *message
+		clone.Content = "[Earlier tool result omitted from the active context. Full original record: session_history action=read, entry_id=" + entryIDs[i] + ". Verify the result before relying on it.]"
+		messages[i] = &clone
+	}
 }
 
 func latestUserMessageIndex(branch []transcript.Entry, start int) int {

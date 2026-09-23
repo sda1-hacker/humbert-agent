@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/cloudwego/eino/schema"
+
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
@@ -41,6 +43,20 @@ func planCompaction(
 	estimator Estimator,
 	policies ...ReasoningReplayPolicy,
 ) (Plan, error) {
+	policy := ReasoningReplayAuto
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	return planCompactionForWindow(document, keepRecentTokens, 0, estimator, policy)
+}
+
+func planCompactionForWindow(
+	document transcript.Document,
+	keepRecentTokens int,
+	contextWindow int,
+	estimator Estimator,
+	policy ReasoningReplayPolicy,
+) (Plan, error) {
 	if keepRecentTokens <= 0 {
 		return Plan{}, errors.New("KeepRecentTokens 必须大于 0")
 	}
@@ -49,17 +65,14 @@ func planCompaction(
 	}
 
 	branch := document.ActiveBranch
-	policy := ReasoningReplayAuto
-	if len(policies) > 0 {
-		policy = policies[0]
-	}
 	if len(branch) < 2 {
 		return Plan{}, ErrNothingToCompact
 	}
 
 	baseIndex := 0
 	previousSummary := ""
-	_, latest := latestCompaction(branch)
+	latestIndex, latest := latestCompaction(branch)
+	repairBoundaryIndex := -1
 	if latest != nil {
 		previousSummary = strings.TrimSpace(latest.Summary)
 		index := findEntryIndex(branch, latest.FirstKeptEntryID)
@@ -67,10 +80,27 @@ func planCompaction(
 			return Plan{}, fmt.Errorf("上一次 Compaction firstKeptEntryId %s 不在当前分支", latest.FirstKeptEntryID)
 		}
 		baseIndex = index
+		if latest.Details != nil && latest.Details.Degraded {
+			repairBoundaryIndex = index
+			baseIndex = findEntryIndex(branch, latest.Details.SourceFirstEntryID)
+			if baseIndex < 0 || baseIndex >= repairBoundaryIndex {
+				return Plan{}, fmt.Errorf("应急检查点 %s 的来源范围无效", latest.ID)
+			}
+			previousSummary = ""
+			for i := latestIndex - 1; i >= 0; i-- {
+				prior := branch[i]
+				if prior.Type == transcript.EntryCompaction && (prior.Details == nil || !prior.Details.Degraded) {
+					previousSummary = strings.TrimSpace(prior.Summary)
+					break
+				}
+			}
+		}
 	}
 
 	messageIndices := make([]int, 0, len(branch)-baseIndex)
 	messageTokens := make(map[int]int)
+	projected := make([]*schema.Message, 0, len(branch)-baseIndex)
+	entryIDs := make([]string, 0, len(branch)-baseIndex)
 	latestUserIndex := latestUserMessageIndex(branch, baseIndex)
 	for index := baseIndex; index < len(branch); index++ {
 		entry := branch[index]
@@ -82,9 +112,14 @@ func planCompaction(
 			return Plan{}, fmt.Errorf("估算 Message Entry %s 失败: %w", entry.ID, err)
 		}
 		messageIndices = append(messageIndices, index)
-		messageTokens[index] = estimator.EstimateMessage(
-			applyReasoningReplayPolicy(decoded.Message, reasoningPolicyForIndex(policy, index, latestUserIndex)),
-		)
+		projected = append(projected, normalizeLegacyContextToolGuidance(applyReasoningReplayPolicy(decoded.Message, reasoningPolicyForIndex(policy, index, latestUserIndex))))
+		entryIDs = append(entryIDs, entry.ID)
+	}
+	if contextWindow > 0 {
+		limitWindowToolResults(projected, entryIDs, ToolResultWindowChars(contextWindow))
+	}
+	for pos, cost := range projectedMessageCosts(estimator, projected) {
+		messageTokens[messageIndices[pos]] = cost
 	}
 	if len(messageIndices) < 2 {
 		return Plan{}, ErrNothingToCompact
@@ -101,6 +136,14 @@ func planCompaction(
 		}
 	}
 	candidateIndex := messageIndices[candidatePos]
+	if candidateIndex <= baseIndex && repairBoundaryIndex > baseIndex {
+		for pos, index := range messageIndices {
+			if index == repairBoundaryIndex {
+				candidatePos, candidateIndex = pos, index
+				break
+			}
+		}
+	}
 	if candidateIndex <= baseIndex {
 		return Plan{}, ErrNothingToCompact
 	}
@@ -160,6 +203,10 @@ func planCompaction(
 	}
 
 	readFiles, modifiedFiles := extractArtifactPaths(toSummarize)
+	if latest != nil && latest.Details != nil {
+		readFiles = sortedUniqueStrings(append(readFiles, latest.Details.ReadFiles...))
+		modifiedFiles = sortedUniqueStrings(append(modifiedFiles, latest.Details.ModifiedFiles...))
+	}
 	return Plan{
 		ParentLeafID:     document.LeafID,
 		PreviousSummary:  previousSummary,
@@ -170,6 +217,27 @@ func planCompaction(
 		ReadFiles:        readFiles,
 		ModifiedFiles:    modifiedFiles,
 	}, nil
+}
+
+func projectedMessageCosts(estimator Estimator, messages []*schema.Message) []int {
+	if detailed, ok := estimator.(interface{ EstimateMessageCosts([]*schema.Message) []int }); ok {
+		return detailed.EstimateMessageCosts(messages)
+	}
+	costs := make([]int, len(messages))
+	for i, message := range messages {
+		costs[i] = estimator.EstimateMessage(message)
+	}
+	return costs
+}
+
+func sortedUniqueStrings(values []string) []string {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value != "" {
+			set[value] = struct{}{}
+		}
+	}
+	return setToSortedSlice(set)
 }
 
 func tokensFromMessagePosition(indices []int, tokens map[int]int, startPos int) int {

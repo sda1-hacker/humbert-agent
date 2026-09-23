@@ -214,6 +214,9 @@ type CompactionDetails struct {
 	Reason string `json:"reason"`
 
 	SplitTurn bool `json:"splitTurn,omitempty"`
+	// Degraded marks a local emergency checkpoint. The next maintenance pass
+	// must summarize its original source again before treating it as recovered.
+	Degraded bool `json:"degraded,omitempty"`
 
 	ReadFiles []string `json:"readFiles,omitempty"`
 
@@ -343,7 +346,8 @@ type MessageEntryPage struct {
 	NextBeforeID string
 }
 
-// Document 是完整 Session JSONL 的内存投影。
+// Document 是 Session JSONL 的内存投影。LoadSession 返回完整历史；大文件的
+// LoadContextSession 只解码最新压缩窗口，并用 Lineage 保留轻量分支身份。
 //
 // Entries 保存全部 Tree Node；ActiveBranch 保存从当前 Leaf 沿 parentId 回溯得到的当前
 // 分支。模型上下文只能从 ActiveBranch 构造，不能按文件物理顺序把被放弃的 Branch
@@ -355,6 +359,12 @@ type Document struct {
 
 	ActiveBranch []Entry
 
+	// Lineage is a lightweight full branch used to validate derived memory cursors when
+	// ActiveBranch contains only the decoded compaction window of a large session.
+	Lineage []Entry
+
+	ReadStats ReadStats
+
 	LeafID string
 
 	Repair RepairResult
@@ -362,6 +372,13 @@ type Document struct {
 	// ContextWindow 是从当前 ActiveBranch 预先计算的投影边界。缓存命中时，
 	// ContextEngine 可直接从 FirstKeptIndex 开始解码，无需每轮重新扫描旧历史。
 	ContextWindow ContextWindowIndex
+}
+
+// ReadStats measures one context read without exposing message content.
+type ReadStats struct {
+	CacheHit     bool
+	BytesRead    int64
+	IndexRebuilt bool
 }
 
 // ContextWindowIndex 只记录当前分支上的位置，不持有消息正文。

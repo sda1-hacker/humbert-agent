@@ -350,6 +350,14 @@ func (s *Service) LoadContextTranscript(ctx context.Context, sessionID string) (
 	return s.store.LoadContextTranscript(ctx, sessionID)
 }
 
+func (s *Service) VisitActiveBranchReverse(ctx context.Context, sessionID string, visit func(transcript.Entry) bool) error {
+	return s.store.VisitActiveBranchReverse(ctx, sessionID, visit)
+}
+
+func (s *Service) ReadActiveBranchRange(ctx context.Context, sessionID, entryID string, before, after int) ([]transcript.Entry, error) {
+	return s.store.ReadActiveBranchRange(ctx, sessionID, entryID, before, after)
+}
+
 // AppendCompaction 持久化一次已经生成的 Context Checkpoint。
 func (s *Service) AppendCompaction(
 	ctx context.Context,

@@ -103,6 +103,11 @@ func (m *MidRunCompactor) beforeChatModel(ctx context.Context, state *adk.ChatMo
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("MidRun Compaction 被取消: %w", err)
 	}
+	if m.config.OperationTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, m.config.OperationTimeout)
+		defer cancel()
+	}
 	// Eino 的同轮工具循环会把刚生成的 Assistant thinking 放回 State。
 	// 在预算与下一次请求前统一剔除不支持回放的 Provider 的 thinking。
 	if m.config.ReasoningPolicy == ReasoningReplayOmit {
@@ -280,12 +285,16 @@ func (m *MidRunCompactor) compactMessages(ctx context.Context, messages []*schem
 		MaxOutputTokens:  compactionOutput,
 		OperationTimeout: m.config.OperationTimeout,
 		ArgumentMaxRunes: m.config.SerializerMaxChars,
+		TargetTokens:     maxInt(256, m.config.Budget.CheckpointBudgetTokens-m.config.Estimator.EstimateText(compactionCheckpointPrefix)-128),
 	}
 	summary, err := generator.Generate(ctx, CheckpointInput{
 		PreviousCheckpoint: previousCheckpoint,
 		Messages:           toSummarize,
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		m.config.Logger.Warn(
 			ctx,
 			"生成 MidRun Checkpoint 失败，改用本地应急检查点",

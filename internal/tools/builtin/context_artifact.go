@@ -126,37 +126,44 @@ func (f *ContextResourceFactory) readArtifact(ctx context.Context, scope humbert
 }
 
 func (f *ContextResourceFactory) readAttachment(ctx context.Context, scope humberttools.Scope, id string, offset, limit int) (*ContextResourceOutput, error) {
-	document, err := f.history.LoadTranscript(ctx, scope.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range document.ActiveBranch {
+	var found *transcript.ContentBlock
+	visit := func(entry transcript.Entry) bool {
 		if entry.Message == nil {
-			continue
+			return true
 		}
 		for _, block := range entry.Message.Content {
 			if block.Type != transcript.ContentFile || block.AttachmentID != id {
 				continue
 			}
-			runes := []rune(block.ExtractedText)
-			end, err := contextResourceRange(offset, limit, len(runes), "附件")
-			if err != nil {
-				return nil, err
+			found = &block
+			return false
+		}
+		return true
+	}
+	if indexed, ok := f.history.(indexedHistoryRepository); ok {
+		if err := indexed.VisitActiveBranchReverse(ctx, scope.SessionID, visit); err != nil {
+			return nil, err
+		}
+	} else {
+		document, err := f.history.LoadTranscript(ctx, scope.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		for i := len(document.ActiveBranch) - 1; i >= 0; i-- {
+			if !visit(document.ActiveBranch[i]) {
+				break
 			}
-			return &ContextResourceOutput{
-				ResourceType: contextResourceTypeAttachment,
-				ResourceID:   id,
-				Name:         block.Name,
-				MIMEType:     block.MIMEType,
-				Offset:       offset,
-				End:          end,
-				TotalChars:   len(runes),
-				More:         end < len(runes),
-				Content:      string(runes[offset:end]),
-			}, nil
 		}
 	}
-	return nil, fmt.Errorf("attachment resource_id 不在当前有效会话分支中: %s", id)
+	if found == nil {
+		return nil, fmt.Errorf("attachment resource_id 不在当前有效会话分支中: %s", id)
+	}
+	runes := []rune(found.ExtractedText)
+	end, err := contextResourceRange(offset, limit, len(runes), "附件")
+	if err != nil {
+		return nil, err
+	}
+	return &ContextResourceOutput{ResourceType: contextResourceTypeAttachment, ResourceID: id, Name: found.Name, MIMEType: found.MIMEType, Offset: offset, End: end, TotalChars: len(runes), More: end < len(runes), Content: string(runes[offset:end])}, nil
 }
 
 func contextResourceRange(offset, limit, total int, label string) (int, error) {

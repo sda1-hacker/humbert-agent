@@ -19,7 +19,7 @@ import (
 
 // SessionRepository 是 ContextEngine 与 Session Domain 的最小边界。
 //
-// ContextEngine 需要读取只读的当前分支、压缩时的完整历史，并提交 CompactionEntry，但不应该知道
+// ContextEngine 需要读取当前窗口、应急检查点修复时的完整历史，并提交 CompactionEntry，但不应该知道
 // agents/<id>/sessions/<id> 的磁盘路径或 Session config.json 格式。
 type SessionRepository interface {
 	LoadContextTranscript(ctx context.Context, sessionID string) (transcript.Document, error)
@@ -84,6 +84,7 @@ func NewEngine(
 
 // Build 从当前 ActiveBranch 构造下一次模型调用的 Context Snapshot。
 func (e *Engine) Build(ctx context.Context, request BuildRequest) (Snapshot, error) {
+	started := time.Now()
 	if ctx == nil {
 		return Snapshot{}, errors.New("context.Context 不能为空")
 	}
@@ -98,23 +99,35 @@ func (e *Engine) Build(ctx context.Context, request BuildRequest) (Snapshot, err
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("计算 Context Budget 失败: %w", err)
 	}
+	loadStarted := time.Now()
 	document, err := e.sessions.LoadContextTranscript(ctx, request.SessionID)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("读取 Session Transcript 失败: %w", err)
 	}
-	return e.buildFromDocument(ctx, request, budget, document)
+	loadDuration := time.Since(loadStarted)
+	snapshot, err := e.buildFromDocument(ctx, request, budget, document)
+	if err == nil {
+		e.logger.Info(ctx, "Context 构建指标",
+			"operation", "context.build", "session_id", request.SessionID,
+			"cache_hit", document.ReadStats.CacheHit,
+			"index_rebuilt", document.ReadStats.IndexRebuilt,
+			"bytes_read", document.ReadStats.BytesRead,
+			"load_ms", loadDuration.Milliseconds(), "build_ms", time.Since(started).Milliseconds(),
+			"estimated_input_tokens", snapshot.Usage.UsedTokens)
+	}
+	return snapshot, err
 }
 
 // buildFromDocument 使用调用方已经读取并验证过的 Transcript 构建 Snapshot。
-// Compact 的 Prepare 阶段借此复用同一份 Document，避免长 Session 在生成摘要前连续扫描
-// 两次 JSONL。提交时 AppendCompaction 仍会独立验证 ExpectedLeaf，因而不削弱并发安全。
+// Compact 使用按需读取的当前窗口；修复应急检查点时才读取更早来源。
+// 提交时 AppendCompaction 仍会独立验证 ExpectedLeaf。
 func (e *Engine) buildFromDocument(
 	ctx context.Context,
 	request BuildRequest,
 	budget Budget,
 	document transcript.Document,
 ) (Snapshot, error) {
-	projection, err := projectActiveBranch(document, request.ReasoningPolicy)
+	projection, err := projectActiveBranch(document, request.ReasoningPolicy, ToolResultWindowChars(request.ContextWindow))
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -128,7 +141,11 @@ func (e *Engine) buildFromDocument(
 	memoryTokens := 0
 	referenceTokens := 0
 	if e.memory != nil {
-		facts, memoryErr := e.memory.ContextFacts(ctx, request.SessionID, document.ActiveBranch)
+		lineage := document.ActiveBranch
+		if document.Lineage != nil {
+			lineage = document.Lineage
+		}
+		facts, memoryErr := e.memory.ContextFacts(ctx, request.SessionID, lineage)
 		if memoryErr != nil {
 			return Snapshot{}, fmt.Errorf("读取 Session Memory Key Facts 失败: %w", memoryErr)
 		}
@@ -172,6 +189,22 @@ func (e *Engine) buildFromDocument(
 		Usage:       usage,
 		Assembly:    assembly,
 	}, nil
+}
+
+// ToolResultWindowChars is the shared content allowance for all tool results
+// in one turn and for the retained results in one model context window.
+func ToolResultWindowChars(contextWindow int) int {
+	if contextWindow <= 0 {
+		return 16000
+	}
+	limit := contextWindow / 4
+	if limit < 8192 {
+		limit = 8192
+	}
+	if limit > 65536 {
+		limit = 65536
+	}
+	return limit
 }
 
 func assemblyFromProjection(projection projectionResult, memoryInjected bool, referenceMessageCount int) Assembly {
@@ -332,6 +365,19 @@ func (e *Engine) ObservePromptUsage(estimated int, actual int) {
 		return
 	}
 	calibrator.ObservePromptUsage(estimated, actual)
+}
+
+// ObserveSessionPromptUsage records the first provider input usage for one turn
+// and feeds the same observation to the approximate estimator.
+func (e *Engine) ObserveSessionPromptUsage(ctx context.Context, sessionID string, estimated, actual int) {
+	if estimated <= 0 || actual <= 0 {
+		return
+	}
+	e.logger.Info(ctx, "模型输入 Token 估算偏差",
+		"operation", "context.prompt_usage", "session_id", sessionID,
+		"estimated_input_tokens", estimated, "actual_input_tokens", actual,
+		"delta_tokens", actual-estimated)
+	e.ObservePromptUsage(estimated, actual)
 }
 
 // BudgetForModel 返回指定 Model 的 Context 预算。

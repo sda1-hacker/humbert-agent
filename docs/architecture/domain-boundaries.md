@@ -39,17 +39,19 @@ Session 只记录 `AgentID`，物理布局为：
 agents/<agent-id>/sessions/<session-id>/
 ├── config.json
 ├── session.jsonl
+├── session.locations.jsonl
 └── attachments/
 ```
 
 `config.json` 是低频控制面；`session.jsonl` 是 Message、Thinking、ToolCall、ToolResult
 与 Conversation Tree 的唯一事实来源。Store 只接受当前 schema。
 
-Transcript 首次访问或文件变化时严格解析并校验完整 JSONL；成功后保存容量受限、可丢弃
-的进程内 Document LRU。缓存用文件身份、大小和修改时间校验，Tail Repair、外部变化、
-删除或 LRU 淘汰都会触发重建。正常追加在 Session 文件锁内增量推进 Leaf 与 Active
-Branch，并同步维护 Message ID/序号到分支位置的分页索引。历史分页只复制当前窗口；缓存
-不是第二份持久化事实源，也不改变 JSONL 的崩溃恢复语义。
+较小的 Transcript 使用容量受限的进程内 Document LRU。超过完整文档缓存上限后，Store
+用 `session.locations.jsonl` 记录 Entry 身份与字节位置；首次建立或索引失效时会严格扫描
+完整 JSONL。正常追加增量更新位置、分支、压缩切点与消息分页索引。构建模型 Context 时只
+解码最新压缩检查点对应的原始窗口，Memory 仍可校验完整分支的 Entry 身份；旧历史按需
+通过位置读取。索引以 Transcript 的文件身份、大小和修改时间校验，崩溃后可重建。
+`session.jsonl` 始终是唯一事实来源。
 
 一个 Session 的配置损坏时，Store 会隔离该 Session、保留原文件并记录诊断；其它健康
 Session 仍可加载，应用启动不会被单个损坏会话阻塞。仅当 `config.json` 缺失且 transcript

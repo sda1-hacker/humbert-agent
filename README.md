@@ -31,6 +31,7 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 │       │   └── <session-id>/
 │       │       ├── config.json
 │       │       ├── session.jsonl
+│       │       ├── session.locations.jsonl
 │       │       ├── memory.json
 │       │       ├── attachments/
 │       │       └── subagents/
@@ -60,6 +61,7 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 - `agents/<id>/config.json`：Agent Profile。
 - `agents/<id>/sessions/<id>/config.json`：会话标题、工作目录等配置。
 - `agents/<id>/sessions/<id>/session.jsonl`：消息、工具调用/结果与压缩检查点的事实来源。
+- `agents/<id>/sessions/<id>/session.locations.jsonl`：按需生成的 Entry 字节位置索引；可从 `session.jsonl` 重建。
 - `agents/<id>/sessions/<id>/memory.json`：从会话历史派生的记忆，按需创建。
 - `agents/<id>/tasks/<id>/config.json`：主动任务、结构化日程、重叠/错过策略与执行限制。
 - `agents/<id>/tasks/<id>/runs/<id>.json`：每次运行的持久化状态、计数、审批投影与结果摘要。
@@ -70,6 +72,8 @@ Humbert Agent 是一个以 Go + Eino + Wails 3 + Vue 为核心的 Local-first Pe
 ## Thinking 与模型上下文
 
 会话 Transcript 保存模型返回的 thinking，供当前会话展示和排障。发送下一次模型请求时，OpenAI 与 OpenAI 兼容接口只回放可见回答及工具调用/结果；Ollama 仅在当前用户轮次内回放 thinking。较早轮次的 thinking 不进入模型上下文，也不计入压缩预算。压缩摘要和派生记忆不收录 thinking。
+
+上下文压缩保留完整的 `session.jsonl` 原文，只追加检查点。摘要模型失败时，检查点标记为 `degraded`，保留开头与最近线索；后续维护会从原始来源重新生成摘要。多次压缩会继承已确认的文件读写元数据。图片检查点保留附件身份与对话中已有的观察，不会凭文本推断未见过的视觉内容。
 
 ## 多 Agent 协作
 

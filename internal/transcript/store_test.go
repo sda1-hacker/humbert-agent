@@ -89,6 +89,47 @@ func TestLoadSessionCacheIsIsolatedFromCallerMutation(t *testing.T) {
 	}
 }
 
+func TestAppendOwnsCallerPayloadBeforeCaching(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, CreateSessionInput{ID: "session", AgentID: "agent", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	message := testUserWireMessage("original")
+	first, err := store.AppendMessage(ctx, "agent", "session", message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message.Content[0].Text = "mutated after append"
+	view, err := store.LoadContextSession(ctx, "agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.ActiveBranch[0].Message.Content[0].Text; got != "original" {
+		t.Fatalf("cached message changed to %q", got)
+	}
+	second, err := store.AppendMessage(ctx, "agent", "session", testUserWireMessage("kept"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := CompactionDetails{Reason: "test", ReadFiles: []string{"original.txt"}}
+	_, err = store.AppendCompaction(ctx, "agent", "session", AppendCompactionInput{ExpectedLeafID: second.ID, FirstKeptEntryID: first.ID, Summary: "summary", TokensBefore: 100, TokensAfter: 50, Details: details})
+	if err != nil {
+		t.Fatal(err)
+	}
+	details.ReadFiles[0] = "mutated.txt"
+	view, err = store.LoadContextSession(ctx, "agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := view.ActiveBranch[2].Details.ReadFiles[0]; got != "original.txt" {
+		t.Fatalf("cached compaction details changed to %q", got)
+	}
+}
+
 func TestLoadContextSessionTracksCompactionWindowAndAppend(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

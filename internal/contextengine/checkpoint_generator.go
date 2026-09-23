@@ -10,6 +10,7 @@ import (
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 )
 
 // CheckpointGenerator 是持久化压缩和执行中临时压缩共用的唯一语义压缩核心。
@@ -25,6 +26,7 @@ type CheckpointGenerator struct {
 
 	OperationTimeout time.Duration
 	ArgumentMaxRunes int
+	TargetTokens     int
 }
 
 // CheckpointInput 描述一次检查点生成任务。PreviousCheckpoint 可以为空；Messages 必须按
@@ -62,13 +64,6 @@ func (g CheckpointGenerator) Generate(ctx context.Context, input CheckpointInput
 	}
 
 	previous := strings.TrimSpace(input.PreviousCheckpoint)
-	history := serializeMessagesForCheckpoint(input.Messages, g.ArgumentMaxRunes)
-	if strings.TrimSpace(history) == "" {
-		if previous == "" {
-			return "", ErrNothingToCompact
-		}
-		return previous, nil
-	}
 
 	// 给 Provider framing 和估算误差留出额外余量。输出空间使用压缩模型自己的
 	// MaxOutputTokens，而不是当前聊天模型的配置。
@@ -79,49 +74,93 @@ func (g CheckpointGenerator) Generate(ctx context.Context, input CheckpointInput
 		return "", fmt.Errorf("%w: 压缩模型可用输入空间不足: window=%d output=%d", ErrContextBudgetExceeded, g.ContextWindow, g.MaxOutputTokens)
 	}
 
-	remaining := history
 	checkpoint := previous
-	for strings.TrimSpace(remaining) != "" {
-		if err := ctx.Err(); err != nil {
+	pending := ""
+	seenHistory := false
+	flush := func(force bool) error {
+		for strings.TrimSpace(pending) != "" {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			baseTokens := systemTokens + 128
+			if checkpoint != "" {
+				baseTokens += g.Estimator.EstimateText("[Previous checkpoint]\n" + checkpoint)
+			}
+			available := inputLimit - baseTokens
+			if available < 256 {
+				shrunk, err := g.shrinkCheckpoint(ctx, checkpoint, inputLimit-systemTokens-256)
+				if err != nil {
+					return err
+				}
+				if g.Estimator.EstimateText(shrunk) >= g.Estimator.EstimateText(checkpoint) {
+					return fmt.Errorf("%w: 检查点自身占满压缩模型输入窗口", ErrContextBudgetExceeded)
+				}
+				checkpoint = shrunk
+				continue
+			}
+			if !force && g.Estimator.EstimateText(pending) <= available {
+				return nil
+			}
+			chunk, rest := splitTextByEstimatedTokens(pending, available, g.Estimator)
+			if strings.TrimSpace(chunk) == "" {
+				return fmt.Errorf("%w: 无法为压缩请求切出有效历史片段", ErrContextBudgetExceeded)
+			}
+			next, err := g.generateOnce(ctx, checkpoint, chunk)
+			if err != nil {
+				return err
+			}
+			checkpoint, pending = next, rest
+		}
+		return nil
+	}
+	// Serialize one message at a time. A long session never needs a second
+	// full-size copy of its entire pre-compaction history in memory.
+	for _, message := range input.Messages {
+		fragment := serializeMessagesForCheckpoint([]*schema.Message{message}, g.ArgumentMaxRunes)
+		if fragment == "" {
+			continue
+		}
+		seenHistory = true
+		if pending != "" {
+			pending += "\n\n"
+		}
+		pending += fragment
+		if err := flush(false); err != nil {
 			return "", err
 		}
-
-		baseTokens := systemTokens + 128
-		if checkpoint != "" {
-			baseTokens += g.Estimator.EstimateText("[Previous checkpoint]\n" + checkpoint)
+	}
+	if !seenHistory {
+		if previous == "" {
+			return "", ErrNothingToCompact
 		}
-		available := inputLimit - baseTokens
-		if available < 256 {
-			// 检查点自身变得过大时，先把检查点收敛一次，再继续吸收后续历史。这里没有
-			// 丢弃原信息，而是显式调用模型重新整理现有检查点。
+		return previous, nil
+	}
+	if err := flush(true); err != nil {
+		return "", err
+	}
+	if g.TargetTokens > 0 {
+		for attempt := 0; g.Estimator.EstimateText(checkpoint) > g.TargetTokens && attempt < 2; attempt++ {
 			shrunk, err := g.shrinkCheckpoint(ctx, checkpoint, inputLimit-systemTokens-256)
 			if err != nil {
 				return "", err
 			}
-			if strings.TrimSpace(shrunk) == strings.TrimSpace(checkpoint) {
-				return "", fmt.Errorf("%w: 检查点自身占满压缩模型输入窗口", ErrContextBudgetExceeded)
+			if g.Estimator.EstimateText(shrunk) >= g.Estimator.EstimateText(checkpoint) {
+				break
 			}
 			checkpoint = shrunk
-			continue
 		}
-
-		chunk, rest := splitTextByEstimatedTokens(remaining, available, g.Estimator)
-		if strings.TrimSpace(chunk) == "" {
-			return "", fmt.Errorf("%w: 无法为压缩请求切出有效历史片段", ErrContextBudgetExceeded)
+		if g.Estimator.EstimateText(checkpoint) > g.TargetTokens {
+			return "", fmt.Errorf("%w: 检查点超出预留预算: target=%d actual=%d", ErrContextBudgetExceeded, g.TargetTokens, g.Estimator.EstimateText(checkpoint))
 		}
-		next, err := g.generateOnce(ctx, checkpoint, chunk)
-		if err != nil {
-			return "", err
-		}
-		checkpoint = next
-		remaining = rest
 	}
-
 	return checkpoint, nil
 }
 
 func (g CheckpointGenerator) generateOnce(ctx context.Context, previous string, chunk string) (string, error) {
 	var prompt strings.Builder
+	if g.TargetTokens > 0 {
+		fmt.Fprintf(&prompt, "[Checkpoint size target: at most %d estimated tokens. Preserve the required headings and essential facts.]\n\n", g.TargetTokens)
+	}
 	if strings.TrimSpace(previous) != "" {
 		prompt.WriteString("[Previous checkpoint]\n")
 		prompt.WriteString(strings.TrimSpace(previous))
@@ -184,7 +223,9 @@ func serializeMessagesForCheckpoint(messages []*schema.Message, argumentMaxRunes
 			for _, part := range message.UserInputMultiContent {
 				switch part.Type {
 				case schema.ChatMessagePartTypeImageURL:
-					builder.WriteString("\n[Image attachment]")
+					builder.WriteString("\n")
+					builder.WriteString(multimodal.HistoricalImagePlaceholder(part))
+					builder.WriteString(" Visual details are unavailable to this text-only checkpoint; retain any observations stated in nearby messages, and do not invent image contents.")
 				case schema.ChatMessagePartTypeFileURL:
 					name := "file"
 					if part.File != nil && strings.TrimSpace(part.File.Name) != "" {

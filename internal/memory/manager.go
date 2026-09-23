@@ -184,7 +184,15 @@ func (m *Manager) Refresh(
 	}
 
 	startedAt := time.Now()
-	document, err := m.transcripts.LoadTranscript(ctx, sessionID)
+	var document transcript.Document
+	var err error
+	if reader, ok := m.transcripts.(interface {
+		LoadContextTranscript(context.Context, string) (transcript.Document, error)
+	}); ok {
+		document, err = reader.LoadContextTranscript(ctx, sessionID)
+	} else {
+		document, err = m.transcripts.LoadTranscript(ctx, sessionID)
+	}
 	if err != nil {
 		return RefreshResult{}, fmt.Errorf("读取 Session Transcript 失败: %w", err)
 	}
@@ -205,6 +213,16 @@ func (m *Manager) Refresh(
 		)
 		exists = false
 		current = Document{}
+	}
+	if document.Lineage != nil {
+		if reconstructed, ok := reconstructMemoryBranch(document, current.Cursor, exists); ok {
+			document = reconstructed
+		} else {
+			document, err = m.transcripts.LoadTranscript(ctx, sessionID)
+			if err != nil {
+				return RefreshResult{}, fmt.Errorf("读取 Session Transcript 失败: %w", err)
+			}
+		}
 	}
 
 	result, next, shouldSave, err := m.prepareAndGenerate(ctx, document, current, exists, model, force)
@@ -229,6 +247,30 @@ func (m *Manager) Refresh(
 		logging.Duration(startedAt),
 	)
 	return result, nil
+}
+
+// reconstructMemoryBranch overlays decoded current-window entries on the
+// lightweight lineage. It is safe only when the memory cursor has not fallen
+// behind the window start; otherwise the caller loads full source history.
+func reconstructMemoryBranch(document transcript.Document, cursor Cursor, exists bool) (transcript.Document, bool) {
+	if !exists || len(document.Lineage) == 0 || len(document.ActiveBranch) == 0 {
+		return transcript.Document{}, false
+	}
+	start := -1
+	for i := range document.Lineage {
+		if document.Lineage[i].ID == document.ActiveBranch[0].ID {
+			start = i
+			break
+		}
+	}
+	covered, valid := cursorMatches(cursor, document.Lineage)
+	if !valid || start < 0 || covered < start-1 || len(document.Lineage)-start != len(document.ActiveBranch) {
+		return transcript.Document{}, false
+	}
+	branch := append([]transcript.Entry(nil), document.Lineage...)
+	copy(branch[start:], document.ActiveBranch)
+	document.ActiveBranch = branch
+	return document, true
 }
 
 func (m *Manager) prepareAndGenerate(

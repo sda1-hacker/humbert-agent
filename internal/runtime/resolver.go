@@ -7,10 +7,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino/adk"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
@@ -83,6 +85,7 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 		EnabledSkills: append([]string(nil), skillSnapshot.Names...), SkillRevision: skillSnapshot.Revision,
 		SkillIdentities: skillSnapshot.PackageIdentities(), SkillScriptCommands: skillSnapshot.ScriptRuntimeCommands(),
 		ToolResultMaxChars: toolResultMaxCharsForContext(modelSnapshot.ContextWindow),
+		ToolResultBudget:   input.ParentScope.ToolResultBudget,
 	}
 	resolvedTools, err := r.tools.Resolve(ctx, toolScope)
 	if err != nil {
@@ -210,6 +213,7 @@ type resolvedContextBase struct {
 	baseInstruction string
 
 	toolTokenEstimate int
+	toolResultBudget  *humberttools.ResultBudget
 }
 
 // Resolver 创建不可变 Runtime Snapshot，并协调 Context/Compaction/Session Memory。
@@ -316,6 +320,17 @@ func (r *Resolver) ResolveTurn(
 		if err != nil {
 			return nil, err
 		}
+	}
+	// Retained results and newly generated results share one window allowance.
+	// Seed after compaction because the final context may contain fewer results.
+	if base.toolResultBudget != nil {
+		retainedChars := 0
+		for _, message := range contextSnapshot.Messages {
+			if message != nil && message.Role == schema.Tool {
+				retainedChars += utf8.RuneCountInString(message.Content)
+			}
+		}
+		base.toolResultBudget.SeedUsed(retainedChars)
 	}
 
 	budget := contextSnapshot.Budget
@@ -708,31 +723,23 @@ func (r *Resolver) observeInitialPromptUsage(ctx context.Context, snapshot *Snap
 	if snapshot == nil || snapshot.ContextUsage.UsedTokens <= 0 {
 		return
 	}
-	document, err := r.sessions.LoadTranscript(ctx, snapshot.SessionID)
-	if err != nil {
-		return
-	}
-	latestUser := -1
-	for index := len(document.ActiveBranch) - 1; index >= 0; index-- {
-		entry := document.ActiveBranch[index]
-		if entry.Type == transcript.EntryMessage && entry.Message != nil && entry.Message.Role == transcript.RoleUser {
-			latestUser = index
-			break
+	firstUsage := 0
+	seenUser := false
+	err := r.sessions.VisitActiveBranchReverse(ctx, snapshot.SessionID, func(entry transcript.Entry) bool {
+		if entry.Type != transcript.EntryMessage || entry.Message == nil {
+			return true
 		}
-	}
-	if latestUser < 0 {
-		return
-	}
-	for index := latestUser + 1; index < len(document.ActiveBranch); index++ {
-		entry := document.ActiveBranch[index]
-		if entry.Type != transcript.EntryMessage || entry.Message == nil || entry.Message.Role != transcript.RoleAssistant {
-			continue
+		if entry.Message.Role == transcript.RoleUser {
+			seenUser = true
+			return false
 		}
-		if entry.Message.Usage == nil || entry.Message.Usage.Input <= 0 {
-			continue
+		if entry.Message.Role == transcript.RoleAssistant && entry.Message.Usage != nil && entry.Message.Usage.Input > 0 {
+			firstUsage = entry.Message.Usage.Input
 		}
-		r.contextEngine.ObservePromptUsage(snapshot.ContextUsage.UsedTokens, entry.Message.Usage.Input)
-		return
+		return true
+	})
+	if err == nil && seenUser && firstUsage > 0 {
+		r.contextEngine.ObserveSessionPromptUsage(ctx, snapshot.SessionID, snapshot.ContextUsage.UsedTokens, firstUsage)
 	}
 }
 
@@ -795,6 +802,7 @@ func (r *Resolver) resolveContextBase(
 		return resolvedContextBase{}, fmt.Errorf("解析 Agent Skill Snapshot 失败: %w", err)
 	}
 
+	resultBudget := humberttools.NewResultBudget(contextengine.ToolResultWindowChars(modelSnapshot.ContextWindow))
 	toolScope := humberttools.Scope{
 		RequestID:           requestID,
 		RunID:               runID,
@@ -809,6 +817,7 @@ func (r *Resolver) resolveContextBase(
 		SkillIdentities:     skillSnapshot.PackageIdentities(),
 		SkillScriptCommands: skillSnapshot.ScriptRuntimeCommands(),
 		ToolResultMaxChars:  toolResultMaxCharsForContext(modelSnapshot.ContextWindow),
+		ToolResultBudget:    resultBudget,
 	}
 	resolvedTools, err := r.tools.Resolve(ctx, toolScope)
 	if err != nil {
@@ -888,6 +897,7 @@ func (r *Resolver) resolveContextBase(
 		mcp:               mcpSnapshot,
 		baseInstruction:   instruction,
 		toolTokenEstimate: toolTokens,
+		toolResultBudget:  resultBudget,
 	}, nil
 }
 

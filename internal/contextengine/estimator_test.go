@@ -68,3 +68,22 @@ func TestApproxEstimatorCalibratesTowardProviderUsage(t *testing.T) {
 		t.Fatalf("calibration exceeded safety bound: before=%d after=%d", before, after)
 	}
 }
+
+func TestApproxEstimatorMessageCostsMatchProjectedTotal(t *testing.T) {
+	t.Parallel()
+	imageURL := "humbert-attachment://image-1"
+	messages := []*schema.Message{{Role: schema.User, UserInputMultiContent: []schema.MessageInputPart{{
+		Type:  schema.ChatMessagePartTypeImageURL,
+		Image: &schema.MessageInputImage{MessagePartCommon: schema.MessagePartCommon{URL: &imageURL, MIMEType: "image/png"}},
+		Extra: map[string]any{"attachment_id": "image-1"},
+	}}}, schema.AssistantMessage("seen", nil), schema.UserMessage("follow up"), schema.UserMessage("later")}
+	estimator := NewApproxEstimator()
+	costs := estimator.EstimateMessageCosts(messages)
+	total := 0
+	for _, cost := range costs {
+		total += cost
+	}
+	if total != estimator.EstimateMessages(messages) || costs[0] >= estimator.EstimateMessage(messages[0]) {
+		t.Fatalf("planner costs drifted from projected prompt: costs=%v total=%d", costs, estimator.EstimateMessages(messages))
+	}
+}

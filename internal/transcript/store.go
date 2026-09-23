@@ -45,7 +45,8 @@ type Store struct {
 
 	locks *lockRegistry
 
-	cache *documentCache
+	cache     *documentCache
+	locations *locationCache
 }
 
 type lockEntry struct {
@@ -93,7 +94,8 @@ func NewStore(agentsRoot string) (*Store, error) {
 		locks: &lockRegistry{
 			values: make(map[string]*lockEntry),
 		},
-		cache: newDocumentCache(),
+		cache:     newDocumentCache(),
+		locations: newLocationCache(),
 	}, nil
 }
 
@@ -188,6 +190,8 @@ func (s *Store) CreateSession(ctx context.Context, input CreateSessionInput) err
 			ContextWindow: ContextWindowIndex{Valid: true, LatestCompactionIndex: -1},
 		}, info)
 	}
+	// The location sidecar is derived and can be created lazily. Its first write
+	// happens when a transcript grows past the full-document cache limit.
 	return nil
 }
 
@@ -294,16 +298,29 @@ func (s *Store) LoadContextSession(
 	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
 		return Document{}, err
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return Document{}, err
+	}
+	if info.Size() > defaultDocumentCacheBytes {
+		return s.largeContextSessionLocked(ctx, path, sessionID)
+	}
+	_, cached := s.cache.readOnly(path, info)
 	document, _, _, err := s.documentForReadLocked(ctx, path, sessionID)
 	if err != nil {
 		return Document{}, err
 	}
 	branch := document.ActiveBranch
+	stats := ReadStats{CacheHit: cached}
+	if !cached {
+		stats = ReadStats{BytesRead: info.Size()}
+	}
 	return Document{
 		Header:        document.Header,
 		ActiveBranch:  branch[:len(branch):len(branch)],
 		LeafID:        document.LeafID,
 		ContextWindow: document.ContextWindow,
+		ReadStats:     stats,
 	}, nil
 }
 
@@ -324,6 +341,13 @@ func (s *Store) LoadMessagePage(
 	defer unlock()
 	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
 		return MessageEntryPage{}, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return MessageEntryPage{}, err
+	}
+	if info.Size() > defaultDocumentCacheBytes {
+		return s.largeMessagePageLocked(ctx, path, sessionID, beforeEntryID, limit)
 	}
 
 	document, info, _, err := s.documentForReadLocked(ctx, path, sessionID)
@@ -497,6 +521,7 @@ func (s *Store) DeleteSession(ctx context.Context, agentID string, sessionID str
 		return fmt.Errorf("删除 Session 数据目录失败: %w", err)
 	}
 	s.cache.invalidate(path)
+	s.locations.invalidate(path)
 	return nil
 }
 
@@ -520,6 +545,7 @@ func (s *Store) RepairSession(
 	result, err := repairTailLocked(ctx, path)
 	if result.Repaired {
 		s.cache.invalidate(path)
+		s.locations.invalidate(path)
 	}
 	return result, err
 }
@@ -559,7 +585,22 @@ func (s *Store) appendEntry(
 	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
 		return Entry{}, err
 	}
-	document, info, _, err := s.documentForReadLocked(ctx, path, sessionID)
+	info, err := os.Stat(path)
+	if err != nil {
+		return Entry{}, err
+	}
+	var document Document
+	var location *locationIndex
+	if info.Size() > defaultDocumentCacheBytes {
+		// The full cache cannot retain this document; validate append from the
+		// lightweight location index instead of reparsing all message bodies.
+		document, location, err = s.largeMetadataLocked(ctx, path, sessionID)
+		if err == nil {
+			info, err = os.Stat(path)
+		}
+	} else {
+		document, info, _, err = s.documentForReadLocked(ctx, path, sessionID)
+	}
 	if err != nil {
 		return Entry{}, err
 	}
@@ -617,8 +658,12 @@ func (s *Store) appendEntry(
 	}
 	closed = true
 
+	// Cache and location metadata must own their payloads. The caller still
+	// holds the input message and may reuse or mutate its slices after append.
+	storedEntry := cloneEntry(entry)
 	if updatedInfo, statErr := os.Stat(path); statErr == nil {
-		if !s.cache.advance(path, info, updatedInfo, entry) {
+		s.advanceLocationLocked(path, info, updatedInfo, storedEntry, int64(len(line)), location)
+		if !s.cache.advance(path, info, updatedInfo, storedEntry) {
 			s.cache.invalidate(path)
 		}
 	} else {

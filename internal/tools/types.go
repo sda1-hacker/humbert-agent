@@ -198,6 +198,10 @@ type Scope struct {
 	// ToolResultMaxChars 是当前模型工作窗口允许单个 ToolResult 直接进入上下文的字符上限。
 	// 超过上限的完整结果由 ResultArchiver 保存，模型只收到首尾摘录和引用编号。
 	ToolResultMaxChars int
+
+	// ToolResultBudget is shared by every tool in this turn, including MCP tools.
+	// It bounds the total result content kept directly in model context.
+	ToolResultBudget *ResultBudget
 }
 
 // SandboxPolicy 返回当前 Scope 的有效 Sandbox；未显式注入时使用安全的 Workspace-only 默认值。
