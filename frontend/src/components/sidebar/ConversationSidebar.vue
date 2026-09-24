@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  onUnmounted,
   ref,
   watch,
 } from "vue";
@@ -34,6 +35,7 @@ import {
   useSessionStore,
 } from "../../stores/sessions.js";
 import { searchSessionMessages } from "../../api/sessions.js";
+import { pollIndexedSearch } from "../../utils/searchPolling.js";
 
 import AgentModal
   from "./AgentModal.vue";
@@ -70,6 +72,12 @@ const sessionStore =
 const contentResults = ref([]);
 const contentSearching = ref(false);
 const showArchived = ref(false);
+const archivedCount = computed(() => agentStore.items.reduce((count, agent) =>
+  count + sessionStore.sessionsForAgent(agent.id).filter((session) => session.archived).length, 0));
+
+watch(() => sessionStore.selectedSession?.archived, (archived) => {
+  if (archived) showArchived.value = true;
+}, { immediate: true });
 let searchSequence = 0;
 let searchTimer = null;
 
@@ -81,14 +89,22 @@ watch(() => sessionStore.search, (value) => {
   contentSearching.value = true;
   searchTimer = setTimeout(async () => {
     try {
-      const results = await searchSessionMessages(query);
-      if (sequence === searchSequence) contentResults.value = Array.isArray(results) ? results : [];
+      await pollIndexedSearch(
+          () => searchSessionMessages(query),
+          () => sequence === searchSequence,
+          (results) => { contentResults.value = results; },
+      );
     } catch (error) {
       if (sequence === searchSequence) Message.error(error?.message ?? String(error));
     } finally {
       if (sequence === searchSequence) contentSearching.value = false;
     }
   }, 350);
+});
+
+onUnmounted(() => {
+  clearTimeout(searchTimer);
+  searchSequence += 1;
 });
 
 async function openSearchResult(result) {
@@ -844,13 +860,16 @@ watch(
     </div>
 
     <div v-if="searchKeyword.length >= 2" class="sidebar-content-results">
-      <small>{{ contentSearching ? '正在搜索消息…' : `消息正文 · ${contentResults.length} 条结果` }}</small>
+      <small>{{ contentSearching ? `正在更新搜索索引… ${contentResults.length} 条结果` : `消息正文 · ${contentResults.length} 条结果` }}</small>
       <button v-for="result in contentResults" :key="`${result.sessionID}:${result.entryID}`" type="button" class="sidebar-content-result" @click="openSearchResult(result)">
         <strong>{{ result.title }}{{ result.archived ? '（已归档）' : '' }}</strong>
         <span>{{ result.snippet }}</span>
       </button>
     </div>
-    <button type="button" class="sidebar-archive-toggle" @click="showArchived = !showArchived">{{ showArchived ? '隐藏已归档会话' : '显示已归档会话' }}</button>
+    <button type="button" class="sidebar-archive-toggle" :aria-expanded="showArchived" @click="showArchived = !showArchived">
+      <span>已归档会话<span v-if="archivedCount">（{{ archivedCount }}）</span></span>
+      <span>{{ showArchived ? '收起' : '显示' }}</span>
+    </button>
 
     <!-- Agent -> Session Tree -->
     <div class="agent-tree">
@@ -1324,7 +1343,8 @@ watch(
 .sidebar-content-result:hover { background: var(--h-bg-hover); }
 .sidebar-content-result strong { color: var(--h-text); font-size: 12px; }
 .sidebar-content-result span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 11px; }
-.sidebar-archive-toggle { margin: 0 12px 8px; border: 0; background: transparent; color: var(--h-text-muted); cursor: pointer; text-align: left; font-size: 11px; }
+.sidebar-archive-toggle { display: flex; justify-content: space-between; width: calc(100% - 24px); margin: 0 12px 8px; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--h-text-muted); cursor: pointer; text-align: left; font-size: 12px; }
+.sidebar-archive-toggle:hover { background: var(--h-surface-hover); color: var(--h-text); }
 
 .sidebar-primary-nav {
   flex: 0 0 auto;

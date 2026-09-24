@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { exportBackup, scheduleRestore, getPendingBackupStatus, cancelPendingBackup } from "../../api/app.js";
+import { exportBackup, scheduleRestore, getPendingBackupStatus, cancelPendingBackup, getPendingRestoreStatus, cancelPendingRestore } from "../../api/app.js";
 import { confirmAction } from "../../utils/confirm.js";
 
 const busy = ref(false);
@@ -9,12 +9,24 @@ const backupPassword = ref("");
 const backupPasswordConfirm = ref("");
 const restorePassword = ref("");
 const pendingBackup = ref(null);
+const pendingRestore = ref(null);
 
 async function refreshBackupStatus() {
   try {
-    const status = await getPendingBackupStatus();
-    pendingBackup.value = status?.destination ? status : null;
+    const [backup, restore] = await Promise.all([getPendingBackupStatus(), getPendingRestoreStatus()]);
+    pendingBackup.value = backup?.destination ? backup : null;
+    pendingRestore.value = restore?.archive ? restore : null;
   } catch (error) { Message.error(error?.message || String(error)); }
+}
+
+async function cancelRestore() {
+  busy.value = true;
+  try {
+    await cancelPendingRestore();
+    pendingRestore.value = null;
+    Message.success("已取消待执行的数据恢复");
+  } catch (error) { Message.error(error?.message || String(error)); }
+  finally { busy.value = false; }
 }
 
 async function cancelBackup() {
@@ -55,7 +67,10 @@ async function restoreBackup() {
   busy.value = true;
   try {
     const path = await scheduleRestore(restorePassword.value);
-    if (path) Message.success("备份已验证。完全退出并重新启动 Humbert 后将恢复数据。");
+    if (path) {
+      Message.success("备份已验证。完全退出并重新启动 Humbert 后将恢复数据。");
+      await refreshBackupStatus();
+    }
   } catch (error) { Message.error(error?.message || String(error)); }
   finally { busy.value = false; restorePassword.value = ""; }
 }
@@ -77,6 +92,12 @@ async function restoreBackup() {
     <p>加密备份需输入创建时的口令；旧版 ZIP 可留空。验证后完全退出并重新启动 Humbert，原数据会保留在同级回退目录。</p>
     <a-input-password v-model="restorePassword" placeholder="加密备份口令" :max-length="256" autocomplete="off" />
     <a-button :disabled="busy" @click="restoreBackup">选择备份并安排恢复</a-button>
+    <div v-if="pendingRestore" class="pending-backup" role="status">
+      <p>下次启动将恢复：{{ pendingRestore.archive }}</p>
+      <p v-if="pendingRestore.scheduledAt">安排时间：{{ new Date(pendingRestore.scheduledAt).toLocaleString() }}</p>
+      <p>类型：{{ pendingRestore.encrypted ? '加密备份' : '旧版 ZIP 备份' }}。当前数据会保留在回退目录。</p>
+      <a-button :disabled="busy" @click="cancelRestore">取消待执行恢复</a-button>
+    </div>
   </section>
 </template>
 

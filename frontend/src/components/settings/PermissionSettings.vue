@@ -584,13 +584,19 @@ onMounted(() => {
               <div class="rule-item__heading">
                 <div class="rule-item__title">{{ rule.agentName }}</div>
                 <StatusPill
-                    :label="actionText(rule.action)"
-                    :tone="rule.action === 'deny' ? 'danger' : 'success'"
+                    :label="rule.toolName === 'run_command' && rule.action === 'allow' && !rule.invocationFingerprint ? '已失效' : actionText(rule.action)"
+                    :tone="rule.toolName === 'run_command' && rule.action === 'allow' && !rule.invocationFingerprint ? 'neutral' : rule.action === 'deny' ? 'danger' : 'success'"
                     :dot="false"
                 />
               </div>
 
               <div class="rule-item__target">{{ ruleTarget(rule) }}</div>
+              <div v-if="rule.toolName === 'run_command' && rule.action === 'allow' && !rule.invocationFingerprint" class="rule-item__condition">
+                旧版命令授权不再生效；后续按当前执行策略处理，可以撤销这条规则。
+              </div>
+              <div v-if="rule.invocationFingerprint" class="rule-item__condition">
+                精确调用标识 · {{ shortFingerprint(rule.invocationFingerprint) }} · 参数或工作目录变化后重新询问
+              </div>
               <div v-if="rule.executable" class="rule-item__condition">
                 执行文件 · {{ rule.executable }}
               </div>
@@ -660,9 +666,15 @@ onMounted(() => {
             <div class="rule-item__main">
               <div class="rule-item__heading">
                 <div class="rule-item__title">{{ rule.agentName }}</div>
-                <StatusPill label="允许" tone="success" :dot="false" />
+                <StatusPill :label="rule.toolName === 'run_command' && !rule.invocationFingerprint ? '已失效' : '允许'" :tone="rule.toolName === 'run_command' && !rule.invocationFingerprint ? 'neutral' : 'success'" :dot="false" />
               </div>
               <div class="rule-item__target">{{ ruleTarget(rule) }}</div>
+              <div v-if="rule.toolName === 'run_command' && !rule.invocationFingerprint" class="rule-item__condition">
+                旧版命令授权不再生效；后续按当前执行策略处理。
+              </div>
+              <div v-if="rule.invocationFingerprint" class="rule-item__condition">
+                精确调用标识 · {{ shortFingerprint(rule.invocationFingerprint) }} · 参数或工作目录变化后重新询问
+              </div>
               <div v-if="rule.executable" class="rule-item__condition">
                 执行文件 · {{ rule.executable }}
               </div>

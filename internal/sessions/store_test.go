@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -12,11 +13,12 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/sda1-hacker/humbert-agent/internal/databackup"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
-func TestStoreRecoversMissingConfigWithoutChangingTranscript(t *testing.T) {
+func TestStoreRecoversUnindexedTranscriptWithoutChangingMessages(t *testing.T) {
 	ctx := context.Background()
 	tr, err := transcript.NewStore(t.TempDir())
 	if err != nil {
@@ -50,6 +52,9 @@ func TestStoreRecoversMissingConfigWithoutChangingTranscript(t *testing.T) {
 	if got.Title != "恢复的会话" || !got.CreatedAt.Equal(created) {
 		t.Fatalf("unexpected recovery: %#v", got)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "config.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("恢复过程不应生成 config.json: %v", err)
+	}
 	if err := s.RenameSession(ctx, got.ID, "my title"); err != nil {
 		t.Fatal(err)
 	}
@@ -68,6 +73,137 @@ func TestStoreRecoversMissingConfigWithoutChangingTranscript(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("recovery changed transcript")
 	}
+}
+
+func TestLegacyConfigIsIgnored(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	tr, err := transcript.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().UTC().Truncate(time.Millisecond)
+	if err := tr.CreateSession(ctx, transcript.CreateSessionInput{ID: "legacy", AgentID: "agent", CWD: root, CreatedAt: created}); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := tr.SessionDirectory("agent", "legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(config, []byte(fmt.Sprintf(`{"schema_version":3,"session":{"id":"legacy","agent_id":"agent","title":"旧标题","cwd":%q,"created_at":%q}}`, root, created.Format(time.RFC3339Nano))), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(dir, "session.jsonl")
+	before, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := store.GetSession(ctx, "legacy")
+	if err != nil || initial.Title != "恢复的会话" || initial.Archived {
+		t.Fatalf("旧 config.json 不应导入: %+v, %v", initial, err)
+	}
+	if err := store.RenameSession(ctx, "legacy", "新标题"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetArchived(ctx, "legacy", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// 旧文件即使仍在目录中，也不影响 SQLite 中的新状态。
+	reopened, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	listed, err := reopened.ListSessions(ctx, "agent")
+	if err != nil || len(listed) != 1 || listed[0].Title != "新标题" || !listed[0].Archived {
+		t.Fatalf("迁移后元数据错误: %+v, %v", listed, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "session-metadata.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(transcriptPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("元数据操作修改了消息事实: %v", err)
+	}
+	legacyConfig, err := os.ReadFile(config)
+	if err != nil || !bytes.Contains(legacyConfig, []byte("旧标题")) {
+		t.Fatalf("旧配置被修改: %v", err)
+	}
+}
+
+func TestSessionMetadataSortAndAgentPurge(t *testing.T) {
+	ctx := context.Background()
+	tr, err := transcript.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, id := range []string{"first", "second"} {
+		if err := store.CreateSession(ctx, Session{ID: id, AgentID: "agent", Title: id, CreatedAt: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.AppendMessage(ctx, "first", schema.UserMessage("latest"), transcript.EncodeOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := store.ListSessions(ctx, "agent")
+	if err != nil || len(listed) != 2 || listed[0].ID != "first" {
+		t.Fatalf("会话列表未按最新消息排序: %+v, %v", listed, err)
+	}
+	if err := store.PurgeAgentMetadata(ctx, "agent"); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = store.ListSessions(ctx, "agent")
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("Agent 元数据未清理: %+v, %v", listed, err)
+	}
+}
+
+func TestSessionMetadataIncludedInOfflineBackup(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	home := filepath.Join(parent, "home")
+	tr, err := transcript.NewStore(filepath.Join(home, "agents"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, Session{ID: "saved", AgentID: "agent", Title: "需要备份", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(parent, "backup.zip")
+	if err := databackup.Create(ctx, home, archive); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.OpenReader(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	for _, file := range reader.File {
+		if file.Name == "agents/session-metadata.sqlite" {
+			return
+		}
+	}
+	t.Fatal("离线备份缺少会话元数据库")
 }
 
 func TestArchivePersistsWithoutChangingTranscript(t *testing.T) {
@@ -338,7 +474,7 @@ func TestNormalizeTitleCountsCharactersInsteadOfUTF8Bytes(t *testing.T) {
 	}
 }
 
-func TestStoreDoesNotOverwriteCorruptConfig(t *testing.T) {
+func TestStoreIgnoresCorruptLegacyConfig(t *testing.T) {
 	ctx := context.Background()
 	tr, err := transcript.NewStore(t.TempDir())
 	if err != nil {
@@ -369,16 +505,15 @@ func TestStoreDoesNotOverwriteCorruptConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("corrupt session blocked startup: %v", err)
 	}
-	issues := store.Issues()
-	if len(issues) != 1 || issues[0].SessionID != "broken" || issues[0].AgentID != "agent" {
-		t.Fatalf("unexpected isolated session diagnostics: %#v", issues)
+	if issues := store.Issues(); len(issues) != 0 {
+		t.Fatalf("旧配置不应影响会话: %#v", issues)
 	}
-	if _, err := store.GetSession(ctx, "broken"); !errors.Is(err, ErrSessionUnavailable) {
-		t.Fatalf("corrupt session did not return ErrSessionUnavailable: %v", err)
+	if recovered, err := store.GetSession(ctx, "broken"); err != nil || recovered.Title != "恢复的会话" {
+		t.Fatalf("JSONL Header 恢复失败: %+v, %v", recovered, err)
 	}
 	list, err := store.ListSessions(ctx, "agent")
-	if err != nil || len(list) != 1 || list[0].ID != "healthy" {
-		t.Fatalf("healthy session listing was not isolated: %#v, %v", list, err)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("旧配置影响会话列表: %#v, %v", list, err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -386,5 +521,35 @@ func TestStoreDoesNotOverwriteCorruptConfig(t *testing.T) {
 	}
 	if !bytes.Equal(before, after) {
 		t.Fatal("corrupt config was overwritten")
+	}
+}
+
+func TestStoreIsolatesInvalidTranscriptHeader(t *testing.T) {
+	ctx := context.Background()
+	tr, err := transcript.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.CreateSession(ctx, transcript.CreateSessionInput{ID: "broken", AgentID: "agent"}); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := tr.SessionDirectory("agent", "broken")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "session.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"session"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, tr)
+	if err != nil {
+		t.Fatalf("单个损坏会话不应阻止启动: %v", err)
+	}
+	defer store.Close()
+	if issues := store.Issues(); len(issues) != 1 || issues[0].SessionID != "broken" {
+		t.Fatalf("损坏会话未隔离: %#v", issues)
+	}
+	if _, err := store.GetSession(ctx, "broken"); !errors.Is(err, ErrSessionUnavailable) {
+		t.Fatalf("损坏会话错误类型: %v", err)
 	}
 }

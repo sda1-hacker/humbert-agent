@@ -9,14 +9,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/atomicfile"
 )
 
 type restorePlan struct {
-	Archive   string `json:"archive"`
-	SHA256    string `json:"sha256"`
-	Encrypted bool   `json:"encrypted,omitempty"`
+	Archive     string `json:"archive"`
+	SHA256      string `json:"sha256"`
+	Encrypted   bool   `json:"encrypted,omitempty"`
+	ScheduledAt string `json:"scheduledAt,omitempty"`
 }
 
 type backupPlan struct {
@@ -26,6 +28,13 @@ type backupPlan struct {
 type BackupStatus struct {
 	Destination string `json:"destination"`
 	LastError   string `json:"lastError"`
+}
+
+// RestoreStatus 只暴露待执行计划的非敏感信息，口令始终留在系统凭据库。
+type RestoreStatus struct {
+	Archive     string `json:"archive"`
+	Encrypted   bool   `json:"encrypted"`
+	ScheduledAt string `json:"scheduledAt,omitempty"`
 }
 
 const backupErrorName = ".pending-backup-error.json"
@@ -201,7 +210,7 @@ func ScheduleEncryptedRestore(ctx context.Context, root, archive, passphrase str
 	if err := vault.Set(restoreVaultID, passphrase); err != nil {
 		return err
 	}
-	if err := atomicfile.WriteJSON(ctx, filepath.Join(root, pendingRestoreName), 0o600, restorePlan{Archive: archive, SHA256: digest, Encrypted: true}); err != nil {
+	if err := atomicfile.WriteJSON(ctx, filepath.Join(root, pendingRestoreName), 0o600, restorePlan{Archive: archive, SHA256: digest, Encrypted: true, ScheduledAt: time.Now().Format(time.RFC3339)}); err != nil {
 		_ = vault.Delete(restoreVaultID)
 		return err
 	}
@@ -238,7 +247,32 @@ func ScheduleRestore(ctx context.Context, root, archive string) error {
 	if err != nil {
 		return err
 	}
-	return atomicfile.WriteJSON(ctx, filepath.Join(root, pendingRestoreName), 0o600, restorePlan{Archive: archive, SHA256: digest})
+	return atomicfile.WriteJSON(ctx, filepath.Join(root, pendingRestoreName), 0o600, restorePlan{Archive: archive, SHA256: digest, ScheduledAt: time.Now().Format(time.RFC3339)})
+}
+
+func PendingRestoreStatus(ctx context.Context, root string) (RestoreStatus, error) {
+	var plan restorePlan
+	if err := atomicfile.ReadJSON(ctx, filepath.Join(root, pendingRestoreName), &plan); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return RestoreStatus{}, nil
+		}
+		return RestoreStatus{}, err
+	}
+	return RestoreStatus{Archive: plan.Archive, Encrypted: plan.Encrypted, ScheduledAt: plan.ScheduledAt}, nil
+}
+
+// CancelPendingRestore 在应用仍运行时撤销离线恢复，并清理暂存口令。
+func CancelPendingRestore(ctx context.Context, root string, vault PassphraseVault) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := os.Remove(filepath.Join(root, pendingRestoreName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if vault != nil {
+		return vault.Delete(restoreVaultID)
+	}
+	return nil
 }
 
 // ApplyPendingRestore 在桌面 Core 初始化前执行，确保没有任何 Store 或调度器打开旧数据。

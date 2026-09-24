@@ -75,13 +75,48 @@ type WorkspacePreviewDTO struct {
 // 所有查询都要求 AgentID，并由 Core 的 WorkspaceView Service 重新解析该 Agent 当前
 // Workspace；前端不能提交绝对 Workspace Root 来读取任意目录。
 type WorkspaceService struct {
-	core     *coreapp.Application
-	docMu    sync.Mutex
-	docIndex *searchindex.Index
+	core       *coreapp.Application
+	docMu      sync.Mutex
+	docStateMu sync.Mutex
+	docIndex   *searchindex.Index
+	docCtx     context.Context
+	docCancel  context.CancelFunc
+	docWorkers sync.WaitGroup
+	docReaders sync.WaitGroup
+	docStates  map[string]documentRefreshState
+}
+
+type documentRefreshState struct {
+	updating  bool
+	checked   time.Time
+	lastError string
+}
+
+type DocumentSearchDTO struct {
+	Results  []searchindex.DocumentResult `json:"results"`
+	Updating bool                         `json:"updating"`
+	Error    string                       `json:"error,omitempty"`
 }
 
 func NewWorkspaceService(core *coreapp.Application) *WorkspaceService {
-	return &WorkspaceService{core: core}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &WorkspaceService{core: core, docCtx: ctx, docCancel: cancel, docStates: make(map[string]documentRefreshState)}
+}
+
+func (s *WorkspaceService) ServiceShutdown() error {
+	s.docStateMu.Lock()
+	s.docCancel()
+	s.docStateMu.Unlock()
+	s.docWorkers.Wait()
+	s.docReaders.Wait()
+	s.docStateMu.Lock()
+	defer s.docStateMu.Unlock()
+	if s.docIndex != nil {
+		index := s.docIndex
+		s.docIndex = nil
+		return index.Close()
+	}
+	return nil
 }
 
 func (s *WorkspaceService) ServiceName() string { return "WorkspaceService" }
@@ -119,37 +154,78 @@ func (s *WorkspaceService) PreviewFile(agentID, path string) (WorkspacePreviewDT
 	return workspacePreviewDTO(value), nil
 }
 
-// SearchDocuments refreshes a bounded, disposable SQLite index of extractable
-// workspace documents. The Agent workspace is resolved anew on every call.
-func (s *WorkspaceService) SearchDocuments(agentID, query string) ([]searchindex.DocumentResult, error) {
+// SearchDocuments 立即检索已提交索引，后台同步当前工作区文件。工作区位置每次重新解析。
+func (s *WorkspaceService) SearchDocuments(agentID, query string) (DocumentSearchDTO, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
-		return []searchindex.DocumentResult{}, nil
+		return DocumentSearchDTO{Results: []searchindex.DocumentResult{}}, nil
 	}
 	if len([]rune(query)) > 200 {
-		return nil, fmt.Errorf("搜索词不能超过 200 字")
+		return DocumentSearchDTO{}, fmt.Errorf("搜索词不能超过 200 字")
 	}
-	s.docMu.Lock()
-	defer s.docMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	info, err := s.core.Agents().Get(ctx, agentID)
 	if err != nil {
-		return nil, err
+		return DocumentSearchDTO{}, err
 	}
 	resolved, err := s.core.Workspaces().Resolve(ctx, info.Agent.ID, info.Agent.WorkspaceMode, info.Agent.WorkspacePath)
 	if err != nil {
-		return nil, err
+		return DocumentSearchDTO{}, err
+	}
+	s.docStateMu.Lock()
+	if err := s.docCtx.Err(); err != nil {
+		s.docStateMu.Unlock()
+		return DocumentSearchDTO{}, err
 	}
 	if s.docIndex == nil {
 		s.docIndex, err = searchindex.Open(filepath.Join(s.core.Config().Paths.CacheDir, "document-search.sqlite"))
 		if err != nil {
-			return nil, err
+			s.docStateMu.Unlock()
+			return DocumentSearchDTO{}, err
 		}
 	}
+	index := s.docIndex
+	key := agentID + "\x00" + resolved.RootDir
+	state := s.docStates[key]
+	if s.docCtx.Err() == nil && !state.updating && time.Since(state.checked) > 10*time.Second {
+		state.updating = true
+		state.lastError = ""
+		s.docStates[key] = state
+		s.docWorkers.Add(1)
+		go s.refreshDocumentIndex(index, agentID, resolved, key)
+	}
+	s.docReaders.Add(1)
+	s.docStateMu.Unlock()
+	defer s.docReaders.Done()
+	results, err := index.SearchDocuments(ctx, agentID, resolved.RootDir, query, 50)
+	if err != nil {
+		return DocumentSearchDTO{}, err
+	}
+	return DocumentSearchDTO{Results: results, Updating: state.updating, Error: state.lastError}, nil
+}
+
+func (s *WorkspaceService) refreshDocumentIndex(index *searchindex.Index, agentID string, resolved workspace.Workspace, key string) {
+	defer s.docWorkers.Done()
+	ctx, cancel := context.WithTimeout(s.docCtx, 2*time.Minute)
+	defer cancel()
+	s.docMu.Lock()
+	err := s.updateDocumentIndex(ctx, index, agentID, resolved)
+	s.docMu.Unlock()
+	s.docStateMu.Lock()
+	state := s.docStates[key]
+	state.updating, state.checked, state.lastError = false, time.Now(), ""
+	if err != nil && s.docCtx.Err() == nil {
+		state.lastError = err.Error()
+	}
+	s.docStates[key] = state
+	s.docStateMu.Unlock()
+}
+
+func (s *WorkspaceService) updateDocumentIndex(ctx context.Context, index *searchindex.Index, agentID string, resolved workspace.Workspace) error {
 	root, err := s.core.Workspaces().OpenRoot(ctx, resolved)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer root.Close()
 	seen := make(map[string]bool)
@@ -193,7 +269,7 @@ func (s *WorkspaceService) SearchDocuments(agentID, query string) ([]searchindex
 		if err != nil || !stat.Mode().IsRegular() || stat.Size() <= 0 || stat.Size() > 12<<20 {
 			return nil
 		}
-		current, err := s.docIndex.DocumentCurrent(ctx, agentID, resolved.RootDir, rel, stat.Size(), stat.ModTime().UnixNano())
+		current, err := index.DocumentCurrent(ctx, agentID, resolved.RootDir, rel, stat.Size(), stat.ModTime().UnixNano())
 		if err != nil || current {
 			return err
 		}
@@ -211,17 +287,17 @@ func (s *WorkspaceService) SearchDocuments(agentID, query string) ([]searchindex
 			// Unsupported or scanned documents have no searchable text until changed.
 			plain = ""
 		}
-		return s.docIndex.ReplaceDocument(ctx, agentID, resolved.RootDir, rel, stat.Size(), stat.ModTime().UnixNano(), plain)
+		return index.ReplaceDocument(ctx, agentID, resolved.RootDir, rel, stat.Size(), stat.ModTime().UnixNano(), plain)
 	})
 	if err != nil && err != fs.SkipAll {
-		return nil, err
+		return err
 	}
 	if !truncated {
-		if err := s.docIndex.PruneDocuments(ctx, agentID, resolved.RootDir, seen); err != nil {
-			return nil, err
+		if err := index.PruneDocuments(ctx, agentID, resolved.RootDir, seen); err != nil {
+			return err
 		}
 	}
-	return s.docIndex.SearchDocuments(ctx, agentID, resolved.RootDir, query, 50)
+	return nil
 }
 
 func workspaceOverviewDTO(value workspaceview.Overview) WorkspaceOverviewDTO {

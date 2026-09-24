@@ -30,6 +30,17 @@ func TestRuntimePromptOnlyReferencesAvailableHelperTools(t *testing.T) {
 	if strings.Contains(readOnly, "用 write_file") || strings.Contains(readOnly, "用 edit_file") {
 		t.Fatal("prompt referenced disabled file tools")
 	}
+	if !strings.Contains(readOnly, "无法生成网页截图") {
+		t.Fatal("prompt should explain missing browser screenshot capability")
+	}
+	withFiles := build("run_command", "list_files", "glob_files")
+	if !strings.Contains(withFiles, "不要为 ls 或 pwd 调用 run_command") {
+		t.Fatal("prompt should route directory listing to the file tool")
+	}
+	withBrowser := build("browser", "run_command")
+	if !strings.Contains(withBrowser, "screenshot 动作") || strings.Contains(withBrowser, "当前没有 browser") {
+		t.Fatal("prompt should route web screenshots to browser")
+	}
 }
 
 func TestRuntimePromptTokenBudget(t *testing.T) {

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
+	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 )
 
@@ -43,7 +45,10 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 	switch descriptor.Name {
 	case "run_command":
 		var input struct {
-			Command string `json:"command"`
+			Command          string   `json:"command"`
+			Args             []string `json:"args"`
+			WorkingDirectory string   `json:"working_directory"`
+			TimeoutSeconds   int      `json:"timeout_seconds"`
 		}
 		if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command Capability Identity 失败: %w", err)
@@ -59,6 +64,23 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		identity.Kind = permission.CapabilityCommand
 		identity.Command = command
 		identity.Executable = executable
+		workingDirectory := strings.TrimSpace(input.WorkingDirectory)
+		if workingDirectory == "" {
+			workingDirectory = "."
+		}
+		decision, err := policy.CheckPath(workingDirectory, sandbox.OpList)
+		if err != nil {
+			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command 工作目录身份失败: %w", err)
+		}
+		invocation, err := json.Marshal(struct {
+			Args             []string `json:"args"`
+			WorkingDirectory string   `json:"working_directory"`
+			TimeoutSeconds   int      `json:"timeout_seconds"`
+		}{append([]string{}, input.Args...), decision.CanonicalPath, input.TimeoutSeconds})
+		if err != nil {
+			return permission.CapabilityIdentity{}, fmt.Errorf("构建 run_command 参数身份失败: %w", err)
+		}
+		identity.InvocationFingerprint = fmt.Sprintf("cmd1:%x", sha256.Sum256(invocation))
 
 	case "run_skill_script":
 		var input struct {

@@ -151,8 +151,9 @@ config/providers.json、models.json           Provider 与模型非密钥信息
 config/permissions.json、proactive.json      权限、主动助手配置与 Inbox
 config/personal-memory.json                 用户确认的跨会话记忆
 agents/<agent-id>/config.json               Agent Profile
+agents/session-metadata.sqlite              Session 控制面与列表索引
 agents/<agent-id>/sessions/<session-id>/
-  config.json                                Session 控制面
+  config.json                                旧版遗留文件，当前版本忽略
   session.jsonl                              消息、工具事务、压缩检查点
   session.locations.jsonl                    可重建的字节位置索引
   memory.json                                派生会话记忆
@@ -165,7 +166,7 @@ cache/document-search.sqlite                工作区文档搜索投影
 logs/humbert.log                            结构化日志
 ```
 
-这些 SQLite 文件只用于搜索，不承担消息或任务的唯一存储。运行时不要直接编辑活跃会话的 JSONL；先通过 `sessions`/`transcript` 的 API 修改。持久化格式升级要考虑旧数据迁移和崩溃后的重试。详细所有权及恢复约束见 [领域边界](domain-boundaries.md)。
+`agents/session-metadata.sqlite` 保存不可丢失的会话控制面；`cache/` 下两个 SQLite 文件只用于搜索，可重建。三者都不保存消息正文的唯一事实。运行时不要直接编辑活跃会话的 JSONL；先通过 `sessions`/`transcript` 的 API 修改。持久化格式升级要考虑旧数据迁移和崩溃后的重试。详细所有权及恢复约束见 [领域边界](domain-boundaries.md)。
 
 ## 7. 从哪里开始学习
 

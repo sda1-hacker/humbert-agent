@@ -4,7 +4,45 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestSearchReadsCommittedSnapshotWhileIndexUpdates(t *testing.T) {
+	ctx := context.Background()
+	index, err := Open(filepath.Join(t.TempDir(), "search.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer index.Close()
+	session := Session{ID: "s1", AgentID: "a1", Title: "测试", Revision: 1}
+	if err := index.Replace(ctx, session, []Message{{EntryID: "old", Role: "user", Content: "旧消息内容"}}); err != nil {
+		t.Fatal(err)
+	}
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		session.Revision = 2
+		done <- index.ReplaceStream(ctx, session, func(add func(Message) error) error {
+			close(started)
+			<-release
+			return add(Message{EntryID: "new", Role: "user", Content: "新消息内容"})
+		})
+	}()
+	<-started
+	readCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	results, err := index.Search(readCtx, "旧消息", 10)
+	close(release)
+	if err != nil || len(results) != 1 || results[0].EntryID != "old" {
+		t.Fatalf("更新中读取快照失败: results=%+v err=%v", results, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	results, err = index.Search(ctx, "新消息", 10)
+	if err != nil || len(results) != 1 || results[0].EntryID != "new" {
+		t.Fatalf("更新后索引未生效: results=%+v err=%v", results, err)
+	}
+}
 
 func TestSearchReplaceAndPrune(t *testing.T) {
 	ctx := context.Background()

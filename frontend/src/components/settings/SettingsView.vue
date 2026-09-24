@@ -20,6 +20,7 @@ import MCPSettings from "./MCPSettings.vue";
 import AppPageHeader from "../ui/AppPageHeader.vue";
 import UserProfileSettings from "./UserProfileSettings.vue";
 import DataSettings from "./DataSettings.vue";
+import ArchivedSessionsSettings from "./ArchivedSessionsSettings.vue";
 
 const props = defineProps({
   initialKey: {
@@ -31,6 +32,7 @@ const props = defineProps({
 const emit = defineEmits([
   "close",
   "open-skills",
+  "open-session",
 ]);
 
 const navigationGroups = [
@@ -51,6 +53,13 @@ const navigationGroups = [
         description: "导出并校验个人数据备份。",
         keywords: ["数据", "备份", "恢复", "backup", "restore"],
         glyph: "D",
+      },
+      {
+        key: "archived",
+        title: "归档会话",
+        description: "查看、解除归档或删除已归档的对话。",
+        keywords: ["归档", "会话", "对话", "恢复", "删除", "archive", "session"],
+        glyph: "H",
       },
     ],
   },
@@ -246,6 +255,7 @@ function selectItem(key) {
           <section class="settings-content__body">
             <UserProfileSettings v-if="activeKey === 'profile'"/>
             <DataSettings v-else-if="activeKey === 'data'"/>
+            <ArchivedSessionsSettings v-else-if="activeKey === 'archived'" @open-session="emit('open-session', $event)"/>
             <ModelCatalog v-else-if="activeKey === 'models'"/>
             <ProviderSettings v-else-if="activeKey === 'providers'"/>
             <MultimediaSettings v-else-if="activeKey === 'multimedia'"/>

@@ -6,6 +6,8 @@
 
 `Engine.Evaluate` 对一个具体 `Request` 返回 allow、deny 或 ask。Request 包含工具、风险、Session/Agent 和 `CapabilityIdentity`；`presentation` 把本次操作安全地投影为审批卡。持久化 Agent 规则在 `config/permissions.json`，Session 规则在内存中。Allow 只跳过再次询问，不能绕过工具自己的工作区 Path Guard、命令白名单或 Sandbox。
 
+`run_command` 的可复用授权绑定程序、可执行路径、Sandbox 与本次调用的参数指纹。指纹覆盖完整 `args`、实际工作目录和超时值，规则中不保存可能含密钥的原始参数。相同调用可以选择本会话允许或 Agent 始终允许；参数变化会重新询问。旧版只绑定程序的 Allow 不再命中，Deny 仍生效。用户显式把执行默认策略设为 `allow` 或关闭操作确认时，仍按该全局设置处理。
+
 ```mermaid
 flowchart TD
   Q[Tool Request + CapabilityIdentity] --> E[Engine.Evaluate]

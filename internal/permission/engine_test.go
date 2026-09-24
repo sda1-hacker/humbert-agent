@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
@@ -41,6 +42,7 @@ func testCommandRequest(command, executable, sandboxFingerprint string) Request 
 		Identity: CapabilityIdentity{
 			Version: CapabilityIdentityVersion, Kind: CapabilityCommand, Tool: "run_command", Risk: RiskExec,
 			SandboxFingerprint: sandboxFingerprint, Command: command, Executable: executable,
+			InvocationFingerprint: "cmd1:original",
 		},
 	}
 }
@@ -130,30 +132,82 @@ func TestAllowRuleInvalidatesWhenSandboxChanges(t *testing.T) {
 	}
 }
 
-func TestCommandAllowBindsExecutableAndCommand(t *testing.T) {
+func TestCommandReusableApprovalMatchesExactInvocation(t *testing.T) {
 	engine := newTestEngine(t)
 	ctx := context.Background()
 	request := testCommandRequest("python3", "/usr/bin/python3", "sbx1:a")
 
 	if _, err := engine.Grant(ctx, ApprovalGrant{Scope: GrantAgent, Request: request}); err != nil {
-		t.Fatalf("创建 command 长期授权失败: %v", err)
+		t.Fatalf("run_command 应允许精确调用的长期授权: %v", err)
 	}
 	decision, err := engine.Evaluate(ctx, request)
 	if err != nil || decision.Action != ActionAllow {
-		t.Fatalf("原 executable 应命中 Allow: %#v err=%v", decision, err)
+		t.Fatalf("同一调用应命中长期授权: %#v err=%v", decision, err)
 	}
-
-	changedExecutable := request
-	changedExecutable.Identity.Executable = "/opt/homebrew/bin/python3"
-	decision, err = engine.Evaluate(ctx, changedExecutable)
+	changed := request
+	changed.Identity.InvocationFingerprint = "cmd1:different-args"
+	decision, err = engine.Evaluate(ctx, changed)
 	if err != nil || decision.Action != ActionAsk {
-		t.Fatalf("Executable 变化后应重新询问: %#v err=%v", decision, err)
+		t.Fatalf("参数变化后应重新询问: %#v err=%v", decision, err)
 	}
-
-	git := testCommandRequest("git", "/usr/bin/git", "sbx1:a")
-	decision, err = engine.Evaluate(ctx, git)
+	if _, err := engine.Grant(ctx, ApprovalGrant{Scope: GrantAgent, Request: changed}); err != nil {
+		t.Fatalf("第二组参数应能单独保存: %v", err)
+	}
+	for _, approved := range []Request{request, changed} {
+		decision, err = engine.Evaluate(ctx, approved)
+		if err != nil || decision.Action != ActionAllow {
+			t.Fatalf("两组已批准参数应同时生效: %#v err=%v", decision, err)
+		}
+	}
+	changed = request
+	changed.Identity.SandboxFingerprint = "sbx1:another"
+	decision, err = engine.Evaluate(ctx, changed)
 	if err != nil || decision.Action != ActionAsk {
-		t.Fatalf("python3 Rule 不应授权 git: %#v err=%v", decision, err)
+		t.Fatalf("安全环境变化后应重新询问: %#v err=%v", decision, err)
+	}
+	legacy := request
+	legacy.Identity.InvocationFingerprint = ""
+	if err := engine.store.Upsert(ctx, Rule{
+		ID: "old-command-allow", AgentID: legacy.AgentID, ToolName: legacy.ToolName,
+		Action: ActionAllow, Scope: GrantAgent, Identity: legacy.Identity,
+		CreatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	changed = request
+	changed.Identity.InvocationFingerprint = "cmd1:unapproved"
+	decision, err = engine.Evaluate(ctx, changed)
+	if err != nil || decision.Action != ActionAsk {
+		t.Fatalf("旧版程序级 Allow 不应放行其他参数: %#v err=%v", decision, err)
+	}
+	if _, err := engine.Grant(ctx, ApprovalGrant{Scope: GrantAgent, Request: legacy}); !errors.Is(err, ErrInvalidApprovalScope) {
+		t.Fatalf("不能新建缺少参数身份的长期规则: %v", err)
+	}
+}
+
+func TestCommandSessionApprovalKeepsDistinctInvocations(t *testing.T) {
+	engine := newTestEngine(t)
+	ctx := context.Background()
+	first := testCommandRequest("ls", "/bin/ls", "sbx1:a")
+	first.Identity.InvocationFingerprint = "cmd1:ls-la"
+	second := first
+	second.Identity.InvocationFingerprint = "cmd1:ls-l"
+	for _, request := range []Request{first, second} {
+		if _, err := engine.Grant(ctx, ApprovalGrant{Scope: GrantSession, Request: request}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, request := range []Request{first, second} {
+		decision, err := engine.Evaluate(ctx, request)
+		if err != nil || decision.Action != ActionAllow {
+			t.Fatalf("exact session invocation should remain allowed: %#v err=%v", decision, err)
+		}
+	}
+	otherSession := first
+	otherSession.SessionID = "session-2"
+	decision, err := engine.Evaluate(ctx, otherSession)
+	if err != nil || decision.Action != ActionAsk {
+		t.Fatalf("session approval leaked: %#v err=%v", decision, err)
 	}
 }
 

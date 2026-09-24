@@ -82,6 +82,11 @@ func (s *Service) ListIDs(ctx context.Context, agentID string) ([]string, error)
 	return s.store.ListSessionIDs(ctx, agentID)
 }
 
+// PurgeAgentMetadata 在 Agent 整体删除后清除 SQLite 中的会话控制面。
+func (s *Service) PurgeAgentMetadata(ctx context.Context, agentID string) error {
+	return s.store.PurgeAgentMetadata(ctx, agentID)
+}
+
 // Get 返回指定 Session。
 func (s *Service) Get(ctx context.Context, sessionID string) (Session, error) {
 	sessionID = strings.TrimSpace(sessionID)
@@ -153,7 +158,7 @@ func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session
 	return value, nil
 }
 
-// Rename 原子更新该 Session 自己的 config.json，不写 Conversation Tree。
+// Rename 原子更新 SQLite 会话元数据，不写 Conversation Tree。
 func (s *Service) Rename(ctx context.Context, sessionID string, title string) (Session, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return Session{}, errors.New("Session ID 不能为空")

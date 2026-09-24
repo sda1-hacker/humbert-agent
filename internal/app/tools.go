@@ -158,6 +158,12 @@ func buildToolRegistry(
 
 			return nil
 		}
+	registerBuilt := func(name string, factory humberttools.Factory, err error) error {
+		if err != nil {
+			return fmt.Errorf("创建 %s Factory 失败: %w", name, err)
+		}
+		return register(factory)
+	}
 
 	// 上下文恢复能力属于 Humbert 的运行时可靠性基础设施，始终随 Runtime 提供，
 	// 不受 Agent 的 Builtin 选择开关影响。这里刻意只暴露两个内部只读 Tool：
@@ -217,79 +223,21 @@ func buildToolRegistry(
 				MaxListEntries:       toolConfig.Files.MaxListEntries,
 			}
 
-		listFilesFactory, err :=
-			builtin.NewListFilesFactory(
-				workspaceManager,
-				readLimits,
-			)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"创建 list_files Factory 失败: %w",
-				err,
-			)
-		}
-
-		if err :=
-			register(
-				listFilesFactory,
-			); err != nil {
+		// 构造失败与注册失败都在这里统一带上工具名，避免为每个文件工具重复装配代码。
+		listFilesFactory, err := builtin.NewListFilesFactory(workspaceManager, readLimits)
+		if err := registerBuilt("list_files", listFilesFactory, err); err != nil {
 			return nil, err
 		}
-
-		readFileFactory, err :=
-			builtin.NewReadFileFactory(
-				workspaceManager,
-				readLimits,
-			)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"创建 read_file Factory 失败: %w",
-				err,
-			)
-		}
-
-		if err :=
-			register(
-				readFileFactory,
-			); err != nil {
+		readFileFactory, err := builtin.NewReadFileFactory(workspaceManager, readLimits)
+		if err := registerBuilt("read_file", readFileFactory, err); err != nil {
 			return nil, err
 		}
-		writeFileFactory, err :=
-			builtin.NewWriteFileFactory(
-				workspaceManager,
-				toolConfig.Files.MaxWritableFileBytes,
-			)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"创建 write_file Factory 失败: %w",
-				err,
-			)
-		}
-
-		if err :=
-			register(
-				writeFileFactory,
-			); err != nil {
+		writeFileFactory, err := builtin.NewWriteFileFactory(workspaceManager, toolConfig.Files.MaxWritableFileBytes)
+		if err := registerBuilt("write_file", writeFileFactory, err); err != nil {
 			return nil, err
 		}
-
-		editFileFactory, err :=
-			builtin.NewEditFileFactory(
-				workspaceManager,
-				toolConfig.Files.MaxWritableFileBytes,
-				toolConfig.Files.MaxReadOutputBytes,
-			)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"创建 edit_file Factory 失败: %w",
-				err,
-			)
-		}
-
-		if err :=
-			register(
-				editFileFactory,
-			); err != nil {
+		editFileFactory, err := builtin.NewEditFileFactory(workspaceManager, toolConfig.Files.MaxWritableFileBytes, toolConfig.Files.MaxReadOutputBytes)
+		if err := registerBuilt("edit_file", editFileFactory, err); err != nil {
 			return nil, err
 		}
 
@@ -304,24 +252,15 @@ func buildToolRegistry(
 		}
 
 		copyFileFactory, err := builtin.NewCopyFileFactory(toolConfig.Files.MaxWritableFileBytes)
-		if err != nil {
-			return nil, fmt.Errorf("创建 copy_file Factory 失败: %w", err)
-		}
-		if err := register(copyFileFactory); err != nil {
+		if err := registerBuilt("copy_file", copyFileFactory, err); err != nil {
 			return nil, err
 		}
 		moveFileFactory, err := builtin.NewMoveFileFactory(toolConfig.Files.MaxWritableFileBytes)
-		if err != nil {
-			return nil, fmt.Errorf("创建 move_file Factory 失败: %w", err)
-		}
-		if err := register(moveFileFactory); err != nil {
+		if err := registerBuilt("move_file", moveFileFactory, err); err != nil {
 			return nil, err
 		}
 		applyPatchFactory, err := builtin.NewApplyPatchFactory(toolConfig.Files.MaxWritableFileBytes)
-		if err != nil {
-			return nil, fmt.Errorf("创建 apply_patch Factory 失败: %w", err)
-		}
-		if err := register(applyPatchFactory); err != nil {
+		if err := registerBuilt("apply_patch", applyPatchFactory, err); err != nil {
 			return nil, err
 		}
 	}

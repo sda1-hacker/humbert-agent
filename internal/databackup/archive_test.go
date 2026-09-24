@@ -41,6 +41,32 @@ func TestBackupVerifyRestore(t *testing.T) {
 	}
 }
 
+func TestLegacyPendingRestoreCanBeCancelled(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "data")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(parent, "backup.zip")
+	if err := Create(ctx, root, archive); err != nil {
+		t.Fatal(err)
+	}
+	if err := ScheduleRestore(ctx, root, archive); err != nil {
+		t.Fatal(err)
+	}
+	status, err := PendingRestoreStatus(ctx, root)
+	if err != nil || status.Archive != archive || status.Encrypted {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	if err := CancelPendingRestore(ctx, root, nil); err != nil {
+		t.Fatal(err)
+	}
+	if rollback, err := ApplyPendingRestore(ctx, root); err != nil || rollback != "" {
+		t.Fatalf("取消后仍执行恢复: rollback=%q err=%v", rollback, err)
+	}
+}
+
 func TestRejectTraversal(t *testing.T) {
 	parent := t.TempDir()
 	archive := filepath.Join(parent, "evil.zip")

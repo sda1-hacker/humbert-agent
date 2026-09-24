@@ -60,6 +60,17 @@ func buildRuntimeInstruction(
 	if hasTool(available, "web_fetch") {
 		builder.WriteString("已知 URL 直接用 web_fetch；精确事实读取原页面，不把搜索摘要当作正文。\n")
 	}
+	if hasTool(available, "browser") {
+		builder.WriteString("打开网页、交互和网页截图用 browser；截图使用 screenshot 动作。不要用 run_command 调用 open 或 screencapture。\n")
+	} else if hasTool(available, "run_command") {
+		builder.WriteString("run_command 不用于打开网页或截图；当前没有 browser 时，如实说明无法生成网页截图。\n")
+	}
+	if hasTool(available, "run_command") && hasTool(available, "list_files") {
+		builder.WriteString("查看目录用 list_files；不要为 ls 或 pwd 调用 run_command。\n")
+	}
+	if hasTool(available, "run_command") && hasTool(available, "glob_files") {
+		builder.WriteString("查找文件优先用 glob_files。\n")
+	}
 	if hasTool(available, "schedule_task") {
 		if hasTool(available, "get_current_time") {
 			builder.WriteString("用户要求提醒或定时工作时，先用 get_current_time 核对时间，再用 schedule_task。\n")

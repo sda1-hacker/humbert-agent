@@ -307,7 +307,7 @@ type Entry struct {
 // CreateSessionInput 描述创建 Transcript JSONL Header 所需的不可变信息。
 //
 // Session 的可变控制面配置（例如 title）不属于 Transcript 协议，由 sessions 包写入
-// 每个 Session 目录自己的 config.json。Transcript 只保存 Agent 对话协议。
+// SQLite 元数据库。Transcript 只保存 Agent 对话协议。
 type CreateSessionInput struct {
 	ID string
 

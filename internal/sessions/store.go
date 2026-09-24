@@ -1,13 +1,10 @@
 package sessions
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -15,83 +12,44 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 
-	"github.com/sda1-hacker/humbert-agent/internal/atomicfile"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
-const (
-	sessionConfigFileName      = "config.json"
-	sessionConfigSchemaVersion = 3
-)
-
-// sessionDocument 是每个 Session 独立 config.json 的文件结构。
-//
-// Session 配置与 Conversation Transcript 明确分工：
-//   - config.json：Session 控制面信息，例如 title；
-//   - session.jsonl：User/Assistant/ToolResult、Thinking、ToolCall 与 Tree。
-//
-// Title 修改只原子替换 config.json，绝不会再向 JSONL 追加 session_info Entry。
-// CreatedAt/CWD 在 Header 中也存在一份不可变协议快照，便于 session.jsonl 单文件导出；
-// 日常 Session 管理则以这里的配置为控制面来源。
-type sessionDocument struct {
-	SchemaVersion int `json:"schema_version"`
-
-	Session sessionConfig `json:"session"`
-}
-
-// sessionConfig 保存一个 Session 的低频配置。
-//
-// UpdatedAt 不持久化：它由 config.json 与 session.jsonl 的实际修改时间计算，这样每次
-// Agent Message append 都不需要额外重写 JSON 配置文件，也不会制造高频第二写路径。
-type sessionConfig struct {
-	ID string `json:"id"`
-
-	AgentID string `json:"agent_id"`
-
-	Title    string `json:"title"`
-	Archived bool   `json:"archived,omitempty"`
-
-	CWD string `json:"cwd"`
-
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// Store 是 Session Domain 的文件持久化协调层。
+// Store 协调 Session 控制面 SQLite 与消息 JSONL。
 //
 // 物理布局：
 //
+//	agents/session-metadata.sqlite
 //	agents/<agent-id>/sessions/<session-id>/
-//	├── config.json
-//	└── session.jsonl
+//	└── session.jsonl（消息事实）
 //
 // Runtime Message 仍统一使用 Eino *schema.Message；消息编码/解码完全委托给
-// transcript.Codec。Store 只额外管理每 Session 独立 config.json 和一个可重建的
-// session_id -> agent_id 内存索引。
+// transcript.Codec。SQLite 只保存会话标题、归档、所属 Agent 与排序时间。
 type Store struct {
 	transcripts *transcript.Store
+	catalog     *sessionCatalog
+	lifecycleMu sync.Mutex
 
 	indexMu sync.RWMutex
 
-	sessionAgents map[string]string
-
 	issues map[string]SessionIssue
 
-	configLocks *configLockRegistry
+	sessionLocks *sessionLockRegistry
 }
 
-type configLockEntry struct {
+type sessionLockEntry struct {
 	mu sync.Mutex
 
 	refs int
 }
 
-type configLockRegistry struct {
+type sessionLockRegistry struct {
 	mu sync.Mutex
 
-	values map[string]*configLockEntry
+	values map[string]*sessionLockEntry
 }
 
-// NewStore 创建 Session Store，并从现有 Session 目录重建定位索引。
+// NewStore 创建 Session Store，并从 JSONL 修复缺失元数据及活动时间。
 func NewStore(ctx context.Context, transcripts *transcript.Store) (*Store, error) {
 	if ctx == nil {
 		return nil, errors.New("context.Context 不能为空")
@@ -100,55 +58,36 @@ func NewStore(ctx context.Context, transcripts *transcript.Store) (*Store, error
 		return nil, errors.New("Session Store TranscriptStore 不能为空")
 	}
 
+	catalog, err := openSessionCatalog(transcripts.AgentsRoot())
+	if err != nil {
+		return nil, err
+	}
 	store := &Store{
-		transcripts:   transcripts,
-		sessionAgents: make(map[string]string),
-		issues:        make(map[string]SessionIssue),
-		configLocks: &configLockRegistry{
-			values: make(map[string]*configLockEntry),
+		transcripts: transcripts,
+		catalog:     catalog,
+		issues:      make(map[string]SessionIssue),
+		sessionLocks: &sessionLockRegistry{
+			values: make(map[string]*sessionLockEntry),
 		},
 	}
 	if err := store.rebuildIndex(ctx); err != nil {
+		_ = catalog.close()
 		return nil, fmt.Errorf("重建 Session 索引失败: %w", err)
 	}
 	return store, nil
 }
 
-// ListSessions 返回指定 Agent 的全部 Session。
-//
-// TranscriptStore 只枚举存在 session.jsonl 的 Session 目录；这里再读取每个独立
-// config.json 获取 title 等控制面信息。不存在一个全局 sessions/config.json，因此
-// 不同 Session 的创建、重命名不会竞争同一配置文件。
+// Close 释放会话元数据库连接；应在所有 Session 操作结束后调用。
+func (s *Store) Close() error { return s.catalog.close() }
+
+// ListSessions 从 SQLite 索引读取，不逐个打开 Session 目录或配置。
 func (s *Store) ListSessions(ctx context.Context, agentID string) ([]Session, error) {
-	refs, err := s.transcripts.ListSessionRefs(ctx, agentID)
-	if err != nil {
-		return nil, translateTranscriptError(err)
-	}
-
-	result := make([]Session, 0, len(refs))
-	for _, ref := range refs {
-		value, err := s.readSessionConfig(ctx, ref.AgentID, ref.ID)
-		if err != nil {
-			s.recordIssue(ref.ID, ref.AgentID, err)
-			continue
-		}
-		result = append(result, value)
-		s.rememberSession(value.ID, value.AgentID)
-		s.clearIssue(value.ID)
-	}
-
-	sort.SliceStable(result, func(i, j int) bool {
-		if result[i].UpdatedAt.Equal(result[j].UpdatedAt) {
-			return result[i].ID < result[j].ID
-		}
-		return result[i].UpdatedAt.After(result[j].UpdatedAt)
-	})
-	return result, nil
+	return s.catalog.list(ctx, agentID)
 }
 
 // ListSessionIDs 返回指定 Agent 下所有存在 transcript 的 Session ID。
 //
-// 该清单不读取 config.json，因此 Agent 级删除仍能覆盖并清理已被隔离的损坏 Session。
+// 该清单不读取 SQLite，因此 Agent 级删除仍能覆盖并清理损坏 Session。
 func (s *Store) ListSessionIDs(ctx context.Context, agentID string) ([]string, error) {
 	refs, err := s.transcripts.ListSessionRefs(ctx, agentID)
 	if err != nil {
@@ -168,31 +107,22 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 		return Session{}, ErrSessionNotFound
 	}
 
-	agentID, exists := s.lookupAgent(id)
-	if !exists {
+	value, err := s.catalog.get(ctx, id)
+	if errors.Is(err, ErrSessionNotFound) {
 		if err := s.rebuildIndex(ctx); err != nil {
 			return Session{}, fmt.Errorf("刷新 Session 索引失败: %w", err)
 		}
-		agentID, exists = s.lookupAgent(id)
-		if !exists {
+		value, err = s.catalog.get(ctx, id)
+		if errors.Is(err, ErrSessionNotFound) {
 			if issue, unavailable := s.lookupIssue(id); unavailable {
 				return Session{}, fmt.Errorf("%w: session_id=%s: %s", ErrSessionUnavailable, id, issue.Error)
 			}
 			return Session{}, fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 		}
 	}
-
-	value, err := s.readSessionConfig(ctx, agentID, id)
 	if err != nil {
-		if errors.Is(err, transcript.ErrSessionNotFound) || errors.Is(err, os.ErrNotExist) {
-			s.forgetSession(id)
-		} else {
-			s.recordIssue(id, agentID, err)
-			return Session{}, fmt.Errorf("%w: session_id=%s: %v", ErrSessionUnavailable, id, err)
-		}
 		return Session{}, err
 	}
-	s.clearIssue(id)
 	return value, nil
 }
 
@@ -213,23 +143,17 @@ func (s *Store) Issues() []SessionIssue {
 	return result
 }
 
-// CreateSession 创建独立 Session 目录中的 session.jsonl 与 config.json。
-//
-// Transcript 先创建协议文件，随后使用 atomicfile 写 config.json。第二步失败时会补偿
-// 删除整个 Session 目录；进程在两步之间退出时，下次读取从合法 Header 恢复缺失配置。
+// CreateSession 创建 JSONL，再写入 SQLite 控制面。第二步失败时回滚目录。
 func (s *Store) CreateSession(ctx context.Context, value Session) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	if ctx == nil {
 		return errors.New("context.Context 不能为空")
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("创建 Session 被取消: %w", err)
 	}
-	path, err := s.configPath(value.AgentID, value.ID)
-	if err != nil {
-		return err
-	}
-	// 创建与缺失配置恢复使用同一把锁，避免并发列表读取把新会话恢复为默认标题。
-	unlock := s.configLocks.lock(path)
+	unlock := s.sessionLocks.lock(value.ID)
 	defer unlock()
 
 	if err := s.transcripts.CreateSession(ctx, transcript.CreateSessionInput{
@@ -241,105 +165,92 @@ func (s *Store) CreateSession(ctx context.Context, value Session) error {
 		return translateTranscriptError(err)
 	}
 
-	document := sessionDocument{
-		SchemaVersion: sessionConfigSchemaVersion,
-		Session: sessionConfig{
-			ID:        value.ID,
-			AgentID:   value.AgentID,
-			Title:     value.Title,
-			CWD:       value.CWD,
-			CreatedAt: value.CreatedAt.UTC(),
-		},
+	value.CreatedAt = value.CreatedAt.UTC()
+	value.UpdatedAt = value.CreatedAt
+	if modified, err := s.transcripts.SessionModifiedAt(ctx, value.AgentID, value.ID); err == nil && modified.After(value.UpdatedAt) {
+		value.UpdatedAt = modified
 	}
-	if err := atomicfile.WriteJSON(ctx, path, 0o600, document); err != nil {
+	if err := s.catalog.insert(ctx, value); err != nil {
 		rollbackErr := s.transcripts.DeleteSession(context.WithoutCancel(ctx), value.AgentID, value.ID)
 		if rollbackErr != nil {
 			return errors.Join(
-				fmt.Errorf("创建 Session config.json 失败: %w", err),
+				fmt.Errorf("写入 Session 元数据库失败: %w", err),
 				fmt.Errorf("回滚 Session 数据目录失败: %w", rollbackErr),
 			)
 		}
-		return fmt.Errorf("创建 Session config.json 失败: %w", err)
+		return fmt.Errorf("写入 Session 元数据库失败: %w", err)
 	}
 
-	s.rememberSession(value.ID, value.AgentID)
+	s.clearIssue(value.ID)
 	return nil
 }
 
-// RenameSession 原子更新单个 Session 的 config.json。
-//
-// Rename 不再产生 Session Tree Entry，因此改名不会污染模型上下文，也不会让
-// session.jsonl 出现与 Agent 对话无关的 session_info 记录。
+// RenameSession 只更新 SQLite 控制面，不追加 Session Tree Entry。
 func (s *Store) RenameSession(ctx context.Context, id string, title string) error {
-	session, err := s.GetSession(ctx, id)
+	_, err := s.GetSession(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	path, err := s.configPath(session.AgentID, id)
-	if err != nil {
-		return err
-	}
-	unlock := s.configLocks.lock(path)
+	unlock := s.sessionLocks.lock(id)
 	defer unlock()
 
-	document, err := s.readSessionDocument(ctx, path, session.AgentID, id)
-	if err != nil {
-		return err
-	}
-	document.Session.Title = title
-
-	if err := atomicfile.WriteJSON(ctx, path, 0o600, document); err != nil {
-		return fmt.Errorf("更新 Session config.json 失败: %w", err)
-	}
-	return nil
+	return s.catalog.rename(ctx, id, title)
 }
 
 // SetArchived updates only the session control plane; its transcript remains intact.
 func (s *Store) SetArchived(ctx context.Context, id string, archived bool) error {
-	session, err := s.GetSession(ctx, id)
+	_, err := s.GetSession(ctx, id)
 	if err != nil {
 		return err
 	}
-	path, err := s.configPath(session.AgentID, id)
-	if err != nil {
-		return err
-	}
-	unlock := s.configLocks.lock(path)
+	unlock := s.sessionLocks.lock(id)
 	defer unlock()
-	document, err := s.readSessionDocument(ctx, path, session.AgentID, id)
-	if err != nil {
-		return err
-	}
-	document.Session.Archived = archived
-	return atomicfile.WriteJSON(ctx, path, 0o600, document)
+	return s.catalog.setArchived(ctx, id, archived)
 }
 
-// DeleteSession 删除 Session 整个目录，包括 config.json、session.jsonl 与未来 sidecar。
+// DeleteSession 删除 Session 整个目录和对应的 SQLite 元数据。
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	session, err := s.GetSession(ctx, id)
 	if err != nil {
 		return err
 	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 
-	path, err := s.configPath(session.AgentID, id)
-	if err != nil {
-		return err
-	}
-	unlock := s.configLocks.lock(path)
+	unlock := s.sessionLocks.lock(id)
 	defer unlock()
 
 	if err := s.transcripts.DeleteSession(ctx, session.AgentID, id); err != nil {
 		return translateTranscriptError(err)
 	}
-	s.forgetSession(id)
+	if err := s.catalog.delete(ctx, id); err != nil {
+		return err
+	}
+	s.clearIssue(id)
+	return nil
+}
+
+// PurgeAgentMetadata 在 Agent 目录删除成功后清除其会话目录索引。
+func (s *Store) PurgeAgentMetadata(ctx context.Context, agentID string) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if err := s.catalog.deleteAgent(ctx, agentID); err != nil {
+		return err
+	}
+	s.indexMu.Lock()
+	for id, issue := range s.issues {
+		if issue.AgentID == agentID {
+			delete(s.issues, id)
+		}
+	}
+	s.indexMu.Unlock()
 	return nil
 }
 
 // AppendMessage 把 Eino Message 编码成 JSONL v3 Wire Message，再追加到当前 Tree Leaf。
 //
-// config.json 不参与消息写入，因此 Agent Streaming/Tool Calling 不会产生第二个高频
-// writer。Session UpdatedAt 由 session.jsonl 的文件修改时间即时投影。
+// 元数据库只保存更新时间；消息内容仍只有 JSONL 一份。
 func (s *Store) AppendMessage(
 	ctx context.Context,
 	sessionID string,
@@ -359,6 +270,10 @@ func (s *Store) AppendMessage(
 	entry, err := s.transcripts.AppendMessage(ctx, session.AgentID, sessionID, wireMessage)
 	if err != nil {
 		return Message{}, translateTranscriptError(err)
+	}
+	// JSONL 已经提交；即使更新时间投影失败，重启后的重建也会以文件 mtime 修复。
+	if modified, statErr := s.transcripts.SessionModifiedAt(ctx, session.AgentID, sessionID); statErr == nil {
+		_ = s.catalog.touch(ctx, sessionID, modified)
 	}
 
 	createdAt, err := time.Parse(time.RFC3339Nano, entry.Timestamp)
@@ -504,6 +419,9 @@ func (s *Store) AppendCompaction(
 	if err != nil {
 		return transcript.Entry{}, translateTranscriptError(err)
 	}
+	if modified, statErr := s.transcripts.SessionModifiedAt(ctx, session.AgentID, sessionID); statErr == nil {
+		_ = s.catalog.touch(ctx, sessionID, modified)
+	}
 	return entry, nil
 }
 
@@ -529,8 +447,10 @@ func (s *Store) SessionDirectory(ctx context.Context, sessionID string) (string,
 	return directory, nil
 }
 
-// rebuildIndex 从 Agent Session 目录重新构建 SessionID -> AgentID 索引。
+// rebuildIndex 只从 JSONL 头部恢复缺失元数据，并用文件 mtime 修复活动时间。
 func (s *Store) rebuildIndex(ctx context.Context) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
 	if ctx == nil {
 		return errors.New("context.Context 不能为空")
 	}
@@ -544,7 +464,7 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 		return fmt.Errorf("读取 Agent Transcript Root 失败: %w", err)
 	}
 
-	newAgents := make(map[string]string)
+	seen := make(map[string]string)
 	newIssues := make(map[string]SessionIssue)
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
@@ -562,254 +482,72 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 			return err
 		}
 		for _, ref := range refs {
-			// 缺失配置可由合法 Transcript Header 恢复；损坏或不匹配的配置会被隔离，
-			// 不能让单个 Session 阻塞整个应用启动。
-			value, err := s.readSessionConfig(ctx, ref.AgentID, ref.ID)
-			if err != nil {
-				newIssues[ref.ID] = SessionIssue{SessionID: ref.ID, AgentID: ref.AgentID, Error: err.Error()}
-				continue
-			}
-			if existing, exists := newAgents[value.ID]; exists && existing != value.AgentID {
+			if existing, exists := seen[ref.ID]; exists && existing != ref.AgentID {
 				return fmt.Errorf(
 					"发现重复 Session ID %s，分别属于 Agent %s 和 %s",
-					value.ID,
+					ref.ID,
 					existing,
-					value.AgentID,
+					ref.AgentID,
 				)
 			}
-			newAgents[value.ID] = value.AgentID
+			seen[ref.ID] = ref.AgentID
+			value, err := s.catalog.get(ctx, ref.ID)
+			if errors.Is(err, ErrSessionNotFound) {
+				value, err = s.recoverSessionFromHeader(ctx, ref.AgentID, ref.ID)
+				if err != nil {
+					newIssues[ref.ID] = SessionIssue{SessionID: ref.ID, AgentID: ref.AgentID, Error: err.Error()}
+					continue
+				}
+				if err := s.catalog.insert(ctx, value); err != nil {
+					return fmt.Errorf("恢复 Session %s 元数据失败: %w", ref.ID, err)
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("读取 Session %s 元数据失败: %w", ref.ID, err)
+			}
+			if value.AgentID != ref.AgentID {
+				return fmt.Errorf("Session %s 元数据所属 Agent 与目录不一致", ref.ID)
+			}
+			if modified, err := s.transcripts.SessionModifiedAt(ctx, ref.AgentID, ref.ID); err == nil {
+				if err := s.catalog.touch(ctx, ref.ID, modified); err != nil {
+					return err
+				}
+			}
 		}
+	}
+	if err := s.catalog.prune(ctx, seen); err != nil {
+		return err
 	}
 
 	s.indexMu.Lock()
-	s.sessionAgents = newAgents
 	s.issues = newIssues
 	s.indexMu.Unlock()
 	return nil
 }
 
-func (s *Store) readSessionConfig(ctx context.Context, agentID string, sessionID string) (Session, error) {
-	path, err := s.configPath(agentID, sessionID)
-	if err != nil {
-		return Session{}, err
-	}
-	unlock := s.configLocks.lock(path)
-	defer unlock()
-
-	document, err := s.readSessionDocument(ctx, path, agentID, sessionID)
-	if errors.Is(err, os.ErrNotExist) {
-		document, err = s.recoverMissingSessionConfig(ctx, path, agentID, sessionID)
-	}
-	if err != nil {
-		return Session{}, err
-	}
-
-	transcriptModifiedAt, err := s.transcripts.SessionModifiedAt(ctx, agentID, sessionID)
+// recoverSessionFromHeader 仅在 SQLite 缺少记录时读取 JSONL 第一行。
+// Header 不含旧标题和归档信息，因此使用明确的恢复标题。
+func (s *Store) recoverSessionFromHeader(ctx context.Context, agentID, sessionID string) (Session, error) {
+	header, err := s.transcripts.LoadHeader(ctx, agentID, sessionID)
 	if err != nil {
 		return Session{}, translateTranscriptError(err)
 	}
-	configInfo, err := os.Stat(path)
+	createdAt, err := time.Parse(time.RFC3339Nano, header.Timestamp)
 	if err != nil {
-		return Session{}, fmt.Errorf("读取 Session config.json 修改时间失败: %w", err)
+		return Session{}, fmt.Errorf("解析 Session Header 创建时间失败: %w", err)
 	}
-
-	updatedAt := document.Session.CreatedAt.UTC()
-	if transcriptModifiedAt.After(updatedAt) {
-		updatedAt = transcriptModifiedAt
+	modifiedAt, err := s.transcripts.SessionModifiedAt(ctx, agentID, sessionID)
+	if err != nil {
+		return Session{}, translateTranscriptError(err)
 	}
-	if configInfo.ModTime().UTC().After(updatedAt) {
-		updatedAt = configInfo.ModTime().UTC()
+	createdAt = createdAt.UTC()
+	if modifiedAt.Before(createdAt) {
+		modifiedAt = createdAt
 	}
-
 	return Session{
-		ID:        document.Session.ID,
-		AgentID:   document.Session.AgentID,
-		Title:     document.Session.Title,
-		Archived:  document.Session.Archived,
-		CWD:       document.Session.CWD,
-		CreatedAt: document.Session.CreatedAt.UTC(),
-		UpdatedAt: updatedAt,
+		ID: sessionID, AgentID: agentID, Title: "恢复的会话", CWD: header.CWD,
+		CreatedAt: createdAt, UpdatedAt: modifiedAt,
 	}, nil
-}
-
-// recoverMissingSessionConfig 只恢复不存在的配置，不覆盖已有、损坏或符号链接配置。
-// Header 保存不可变身份、工作目录和创建时间；丢失的标题无法恢复，明确使用恢复标题。
-// 调用方必须持有 configLocks；完整加载同时校验 JSONL，保留所有原始消息。
-func (s *Store) recoverMissingSessionConfig(ctx context.Context, path, agentID, sessionID string) (sessionDocument, error) {
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		if err != nil {
-			return sessionDocument{}, fmt.Errorf("检查待恢复 Session 配置失败: %w", err)
-		}
-		return sessionDocument{}, errors.New("Session 配置已存在，拒绝覆盖恢复")
-	}
-	loaded, err := s.transcripts.LoadSession(ctx, agentID, sessionID)
-	if err != nil {
-		return sessionDocument{}, fmt.Errorf("校验待恢复 Session Transcript 失败: %w", err)
-	}
-	createdAt, err := time.Parse(time.RFC3339Nano, loaded.Header.Timestamp)
-	if err != nil {
-		return sessionDocument{}, fmt.Errorf("解析待恢复 Session 创建时间失败: %w", err)
-	}
-	document := sessionDocument{
-		SchemaVersion: sessionConfigSchemaVersion,
-		Session: sessionConfig{
-			ID: sessionID, AgentID: agentID, Title: "恢复的会话",
-			CWD: loaded.Header.CWD, CreatedAt: createdAt.UTC(),
-		},
-	}
-	if err := atomicfile.WriteJSON(ctx, path, 0o600, document); err != nil {
-		return sessionDocument{}, fmt.Errorf("恢复 Session config.json 失败: %w", err)
-	}
-	return document, nil
-}
-
-func (s *Store) readSessionDocument(
-	ctx context.Context,
-	path string,
-	expectedAgentID string,
-	expectedSessionID string,
-) (sessionDocument, error) {
-	// v1/v2 曾保存已移除的 project_id。只迁移这两个已知结构，保留原文件
-	// 的一次性副本，避免升级失败时丢失用户会话控制面。
-	var raw json.RawMessage
-	if err := atomicfile.ReadJSON(ctx, path, &raw); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return sessionDocument{}, fmt.Errorf("Session config.json 不存在: %w", err)
-		}
-		return sessionDocument{}, fmt.Errorf("读取 Session config.json 失败: %w", err)
-	}
-	var version struct {
-		SchemaVersion int `json:"schema_version"`
-	}
-	if err := json.Unmarshal(raw, &version); err != nil {
-		return sessionDocument{}, fmt.Errorf("解析 Session config.json 版本失败: %w", err)
-	}
-	if version.SchemaVersion == 1 || version.SchemaVersion == 2 {
-		if err := migrateLegacySessionConfig(ctx, path, raw, expectedAgentID, expectedSessionID); err != nil {
-			return sessionDocument{}, fmt.Errorf("迁移 Session config.json 失败: %w", err)
-		}
-	}
-	var document sessionDocument
-	if err := atomicfile.ReadJSON(ctx, path, &document); err != nil {
-		return sessionDocument{}, fmt.Errorf("读取 Session config.json 失败: %w", err)
-	}
-	if document.SchemaVersion != sessionConfigSchemaVersion {
-		return sessionDocument{}, fmt.Errorf(
-			"Session config.json schema_version 不支持: %d",
-			document.SchemaVersion,
-		)
-	}
-	if document.Session.ID != expectedSessionID {
-		return sessionDocument{}, fmt.Errorf(
-			"Session config.json ID 与目录不一致: directory=%s config=%s",
-			expectedSessionID,
-			document.Session.ID,
-		)
-	}
-	if document.Session.AgentID != expectedAgentID {
-		return sessionDocument{}, fmt.Errorf(
-			"Session config.json AgentID 与目录不一致: directory=%s config=%s",
-			expectedAgentID,
-			document.Session.AgentID,
-		)
-	}
-	if strings.TrimSpace(document.Session.Title) == "" {
-		return sessionDocument{}, errors.New("Session config.json title 不能为空")
-	}
-	if document.Session.CreatedAt.IsZero() {
-		return sessionDocument{}, errors.New("Session config.json created_at 不能为空")
-	}
-
-	return document, nil
-}
-
-func migrateLegacySessionConfig(ctx context.Context, path string, raw json.RawMessage, agentID string, sessionID string) error {
-	var legacy struct {
-		SchemaVersion int `json:"schema_version"`
-		Session       struct {
-			ID        string    `json:"id"`
-			AgentID   string    `json:"agent_id"`
-			Title     string    `json:"title"`
-			CWD       string    `json:"cwd"`
-			CreatedAt time.Time `json:"created_at"`
-			ProjectID string    `json:"project_id,omitempty"`
-		} `json:"session"`
-	}
-	if err := json.Unmarshal(raw, &legacy); err != nil {
-		return err
-	}
-	if legacy.Session.ID != sessionID || legacy.Session.AgentID != agentID || strings.TrimSpace(legacy.Session.Title) == "" || legacy.Session.CreatedAt.IsZero() {
-		return errors.New("旧 Session 配置身份或必填字段无效")
-	}
-	backupPath := path + fmt.Sprintf(".pre-v3.%d", legacy.SchemaVersion)
-	backup, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if !errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("创建升级前副本失败: %w", err)
-		}
-		existing, readErr := os.ReadFile(backupPath)
-		var normalizedExisting, normalizedCurrent bytes.Buffer
-		if readErr != nil || json.Compact(&normalizedExisting, existing) != nil || json.Compact(&normalizedCurrent, raw) != nil || !bytes.Equal(normalizedExisting.Bytes(), normalizedCurrent.Bytes()) {
-			return errors.New("既有升级前副本无法校验，拒绝继续迁移")
-		}
-	} else {
-		if _, err := backup.Write(raw); err != nil {
-			_ = backup.Close()
-			_ = os.Remove(backupPath)
-			return fmt.Errorf("保存升级前副本失败: %w", err)
-		}
-		if err := backup.Sync(); err != nil {
-			_ = backup.Close()
-			_ = os.Remove(backupPath)
-			return fmt.Errorf("同步升级前副本失败: %w", err)
-		}
-		if err := backup.Close(); err != nil {
-			return fmt.Errorf("关闭升级前副本失败: %w", err)
-		}
-	}
-	document := sessionDocument{SchemaVersion: sessionConfigSchemaVersion, Session: sessionConfig{
-		ID: sessionID, AgentID: agentID, Title: legacy.Session.Title, CWD: legacy.Session.CWD, CreatedAt: legacy.Session.CreatedAt,
-	}}
-	if err := atomicfile.WriteJSON(ctx, path, 0o600, document); err != nil {
-		return fmt.Errorf("写入新版 Session 配置失败: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) configPath(agentID string, sessionID string) (string, error) {
-	directory, err := s.transcripts.SessionDirectory(agentID, sessionID)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(directory, sessionConfigFileName), nil
-}
-
-func (s *Store) lookupAgent(sessionID string) (string, bool) {
-	s.indexMu.RLock()
-	defer s.indexMu.RUnlock()
-	agentID, exists := s.sessionAgents[sessionID]
-	return agentID, exists
-}
-
-func (s *Store) rememberSession(sessionID string, agentID string) {
-	s.indexMu.Lock()
-	s.sessionAgents[sessionID] = agentID
-	delete(s.issues, sessionID)
-	s.indexMu.Unlock()
-}
-
-func (s *Store) forgetSession(sessionID string) {
-	s.indexMu.Lock()
-	delete(s.sessionAgents, sessionID)
-	delete(s.issues, sessionID)
-	s.indexMu.Unlock()
-}
-
-func (s *Store) recordIssue(sessionID string, agentID string, err error) {
-	s.indexMu.Lock()
-	delete(s.sessionAgents, sessionID)
-	s.issues[sessionID] = SessionIssue{SessionID: sessionID, AgentID: agentID, Error: err.Error()}
-	s.indexMu.Unlock()
 }
 
 func (s *Store) clearIssue(sessionID string) {
@@ -835,11 +573,11 @@ func translateTranscriptError(err error) error {
 	return err
 }
 
-func (r *configLockRegistry) lock(key string) func() {
+func (r *sessionLockRegistry) lock(key string) func() {
 	r.mu.Lock()
 	entry := r.values[key]
 	if entry == nil {
-		entry = &configLockEntry{}
+		entry = &sessionLockEntry{}
 		r.values[key] = entry
 	}
 	entry.refs++

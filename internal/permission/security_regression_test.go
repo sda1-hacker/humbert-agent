@@ -3,6 +3,7 @@ package permission
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 )
@@ -28,11 +29,20 @@ func TestSecurityRegressionReusableAllowIdentityMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("command-executable-change", func(t *testing.T) {
+	t.Run("legacy-command-allow-ignored", func(t *testing.T) {
 		engine := newTestEngine(t)
 		request := testCommandRequest("python3", "/usr/bin/python3", "sbx1:a")
-		if _, err := engine.Grant(ctx, ApprovalGrant{Scope: GrantAgent, Request: request}); err != nil {
+		request.Identity.InvocationFingerprint = ""
+		if err := engine.store.Upsert(ctx, Rule{
+			ID: "old-command-allow", AgentID: request.AgentID, ToolName: request.ToolName,
+			Action: ActionAllow, Scope: GrantAgent, Identity: request.Identity,
+			CreatedAt: time.Now().UTC(),
+		}); err != nil {
 			t.Fatal(err)
+		}
+		current, err := engine.Evaluate(ctx, request)
+		if err != nil || current.Action != ActionAsk {
+			t.Fatalf("old command allow must not bypass approval: decision=%#v err=%v", current, err)
 		}
 		changed := request
 		changed.Identity.Executable = "/opt/runtime/python3"

@@ -89,7 +89,7 @@ runtime:
 
 security:
   max_file_bytes: 1048576
-  shell_enabled: true
+  shell_enabled: false
   sandbox:
     default_profile: standard
     default_network_mode: public

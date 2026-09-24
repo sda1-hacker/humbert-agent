@@ -50,6 +50,36 @@ func TestLoadSessionRepairsOnlyIncompleteTail(t *testing.T) {
 	}
 }
 
+func TestLoadHeaderDoesNotScanLongTranscript(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(ctx, CreateSessionInput{ID: "session", AgentID: "agent", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	path, err := store.sessionPath("agent", "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteString(`{"type":"message"`); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	header, err := store.LoadHeader(ctx, "agent", "session")
+	if err != nil || header.ID != "session" {
+		t.Fatalf("仅读取 Header 失败: %+v, %v", header, err)
+	}
+}
+
 func TestLoadSessionCacheIsIsolatedFromCallerMutation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

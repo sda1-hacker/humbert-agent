@@ -4,12 +4,14 @@
 
 ## 领域边界
 
-`Store` 管 `agents/<agent-id>/sessions/<session-id>/config.json` 的标题、归属、归档等低频元数据，并借 Transcript 定位物理会话。`Service` 提供以 Session ID 为入口的业务 API。真正的消息、thinking、toolCall、toolResult 与压缩检查点在 `session.jsonl`，不能把 `config.json` 当聊天历史。
+`Store` 把标题、归属、归档、创建与最近活动时间保存在 `agents/session-metadata.sqlite`，会话列表直接按 `agent_id, updated_at` 索引查询。会话目录里的旧 `config.json` 不再读取或写入。`Service` 提供以 Session ID 为入口的业务 API。消息、thinking、toolCall、toolResult 与压缩检查点仍只在 `session.jsonl`。
+
+如果数据库没有某个已有 JSONL 的记录，启动时只读取 JSONL 第一行恢复 ID、CWD 与创建时间，标题设为“恢复的会话”、归档状态设为未归档。旧 `config.json` 不参与恢复，因此旧标题与归档状态无法从该文件带入。
 
 ```mermaid
 flowchart TD
   UI[SessionService / Runtime] --> S[sessions.Service]
-  S --> M[Store: config.json]
+  S --> M[Store: session-metadata.sqlite]
   S --> T[transcript.Store: session.jsonl]
   S --> A[attachments/ 原件]
   T --> I[locations sidecar]
@@ -39,13 +41,15 @@ sequenceDiagram
 
 `Session.Create` 冻结当时解析的工作区路径到 Session CWD。Agent 后来更换工作区，不会移动旧 Session 的数据。删除会话时应通过 Runtime 的互斥入口，使活动 Turn/压缩不能与删除并发；`sessions.Service.Delete` 本身只处理存储层动作。
 
+归档只修改 SQLite 的 `archived` 字段，JSONL 与附件保持原样。前端可在侧边栏显示归档会话；“设置 → 归档会话”集中提供查看、解除归档和删除。删除走 `SessionService.Delete`，若会话属于任务，还会清理对应运行记录。
+
 ## 阅读地图
 
 | 文件 | 关键函数 | 为什么读 |
 | --- | --- | --- |
 | `service.go` | `Create`、`PrepareUserMessage`、`AppendAssistantMessage`、`LoadContextTranscript` | 看会话业务 API 和 Transcript 边界。 |
-| `store.go` | `NewStore`、`Get`、`ListMessages` | 看 Session ID 到 Agent 目录的定位与配置恢复。 |
+| `store.go`、`catalog.go` | `NewStore`、`GetSession`、`ListSessions` | 看 SQLite 元数据、JSONL Header 恢复和消息边界。 |
 | `attachments.go` | `appendUserInput`、`HydrateMessages`、`ReadAttachment` | 看附件入库和模型调用前恢复。 |
 | `types.go` | `Session`、`UserInput`、`Message` | 区分控制面 DTO、附件和持久化消息。 |
 
-调试时先确认 Session `config.json` 的 AgentID，再查 JSONL Entry ID；附件问题继续看 `attachments/` 和 `HydrateMessages`。不要把 Base64 写进 JSONL 或 Memory。
+调试时先查 `session-metadata.sqlite` 中的 Session AgentID，再查 JSONL Entry ID；附件问题继续看 `attachments/` 和 `HydrateMessages`。SQLite 元数据库必须随用户数据备份，不能像搜索缓存一样删除。不要把 Base64 写进 JSONL 或 Memory。

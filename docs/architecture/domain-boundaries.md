@@ -1,8 +1,7 @@
 # Humbert Domain Boundaries
 
-本文档描述当前开发版本的领域边界。Session config v1/v2 会在首次读取时升级到 v3，
-旧文件保留为同目录的 `.pre-v3.<version>` 副本。其它 Store 目前只支持当前 schema，
-发布后改变其结构前必须增加逐版本迁移，不能直接拒绝已有用户数据。
+本文档描述当前开发版本的领域边界。会话控制面仅采用 SQLite；旧版 Session config 文件不导入。
+其它 Store 目前只支持当前 schema，发布后改变其结构前必须增加逐版本迁移，不能直接拒绝已有用户数据。
 
 ## Agent
 
@@ -36,15 +35,19 @@ Workspace 中的文件。
 Session 只记录 `AgentID`，物理布局为：
 
 ```text
+agents/session-metadata.sqlite
 agents/<agent-id>/sessions/<session-id>/
-├── config.json
+├── config.json  # 旧版遗留文件，当前版本忽略
 ├── session.jsonl
 ├── session.locations.jsonl
 └── attachments/
 ```
 
-`config.json` 是低频控制面；`session.jsonl` 是 Message、Thinking、ToolCall、ToolResult
-与 Conversation Tree 的唯一事实来源。Store 只接受当前 schema。
+`session-metadata.sqlite` 是标题、归属、归档及列表排序时间的控制面事实来源。
+启动时不会读取旧 `config.json`。若数据库缺少记录，Store 只读 JSONL Header 恢复会话身份、CWD 和创建时间，标题设为“恢复的会话”，归档状态设为未归档。
+`session.jsonl` 是 Message、Thinking、ToolCall、ToolResult 与 Conversation Tree 的唯一事实来源。
+消息提交后更新时间索引；若进程恰在两次提交之间退出，启动扫描会用 JSONL mtime 修复排序时间。
+因此元数据库属于用户数据，备份时不能按可重建缓存跳过。
 
 较小的 Transcript 使用容量受限的进程内 Document LRU。超过完整文档缓存上限后，Store
 用 `session.locations.jsonl` 记录 Entry 身份与字节位置；首次建立或索引失效时会严格扫描
@@ -53,9 +56,7 @@ agents/<agent-id>/sessions/<session-id>/
 通过位置读取。索引以 Transcript 的文件身份、大小和修改时间校验，崩溃后可重建。
 `session.jsonl` 始终是唯一事实来源。
 
-一个 Session 的配置损坏时，Store 会隔离该 Session、保留原文件并记录诊断；其它健康
-Session 仍可加载，应用启动不会被单个损坏会话阻塞。仅当 `config.json` 缺失且 transcript
-header 合法时，Store 才会重建当前版本配置。
+数据库无记录且 Transcript Header 损坏时，Store 会隔离该 Session、保留原文件并记录诊断；其它健康 Session 仍可加载。旧 `config.json` 是否存在、是否损坏均不影响恢复。数据库已有记录时，也不会用旧 JSON 覆盖较新的标题。
 
 ## Runtime
 

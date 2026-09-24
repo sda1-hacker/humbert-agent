@@ -38,6 +38,8 @@ type CapabilityIdentity struct {
 
 	Command    string `json:"command,omitempty"`
 	Executable string `json:"executable,omitempty"`
+	// InvocationFingerprint 绑定完整 argv、实际工作目录及超时，不保存可能含密钥的原始参数。
+	InvocationFingerprint string `json:"invocationFingerprint,omitempty"`
 
 	SkillName     string `json:"skillName,omitempty"`
 	SkillIdentity string `json:"skillIdentity,omitempty"`
@@ -52,6 +54,7 @@ func (i CapabilityIdentity) Empty() bool {
 	return i.Version == 0 && i.Kind == "" && strings.TrimSpace(i.Tool) == "" &&
 		strings.TrimSpace(i.SandboxFingerprint) == "" && strings.TrimSpace(i.Command) == "" &&
 		strings.TrimSpace(i.Executable) == "" && strings.TrimSpace(i.SkillName) == "" &&
+		strings.TrimSpace(i.InvocationFingerprint) == "" &&
 		strings.TrimSpace(i.SkillIdentity) == "" && strings.TrimSpace(i.Script) == "" &&
 		strings.TrimSpace(i.MCPServerID) == "" && strings.TrimSpace(i.MCPServerFingerprint) == "" &&
 		strings.TrimSpace(i.MCPTool) == ""
@@ -63,6 +66,7 @@ func (i CapabilityIdentity) Normalize() CapabilityIdentity {
 	i.SandboxFingerprint = strings.TrimSpace(i.SandboxFingerprint)
 	i.Command = strings.TrimSpace(i.Command)
 	i.Executable = normalizeIdentityPath(i.Executable)
+	i.InvocationFingerprint = strings.TrimSpace(i.InvocationFingerprint)
 	i.SkillName = strings.TrimSpace(i.SkillName)
 	i.SkillIdentity = strings.TrimSpace(i.SkillIdentity)
 	i.Script = strings.TrimSpace(strings.ReplaceAll(i.Script, "\\", "/"))

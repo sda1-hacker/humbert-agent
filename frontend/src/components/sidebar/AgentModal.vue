@@ -14,6 +14,7 @@ import {
 import {
   confirmAction,
 } from "../../utils/confirm.js";
+import { defaultBuiltinTools } from "../../utils/defaultBuiltinTools.js";
 
 import {
   IconDelete,
@@ -249,7 +250,7 @@ function resetForm(agent) {
               "",
 
           enabledBuiltinTools:
-              builtinCatalog.value.map((tool) => tool.name),
+              defaultBuiltinTools(builtinCatalog.value),
           availableBuiltinTools:
               [...builtinCatalog.value],
           builtinToolsConfigured:

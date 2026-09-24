@@ -86,6 +86,6 @@ flowchart TD
 ## 读源码时的共同规则
 
 - 先找到调用入口，再顺着实际方法走；Mermaid 图标出边界，不能替代代码中的错误与取消路径。
-- `session.jsonl` 是消息事实；`memory.json`、位置索引和 SQLite 搜索库是派生数据。实时 EventBus 也不是持久化来源。
+- `session.jsonl` 是消息事实；`agents/session-metadata.sqlite` 是会话控制面的事实来源；`memory.json`、位置索引和 `cache/` 中的 SQLite 搜索库是派生数据。实时 EventBus 也不是持久化来源。
 - 排查一次聊天以 `SessionID`、`RequestID`、`RunID` 关联；排查任务再加 `TaskID`，排查工具再加 `ToolCallID`。
 - 修改磁盘格式、授权或并发时，同时阅读对应章节的恢复与安全边界，并运行相关包测试和 `go test ./...`。

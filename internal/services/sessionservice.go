@@ -79,64 +79,133 @@ type AttachmentContentDTO struct {
 
 // SessionService 是 Session Domain 的 Wails Adapter。
 type SessionService struct {
-	core     *coreapp.Application
-	searchMu sync.Mutex
-	search   *searchindex.Index
+	core           *coreapp.Application
+	searchMu       sync.Mutex
+	search         *searchindex.Index
+	searchCtx      context.Context
+	searchCancel   context.CancelFunc
+	searchWorkers  sync.WaitGroup
+	searchReaders  sync.WaitGroup
+	searchUpdating bool
+	searchChecked  time.Time
+	searchError    string
+}
+
+type SessionSearchDTO struct {
+	Results  []searchindex.Result `json:"results"`
+	Updating bool                 `json:"updating"`
+	Error    string               `json:"error,omitempty"`
 }
 
 // NewSessionService 创建 SessionService。
 func NewSessionService(core *coreapp.Application) *SessionService {
-	return &SessionService{core: core}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &SessionService{core: core, searchCtx: ctx, searchCancel: cancel}
 }
 
-// Search indexes visible messages from the active branch on demand. The SQLite
-// file is disposable and never replaces the session transcript.
-func (s *SessionService) Search(query string) ([]searchindex.Result, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return []searchindex.Result{}, nil
-	}
-	if len([]rune(query)) > 200 {
-		return nil, fmt.Errorf("搜索词不能超过 200 字")
-	}
+func (s *SessionService) ServiceShutdown() error {
+	s.searchMu.Lock()
+	s.searchCancel()
+	s.searchMu.Unlock()
+	s.searchWorkers.Wait()
+	s.searchReaders.Wait()
 	s.searchMu.Lock()
 	defer s.searchMu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	if s.search != nil {
+		index := s.search
+		s.search = nil
+		return index.Close()
+	}
+	return nil
+}
+
+// Search 先读可丢弃的 SQLite 投影；过期检查在后台执行。前端按 updating 轮询，
+// 因此首轮建索引不会把一次搜索请求挂起到两分钟。
+func (s *SessionService) Search(query string) (SessionSearchDTO, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return SessionSearchDTO{Results: []searchindex.Result{}}, nil
+	}
+	if len([]rune(query)) > 200 {
+		return SessionSearchDTO{}, fmt.Errorf("搜索词不能超过 200 字")
+	}
+	s.searchMu.Lock()
+	if err := s.searchCtx.Err(); err != nil {
+		s.searchMu.Unlock()
+		return SessionSearchDTO{}, err
+	}
 	if s.search == nil {
 		index, err := searchindex.Open(filepath.Join(s.core.Config().Paths.CacheDir, "conversation-search.sqlite"))
 		if err != nil {
-			return nil, err
+			s.searchMu.Unlock()
+			return SessionSearchDTO{}, err
 		}
 		s.search = index
 	}
+	index := s.search
+	if s.searchCtx.Err() == nil && !s.searchUpdating && time.Since(s.searchChecked) > 10*time.Second {
+		s.searchUpdating = true
+		s.searchError = ""
+		s.searchWorkers.Add(1)
+		go s.refreshSearchIndex(index)
+	}
+	updating, lastError := s.searchUpdating, s.searchError
+	s.searchReaders.Add(1)
+	s.searchMu.Unlock()
+	defer s.searchReaders.Done()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	results, err := index.Search(ctx, query, 50)
+	if err != nil {
+		return SessionSearchDTO{}, err
+	}
+	return SessionSearchDTO{Results: results, Updating: updating, Error: lastError}, nil
+}
+
+func (s *SessionService) refreshSearchIndex(index *searchindex.Index) {
+	defer s.searchWorkers.Done()
+	ctx, cancel := context.WithTimeout(s.searchCtx, 2*time.Minute)
+	defer cancel()
+	err := s.updateSearchIndex(ctx, index)
+	s.searchMu.Lock()
+	s.searchUpdating = false
+	s.searchChecked = time.Now()
+	s.searchError = ""
+	if err != nil && s.searchCtx.Err() == nil {
+		s.searchError = err.Error()
+	}
+	s.searchMu.Unlock()
+}
+
+// updateSearchIndex 只重建 revision 改变的会话；JSONL 始终是权威数据。
+func (s *SessionService) updateSearchIndex(ctx context.Context, index *searchindex.Index) error {
 	agents, err := s.core.Agents().List(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	keep := make(map[string]bool)
 	for _, agent := range agents {
 		sessions, err := s.core.Sessions().List(ctx, agent.Agent.ID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, session := range sessions {
 			keep[session.ID] = true
 			revision := session.UpdatedAt.UnixNano()
-			cached, exists, err := s.search.CachedSession(ctx, session.ID)
+			cached, exists, err := index.CachedSession(ctx, session.ID)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			indexed := searchindex.Session{ID: session.ID, AgentID: session.AgentID, Title: session.Title, Archived: session.Archived, Revision: revision}
 			if exists && cached.Revision == revision {
 				if cached.Title != indexed.Title || cached.Archived != indexed.Archived || cached.AgentID != indexed.AgentID {
-					if err := s.search.UpdateSessionMetadata(ctx, indexed); err != nil {
-						return nil, err
+					if err := index.UpdateSessionMetadata(ctx, indexed); err != nil {
+						return err
 					}
 				}
 				continue
 			}
-			if err := s.search.ReplaceStream(ctx, indexed, func(add func(searchindex.Message) error) error {
+			if err := index.ReplaceStream(ctx, indexed, func(add func(searchindex.Message) error) error {
 				var insertErr error
 				visitErr := s.core.Sessions().VisitActiveBranchReverse(ctx, session.ID, func(entry transcript.Entry) bool {
 					if entry.Type != transcript.EntryMessage || entry.Message == nil {
@@ -165,14 +234,14 @@ func (s *SessionService) Search(query string) ([]searchindex.Result, error) {
 				}
 				return insertErr
 			}); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
-	if err := s.search.Prune(ctx, keep); err != nil {
-		return nil, err
+	if err := index.Prune(ctx, keep); err != nil {
+		return err
 	}
-	return s.search.Search(ctx, query, 50)
+	return nil
 }
 
 // List 返回 Agent 的 Sessions。

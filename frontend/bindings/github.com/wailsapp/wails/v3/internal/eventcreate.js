@@ -6,4 +6,32 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-Object.freeze($Create.Events);
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as notifications$0 from "../../../../sda1-hacker/humbert-agent/internal/notifications/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as proactive$0 from "../../../../sda1-hacker/humbert-agent/internal/proactive/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as runtime$0 from "../../../../sda1-hacker/humbert-agent/internal/runtime/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as tasks$0 from "../../../../sda1-hacker/humbert-agent/internal/tasks/models.js";
+
+function configure() {
+    Object.freeze(Object.assign($Create.Events, {
+        "humbert:notification": $$createType0,
+        "humbert:proactive:event": $$createType1,
+        "humbert:runtime:event": $$createType2,
+        "humbert:task:event": $$createType3,
+    }));
+}
+
+// Private type creation functions
+const $$createType0 = notifications$0.Notification.createFrom;
+const $$createType1 = proactive$0.PublicEvent.createFrom;
+const $$createType2 = runtime$0.Event.createFrom;
+const $$createType3 = tasks$0.Event.createFrom;
+
+configure();

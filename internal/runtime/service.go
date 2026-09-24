@@ -1259,6 +1259,7 @@ func (s *Service) finishCancelledWaitingRun(active *activeRun) {
 // Event delivery failure 不改变 Agent 执行结果。例如用户恰好关闭窗口，Session JSONL
 // 仍应由 Executor 正常完成写入。
 func (s *Service) publishEvent(event Event) {
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -1273,6 +1274,9 @@ func (s *Service) publishEvent(event Event) {
 			"session_id", event.SessionID,
 			"error", err,
 		)
+	}
+	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+		s.logger.Warn(context.Background(), "Runtime Event 订阅处理较慢", "operation", "runtime.event.slow_delivery", "event_type", string(event.Type), "session_id", event.SessionID, "duration_ms", elapsed.Milliseconds())
 	}
 }
 

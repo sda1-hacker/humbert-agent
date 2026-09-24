@@ -525,6 +525,7 @@ onUnmounted(() => {
         :initial-key="settingsInitialKey"
         @close="closeSettings"
         @open-skills="openSkills"
+        @open-session="openTaskSession"
     />
 
     <div v-else-if="bootstrapError" class="app-shell__bootstrap">

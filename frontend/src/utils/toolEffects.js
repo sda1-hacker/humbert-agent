@@ -213,6 +213,14 @@ export function fileChangesOfCalls(calls) {
                 break;
             }
 
+            case "browser": {
+                if (input.action === "screenshot") {
+                    // 后端只在截图成功保存后返回路径；不能根据调用参数猜测产物。
+                    append(readStringProperty(output, "screenshot_path"), "created");
+                }
+                break;
+            }
+
             default:
                 break;
         }

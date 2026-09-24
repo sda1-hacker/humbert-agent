@@ -228,7 +228,7 @@ func BuildPresentation(request Request) (Presentation, error) {
 
 		return Presentation{
 			Title:       "请求执行本地程序",
-			Description: "该操作会在当前 Agent Workspace 中启动白名单程序，不经过 Shell。长期授权会绑定当前可执行文件与安全沙盒。",
+			Description: "该操作会在当前 Agent Workspace 中启动白名单程序，不经过 Shell。会话或长期允许只匹配相同程序、参数、工作目录和安全环境。",
 			Fields: []PresentationField{
 				{Label: "程序", Value: safeField(command)},
 				{Label: "执行文件", Value: safeField(request.Identity.Executable)},

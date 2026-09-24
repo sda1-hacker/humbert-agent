@@ -23,6 +23,12 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 	if runID == "" {
 		return
 	}
+	started := time.Now()
+	defer func() {
+		if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
+			m.logger.Warn(context.Background(), "任务事件持久化较慢", "operation", "tasks.event.slow_persist", "event_type", string(event.Type), "run_id", runID, "duration_ms", elapsed.Milliseconds())
+		}
+	}()
 	run, err := m.store.GetRun(context.Background(), runID)
 	if err != nil || run.Status.Terminal() {
 		return

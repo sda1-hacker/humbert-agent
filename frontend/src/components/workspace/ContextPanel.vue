@@ -2,6 +2,7 @@
 import { onUnmounted, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { searchWorkspaceDocuments } from "../../api/workspace.js";
+import { pollIndexedSearch } from "../../utils/searchPolling.js";
 import { useAgentStore } from "../../stores/agents.js";
 import { useWorkspaceStore } from "../../stores/workspace.js";
 import { useContextPanelStore } from "../../stores/contextPanel.js";
@@ -48,11 +49,11 @@ async function searchDocuments() {
   const sequence = ++documentSearchSequence;
   documentSearching.value = true;
   try {
-    const results = await searchWorkspaceDocuments(agentID, query);
-    if (sequence === documentSearchSequence) {
-      documentResults.value = Array.isArray(results) ? results : [];
-      documentSearched.value = true;
-    }
+    await pollIndexedSearch(
+        () => searchWorkspaceDocuments(agentID, query),
+        () => sequence === documentSearchSequence,
+        (results) => { documentResults.value = results; documentSearched.value = true; },
+    );
   } catch (error) {
     if (sequence === documentSearchSequence) report(error);
   } finally {
@@ -100,10 +101,10 @@ async function selectEntry(entry) { try { await workspace.selectEntry(entry); } 
     <form v-if="searchOpen" class="context-panel__search" @submit.prevent="searchDocuments">
       <div class="context-panel__search-row">
         <input v-model="documentQuery" type="search" placeholder="搜索 PDF / Office 文档正文" aria-label="搜索工作区文档正文" />
-        <button type="submit" :disabled="!documentQuery.trim() || documentSearching">{{ documentSearching ? '检索中…' : '搜索' }}</button>
+        <button type="submit" :disabled="!documentQuery.trim()">{{ documentSearching ? '重新搜索' : '搜索' }}</button>
       </div>
       <div v-if="documentSearched" class="context-panel__results" role="region" aria-label="文档搜索结果">
-        <span v-if="!documentResults.length">没有找到匹配的文档内容</span>
+        <span v-if="!documentResults.length">{{ documentSearching ? '正在建立文档索引…' : '没有找到匹配的文档内容' }}</span>
         <button v-for="result in documentResults" :key="`${result.path}:${result.line}`" type="button" @click="openDocumentResult(result)">
           <strong>{{ result.path }}:{{ result.line }}</strong>
           <span>{{ result.snippet }}</span>

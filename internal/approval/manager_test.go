@@ -39,6 +39,7 @@ func approvalInfo() InterruptInfo {
 			Version: permission.CapabilityIdentityVersion, Kind: permission.CapabilityCommand,
 			Tool: "run_command", Risk: permission.RiskExec,
 			SandboxFingerprint: "sbx1:test", Command: "go", Executable: "/usr/bin/go",
+			InvocationFingerprint: "cmd1:go-test",
 		},
 		Presentation: permission.Presentation{Title: "请求执行本地程序"},
 	}
@@ -47,7 +48,14 @@ func approvalInfo() InterruptInfo {
 func TestResolveAllowSessionCreatesReusableRule(t *testing.T) {
 	manager, engine := newApprovalManager(t, time.Minute)
 	ctx := context.Background()
-	request, err := manager.Register(ctx, approvalInfo(), "interrupt-1", "checkpoint-1")
+	info := approvalInfo()
+	info.ToolName = "write_file"
+	info.Risk = permission.RiskWrite
+	info.Identity = permission.CapabilityIdentity{
+		Version: permission.CapabilityIdentityVersion, Kind: permission.CapabilityBuiltin,
+		Tool: "write_file", Risk: permission.RiskWrite, SandboxFingerprint: "sbx1:test",
+	}
+	request, err := manager.Register(ctx, info, "interrupt-1", "checkpoint-1")
 	if err != nil {
 		t.Fatalf("Register 失败: %v", err)
 	}
@@ -61,9 +69,9 @@ func TestResolveAllowSessionCreatesReusableRule(t *testing.T) {
 	}
 
 	decision, err := engine.Evaluate(ctx, permission.Request{
-		AgentID: "agent-1", SessionID: "session-1", ToolName: "run_command", Risk: permission.RiskExec,
-		Arguments: `{"command":"go","args":["test"]}`,
-		Identity:  approvalInfo().Identity,
+		AgentID: "agent-1", SessionID: "session-1", ToolName: "write_file", Risk: permission.RiskWrite,
+		Arguments: `{"path":"notes.txt"}`,
+		Identity:  info.Identity,
 	})
 	if err != nil {
 		t.Fatalf("Evaluate 失败: %v", err)
@@ -74,6 +82,23 @@ func TestResolveAllowSessionCreatesReusableRule(t *testing.T) {
 
 	if _, err := manager.Resolve(ctx, request.ID, DecisionAllowOnce); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("重复 Resolve 应返回 ErrNotPending，got %v", err)
+	}
+}
+
+func TestResolveCommandCreatesReusableApproval(t *testing.T) {
+	manager, engine := newApprovalManager(t, time.Minute)
+	request, err := manager.Register(context.Background(), approvalInfo(), "interrupt-1", "checkpoint-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Resolve(context.Background(), request.ID, DecisionAllowSession); err != nil {
+		t.Fatalf("exact command reuse should be allowed: %v", err)
+	}
+	permissionRequest := approvalInfo().PermissionRequest()
+	permissionRequest.Arguments = `{"command":"go","args":["test"]}`
+	decision, err := engine.Evaluate(context.Background(), permissionRequest)
+	if err != nil || decision.Action != permission.ActionAllow {
+		t.Fatalf("exact command should reuse approval: %#v err=%v", decision, err)
 	}
 }
 

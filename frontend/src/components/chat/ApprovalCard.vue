@@ -130,8 +130,11 @@ const approvalHint =
         return "请核对时间、时区和执行内容。确认只创建这一项任务；后续安排仍需单独确认。";
       }
       if (!reusableAllowAvailable.value) {
-        return "远程 Skill 安装每次都需要单独确认；不会保存可自动安装其他 URL 的会话级或 Agent 级允许规则。";
+        return "这项操作每次都需要单独确认；不会保存会话级或 Agent 级允许规则。";
       }
+	  if (props.approval?.toolName === "run_command") {
+	    return `“${sessionAllowText.value}”只作用于${sessionScopeText.value}；“Agent 始终允许”会记住相同程序、完整参数、工作目录与安全环境。更换参数仍需重新确认。`;
+	  }
       if (isMCPApproval.value) {
         return `“${sessionAllowText.value}”只作用于${sessionScopeText.value}；Agent 长期规则只作用于${agentScopeText.value}。MCP 规则还会绑定当前 Server 的安全指纹，配置变化后旧规则不会继续自动生效。`;
       }
@@ -166,7 +169,7 @@ function decide(decision) {
     Modal.warning({
       title: "长期允许执行程序？",
       content:
-          `将为${agentScopeText.value}长期允许 ${persistentTarget.value}。这个授权在应用重启后仍然有效，你可以随时在「设置 → 操作确认」中撤销。`,
+          `将为${agentScopeText.value}长期允许 ${persistentTarget.value} 的当前参数和工作目录。这个授权在应用重启后仍然有效，你可以随时在「设置 → 操作确认」中撤销。`,
       hideCancel: false,
       okText: "确认长期允许",
       cancelText: "取消",

@@ -17,4 +17,6 @@ flowchart TD
 
 `safeArchivePath` 与 `within` 防止归档路径逃逸；恢复先验证、再切换根目录，失败时按阶段清理或回滚。用户自定义 Workspace 在数据根目录之外，不能假设备份包含它。备份口令必须来自安全 Vault，不放在普通配置或日志中。
 
+设置页可通过 `PendingRestoreStatus` 读取待恢复文件及加密状态，并通过 `CancelPendingRestore` 在下次启动前撤销计划；撤销加密恢复时同步清理系统凭据库中的暂存口令。
+
 从 `cmd/data/main.go` 的命令分派或 `cmd/desktop/main.go` 的启动前计划进入，再读 `CreateEncrypted`/`RestoreEncryptedAndImport`、`inspectReader` 与 `ApplyPendingRestore`。测试要覆盖错误口令、损坏归档、路径穿越和恢复中断。

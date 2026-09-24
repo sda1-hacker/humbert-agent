@@ -630,6 +630,13 @@ onUnmounted(() => {
 
 <style scoped>
 .message-viewport :deep(.message-search-highlight) { outline: 2px solid var(--h-primary); outline-offset: 4px; border-radius: 8px; }
+/* 已分页加载的旧消息留在 DOM 中以保持滚动位置；跳过视口外内容的布局与绘制。 */
+@supports (content-visibility: auto) {
+  .message-container :deep(> [data-entry-id]) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 160px;
+  }
+}
 .message-list {
   position: relative;
 

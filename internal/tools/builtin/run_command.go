@@ -29,7 +29,7 @@ const (
 	// 1-2 秒的超时很容易把一次完全正常的短命令误判为失败。
 	minimumCommandTimeout = 5 * time.Second
 
-	runCommandToolDescription = `在当前 Agent Workspace 执行白名单中的本地程序。不会启动 Shell；command 填程序名，args 逐项填写参数，不解析管道、重定向或 Shell 表达式。工具可见即代表本地程序能力已启用；白名单拒绝会返回 Tool Error。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
+	runCommandToolDescription = `在当前 Agent Workspace 执行白名单中的本地程序。不会启动 Shell；command 填程序名，args 逐项填写参数，不解析管道、重定向或 Shell 表达式。网页操作和网页截图使用 browser，不要用本工具调用 open 或 screencapture。工具可见即代表本地程序能力已启用；白名单拒绝会返回 Tool Error。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
 )
 
 // CommandLimits 描述 run_command 的资源边界。

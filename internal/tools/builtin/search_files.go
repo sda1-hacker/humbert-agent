@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 
@@ -28,7 +29,8 @@ const (
 
 type GlobFilesInput struct {
 	Path       string `json:"path,omitempty" jsonschema:"description=Directory to search. Relative paths are resolved from the current workspace."`
-	Pattern    string `json:"pattern" jsonschema:"description=File name glob, for example *.go or *.vue."`
+	Pattern    string `json:"pattern" jsonschema:"description=Glob pattern. Without / it matches names recursively (for example *.go); with / it matches paths below path (for example src/**/*.go)."`
+	FileType   string `json:"file_type,omitempty" jsonschema:"description=Return file (default), directory, or all."`
 	MaxResults int    `json:"max_results,omitempty" jsonschema:"description=Maximum results to return. Defaults to 200 and is capped at 500."`
 }
 
@@ -48,13 +50,21 @@ func (f *GlobFilesFactory) Build(ctx context.Context, scope humberttools.Scope) 
 		return nil, err
 	}
 	return utils.InferTool(globFilesToolName,
-		"Find files by file-name glob inside directories allowed by the current Agent Sandbox. Does not follow symbolic-link directories.",
+		"Find files or directories by name or relative path glob inside the current Agent Sandbox. Supports ** across directories; does not follow symbolic-link directories.",
 		func(callCtx context.Context, input *GlobFilesInput) (*GlobFilesOutput, error) {
 			if input == nil || strings.TrimSpace(input.Pattern) == "" {
 				return nil, errors.New("glob_files pattern 不能为空")
 			}
-			if _, err := filepath.Match(input.Pattern, "probe"); err != nil {
-				return nil, fmt.Errorf("glob_files pattern 无效: %w", err)
+			pattern := strings.TrimSpace(input.Pattern)
+			if !doublestar.ValidatePattern(pattern) {
+				return nil, errors.New("glob_files pattern 无效")
+			}
+			fileType := strings.TrimSpace(input.FileType)
+			if fileType == "" {
+				fileType = "file"
+			}
+			if fileType != "file" && fileType != "directory" && fileType != "all" {
+				return nil, errors.New("glob_files file_type 只能是 file、directory 或 all")
 			}
 			limit := input.MaxResults
 			if limit <= 0 {
@@ -71,11 +81,18 @@ func (f *GlobFilesFactory) Build(ctx context.Context, scope humberttools.Scope) 
 			files := make([]string, 0, limit)
 			truncated := false
 			err = walkRoot(callCtx, target, func(rel string, entry fs.DirEntry) error {
-				if entry.IsDir() {
+				if (entry.IsDir() && fileType == "file") || (!entry.IsDir() && fileType == "directory") {
 					return nil
 				}
-				ok, _ := filepath.Match(input.Pattern, entry.Name())
-				if !ok {
+				candidate := entry.Name()
+				if strings.Contains(pattern, "/") {
+					searchRelative, relErr := filepath.Rel(target.relative, rel)
+					if relErr != nil {
+						return relErr
+					}
+					candidate = filepath.ToSlash(searchRelative)
+				}
+				if !doublestar.MatchUnvalidated(pattern, candidate) {
 					return nil
 				}
 				display := displayRootChild(target, rel)
@@ -242,6 +259,9 @@ func defaultSearchPath(path string) string {
 }
 
 func displayRootChild(target *sandboxTarget, rel string) string {
+	if child, err := filepath.Rel(target.relative, rel); err == nil {
+		rel = child
+	}
 	if target.display == "." {
 		return filepath.ToSlash(rel)
 	}

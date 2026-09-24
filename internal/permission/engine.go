@@ -101,9 +101,8 @@ func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error
 		}, nil
 	}
 
-	// install_skill 的远程来源当前没有参数级 Rule 约束，因此即使旧版本已经留下
-	// Session/Agent Allow，也不能继续自动放行。Deny 仍然在上方优先生效。这样升级后
-	// 不需要用户先手工清理旧 permissions.json 才能获得新的安全语义。
+	// install_skill 和 schedule_task 的 Rule 身份尚未绑定本次参数，仍只允许单次批准。
+	// run_command 的旧规则没有 InvocationFingerprint，会在 ruleMatches 中失效。
 	if request.ToolName != "install_skill" && request.ToolName != "schedule_task" {
 		if rule, ok := newestRuleWithAction(sessionMatches, nil, ActionAllow); ok {
 			return Decision{
@@ -167,15 +166,16 @@ func (e *Engine) Grant(ctx context.Context, grant ApprovalGrant) (*Rule, error) 
 		return nil, nil
 	}
 
-	// install_skill 的 source_url 每次都可能指向完全不同的远程内容。当前 Permission
-	// CapabilityIdentity 当前没有绑定远程仓库内容身份，因此不能把一次安装批准扩大成整个
-	// Session 或 Agent 对所有未来 URL 的 Allow。长期 Deny 仍然允许，因为它只会收紧权限。
+	// install_skill 和 schedule_task 尚未完整绑定参数，不能创建可复用 Allow。
 	if grant.Request.ToolName == "install_skill" || grant.Request.ToolName == "schedule_task" {
 		return nil, fmt.Errorf(
 			"%w: %s 只允许单次批准，不能创建 Session/Agent Allow Rule",
 			ErrInvalidApprovalScope,
 			grant.Request.ToolName,
 		)
+	}
+	if grant.Request.ToolName == "run_command" && grant.Request.Identity.InvocationFingerprint == "" {
+		return nil, fmt.Errorf("%w: run_command 缺少完整参数身份", ErrInvalidApprovalScope)
 	}
 
 	return e.createRule(ctx, grant, ActionAllow)
@@ -435,6 +435,9 @@ func ruleMatches(rule Rule, request Request) bool {
 	if rule.Action == ActionDeny {
 		return rule.Identity.MatchesDeny(current)
 	}
+	if request.ToolName == "run_command" && (rule.Identity.InvocationFingerprint == "" || current.InvocationFingerprint == "") {
+		return false // 升级前的程序级 Allow 不能自动授权不同参数。
+	}
 	return rule.Identity.EqualExact(current)
 }
 
@@ -449,7 +452,7 @@ func capabilityLogicalTarget(identity CapabilityIdentity) string {
 	identity = identity.Normalize()
 	switch identity.Kind {
 	case CapabilityCommand:
-		return string(identity.Kind) + "|" + identity.Tool + "|" + identity.Command
+		return string(identity.Kind) + "|" + identity.Tool + "|" + identity.Command + "|" + identity.InvocationFingerprint
 	case CapabilitySkillScript:
 		return string(identity.Kind) + "|" + identity.Tool + "|" + identity.SkillName + "|" + identity.Script
 	case CapabilityMCP:

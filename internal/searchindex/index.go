@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,11 +49,14 @@ func Open(path string) (*Index, error) {
 	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	// 超时随 DSN 应用于连接池的每条连接；写索引时前台查询仍可读取 WAL 快照。
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_busy_timeout=5000"}).String()
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	// 后台更新使用写连接时，前台查询仍可读 WAL 中已提交的快照。
+	db.SetMaxOpenConns(2)
 	for _, statement := range []string{
 		`PRAGMA journal_mode=WAL`,
 		`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, title TEXT NOT NULL, archived INTEGER NOT NULL, revision INTEGER NOT NULL)`,

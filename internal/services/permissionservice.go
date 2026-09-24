@@ -33,8 +33,9 @@ type PermissionRuleDTO struct {
 
 	CapabilityKind string `json:"capabilityKind,omitempty"`
 
-	Command    string `json:"command,omitempty"`
-	Executable string `json:"executable,omitempty"`
+	Command               string `json:"command,omitempty"`
+	Executable            string `json:"executable,omitempty"`
+	InvocationFingerprint string `json:"invocationFingerprint,omitempty"`
 
 	SkillName     string `json:"skillName,omitempty"`
 	SkillIdentity string `json:"skillIdentity,omitempty"`
@@ -316,25 +317,26 @@ func projectPermissionRules(rules []permission.Rule, agentNames map[string]strin
 		}
 		identity := rule.Identity.Normalize()
 		result = append(result, PermissionRuleDTO{
-			ID:                   rule.ID,
-			AgentID:              rule.AgentID,
-			AgentName:            name,
-			SessionID:            rule.SessionID,
-			ToolName:             rule.ToolName,
-			Action:               string(rule.Action),
-			Scope:                string(rule.Scope),
-			CapabilityKind:       string(identity.Kind),
-			Command:              identity.Command,
-			Executable:           identity.Executable,
-			SkillName:            identity.SkillName,
-			SkillIdentity:        identity.SkillIdentity,
-			Script:               identity.Script,
-			MCPServerID:          identity.MCPServerID,
-			MCPServerName:        mcpName,
-			MCPServerFingerprint: identity.MCPServerFingerprint,
-			MCPTool:              identity.MCPTool,
-			SandboxFingerprint:   identity.SandboxFingerprint,
-			CreatedAt:            rule.CreatedAt.Format(time.RFC3339),
+			ID:                    rule.ID,
+			AgentID:               rule.AgentID,
+			AgentName:             name,
+			SessionID:             rule.SessionID,
+			ToolName:              rule.ToolName,
+			Action:                string(rule.Action),
+			Scope:                 string(rule.Scope),
+			CapabilityKind:        string(identity.Kind),
+			Command:               identity.Command,
+			Executable:            identity.Executable,
+			InvocationFingerprint: identity.InvocationFingerprint,
+			SkillName:             identity.SkillName,
+			SkillIdentity:         identity.SkillIdentity,
+			Script:                identity.Script,
+			MCPServerID:           identity.MCPServerID,
+			MCPServerName:         mcpName,
+			MCPServerFingerprint:  identity.MCPServerFingerprint,
+			MCPTool:               identity.MCPTool,
+			SandboxFingerprint:    identity.SandboxFingerprint,
+			CreatedAt:             rule.CreatedAt.Format(time.RFC3339),
 		})
 	}
 	return result

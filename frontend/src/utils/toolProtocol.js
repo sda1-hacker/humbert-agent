@@ -161,6 +161,12 @@ export function toolDisplayName(
         edit_file:
             "编辑文件",
 
+        glob_files:
+            "查找文件",
+
+        grep_files:
+            "搜索内容",
+
         glob:
             "查找文件",
 
@@ -181,6 +187,9 @@ export function toolDisplayName(
 
         run_command:
             "执行命令",
+
+        browser:
+            "浏览网页",
 
         list_agents:
             "查看可用 Agent",
@@ -441,6 +450,17 @@ export function toolActionLabel(
             }
 
             return "读取网页";
+        }
+
+        case "browser": {
+            const action = readStringProperty(argumentsObject, "action");
+            if (action === "screenshot") return "截取网页";
+            if (action === "open") return "打开网页";
+            if (action === "snapshot") return "查看网页";
+            if (action === "click") return "点击网页元素";
+            if (action === "type") return "输入网页内容";
+            if (action === "close") return "关闭浏览器";
+            return "浏览网页";
         }
 
         default:

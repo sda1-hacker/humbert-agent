@@ -99,6 +99,37 @@ func TestEncryptedRestoreImportFailureRollsBackDirectory(t *testing.T) {
 	}
 }
 
+func TestPendingRestoreCanBeInspectedAndCancelled(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "data")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(parent, "backup.age")
+	if err := CreateEncrypted(ctx, root, archive, "long secure passphrase", nil); err != nil {
+		t.Fatal(err)
+	}
+	vault := fakeVault{}
+	if err := ScheduleEncryptedRestore(ctx, root, archive, "long secure passphrase", vault); err != nil {
+		t.Fatal(err)
+	}
+	status, err := PendingRestoreStatus(ctx, root)
+	if err != nil || status.Archive != archive || !status.Encrypted {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	if err := CancelPendingRestore(ctx, root, vault); err != nil {
+		t.Fatal(err)
+	}
+	status, err = PendingRestoreStatus(ctx, root)
+	if err != nil || status.Archive != "" {
+		t.Fatalf("cancelled status=%+v err=%v", status, err)
+	}
+	if _, err := vault.Get(restoreVaultID); err == nil {
+		t.Fatal("暂存口令未清理")
+	}
+}
+
 func TestFailedScheduledBackupCanBeInspectedAndCancelled(t *testing.T) {
 	ctx := context.Background()
 	parent := t.TempDir()

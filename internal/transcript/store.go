@@ -113,7 +113,7 @@ func (s *Store) AgentsRoot() string {
 //
 //	agents/<agent-id>/sessions/<session-id>/session.jsonl
 //
-// 同目录的 config.json 属于 sessions 包的控制面配置，TranscriptStore 不读写它。
+// 会话控制面由 sessions 包写入 SQLite，TranscriptStore 不读写元数据库。
 // Header 是 JSONL 第一行且不参与 Tree；session.jsonl 使用 O_EXCL 创建，绝不覆盖。
 func (s *Store) CreateSession(ctx context.Context, input CreateSessionInput) error {
 	if err := validateContext(ctx); err != nil {
@@ -391,7 +391,7 @@ func (s *Store) documentForReadLocked(
 
 // ListSessionRefs 返回指定 Agent 下存在有效 session.jsonl 的物理 Session 引用。
 //
-// 本方法故意不读取 title/config.json。Session 可变配置属于 sessions Store；Transcript
+// 本方法故意不读取会话标题或 SQLite 元数据。Session 可变配置属于 sessions Store；Transcript
 // 只负责枚举自己的 JSONL 数据，用于 Agent 删除保护、模型历史引用扫描等低频路径。
 func (s *Store) ListSessionRefs(ctx context.Context, agentID string) ([]SessionRef, error) {
 	if err := validateContext(ctx); err != nil {
@@ -458,13 +458,45 @@ func (s *Store) ListSessionRefs(ctx context.Context, agentID string) ([]SessionR
 
 // SessionDirectory 返回受 Humbert 数据根约束的 Session 目录路径。
 //
-// sessions Store 使用该路径保存同目录 config.json。返回路径不代表目录一定存在。
+// sessions Store 使用该路径定位会话附属文件。返回路径不代表目录一定存在。
 func (s *Store) SessionDirectory(agentID string, sessionID string) (string, error) {
 	return s.sessionDirectory(agentID, sessionID)
 }
 
+// LoadHeader 只读取 JSONL 第一行，供缺失会话元数据时恢复不可变身份。
+// 不扫描或解码长会话的历史消息。
+func (s *Store) LoadHeader(ctx context.Context, agentID, sessionID string) (SessionHeader, error) {
+	if err := validateContext(ctx); err != nil {
+		return SessionHeader{}, err
+	}
+	path, err := s.sessionPath(agentID, sessionID)
+	if err != nil {
+		return SessionHeader{}, err
+	}
+	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
+		return SessionHeader{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return SessionHeader{}, err
+	}
+	defer file.Close()
+	line, err := bufio.NewReader(io.LimitReader(file, maxEntryBytes+2)).ReadBytes('\n')
+	if err != nil || len(line) == 0 || len(line) > maxEntryBytes+1 {
+		return SessionHeader{}, &CorruptionError{Line: 1, Offset: 0, Reason: "Session Header 缺失或超出长度限制"}
+	}
+	var header SessionHeader
+	if err := decodeStrictJSON(bytes.TrimSuffix(line, []byte{'\n'}), &header); err != nil {
+		return SessionHeader{}, &CorruptionError{Line: 1, Offset: 0, Reason: "Session Header JSON 无法解析"}
+	}
+	if err := validateHeader(header, sessionID); err != nil {
+		return SessionHeader{}, &CorruptionError{Line: 1, Offset: 0, Reason: err.Error()}
+	}
+	return header, nil
+}
+
 // SessionModifiedAt 返回 session.jsonl 的文件修改时间，用于 Session List 的 UpdatedAt
-// 投影。UpdatedAt 不需要为了每条 Message 再重写 config.json。
+// 投影。UpdatedAt 不需要为了每条 Message 再重写 JSON 配置。
 func (s *Store) SessionModifiedAt(ctx context.Context, agentID string, sessionID string) (time.Time, error) {
 	if err := validateContext(ctx); err != nil {
 		return time.Time{}, err
@@ -485,8 +517,8 @@ func (s *Store) SessionModifiedAt(ctx context.Context, agentID string, sessionID
 
 // DeleteSession 删除整个 Session 数据目录。
 //
-// Session 采用独立目录后，config.json、session.jsonl 以及未来 payloads/ 都属于同一个
-// 生命周期。删除 Session 时统一删除该目录，避免遗留孤儿控制面文件。
+// Session 采用独立目录后，session.jsonl、附件及旧版遗留文件属于同一个
+// 生命周期。删除 Session 时统一删除该目录，避免遗留孤儿文件。
 func (s *Store) DeleteSession(ctx context.Context, agentID string, sessionID string) error {
 	if err := validateContext(ctx); err != nil {
 		return err

@@ -27,7 +27,9 @@ flowchart TD
 | 网页 | `websearch_tool.go`、`websearch_backends.go`、`webfetch_tool.go`、`browser_tool.go` | 搜索/抓取与 Chrome CDP 操作分别实现；网络目标与内容长度受限。 |
 | 扩展与系统 | `install_skill.go`、`collaboration_tools.go`、`schedule_task.go`、`system_tools.go` | 调用 Skill、子 Agent、Task Manager 或提供时间/计划辅助。 |
 
-`browser_tool.go` 使用独立临时 Chrome 配置，通过 CDP 做 open、snapshot、click、type、close；并没有桌面级视觉控制。`webfetch_tool.go` 的网页正文是外部不可信内容；`htmlmarkdown.go` 只是格式转换。`run_command.go` 不应通过拼接字符串绕开 Sandbox Runner。`sandbox_fs.go` 是多个文件工具共享的路径入口；新增文件操作应优先复用它。
+`browser_tool.go` 使用独立临时 Chrome 配置，通过 CDP 做 open、snapshot、click、type、screenshot、close；screenshot 将原始 PNG 保存到当前 Agent Workspace 的 `screenshots/`，可以在聊天的本轮文件中打开，并不是桌面级视觉控制。这里直接使用 CDP，没有使用 Rod。`webfetch_tool.go` 的网页正文是外部不可信内容；`htmlmarkdown.go` 只是格式转换。`run_command.go` 不应通过拼接字符串绕开 Sandbox Runner。`sandbox_fs.go` 是多个文件工具共享的路径入口；新增文件操作应优先复用它。
+
+`glob_files` 递归查找文件名；模式包含 `/` 时按搜索起点下的相对路径匹配，支持 `**`，`file_type` 可筛选文件或目录。Workspace 绝对路径已经在运行时环境中提供，列出当前目录用 `list_files`，不需要为 `pwd` 启动子进程。`run_command` 的白名单只约束可执行文件名；会话或 Agent 长期允许另行绑定完整 argv、工作目录与超时的指纹，参数变化后重新审批。旧版仅绑定程序的 Allow 不再生效。明确将执行策略设置为 `allow` 或关闭操作确认系统仍会按用户配置放行。
 
 调试一个工具：先从 `app/tools.go` 找注册名，再看本文件 Factory 的 `Descriptor`/`Build`/`run`，最后查 `GuardInvokableTool` 与 `runtime.Executor` 的 Tool Started/Completed 事件和对应 JSONL ToolResult。
 

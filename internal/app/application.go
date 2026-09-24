@@ -115,7 +115,8 @@ type Application struct {
 
 	agents *agents.Service
 
-	sessions *sessions.Service
+	sessions     *sessions.Service
+	sessionStore *sessions.Store
 
 	contextEngine *contextengine.Engine
 
@@ -302,6 +303,12 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Session Store 失败: %w", err)
 	}
+	sessionStoreOwned := true
+	defer func() {
+		if sessionStoreOwned {
+			_ = sessionStore.Close()
+		}
+	}()
 	for _, issue := range sessionStore.Issues() {
 		logger.Warn(
 			ctx,
@@ -511,6 +518,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		models:        modelRegistry,
 		agents:        agentService,
 		sessions:      sessionService,
+		sessionStore:  sessionStore,
 		contextEngine: contextEngine,
 		memory:        memoryManager,
 		runtime:       runtimeService,
@@ -525,6 +533,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	loggerOwned = false
 	workspaceOwned = false
 	eventsOwned = false
+	sessionStoreOwned = false
 
 	logger.Info(
 		ctx,
@@ -724,7 +733,7 @@ func (a *Application) Shutdown(ctx context.Context) error {
 		}
 
 		// Runtime 随后关闭。只有所有受控 Agent Turn 都退出后，才能安全关闭
-		// Workspace watcher 和 EventBus。文件 Store 没有独立后台资源需要 Close。
+		// 会话元数据库、Workspace watcher 和 EventBus。
 		if err := a.runtime.Close(ctx); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 RuntimeService 失败: %w", err))
 			a.logger.Error(
@@ -746,6 +755,9 @@ func (a *Application) Shutdown(ctx context.Context) error {
 		}
 		if err := a.tools.Close(); err != nil {
 			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭内置工具失败: %w", err))
+		}
+		if err := a.sessionStore.Close(); err != nil {
+			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭会话元数据库失败: %w", err))
 		}
 
 		if err := a.workspaces.Close(); err != nil {

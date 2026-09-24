@@ -29,6 +29,14 @@ export function scheduleRestore(passphrase) {
     return Call.ByName(`${appServiceName}.ScheduleRestore`, passphrase);
 }
 
+export function getPendingRestoreStatus() {
+    return Call.ByName(`${appServiceName}.PendingRestoreStatus`);
+}
+
+export function cancelPendingRestore() {
+    return Call.ByName(`${appServiceName}.CancelPendingRestore`);
+}
+
 export function getPendingBackupStatus() {
     return Call.ByName(`${appServiceName}.PendingBackupStatus`);
 }

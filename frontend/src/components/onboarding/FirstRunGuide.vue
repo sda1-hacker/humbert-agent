@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useModelStore } from "../../stores/models.js";
 import { useAgentStore } from "../../stores/agents.js";
 import { listBuiltinTools } from "../../api/agents.js";
+import { defaultBuiltinTools } from "../../utils/defaultBuiltinTools.js";
 
 const emit = defineEmits(["open-settings", "complete"]);
 const models = useModelStore();
@@ -15,7 +16,7 @@ const providerID = ref(models.providers[0]?.id || "");
 const modelID = ref(models.enabledModels[0]?.id || "");
 const agentName = ref("Humbert");
 const builtinTools = ref([]);
-const enableTools = ref(false);
+const enableTools = ref(true);
 const provider = reactive({ name: "", type: "openai", baseURL: "", apiKey: "" });
 const model = reactive({ name: "", contextWindow: 131072, maxOutputTokens: 8192 });
 const steps = ["连接供应商", "选择模型", "连接诊断", "创建助手"];
@@ -101,7 +102,7 @@ async function finish() {
       avatar: "", subagentEnabled: false,
       modelRoles: { utilityModelID: "", memoryModelID: "" }, enabledSkills: [],
       builtinToolsConfigured: true,
-      enabledBuiltinTools: enableTools.value ? builtinTools.value.map((tool) => tool.name) : [],
+      enabledBuiltinTools: enableTools.value && diagnostic.value?.toolsSupported ? defaultBuiltinTools(builtinTools.value) : [],
       sandbox: { profile: "", additionalWritePaths: [], networkMode: "", nativeMode: "" },
     });
     emit("complete");
@@ -146,7 +147,7 @@ async function finish() {
 
       <div v-else-if="step === 1" class="body">
         <h2>选择对话模型</h2>
-        <p>填写服务商实际使用的模型标识。上下文与输出预算应按模型支持值设置。</p>
+        <p>填写服务商实际使用的模型标识。其余参数可以先使用默认值，之后在设置中调整。</p>
         <label v-if="models.enabledModels.length">已有模型
           <select v-model="modelID"><option v-for="item in models.enabledModels" :key="item.id" :value="item.id">{{ item.displayName }} · {{ item.providerName }}</option></select>
         </label>
@@ -154,7 +155,10 @@ async function finish() {
         <div v-if="models.enabledModels.length" class="divider">或新建模型</div>
         <label>供应商<select v-model="providerID"><option v-for="item in models.providers" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
         <label>模型标识<input v-model="model.name" placeholder="填写 API 使用的 model name" autocomplete="off"></label>
-        <div class="pair"><label>Context Window<input v-model.number="model.contextWindow" type="number" min="4096"></label><label>最大输出 Token<input v-model.number="model.maxOutputTokens" type="number" min="256"></label></div>
+        <details class="advanced"><summary>高级选项：上下文与输出预算</summary>
+          <p>若服务商提供了具体数值，请在这里填写；过高的数值可能导致请求被模型拒绝。</p>
+          <div class="pair"><label>Context Window<input v-model.number="model.contextWindow" type="number" min="4096"></label><label>最大输出 Token<input v-model.number="model.maxOutputTokens" type="number" min="256"></label></div>
+        </details>
         <button class="primary" :disabled="busy" @click="createModel">{{ busy ? '正在保存…' : '创建并继续' }}</button>
       </div>
 
@@ -175,10 +179,9 @@ async function finish() {
         <h2>{{ needsAgent ? '创建默认助手' : '准备就绪' }}</h2>
         <p>{{ needsAgent ? '助手会使用所选模型和独立管理的工作区。创建后可在 Agent 设置中启用工具、Skills 和安全权限。' : '已有助手，可以开始对话。' }}</p>
         <label v-if="needsAgent">助手名称<input v-model="agentName" maxlength="100" autocomplete="off"></label>
-        <label v-if="needsAgent && diagnostic?.toolsSupported && builtinTools.length" class="tool-choice">
-          <input v-model="enableTools" type="checkbox">
-          启用全部内置工具（文件与命令操作遵循审批和沙箱设置）
-        </label>
+        <details v-if="needsAgent && diagnostic?.toolsSupported && builtinTools.length" class="advanced"><summary>内置工具：默认启用常用能力</summary>
+          <label class="tool-choice"><input v-model="enableTools" type="checkbox">启用常用工具（文件、网页搜索、浏览器和提醒；浏览器需要安装 Chrome）</label>
+        </details>
         <button class="primary" :disabled="busy" @click="finish">{{ busy ? '正在创建…' : needsAgent ? '创建并开始对话' : '开始对话' }}</button>
       </div>
 
@@ -196,4 +199,5 @@ h1{font-size:28px;margin:10px 0 6px}h2{font-size:19px;margin:0 0 8px}p{color:var
 .steps{display:flex;gap:8px;margin:28px 0 30px}.steps span{display:flex;align-items:center;gap:6px;flex:1;color:var(--h-text-muted);font-size:12px}.steps b{width:25px;height:25px;border-radius:50%;display:grid;place-items:center;background:var(--h-bg);border:1px solid var(--h-border)}.steps .active{color:var(--h-text)}.steps .active b,.steps .done b{background:var(--h-accent);color:white;border-color:var(--h-accent)}
 .body{display:grid;gap:12px}.body>p{margin-bottom:4px}label{display:grid;gap:6px;color:var(--h-text);font-size:13px;font-weight:600}input,select{width:100%;height:38px;border:1px solid var(--h-border);border-radius:8px;padding:0 10px;background:var(--h-bg);color:var(--h-text);font:inherit}input:focus,select:focus{outline:2px solid var(--h-accent);outline-offset:1px}.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.divider{color:var(--h-text-muted);font-size:12px;text-align:center;margin:3px 0}button{justify-self:start;min-height:36px;border-radius:8px;padding:0 15px;cursor:pointer;font:inherit}.primary{background:var(--h-accent);border:1px solid var(--h-accent);color:white}.secondary,.back{background:transparent;border:1px solid var(--h-border);color:var(--h-text)}button:disabled{opacity:.6;cursor:wait}.diagnostic{border:1px solid var(--h-success);border-radius:10px;padding:14px;background:var(--h-bg)}.diagnostic.failure{border-color:var(--h-danger)}.diagnostic p{margin:6px 0 0}.error{color:var(--h-danger);margin:18px 0 0}footer{display:flex;align-items:center;justify-content:space-between;margin-top:28px;color:var(--h-text-muted);font-size:12px}@media(max-width:650px){.guide{padding:12px;place-items:start center}.guide-card{padding:22px}.steps{flex-wrap:wrap}.steps span{min-width:40%}.pair{grid-template-columns:1fr}}
 .tool-choice{display:flex;align-items:center;gap:9px;font-weight:400}.tool-choice input{width:auto;height:auto}
+.advanced{border:1px solid var(--h-border);border-radius:8px;padding:10px 12px}.advanced summary{cursor:pointer;font-size:13px;color:var(--h-text)}.advanced p{margin:10px 0;font-size:12px}
 </style>

@@ -1,12 +1,18 @@
 package builtin
 
 import (
+	"bytes"
 	"context"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
+	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
+	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
 func TestBrowserRejectsLocalAddress(t *testing.T) {
@@ -15,6 +21,26 @@ func TestBrowserRejectsLocalAddress(t *testing.T) {
 	}
 	if err := validateBrowserURL(context.Background(), "file:///etc/passwd"); err == nil {
 		t.Fatal("browser accepted file URL")
+	}
+}
+
+func TestBrowserScreenshotSavedInWorkspace(t *testing.T) {
+	root, err := sandbox.CanonicalRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := humberttools.Scope{Workspace: workspace.Workspace{RootDir: root}}
+	data := []byte("\x89PNG\r\n\x1a\nexample")
+	path, err := saveBrowserScreenshot(context.Background(), scope, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(path, "screenshots/") || !strings.HasSuffix(path, ".png") {
+		t.Fatalf("unexpected screenshot path: %q", path)
+	}
+	stored, err := os.ReadFile(filepath.Join(root, path))
+	if err != nil || !bytes.Equal(stored, data) {
+		t.Fatalf("stored screenshot differs: %v", err)
 	}
 }
 
@@ -49,5 +75,9 @@ func TestBrowserChromeSmoke(t *testing.T) {
 	page, err = session.snapshot(ctx)
 	if err != nil || !strings.Contains(page.Text, "hello") {
 		t.Fatalf("interaction=%+v err=%v", page, err)
+	}
+	png, err := session.captureScreenshot(ctx)
+	if err != nil || !bytes.HasPrefix(png, []byte("\x89PNG\r\n\x1a\n")) {
+		t.Fatalf("invalid screenshot: %v", err)
 	}
 }

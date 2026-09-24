@@ -13,7 +13,7 @@ Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，�
 | 对话与模型 | 多 Agent、多会话；OpenAI、OpenAI 兼容接口和 Ollama；模型能力配置、连接测试与首次使用引导；流式对话和工具调用展示 |
 | 附件与图片 | 支持图片，以及文本、源码、PDF、DOCX、XLSX、PPTX 等可提取文本的附件；聊天模型有视觉能力时直接处理图片，否则由配置的视觉模型先生成观察文本，再交给聊天模型完成本轮对话 |
 | 上下文与记忆 | 自动压缩长对话、保留最近原始消息、按需回查旧历史；会话派生记忆与用户确认后保存的跨会话个人记忆 |
-| 工作区与工具 | 文件浏览和预览、文件读写与检索、补丁、Git 查询、网页搜索与抓取、浏览器操作；命令和 Skill 脚本受配置及权限控制 |
+| 工作区与工具 | 文件浏览和预览、文件读写与检索、补丁、Git 查询、网页搜索与抓取、浏览器操作；本地命令需显式开启并受权限与沙盒控制 |
 | 扩展能力 | 按 Agent 配置内置工具、Skills 和 MCP 连接器；可将显式开放的其他 Agent 作为一次性子 Agent 调用 |
 | 主动任务 | 一次性、间隔、每日、每周及手动任务；聊天中安排提醒；运行记录、重试、通知、审批与执行限额 |
 | 数据管理 | 跨会话正文搜索、工作区文档搜索、会话归档、加密备份与恢复 |
@@ -61,11 +61,11 @@ wails3 dev 会启动桌面应用和前端开发服务。构建桌面程序可运
 
 ### 工作区、搜索与浏览器
 
-Agent 可使用应用管理的工作区，也可指向用户选择的目录。工作区文件只在聊天右侧展示，并跟随当前 Agent：左边是目录树，右边预览选中的文件。文件两栏及右侧面板宽度均可拖动调整。右侧面板占据独立的布局列，不会覆盖聊天；窄窗口打开右侧时自动收起左侧导航。右侧搜索按钮可检索工作区 PDF、DOCX、XLSX、PPTX 的 Markdown 正文；结果提供相对路径与行号。单次搜索最多遍历 5000 个文件、索引 1000 份文档；超过范围时可缩小工作区。左侧栏可搜索跨会话的用户和助手消息，并跳转到对应消息；归档会话不会删除其记录。
+Agent 可使用应用管理的工作区，也可指向用户选择的目录。工作区文件只在聊天右侧展示，并跟随当前 Agent：左边是目录树，右边预览选中的文件。文件两栏及右侧面板宽度均可拖动调整。右侧面板占据独立的布局列，不会覆盖聊天；窄窗口打开右侧时自动收起左侧导航。右侧搜索按钮可检索工作区 PDF、DOCX、XLSX、PPTX 的 Markdown 正文；结果提供相对路径与行号。单次搜索最多遍历 5000 个文件、索引 1000 份文档；超过范围时可缩小工作区。左侧栏可搜索跨会话的用户和助手消息，并跳转到对应消息；归档会话不会删除其记录。可在“设置 → 归档会话”集中查看、解除归档或永久删除，也可在侧边栏展开归档会话。
 
-开启 browser 内置工具后，Agent 可通过 Chrome DevTools Protocol 使用独立临时浏览器配置执行 open、snapshot、click、type、close。该工具基于网页文本和 CSS 选择器，不提供视觉定位、下载管理或操作整个电脑桌面的能力。它只接受经过公网地址检查的 HTTP/HTTPS 页面，操作按写入风险经过权限策略；网页内容仍是不可信信息。关闭浏览器或应用退出时会清理临时配置。
+开启 browser 内置工具后，Agent 可通过 Chrome DevTools Protocol 使用独立临时浏览器配置执行 open、snapshot、click、type、screenshot、close；当前实现直接使用 CDP，没有引入 Rod。screenshot 会将原始 PNG 保存到当前 Agent 工作区的 `screenshots/`，可从聊天的“本轮文件”打开预览。使用此工具需在本机安装 Chrome；默认路径不可用时可设置 `HUMBERT_BROWSER_CHROME_PATH`。该工具基于网页文本和 CSS 选择器，不提供视觉定位、下载管理或操作整个电脑桌面的能力。它只接受经过公网地址检查的 HTTP/HTTPS 页面，操作按写入风险经过权限策略；网页内容仍是不可信信息。关闭浏览器或应用退出时会清理临时配置。
 
-点击对话中的网页链接会使用系统默认浏览器打开。聊天右侧没有内置浏览器或网页截图视图。Agent 的 `browser` 工具是独立的可选能力，仅在为 Agent 启用时使用隔离 Chrome。
+点击对话中的网页链接会使用系统默认浏览器打开。聊天右侧没有内置浏览器；Agent 的 `browser` 工具是独立的可选能力，仅在为 Agent 启用时使用隔离 Chrome。
 
 定时与手动任务在左侧“任务”页面管理。
 
@@ -90,7 +90,7 @@ Vue 3 / Pinia / Wails 桌面界面
                │
 Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
                │
-本地文件与系统凭据库；SQLite 仅用于可重建搜索索引
+本地文件、会话元数据 SQLite 与系统凭据库；搜索 SQLite 可重建
 ~~~
 
 每次 Turn 都固定当时的 Agent、模型、工作区、工具、Skills、MCP、权限与上下文配置，避免运行中配置变化影响正在执行的调用。主要代码位置：
@@ -121,19 +121,21 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 │   ├── personal-memory.json        # 用户确认的跨会话记忆
 │   └── proactive.json              # 主动助手状态
 ├── secrets/                        # 系统凭据库索引及迁移数据
-├── agents/<agent-id>/
-│   ├── config.json                 # Agent Profile
-│   ├── sessions/<session-id>/
-│   │   ├── config.json             # 会话元数据
-│   │   ├── session.jsonl           # 消息、工具事务、压缩检查点
-│   │   ├── session.locations.jsonl # 可重建的字节位置索引
-│   │   ├── memory.json             # 派生会话记忆
-│   │   ├── attachments/            # 附件原件
-│   │   ├── context-artifacts/      # 被移出窗口的大段内容
-│   │   └── subagents/              # 子 Agent 运行摘要
-│   └── tasks/<task-id>/
-│       ├── config.json             # 计划及执行限制
-│       └── runs/<run-id>.json      # 运行状态与摘要
+├── agents/
+│   ├── session-metadata.sqlite     # 会话标题、归档与列表索引，须备份
+│   └── <agent-id>/
+│       ├── config.json             # Agent Profile
+│       ├── sessions/<session-id>/
+│       │   ├── config.json         # 旧版遗留文件，当前版本忽略
+│       │   ├── session.jsonl       # 消息、工具事务、压缩检查点
+│       │   ├── session.locations.jsonl # 可重建的字节位置索引
+│       │   ├── memory.json         # 派生会话记忆
+│       │   ├── attachments/        # 附件原件
+│       │   ├── context-artifacts/  # 被移出窗口的大段内容
+│       │   └── subagents/          # 子 Agent 运行摘要
+│       └── tasks/<task-id>/
+│           ├── config.json        # 计划及执行限制
+│           └── runs/<run-id>.json  # 运行状态与摘要
 ├── workspaces/                     # 应用管理的工作区
 ├── skills/                         # 本地 Skills
 ├── mcp/servers.json                # MCP 连接器配置
@@ -144,7 +146,7 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 └── logs/humbert.log
 ~~~
 
-部分文件会在首次使用对应功能时才创建。session.jsonl 是会话消息与工具事务的事实来源；长会话使用内存缓存或 session.locations.jsonl 的字节位置按需读取，不要求每次构造上下文时把整份 JSONL 加载进内存。memory.json、位置索引及 cache/*.sqlite 是可重建的派生数据。两个 SQLite 文件只用于搜索，不保存会话事实或承担 Runtime 状态存储；删除缓存后会在后续搜索时重建。自定义工作区位于用户指定路径，不一定在上述数据目录内。
+部分文件会在首次使用对应功能时才创建。session.jsonl 是会话消息与工具事务的事实来源；长会话使用内存缓存或 session.locations.jsonl 的字节位置按需读取，不要求每次构造上下文时把整份 JSONL 加载进内存。会话控制面以 agents/session-metadata.sqlite 为事实来源，该数据库使用 WAL，必须包含在离线备份中。旧版会话的 config.json 被忽略；数据库记录缺失时，只能从 JSONL Header 恢复会话身份，标题会成为“恢复的会话”，归档状态会重置。memory.json、位置索引及 cache/*.sqlite 是可重建的派生数据，两个缓存 SQLite 只用于搜索。自定义工作区位于用户指定路径，不一定在上述数据目录内。
 
 ## 配置与安全
 
@@ -159,7 +161,7 @@ Provider 和模型等动态配置在应用设置中管理。桌面应用的模�
 
 ## 备份与恢复
 
-在“设置 → 数据”中设置至少 12 个字符的口令并安排加密备份。完全退出后再次启动，Humbert 会在加载数据服务前生成 .age 归档；如失败，原因会显示在设置页，并在下次启动重试或由用户取消。备份可包含模型密钥、会话、附件、任务、Skills 与托管工作区，请妥善保存归档及口令。
+在“设置 → 数据与备份”中设置至少 12 个字符的口令并安排加密备份。完全退出后再次启动，Humbert 会在加载数据服务前生成 .age 归档；如失败，原因会显示在设置页，并在下次启动重试或由用户取消。备份可包含模型密钥、会话、附件、任务、Skills 与托管工作区，请妥善保存归档及口令。
 
 应用完全退出后，也可使用离线 CLI：
 

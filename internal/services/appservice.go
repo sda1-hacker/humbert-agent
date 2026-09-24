@@ -137,6 +137,14 @@ func (s *AppService) CancelPendingBackup() error {
 	return databackup.CancelPendingBackup(context.Background(), s.core.Config().Paths.HomeDir, credential.BackupVault{})
 }
 
+func (s *AppService) PendingRestoreStatus() (databackup.RestoreStatus, error) {
+	return databackup.PendingRestoreStatus(context.Background(), s.core.Config().Paths.HomeDir)
+}
+
+func (s *AppService) CancelPendingRestore() error {
+	return databackup.CancelPendingRestore(context.Background(), s.core.Config().Paths.HomeDir, credential.BackupVault{})
+}
+
 // ScheduleRestore 验证用户选择的备份，下次启动时在 Core 初始化前恢复。
 func (s *AppService) ScheduleRestore(passphrase string) (string, error) {
 	app := application.Get()
