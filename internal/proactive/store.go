@@ -61,8 +61,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		if err := normalizeDocument(&doc); err != nil {
 			return nil, err
 		}
-		store.doc = doc
-		if err := store.persistLocked(ctx); err != nil {
+		if err := store.persistLocked(ctx, doc); err != nil {
 			return nil, err
 		}
 		return store, nil
@@ -126,9 +125,9 @@ func (s *Store) EnqueueEvent(ctx context.Context, value Event) (bool, error) {
 	if len(s.doc.PendingEvents) >= maxPendingEvents {
 		return false, errors.New("主动事件 Inbox 已满")
 	}
-	s.doc.PendingEvents = append(s.doc.PendingEvents, value)
-	if err := s.persistLocked(ctx); err != nil {
-		s.doc.PendingEvents = s.doc.PendingEvents[:len(s.doc.PendingEvents)-1]
+	next := s.doc
+	next.PendingEvents = append(append([]Event(nil), s.doc.PendingEvents...), value)
+	if err := s.persistLocked(ctx, next); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -154,8 +153,9 @@ func (s *Store) RemovePendingEvent(ctx context.Context, key string) error {
 		if event.Key != key {
 			continue
 		}
-		s.doc.PendingEvents = append(s.doc.PendingEvents[:index], s.doc.PendingEvents[index+1:]...)
-		return s.persistLocked(ctx)
+		next := s.doc
+		next.PendingEvents = append(append([]Event(nil), s.doc.PendingEvents[:index]...), s.doc.PendingEvents[index+1:]...)
+		return s.persistLocked(ctx, next)
 	}
 	return nil
 }
@@ -217,14 +217,15 @@ func (s *Store) Settings() Settings {
 }
 
 func (s *Store) UpdateSettings(ctx context.Context, value Settings) (Settings, error) {
-	normalized, err := NormalizeSettings(value)
+	normalized, err := NormalizeSettings(cloneSettings(value))
 	if err != nil {
 		return Settings{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.doc.Settings = normalized
-	if err := s.persistLocked(ctx); err != nil {
+	next := s.doc
+	next.Settings = cloneSettings(normalized)
+	if err := s.persistLocked(ctx, next); err != nil {
 		return Settings{}, err
 	}
 	return cloneSettings(normalized), nil
@@ -279,21 +280,23 @@ func (s *Store) LastHandledKind(kind EventKind) (Record, bool) {
 func (s *Store) PutRecord(ctx context.Context, value Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	next := s.doc
+	next.Records = append([]Record(nil), s.doc.Records...)
 	updated := false
-	for index := range s.doc.Records {
-		if s.doc.Records[index].ID == value.ID {
-			s.doc.Records[index] = value
+	for index := range next.Records {
+		if next.Records[index].ID == value.ID {
+			next.Records[index] = value
 			updated = true
 			break
 		}
 	}
 	if !updated {
-		s.doc.Records = append(s.doc.Records, value)
+		next.Records = append(next.Records, value)
 	}
-	if len(s.doc.Records) > maxStoredRecords {
-		s.doc.Records = append([]Record(nil), s.doc.Records[len(s.doc.Records)-maxStoredRecords:]...)
+	if len(next.Records) > maxStoredRecords {
+		next.Records = append([]Record(nil), next.Records[len(next.Records)-maxStoredRecords:]...)
 	}
-	return s.persistLocked(ctx)
+	return s.persistLocked(ctx, next)
 }
 
 func (s *Store) DeferredRecords() []Record {
@@ -322,20 +325,23 @@ func (s *Store) WorkspaceSnapshot(agentID string) (WorkspaceSnapshot, bool) {
 func (s *Store) PutWorkspaceSnapshot(ctx context.Context, value WorkspaceSnapshot) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.doc.Workspaces == nil {
-		s.doc.Workspaces = map[string]WorkspaceSnapshot{}
+	next := s.doc
+	next.Workspaces = make(map[string]WorkspaceSnapshot, len(s.doc.Workspaces)+1)
+	for key, snapshot := range s.doc.Workspaces {
+		next.Workspaces[key] = snapshot
 	}
 	value.Files = cloneFileMap(value.Files)
-	s.doc.Workspaces[value.AgentID] = value
-	return s.persistLocked(ctx)
+	next.Workspaces[value.AgentID] = value
+	return s.persistLocked(ctx, next)
 }
 
 func (s *Store) SetHeartbeat(ctx context.Context, value time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value = value.UTC()
-	s.doc.LastHeartbeatAt = &value
-	return s.persistLocked(ctx)
+	next := s.doc
+	next.LastHeartbeatAt = &value
+	return s.persistLocked(ctx, next)
 }
 
 func (s *Store) LastHeartbeat() *time.Time {
@@ -348,9 +354,14 @@ func (s *Store) LastHeartbeat() *time.Time {
 	return &value
 }
 
-func (s *Store) persistLocked(ctx context.Context) error {
-	s.doc.SchemaVersion = storeSchemaVersion
-	return atomicfile.WriteJSON(ctx, s.path, 0o600, s.doc)
+// persistLocked 在磁盘写入成功后才提交内存状态，调用方须持有写锁。
+func (s *Store) persistLocked(ctx context.Context, next storeDocument) error {
+	next.SchemaVersion = storeSchemaVersion
+	if err := atomicfile.WriteJSON(ctx, s.path, 0o600, next); err != nil {
+		return err
+	}
+	s.doc = next
+	return nil
 }
 
 func cloneSettings(value Settings) Settings {

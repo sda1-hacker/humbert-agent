@@ -16,6 +16,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
+	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
 // DeltaEmitter 把 Assistant Streaming Delta 交给 RuntimeService。
@@ -653,7 +654,7 @@ func persistCompletedTool(
 		persistCtx,
 		snapshot.SessionID,
 		message,
-		sessions.ToolResultPersistence{IsError: isRecoverableToolErrorResult(message.Content)},
+		sessions.ToolResultPersistence{IsError: isRecoverableToolErrorResult(message.Content) || transcript.ToolResultRejected(message.Content)},
 	)
 	if err != nil {
 		return sessions.Message{}, fmt.Errorf("持久化 ToolResultMessage 失败: %w", err)

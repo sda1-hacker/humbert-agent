@@ -77,6 +77,24 @@ func TestSerializeSegmentExcludesThinkingAndSuccessfulToolResultBody(t *testing.
 	}
 }
 
+func TestSerializeSegmentRecordsOnlyCompletedFileOperations(t *testing.T) {
+	entries := []transcript.Entry{
+		{Type: transcript.EntryMessage, Message: &transcript.AgentMessage{Role: transcript.RoleAssistant, Content: []transcript.ContentBlock{
+			{Type: transcript.ContentToolCall, ID: "denied", Name: "write_file", Arguments: []byte(`{"path":"denied.txt"}`)},
+			{Type: transcript.ContentToolCall, ID: "failed", Name: "edit_file", Arguments: []byte(`{"path":"failed.txt"}`)},
+			{Type: transcript.ContentToolCall, ID: "complete", Name: "write_file", Arguments: []byte(`{"path":"complete.txt"}`)},
+			{Type: transcript.ContentToolCall, ID: "interrupted", Name: "read_file", Arguments: []byte(`{"path":"unknown.txt"}`)},
+		}}},
+		{Type: transcript.EntryMessage, Message: &transcript.AgentMessage{Role: transcript.RoleToolResult, ToolCallID: "denied", Content: []transcript.ContentBlock{{Type: transcript.ContentText, Text: "用户拒绝了工具 \"write_file\" 的本次调用，未执行任何操作。"}}}},
+		{Type: transcript.EntryMessage, Message: &transcript.AgentMessage{Role: transcript.RoleToolResult, ToolCallID: "failed", IsError: true}},
+		{Type: transcript.EntryMessage, Message: &transcript.AgentMessage{Role: transcript.RoleToolResult, ToolCallID: "complete"}},
+	}
+	_, artifacts := serializeSegment(entries, 256)
+	if len(artifacts.ModifiedFiles) != 1 || artifacts.ModifiedFiles[0] != "complete.txt" || len(artifacts.ReadFiles) != 0 {
+		t.Fatalf("artifacts include failed or interrupted tools: %#v", artifacts)
+	}
+}
+
 func TestCompactArgumentsRecursivelyOmitsSensitiveAndBodyFields(t *testing.T) {
 	t.Parallel()
 

@@ -81,6 +81,16 @@ X`
 	if _, err := normalizeSummaryResult("说明\n" + valid); err == nil {
 		t.Fatal("expected checkpoint preamble to be rejected")
 	}
+	if _, err := normalizeSummaryResult(strings.Replace(valid, "## Next Steps", "正文提及 ## Next Steps", 1)); err == nil {
+		t.Fatal("heading embedded in body text was accepted")
+	}
+	if _, err := normalizeSummaryResult(valid + "\n## Goal\nduplicate"); err == nil {
+		t.Fatal("duplicate heading was accepted")
+	}
+	withCode := strings.Replace(valid, "### Done\nD", "### Done\nD\n```markdown\n## Example\n```", 1)
+	if _, err := normalizeSummaryResult(withCode); err != nil {
+		t.Fatalf("heading inside a code fence was rejected: %v", err)
+	}
 }
 
 func TestSummarizeToolArgumentsRecursivelyOmitsSensitiveFields(t *testing.T) {

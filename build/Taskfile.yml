@@ -27,7 +27,7 @@ tasks:
       - sh: npm version
         msg: "Looks like npm isn't installed. Npm is part of the Node installer: https://nodejs.org/en/download/"
     cmds:
-      - npm install
+      - npm ci
 
   install:frontend:deps:bun:
     dir: frontend
@@ -72,11 +72,9 @@ tasks:
   build:frontend:
     label: build:frontend (DEV={{.DEV}} RUNNER={{.PACKAGE_MANAGER}})
     summary: Build the frontend project
-    # darwin:build:universal runs its per-arch builds as parallel deps, each of
-    # which depends on this task. Without run:once the two executions race:
-    # one regenerates frontend/bindings (-clean deletes it first) while the
-    # other's bundler is reading it, failing intermittently with
-    # 'Could not resolve "./bindings/<pkg>"' (#4637).
+    # 前端通过 @wailsio/runtime 的 Call.ByName 调用服务，不依赖生成的 JS binding。
+    # 因此普通构建不运行代码生成；需要类型 binding 时可显式执行 generate:bindings。
+    # run:once 避免 universal build 的两个架构重复构建同一份前端资源。
     run: once
     dir: frontend
     sources:
@@ -86,12 +84,6 @@ tasks:
       - dist/**/*
     deps:
       - task: install:frontend:deps
-      - task: generate:bindings
-        vars:
-          BUILD_FLAGS:
-            ref: .BUILD_FLAGS
-          OBFUSCATED:
-            ref: .OBFUSCATED
     cmds:
       - task: frontend:run
         vars:
@@ -188,7 +180,7 @@ tasks:
     generates:
       - frontend/bindings/**/*
     cmds:
-      - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true -time-type=string{{if eq .OBFUSCATED "true"}} -obfuscated{{end}}
+      - wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings -f '{{.BUILD_FLAGS}}' -clean=true -time-type=string{{if eq .OBFUSCATED "true"}} -obfuscated{{end}}
 
   generate:icons:
     summary: Generates Windows `.ico` and Mac `.icns` from an image; on macOS, `-iconcomposerinput appicon.icon -macassetdir darwin` also produces `Assets.car` from a `.icon` file (skipped on other platforms).

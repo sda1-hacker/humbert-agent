@@ -1,7 +1,6 @@
 package contextengine
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -293,7 +292,7 @@ func extractArtifactPaths(entries []transcript.Entry) ([]string, []string) {
 		}
 		callID := strings.TrimSpace(entry.Message.ToolCallID)
 		if callID != "" {
-			results[callID] = toolResultSucceeded(entry.Message)
+			results[callID] = transcript.ToolResultSucceeded(entry.Message)
 		}
 	}
 
@@ -305,50 +304,17 @@ func extractArtifactPaths(entries []transcript.Entry) ([]string, []string) {
 			if block.Type != transcript.ContentToolCall || len(block.Arguments) == 0 || !results[block.ID] {
 				continue
 			}
-			var args map[string]any
-			if err := json.Unmarshal(block.Arguments, &args); err != nil {
-				continue
+			read, modified := transcript.FileArtifactPaths(block.Name, block.Arguments)
+			for _, path := range read {
+				readSet[path] = struct{}{}
 			}
-			pathValue, _ := args["path"].(string)
-			pathValue = strings.TrimSpace(pathValue)
-			if pathValue == "" {
-				continue
-			}
-			switch block.Name {
-			case "read_file":
-				readSet[pathValue] = struct{}{}
-			case "write_file", "edit_file", "apply_patch":
-				modifiedSet[pathValue] = struct{}{}
+			for _, path := range modified {
+				modifiedSet[path] = struct{}{}
 			}
 		}
 	}
 
 	return setToSortedSlice(readSet), setToSortedSlice(modifiedSet)
-}
-
-func toolResultSucceeded(message *transcript.AgentMessage) bool {
-	if message == nil || message.IsError {
-		return false
-	}
-	var text strings.Builder
-	for _, block := range message.Content {
-		if block.Type == transcript.ContentText {
-			text.WriteString(block.Text)
-			text.WriteByte('\n')
-		}
-	}
-	value := strings.ToLower(strings.TrimSpace(text.String()))
-	if value == "" {
-		return true
-	}
-	// Permission Guard 的拒绝属于普通 ToolResult（不是 Runtime error），因此不能只依赖
-	// IsError。这里识别 Humbert 自己稳定生成的拒绝文本，防止把“未执行”误记为已修改文件。
-	if strings.Contains(value, "permission policy 拒绝") ||
-		strings.Contains(value, "用户拒绝了工具") ||
-		strings.Contains(value, "未执行任何操作") {
-		return false
-	}
-	return true
 }
 
 func setToSortedSlice(values map[string]struct{}) []string {

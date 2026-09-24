@@ -33,7 +33,6 @@ Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，�
 cd frontend
 npm ci
 cd ..
-wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings
 wails3 dev
 ~~~
 
@@ -107,7 +106,7 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 | internal/searchindex/、internal/databackup/ | SQLite 搜索投影与加密备份 |
 | frontend/ | Vue 3 桌面界面与 Wails bindings |
 
-设计边界详见 [领域边界文档](docs/architecture/domain-boundaries.md)。
+第一次阅读代码可从 [架构手册](docs/architecture/README.md) 进入各包的详细说明，并用 [代码阅读导引](docs/architecture/code-reading-guide.md) 跟踪一次聊天；设计约束见 [领域边界文档](docs/architecture/domain-boundaries.md)。
 
 ### 默认数据目录
 
@@ -184,7 +183,7 @@ go test ./...
 go vet ./...
 ~~~
 
-frontend/dist/.gitkeep 让未构建前端的干净检出也能通过 Go 的嵌入资源检查。修改 Wails 服务签名后，重新执行：
+frontend/dist/.gitkeep 让未构建前端的干净检出也能通过 Go 的嵌入资源检查。前端通过 Wails Runtime 的 `Call.ByName` 调用服务，正常构建不依赖生成的 JS bindings。修改 Wails 服务签名时，应同步检查 `frontend/src/api/` 的调用参数；如需类型 bindings，可显式执行：
 
 ~~~bash
 wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings

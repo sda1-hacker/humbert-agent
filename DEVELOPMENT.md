@@ -117,7 +117,7 @@ go vet ./...
 
 ## 12. 当前 Local-first 持久化基线
 
-当前 Humbert Agent 不再使用 SQLite 作为 Runtime 状态存储，约定目录如下：
+SQLite 只用于可重建的搜索索引，不承担 Runtime 状态和会话事实存储。当前主要目录如下；某些文件在首次使用对应功能时才创建：
 
 ```text
 ~/.humbert-agent/
@@ -125,17 +125,33 @@ go vet ./...
 ├── config/
 │   ├── providers.json
 │   ├── models.json
-│   └── preferences.json
+│   ├── preferences.json
+│   ├── permissions.json
+│   ├── personal-memory.json
+│   └── proactive.json
 ├── secrets/
 ├── agents/
 │   └── <agent-id>/
 │       ├── config.json
-│       └── sessions/
-│           └── <session-id>/
-│               ├── config.json
-│               ├── session.jsonl
-│               └── memory.json
-└── workspaces/
+│       ├── sessions/
+│       │   └── <session-id>/
+│       │       ├── config.json
+│       │       ├── session.jsonl
+│       │       ├── session.locations.jsonl
+│       │       ├── memory.json
+│       │       ├── attachments/
+│       │       ├── context-artifacts/
+│       │       └── subagents/
+│       └── tasks/<task-id>/
+│           ├── config.json
+│           └── runs/<run-id>.json
+├── workspaces/
+├── skills/
+├── mcp/servers.json
+├── cache/
+│   ├── conversation-search.sqlite
+│   └── document-search.sqlite
+└── logs/humbert.log
 ```
 
 其中：
@@ -143,12 +159,14 @@ go vet ./...
 - `config.yaml`：Viper 启动级配置；
 - `providers.json`：Provider 非敏感元数据；
 - `models.json`：Model 配置；
-- `preferences.json`：用户偏好预留入口；
-- `secrets/`：Credential；
+- `preferences.json` 与 `personal-memory.json`：用户偏好及确认保存的个人记忆；
+- `secrets/`：Credential 索引和迁移数据；桌面密钥使用系统凭据库；
 - `agents/<id>/config.json`：Agent Profile；
 - `sessions/<id>/config.json`：会话配置；
 - `sessions/<id>/session.jsonl`：消息、工具事务和压缩检查点的事实来源；
-- `sessions/<id>/memory.json`：可重建的会话记忆；Run Audit 进入结构化日志，不进入消息 JSONL；
-- `workspaces/`：Agent 工作目录，生命周期独立于 Agent Profile。
+- `sessions/<id>/memory.json`、`session.locations.jsonl`：可重建的记忆和字节位置索引；
+- `tasks/<id>/runs/`：任务调度、状态与摘要；完整执行消息仍在对应 Session；
+- `cache/*.sqlite`：可重建的跨会话与文档搜索索引；
+- `workspaces/`：应用托管的工作目录；自定义工作区可在此目录之外。
 
-配置 JSON 使用“同目录临时文件 + fsync + rename”原子替换；Session 使用 append-only JSONL 与 per-file 锁。可重建内存索引只能作为 Cache，不能成为第二份持久化事实来源。
+配置 JSON 使用“同目录临时文件 + fsync + rename”原子替换；Session 使用 append-only JSONL 与 per-file 锁。可重建索引只能作为 Cache，不能成为第二份持久化事实来源。详细的代码入口和数据流见 [代码阅读导引](docs/architecture/code-reading-guide.md)。

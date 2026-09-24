@@ -84,12 +84,8 @@ type ChatService struct {
 }
 
 // NewChatService 创建 ChatService。
-func NewChatService(
-	core *coreapp.Application,
-) *ChatService {
-	return &ChatService{
-		core: core,
-	}
+func NewChatService(core *coreapp.Application) *ChatService {
+	return &ChatService{core: core}
 }
 
 // ServiceName 返回 Wails Service 名称。
@@ -98,85 +94,36 @@ func (s *ChatService) ServiceName() string {
 }
 
 // ServiceStartup 建立 Runtime EventBus → Wails Event Bridge。
-func (s *ChatService) ServiceStartup(
-	ctx context.Context,
-	options application.ServiceOptions,
-) error {
-	unsubscribe, err :=
-		s.core.Events().
-			Subscribe(
-				agentruntime.TopicEvent,
-				func(
-					ctx context.Context,
-					payload any,
-				) {
-					event, ok := payload.(agentruntime.Event)
-					if !ok {
-						s.core.Logger().
-							Warn(
-								ctx,
-								"收到非法 Runtime Event payload",
-								"payload_type",
-								fmt.Sprintf(
-									"%T",
-									payload,
-								),
-							)
-
-						return
-					}
-
-					app :=
-						application.Get()
-
-					if app == nil {
-						return
-					}
-
-					app.Event.Emit(
-						RuntimeEventName,
-						event,
-					)
-				},
-			)
-
+func (s *ChatService) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
+	unsubscribe, err := s.core.Events().Subscribe(agentruntime.TopicEvent, func(ctx context.Context, payload any) {
+		event, ok := payload.(agentruntime.Event)
+		if !ok {
+			s.core.Logger().Warn(ctx, "收到非法 Runtime Event payload", "payload_type", fmt.Sprintf("%T", payload))
+			return
+		}
+		if app := application.Get(); app != nil {
+			app.Event.Emit(RuntimeEventName, event)
+		}
+	})
 	if err != nil {
-		return fmt.Errorf(
-			"订阅 Runtime EventBus 失败: %w",
-			err,
-		)
+		return fmt.Errorf("订阅 Runtime EventBus 失败: %w", err)
 	}
-
 	s.mu.Lock()
-
-	s.unsubscribe =
-		unsubscribe
-
+	s.unsubscribe = unsubscribe
 	s.mu.Unlock()
-
-	s.core.Logger().Info(
-		ctx,
-		"ChatService Runtime Event Bridge 已启动",
-	)
-
+	s.core.Logger().Info(ctx, "ChatService Runtime Event Bridge 已启动")
 	return nil
 }
 
 // ServiceShutdown 清理 EventBus subscription。
 func (s *ChatService) ServiceShutdown() error {
 	s.mu.Lock()
-
-	unsubscribe :=
-		s.unsubscribe
-
+	unsubscribe := s.unsubscribe
 	s.unsubscribe = nil
-
 	s.mu.Unlock()
-
 	if unsubscribe != nil {
 		unsubscribe()
 	}
-
 	return nil
 }
 
@@ -184,43 +131,22 @@ func (s *ChatService) ServiceShutdown() error {
 //
 // 方法只等待 Runtime 完成 Snapshot/Message/Run 初始化，
 // 不等待模型完整回复。
-func (s *ChatService) StartTurn(
-	request StartTurnRequest,
-) (
-	agentruntime.StartTurnResult,
-	error,
-) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			s.contextOperationTimeout(),
-		)
+func (s *ChatService) StartTurn(request StartTurnRequest) (agentruntime.StartTurnResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.contextOperationTimeout())
 	defer cancel()
-
-	result, err :=
-		s.core.Runtime().
-			StartTurn(
-				ctx,
-				agentruntime.StartTurnInput{
-					SessionID:          request.SessionID,
-					Input:              sessions.UserInput{Text: request.Content, Attachments: attachmentInputs(request.Attachments)},
-					RetryUserMessageID: request.RetryUserMessageID,
-				},
-			)
-
+	result, err := s.core.Runtime().StartTurn(ctx, agentruntime.StartTurnInput{
+		SessionID:          request.SessionID,
+		Input:              sessions.UserInput{Text: request.Content, Attachments: attachmentInputs(request.Attachments)},
+		RetryUserMessageID: request.RetryUserMessageID,
+	})
 	if err != nil {
 		// Wails 的 error 返回会丢弃其他返回值；已持久化消息改用带错误状态的收据返回，
 		// 前端仍显示失败，但保留消息 ID，重试时不再次追加相同输入。
 		if result.UserMessageID != "" && result.StartError != "" {
 			return result, nil
 		}
-		return agentruntime.StartTurnResult{},
-			fmt.Errorf(
-				"启动 Agent Turn 失败: %w",
-				err,
-			)
+		return agentruntime.StartTurnResult{}, fmt.Errorf("启动 Agent Turn 失败: %w", err)
 	}
-
 	return result, nil
 }
 
@@ -313,20 +239,9 @@ func (s *ChatService) contextOperationTimeout() time.Duration {
 }
 
 // CancelTurn 请求取消指定 Turn。
-func (s *ChatService) CancelTurn(
-	requestID string,
-) error {
-	if err :=
-		s.core.Runtime().
-			CancelTurn(
-				requestID,
-			); err != nil {
-
-		return fmt.Errorf(
-			"取消 Agent Turn 失败: %w",
-			err,
-		)
+func (s *ChatService) CancelTurn(requestID string) error {
+	if err := s.core.Runtime().CancelTurn(requestID); err != nil {
+		return fmt.Errorf("取消 Agent Turn 失败: %w", err)
 	}
-
 	return nil
 }

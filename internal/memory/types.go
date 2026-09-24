@@ -4,9 +4,9 @@ import "time"
 
 const (
 	// CurrentVersion 是 Session Memory sidecar 当前格式版本。
-	// memory.json 是可重建派生状态，因此当前开发阶段不维护复杂迁移链；遇到未知版本时
-	// Manager 会把它视为不可用状态，并在下一次刷新时基于 Transcript 重新生成。
-	CurrentVersion = 2
+	// v2 可暂时读取，下一次刷新会从 Transcript 重建以纠正旧版 Artifact 记录；其他
+	// 未知版本视为不可用派生状态。
+	CurrentVersion = 3
 
 	importantFactsHeading = "### 重要事实"
 	timelineHeading       = "### 事情经过"

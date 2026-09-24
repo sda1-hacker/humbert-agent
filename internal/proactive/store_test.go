@@ -71,3 +71,35 @@ func TestStorePersistsPendingEventUntilAcknowledged(t *testing.T) {
 		t.Fatalf("pending event count = %d, want 0", got)
 	}
 }
+
+func TestStoreKeepsMemoryStateWhenWriteFails(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewStore(ctx, filepath.Join(t.TempDir(), "proactive.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	settings := store.Settings()
+	settings.HeartbeatIntervalMinutes++
+	if _, err := store.UpdateSettings(cancelled, settings); err == nil || store.Settings().HeartbeatIntervalMinutes == settings.HeartbeatIntervalMinutes {
+		t.Fatal("failed settings write changed in-memory state")
+	}
+	event := Event{Key: "not-committed", Kind: EventWorkspaceChanged, OccurredAt: time.Now().UTC()}
+	if _, err := store.EnqueueEvent(cancelled, event); err == nil || store.PendingEventCount() != 0 {
+		t.Fatal("failed event write changed inbox")
+	}
+	if err := store.PutRecord(cancelled, Record{ID: "not-committed", Event: event}); err == nil || len(store.Records(1)) != 0 {
+		t.Fatal("failed record write changed in-memory state")
+	}
+	if err := store.PutWorkspaceSnapshot(cancelled, WorkspaceSnapshot{AgentID: "agent"}); err == nil {
+		t.Fatal("expected workspace snapshot write failure")
+	}
+	if _, exists := store.WorkspaceSnapshot("agent"); exists {
+		t.Fatal("failed workspace snapshot write changed in-memory state")
+	}
+	if err := store.SetHeartbeat(cancelled, time.Now()); err == nil || store.LastHeartbeat() != nil {
+		t.Fatal("failed heartbeat write changed in-memory state")
+	}
+}

@@ -214,8 +214,11 @@ func (m *Manager) Refresh(
 		exists = false
 		current = Document{}
 	}
+	if exists && current.Version != CurrentVersion {
+		force = true
+	}
 	if document.Lineage != nil {
-		if reconstructed, ok := reconstructMemoryBranch(document, current.Cursor, exists); ok {
+		if reconstructed, ok := reconstructMemoryBranch(document, current.Cursor, exists && current.Version == CurrentVersion); ok {
 			document = reconstructed
 		} else {
 			document, err = m.transcripts.LoadTranscript(ctx, sessionID)
@@ -283,11 +286,11 @@ func (m *Manager) prepareAndGenerate(
 ) (RefreshResult, Document, bool, error) {
 	branch := transcriptDocument.ActiveBranch
 	startIndex := 0
-	rebuilt := !exists
+	rebuilt := !exists || current.Version != CurrentVersion
 	previousSummary := ""
 	previousArtifacts := Artifacts{}
 
-	if exists {
+	if exists && current.Version == CurrentVersion {
 		if coveredIndex, valid := cursorMatches(current.Cursor, branch); valid {
 			startIndex = coveredIndex + 1
 			previousSummary = current.Summary
@@ -329,32 +332,10 @@ func (m *Manager) prepareAndGenerate(
 		return result, current, false, nil
 	}
 
-	var prompt strings.Builder
-	if strings.TrimSpace(previousSummary) != "" && !rebuilt {
-		prompt.WriteString("[已有 Session Memory]\n")
-		prompt.WriteString(truncate(previousSummary, m.config.SerializerMaxChars*2))
-		prompt.WriteString("\n\n[新增会话片段]\n")
-	} else {
-		prompt.WriteString("[当前 Session 会话片段]\n")
-	}
-	prompt.WriteString(serialized)
-
-	operationCtx, cancel := context.WithTimeout(ctx, time.Duration(m.config.OperationTimeoutMS)*time.Millisecond)
-	defer cancel()
-	promptText := truncateMiddle(prompt.String(), m.config.SerializerMaxChars*8)
-	response, err := model.Generate(operationCtx, []*schema.Message{
-		schema.SystemMessage(memorySystemPrompt),
-		schema.UserMessage(promptText),
-	})
+	// 全部片段成功合并后才返回新 cursor；中途失败时旧 Memory 保持原样，下次可重试。
+	summary, err := m.mergeSegments(ctx, model, previousSummary, serialized)
 	if err != nil {
-		return RefreshResult{}, Document{}, false, fmt.Errorf("调用模型更新 Session Memory 失败: %w", err)
-	}
-	if response == nil {
-		return RefreshResult{}, Document{}, false, errors.New("Memory 模型返回空 Message")
-	}
-	summary, err := normalizeSummary(messageText(response))
-	if err != nil {
-		return RefreshResult{}, Document{}, false, fmt.Errorf("Memory 模型返回格式无效: %w", err)
+		return RefreshResult{}, Document{}, false, err
 	}
 
 	result.Updated = true
@@ -371,6 +352,46 @@ func (m *Manager) prepareAndGenerate(
 		UpdatedAt: time.Now().UTC(),
 	}
 	return result, next, true, nil
+}
+
+// mergeSegments 按原始顺序滚动合并，既不删除中间消息，也不截断已有摘要。
+func (m *Manager) mergeSegments(ctx context.Context, model einomodel.BaseChatModel, previous, history string) (string, error) {
+	limit := max(m.config.SerializerMaxChars, 256) * 8
+	offset := 0
+	summary := strings.TrimSpace(previous)
+	for offset < len(history) {
+		prefix := "[当前 Session 会话片段]\n"
+		if summary != "" {
+			prefix = "[已有 Session Memory]\n" + summary + "\n\n[新增会话片段，按顺序连续合并]\n"
+		}
+		available := limit - utf8.RuneCountInString(prefix)
+		if available < 256 {
+			return "", fmt.Errorf("Session Memory 摘要已占满刷新预算（%d 字符），未推进游标", limit)
+		}
+		end := offset
+		for count := 0; end < len(history) && count < available; count++ {
+			_, size := utf8.DecodeRuneInString(history[end:])
+			end += size
+		}
+		operationCtx, cancel := context.WithTimeout(ctx, time.Duration(m.config.OperationTimeoutMS)*time.Millisecond)
+		response, err := model.Generate(operationCtx, []*schema.Message{
+			schema.SystemMessage(memorySystemPrompt),
+			schema.UserMessage(prefix + history[offset:end]),
+		})
+		cancel()
+		if err != nil {
+			return "", fmt.Errorf("调用模型更新 Session Memory 失败: %w", err)
+		}
+		if response == nil {
+			return "", errors.New("Memory 模型返回空 Message")
+		}
+		summary, err = normalizeSummary(messageText(response))
+		if err != nil {
+			return "", fmt.Errorf("Memory 模型返回格式无效: %w", err)
+		}
+		offset = end
+	}
+	return summary, nil
 }
 
 func memorySourceRange(branch []transcript.Entry) SourceRange {
@@ -438,10 +459,16 @@ func serializeSegment(entries []transcript.Entry, maxChars int) (string, Artifac
 	}
 	var builder strings.Builder
 	artifacts := Artifacts{}
+	toolResults := make(map[string]bool)
+	for _, entry := range entries {
+		if entry.Message != nil && entry.Message.Role == transcript.RoleToolResult && entry.Message.ToolCallID != "" {
+			toolResults[entry.Message.ToolCallID] = transcript.ToolResultSucceeded(entry.Message)
+		}
+	}
 	for _, entry := range entries {
 		if entry.Type == transcript.EntryCompaction && strings.TrimSpace(entry.Summary) != "" {
 			builder.WriteString("\n[Context checkpoint]\n")
-			builder.WriteString(truncate(entry.Summary, maxChars*2))
+			builder.WriteString(entry.Summary)
 			builder.WriteByte('\n')
 
 			// memory.json 可能被删除或损坏后重建。CompactionDetails 是从原始 ToolCall
@@ -460,7 +487,7 @@ func serializeSegment(entries []transcript.Entry, maxChars int) (string, Artifac
 		switch message.Role {
 		case transcript.RoleUser:
 			builder.WriteString("\n[User]\n")
-			builder.WriteString(truncate(visibleText(message.Content), maxChars))
+			builder.WriteString(visibleText(message.Content))
 			for _, block := range message.Content {
 				switch block.Type {
 				case transcript.ContentImage:
@@ -471,7 +498,7 @@ func serializeSegment(entries []transcript.Entry, maxChars int) (string, Artifac
 					builder.WriteString("\n[File attachment: ")
 					builder.WriteString(memoryAttachmentLabel(block))
 					builder.WriteString("]\n")
-					builder.WriteString(truncate(block.ExtractedText, maxChars))
+					builder.WriteString(block.ExtractedText)
 				}
 			}
 			builder.WriteByte('\n')
@@ -479,24 +506,32 @@ func serializeSegment(entries []transcript.Entry, maxChars int) (string, Artifac
 			text := visibleText(message.Content)
 			if strings.TrimSpace(text) != "" {
 				builder.WriteString("\n[Assistant outcome]\n")
-				builder.WriteString(truncate(text, maxChars))
+				builder.WriteString(text)
 				builder.WriteByte('\n')
 			}
 			for _, block := range message.Content {
 				if block.Type != transcript.ContentToolCall {
 					continue
 				}
-				builder.WriteString("\n[Tool call]\n")
+				if toolResults[block.ID] {
+					builder.WriteString("\n[Tool call: completed]\n")
+				} else {
+					builder.WriteString("\n[Tool call: failed or unconfirmed]\n")
+				}
 				builder.WriteString(block.Name)
 				builder.WriteString("(")
 				builder.WriteString(compactArguments(block.Arguments, min(maxChars, 1024)))
 				builder.WriteString(")\n")
-				collectArtifact(&artifacts, block.Name, block.Arguments)
+				if toolResults[block.ID] {
+					read, modified := transcript.FileArtifactPaths(block.Name, block.Arguments)
+					artifacts.ReadFiles = append(artifacts.ReadFiles, read...)
+					artifacts.ModifiedFiles = append(artifacts.ModifiedFiles, modified...)
+				}
 			}
 		case transcript.RoleToolResult:
 			// Memory 不保存成功 ToolResult 正文。失败结果只保留短错误语义，便于记住真正
 			// 的阻塞，但仍不复制可能包含文件正文或 Secret 的完整输出。
-			if message.IsError {
+			if message.IsError || transcript.ToolResultRejected(visibleText(message.Content)) {
 				builder.WriteString("\n[Tool error: ")
 				builder.WriteString(message.ToolName)
 				builder.WriteString("]\n")
@@ -505,7 +540,7 @@ func serializeSegment(entries []transcript.Entry, maxChars int) (string, Artifac
 			}
 		}
 	}
-	return truncateMiddle(strings.TrimSpace(builder.String()), maxChars*8), normalizeArtifacts(artifacts)
+	return strings.TrimSpace(builder.String()), normalizeArtifacts(artifacts)
 }
 
 func memoryAttachmentLabel(block transcript.ContentBlock) string {
@@ -517,23 +552,6 @@ func memoryAttachmentLabel(block transcript.ContentBlock) string {
 		return name + "; MIME: " + mimeType
 	}
 	return name
-}
-
-func truncateMiddle(value string, maxRunes int) string {
-	value = strings.TrimSpace(value)
-	if maxRunes <= 0 || utf8.RuneCountInString(value) <= maxRunes {
-		return value
-	}
-	marker := "\n\n...[middle history omitted for memory budget]...\n\n"
-	markerRunes := []rune(marker)
-	if maxRunes <= len(markerRunes)+2 {
-		return truncate(value, maxRunes)
-	}
-	runes := []rune(value)
-	available := maxRunes - len(markerRunes)
-	prefix := available / 3
-	suffix := available - prefix
-	return string(runes[:prefix]) + marker + string(runes[len(runes)-suffix:])
 }
 
 func countUserTurns(entries []transcript.Entry) int {
@@ -641,27 +659,6 @@ func memoryArgumentShouldOmit(key string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func collectArtifact(artifacts *Artifacts, toolName string, arguments json.RawMessage) {
-	if artifacts == nil {
-		return
-	}
-	var raw map[string]any
-	if err := json.Unmarshal(arguments, &raw); err != nil {
-		return
-	}
-	path, _ := raw["path"].(string)
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return
-	}
-	switch strings.ToLower(strings.TrimSpace(toolName)) {
-	case "read_file":
-		artifacts.ReadFiles = append(artifacts.ReadFiles, path)
-	case "write_file", "edit_file":
-		artifacts.ModifiedFiles = append(artifacts.ModifiedFiles, path)
 	}
 }
 

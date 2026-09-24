@@ -219,19 +219,20 @@ func (m *Manager) loop() {
 	}
 }
 
-func (m *Manager) enqueue(event Event) {
+func (m *Manager) enqueue(event Event) error {
 	if event.OccurredAt.IsZero() {
 		event.OccurredAt = time.Now().UTC()
 	}
 	added, err := m.store.EnqueueEvent(context.Background(), event)
 	if err != nil {
 		m.logger.Warn(context.Background(), "持久化主动助手事件失败", "operation", "proactive.enqueue", "event_kind", event.Kind, "event_key", event.Key, "error", err)
-		return
+		return err
 	}
 	if added {
 		m.signalWake()
 		m.publishStatus()
 	}
+	return nil
 }
 
 func (m *Manager) signalWake() {
@@ -283,7 +284,9 @@ func (m *Manager) handleTaskPayload(_ context.Context, payload any) {
 	}
 	run := *event.Run
 	if run.Trigger == tasks.TriggerAutomation {
-		m.finalizeAutomationRun(run)
+		if err := m.finalizeAutomationRun(run); err != nil {
+			m.logger.Warn(context.Background(), "保存主动 Agent 运行结果失败", "operation", "proactive.automation.finalize", "run_id", run.ID, "error", err)
+		}
 		return
 	}
 	converted, ok := proactiveEventFromTask(event)
@@ -406,13 +409,19 @@ func (m *Manager) processEvent(ctx context.Context, event Event) {
 	if decision.Action == ActionIgnore {
 		handled := now
 		record.HandledAt = &handled
-		_ = m.store.PutRecord(context.WithoutCancel(ctx), record)
+		if err := m.store.PutRecord(context.WithoutCancel(ctx), record); err != nil {
+			m.logger.Warn(context.Background(), "保存主动事件记录失败", "operation", "proactive.process.persist", "error", err)
+			return
+		}
 		m.publishRecord(record)
 		return
 	}
 	if InQuietHours(settings, now) {
 		record.Status = RecordDeferred
-		_ = m.store.PutRecord(context.WithoutCancel(ctx), record)
+		if err := m.store.PutRecord(context.WithoutCancel(ctx), record); err != nil {
+			m.logger.Warn(context.Background(), "保存主动事件记录失败", "operation", "proactive.process.persist", "error", err)
+			return
+		}
 		m.publishRecord(record)
 		return
 	}
@@ -427,7 +436,10 @@ func (m *Manager) executeRecord(ctx context.Context, record *Record) {
 	if executor == nil {
 		now := time.Now().UTC()
 		record.Status, record.Error, record.UpdatedAt, record.HandledAt = RecordFailed, "没有对应的主动动作执行器", now, &now
-		_ = m.store.PutRecord(context.WithoutCancel(ctx), *record)
+		if err := m.store.PutRecord(context.WithoutCancel(ctx), *record); err != nil {
+			m.logger.Warn(context.Background(), "保存主动动作结果失败", "operation", "proactive.execute.result", "error", err)
+			return
+		}
 		m.publishRecord(*record)
 		return
 	}
@@ -449,11 +461,16 @@ func (m *Manager) executeRecord(ctx context.Context, record *Record) {
 	} else {
 		record.Status, record.HandledAt = RecordSucceeded, &now
 	}
-	_ = m.store.PutRecord(context.WithoutCancel(ctx), *record)
+	if err := m.store.PutRecord(context.WithoutCancel(ctx), *record); err != nil {
+		m.logger.Warn(context.Background(), "保存主动动作结果失败", "operation", "proactive.execute.result", "error", err)
+		return
+	}
 	m.publishRecord(*record)
 	if record.Decision.Action == ActionRunAgent && record.AutomationRunID != "" {
 		if run, runErr := m.tasks.Run(context.WithoutCancel(ctx), record.AutomationRunID); runErr == nil && run.Status.Terminal() {
-			m.finalizeAutomationRun(run)
+			if err := m.finalizeAutomationRun(run); err != nil {
+				m.logger.Warn(context.Background(), "保存主动 Agent 运行结果失败", "operation", "proactive.automation.finalize", "run_id", run.ID, "error", err)
+			}
 		}
 	}
 }
@@ -488,11 +505,13 @@ func (m *Manager) heartbeat(ctx context.Context, now time.Time) error {
 	for _, current := range snapshots {
 		previous, exists := m.store.WorkspaceSnapshot(current.AgentID)
 		if !exists || previous.RootDir != current.RootDir {
-			_ = m.store.PutWorkspaceSnapshot(context.WithoutCancel(ctx), current)
+			if err := m.store.PutWorkspaceSnapshot(context.WithoutCancel(ctx), current); err != nil {
+				return err
+			}
 			continue
 		}
 		if previous.Fingerprint != current.Fingerprint {
-			m.enqueue(Event{
+			if err := m.enqueue(Event{
 				Key:        "workspace:" + current.AgentID + ":" + current.Fingerprint,
 				Kind:       EventWorkspaceChanged,
 				Title:      "工作区发生变化",
@@ -501,17 +520,21 @@ func (m *Manager) heartbeat(ctx context.Context, now time.Time) error {
 				AgentID:    current.AgentID,
 				OccurredAt: now,
 				Metadata:   map[string]string{"workspace_root": current.RootDir},
-			})
+			}); err != nil {
+				return err
+			}
 		}
-		_ = m.store.PutWorkspaceSnapshot(context.WithoutCancel(ctx), current)
+		if err := m.store.PutWorkspaceSnapshot(context.WithoutCancel(ctx), current); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func (m *Manager) finalizeAutomationRun(run tasks.Run) {
+func (m *Manager) finalizeAutomationRun(run tasks.Run) error {
 	record, exists := m.store.FindByAutomationRunID(run.ID)
 	if !exists || !run.Status.Terminal() {
-		return
+		return nil
 	}
 	now := time.Now().UTC()
 	record.UpdatedAt, record.HandledAt = now, &now
@@ -525,11 +548,14 @@ func (m *Manager) finalizeAutomationRun(run tasks.Run) {
 			record.Error = "主动 Agent 运行未成功完成"
 		}
 	}
-	_ = m.store.PutRecord(context.Background(), record)
+	if err := m.store.PutRecord(context.Background(), record); err != nil {
+		return err
+	}
 	if _, err := m.tasks.Archive(context.Background(), run.TaskID); err != nil {
 		m.logger.Warn(context.Background(), "归档主动助手内部任务失败", "operation", "proactive.automation.archive", "task_id", run.TaskID, "run_id", run.ID, "error", err)
 	}
 	m.publishRecord(record)
+	return nil
 }
 
 func (m *Manager) reconcileRecords(ctx context.Context) error {
@@ -551,7 +577,9 @@ func (m *Manager) reconcileRecords(ctx context.Context) error {
 					return err
 				}
 				if run.Status.Terminal() {
-					m.finalizeAutomationRun(run)
+					if err := m.finalizeAutomationRun(run); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -578,7 +606,9 @@ func (m *Manager) reconcileRecords(ctx context.Context) error {
 			continue
 		}
 		if run.Status.Terminal() {
-			m.finalizeAutomationRun(run)
+			if err := m.finalizeAutomationRun(run); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

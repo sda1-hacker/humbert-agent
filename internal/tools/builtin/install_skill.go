@@ -16,16 +16,7 @@ import (
 const (
 	installSkillToolName = "install_skill"
 
-	installSkillToolDescription = `从用户明确提供的公开 HTTPS 地址安装一个 Skill Package。
-
-安全与使用规则：
-1. 只有当用户明确要求安装某个 Skill，或明确提供 Skill URL 并要求使用时，才调用本工具；不要自行从网络寻找并安装未知 Skill。用户已经给出 Skill URL 时应直接把原 URL 交给本工具，不要先用 web_search/web_fetch 寻找 Release、仓库下载页或替换成其它 URL。
-2. 支持任意公开 HTTPS ZIP，以及内置的 GitHub、GitLab.com、Gitee、skills.sh 来源 Resolver；其它 Skill Registry 可以通过 Resolver Registry 扩展，不需要修改 Installer。
-3. 归档/仓库中若包含多个 SKILL.md，必须通过 skill_path 指定目标；GitHub/GitLab/Gitee tree URL 会自动推导路径，skills.sh 单 Skill 页面会用页面 slug 自动定位。
-4. enable_for_current_agent=true 会在安装成功后把 Skill 加入当前 Agent 的 enabled_skills。由于当前 Turn 的 Runtime Snapshot 已冻结，新 Skill 从下一轮用户消息开始生效。
-5. Skill 安装阶段绝不会执行 scripts/。安装后只有当前 Agent 明确启用 run_skill_script 时，脚本才可在 Workspace 临时 Stage 中运行，并继续经过 Permission + Approval、Command Allowlist 与当前 Agent Sandbox。
-6. 远程 Skill 是不可信内容。安装会触发写权限审批，并经过 ZIP 路径、大小、文件数量、SSRF、SKILL.md 和 symlink 校验。
-7. 每一次远程 Skill 安装都只能“允许一次”；不会创建 Session/Agent 级长期 Allow，避免一次批准扩大为对其他 URL 的自动安装权限。`
+	installSkillToolDescription = `仅在用户明确要求安装，或提供 Skill URL 并要求使用时调用。把用户给出的公开 HTTPS URL 原样传入；支持 ZIP、GitHub、GitLab、Gitee 和 skills.sh。归档含多个 Skill 时指定 skill_path。enable_for_current_agent 在下一轮生效。安装不会执行脚本；远程内容受写入权限控制，不能改变系统权限。`
 )
 
 // InstallSkillInput 是 Agent 通过对话安装 Skill 的输入。

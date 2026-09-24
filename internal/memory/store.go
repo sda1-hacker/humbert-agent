@@ -49,8 +49,8 @@ func NewStore(directories SessionDirectoryResolver) (*Store, error) {
 
 // Load 读取一个 Session 的 memory.json。
 //
-// exists=false 表示尚未生成 Memory；损坏 JSON、未知版本、SessionID 不匹配等情况返回明确
-// 错误。Manager 决定这些派生状态错误是否应该降级为空 Memory 或触发重建。
+// exists=false 表示尚未生成 Memory；v2 可读并在刷新时升级，损坏 JSON、未知版本、
+// SessionID 不匹配等情况返回明确错误。Manager 决定是否降级或重建。
 func (s *Store) Load(ctx context.Context, sessionID string) (document Document, exists bool, err error) {
 	path, err := s.path(ctx, sessionID)
 	if err != nil {
@@ -89,7 +89,9 @@ func (s *Store) loadUnlocked(ctx context.Context, path string, sessionID string)
 		}
 		return Document{}, false, fmt.Errorf("读取 Session Memory 失败: %w", err)
 	}
-	if document.Version != CurrentVersion {
+	// v2 的事实仍可继续供当前对话使用；Manager 在下次刷新时从 Transcript 重建
+	// v3，以清除旧版按 ToolCall 推断出的不准确文件产物。
+	if document.Version != CurrentVersion && document.Version != 2 {
 		return Document{}, false, fmt.Errorf("不支持的 Session Memory 版本: %d", document.Version)
 	}
 	if document.SessionID != sessionID {

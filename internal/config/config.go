@@ -195,8 +195,8 @@ type ContextConfig struct {
 	KeepRecentMinTokens int     `mapstructure:"keep_recent_min_tokens"`
 	KeepRecentMaxTokens int     `mapstructure:"keep_recent_max_tokens"`
 
-	// SerializerMaxChars 限制单条消息块送给压缩/Memory 模型的字符数；实现还会基于
-	// 该值和模型 Context Window 施加全局输入上限。原始 Transcript 不会被截断。
+	// SerializerMaxChars 控制压缩时单个字段的长度，也决定 Memory 每次滚动合并的
+	// 输入预算。Memory 会顺序处理全部语义历史，不截去中间消息。
 	SerializerMaxChars int `mapstructure:"serializer_max_chars"`
 
 	// MemoryTurnInterval/MemoryTokenInterval 控制 Session Memory 的增量刷新节奏。

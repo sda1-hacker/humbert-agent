@@ -100,12 +100,6 @@ func WriteJSON(
 		return fmt.Errorf("提交 JSON 文件失败: %w", err)
 	}
 
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, perm); err != nil {
-			return fmt.Errorf("设置 JSON 文件权限失败: %w", err)
-		}
-	}
-
 	committed = true
 	return nil
 }
@@ -233,7 +227,9 @@ func replaceFile(source string, destination string) error {
 	// Windows 无法保证 Rename 可以直接覆盖已存在文件，因此使用备份切换。
 	// 如果新文件提交失败，会尽力恢复旧文件。
 	backup := destination + ".backup"
-	_ = os.Remove(backup)
+	if err := os.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("清理旧 JSON 备份文件失败: %w", err)
+	}
 
 	oldExists := false
 	if _, err := os.Stat(destination); err == nil {
@@ -253,9 +249,9 @@ func replaceFile(source string, destination string) error {
 	}
 
 	if oldExists {
-		if err := os.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("清理 JSON 备份文件失败: %w", err)
-		}
+		// 新文件已经提交。清理备份失败不能再把这次写入报告为失败，否则调用方的
+		// 内存状态会与磁盘状态分叉；遗留备份可在下一次替换时清理。
+		_ = os.Remove(backup)
 	}
 
 	return nil

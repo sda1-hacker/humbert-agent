@@ -1,0 +1,451 @@
+/**
+ * 持久化消息与工具调用的解析和展示文案。
+ *
+ * 这里只解释消息协议，不判断一次调用是否真正修改了文件或创建了任务。
+ * 副作用投影见 toolEffects.js；时间线拼接见 toolTrace.js。
+ */
+
+/**
+ * 判断 value 是否为普通对象。
+ *
+ * Array、null 都不属于这里需要处理的普通对象。
+ */
+export function isObject(value) {
+    return (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value)
+    );
+}
+
+/**
+ * 安全读取对象中的字符串字段。
+ *
+ * 这里专门避免直接访问：
+ *
+ *   fn.arguments
+ *
+ * 因为部分 ESLint 配置会把 `.arguments`
+ * 识别为对 Function.arguments 的非法引用。
+ *
+ * 使用：
+ *
+ *   readStringProperty(fn, "arguments")
+ *
+ * 可以保持 ToolCall JSON 原始字段名称不变，
+ * 同时避免关闭 ESLint 安全规则。
+ */
+export function readStringProperty(
+    object,
+    key,
+) {
+    if (!isObject(object)) {
+        return "";
+    }
+
+    const value =
+        object[key];
+
+    return (
+        typeof value === "string"
+            ? value
+            : ""
+    );
+}
+
+/**
+ * 安全读取 Message Metadata。
+ */
+export function metadataOf(message) {
+    if (
+        !message ||
+        !isObject(message.metadata)
+    ) {
+        return {};
+    }
+
+    return message.metadata;
+}
+
+/**
+ * 读取后端从 JSONL v3 AssistantMessage 投影出的 Provider Reasoning。
+ *
+ * reasoning_content 是模型协议数据，不是 Tool Trace，也不是前端根据 Tool 数量伪造的
+ * “思考过程”。历史 UI 只展示 Provider 实际返回并持久化下来的内容。
+ */
+export function reasoningOf(message) {
+    if (
+        !message ||
+        message.role !== "assistant"
+    ) {
+        return "";
+    }
+
+    const metadata =
+        metadataOf(message);
+
+    const reasoning =
+        readStringProperty(
+            metadata,
+            "reasoning_content",
+        );
+
+    return reasoning.trim();
+}
+
+/** 从 Assistant Message 中读取持久化的工具调用。 */
+export function toolCallsOf(message) {
+    const metadata =
+        metadataOf(message);
+
+    if (
+        !Array.isArray(
+            metadata.tool_calls,
+        )
+    ) {
+        return [];
+    }
+
+    return metadata.tool_calls.filter(
+        (call) =>
+            isObject(call) &&
+            typeof call.id === "string" &&
+            call.id.trim() !== "",
+    );
+}
+
+/**
+ * 判断是否是带 ToolCalls 的 Assistant Message。
+ */
+export function isToolCallMessage(
+    message,
+) {
+    return (
+        message?.role ===
+        "assistant" &&
+        toolCallsOf(message).length >
+        0
+    );
+}
+
+/**
+ * 判断是否是 Tool Result Message。
+ */
+export function isToolResultMessage(
+    message,
+) {
+    return (
+        message?.role === "tool"
+    );
+}
+
+/**
+ * Tool 技术名称对应的用户友好名称。
+ *
+ * 后端仍然坚持稳定 snake_case，
+ * 中文名称只属于 UI Presentation。
+ */
+export function toolDisplayName(
+    toolName,
+) {
+    const names = {
+        list_files:
+            "查看目录",
+
+        read_file:
+            "读取文件",
+
+        write_file:
+            "写入文件",
+
+        edit_file:
+            "编辑文件",
+
+        glob:
+            "查找文件",
+
+        grep:
+            "搜索内容",
+
+        shell_execute:
+            "执行命令",
+
+        http_request:
+            "HTTP 请求",
+
+        web_search:
+            "搜索网页",
+
+        web_fetch:
+            "读取网页",
+
+        run_command:
+            "执行命令",
+
+        list_agents:
+            "查看可用 Agent",
+
+        run_agent:
+            "调用专业 Agent",
+
+        schedule_task:
+            "安排提醒或任务",
+    };
+
+    return (
+        names[toolName] ||
+        toolName ||
+        "未知工具"
+    );
+}
+
+/**
+ * 尝试把 Tool Arguments JSON String
+ * 解析成普通 Object。
+ *
+ * 非法 JSON、Array、Primitive 都统一返回空对象。
+ */
+export function parseToolArguments(
+    value,
+) {
+    if (
+        typeof value !== "string" ||
+        !value.trim()
+    ) {
+        return {};
+    }
+
+    try {
+        const parsed =
+            JSON.parse(value);
+
+        return isObject(parsed)
+            ? parsed
+            : {};
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * 对结构化文本做 Pretty Print。
+ *
+ * 如果 value 是合法 JSON：
+ *
+ *   {"path":"README.md"}
+ *
+ * 会格式化成：
+ *
+ *   {
+ *     "path": "README.md"
+ *   }
+ *
+ * 如果不是 JSON，则保留原始文本。
+ */
+export function formatStructuredText(
+    value,
+) {
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return "";
+    }
+
+    if (
+        typeof value !== "string"
+    ) {
+        try {
+            return JSON.stringify(
+                value,
+                null,
+                2,
+            );
+        } catch {
+            return String(value);
+        }
+    }
+
+    const text =
+        value.trim();
+
+    if (!text) {
+        return "";
+    }
+
+    try {
+        return JSON.stringify(
+            JSON.parse(text),
+            null,
+            2,
+        );
+    } catch {
+        return value;
+    }
+}
+
+/**
+ * 根据 Tool Name + Arguments
+ * 生成稳定、客观的用户可见活动描述。
+ *
+ * 这里不会展示模型隐藏推理。
+ *
+ * 示例：
+ *
+ * list_files {"path":"."}
+ *   -> 查看 Workspace 根目录
+ *
+ * read_file {"path":"README.md"}
+ *   -> 读取 README.md
+ */
+export function toolActionLabel(
+    call,
+) {
+    const name =
+        call?.name || "";
+
+    const argumentsObject =
+        parseToolArguments(
+            call?.arguments || "",
+        );
+
+    switch (name) {
+        case "list_files": {
+            const path =
+                readStringProperty(
+                    argumentsObject,
+                    "path",
+                ) || ".";
+
+            if (
+                !path ||
+                path === "."
+            ) {
+                return "查看 Workspace 根目录";
+            }
+
+            return `查看 ${path} 目录`;
+        }
+
+        case "read_file": {
+            const path =
+                readStringProperty(
+                    argumentsObject,
+                    "path",
+                );
+
+            if (path) {
+                return `读取 ${path}`;
+            }
+
+            return "读取文件";
+        }
+
+        case "write_file": {
+            const path =
+                readStringProperty(
+                    argumentsObject,
+                    "path",
+                );
+
+            if (path) {
+                return `写入 ${path}`;
+            }
+
+            return "写入文件";
+        }
+
+        case "edit_file": {
+            const path =
+                readStringProperty(
+                    argumentsObject,
+                    "path",
+                );
+
+            if (path) {
+                return `编辑 ${path}`;
+            }
+
+            return "编辑文件";
+        }
+
+        case "glob": {
+            const pattern =
+                readStringProperty(
+                    argumentsObject,
+                    "pattern",
+                );
+
+            if (pattern) {
+                return `查找 ${pattern}`;
+            }
+
+            return "查找文件";
+        }
+
+        case "grep": {
+            const query =
+                readStringProperty(
+                    argumentsObject,
+                    "query",
+                );
+
+            if (query) {
+                return `搜索「${query}」`;
+            }
+
+            return "搜索内容";
+        }
+
+        case "shell_execute":
+        case "run_command":
+            return "执行命令";
+
+        case "http_request": {
+            const url =
+                readStringProperty(
+                    argumentsObject,
+                    "url",
+                );
+
+            if (url) {
+                return `请求 ${url}`;
+            }
+
+            return "发送 HTTP 请求";
+        }
+
+        case "web_search": {
+            const query =
+                readStringProperty(
+                    argumentsObject,
+                    "query",
+                );
+
+            if (query) {
+                return `搜索「${query}」`;
+            }
+
+            return "搜索网页";
+        }
+
+        case "web_fetch": {
+            const url =
+                readStringProperty(
+                    argumentsObject,
+                    "url",
+                );
+
+            if (url) {
+                return `读取 ${url}`;
+            }
+
+            return "读取网页";
+        }
+
+        default:
+            return toolDisplayName(
+                name,
+            );
+    }
+}

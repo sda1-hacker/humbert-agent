@@ -29,24 +29,7 @@ const (
 	// 1-2 秒的超时很容易把一次完全正常的短命令误判为失败。
 	minimumCommandTimeout = 5 * time.Second
 
-	runCommandToolDescription = `在当前 Agent Workspace 中执行一个经过白名单允许的本地程序。
-
-该工具不会启动 Shell，也不会解析 "&&"、"|"、"$()" 等 Shell 语法。
-请把程序名称放在 command，把每个参数分别放在 args 中。
-
-例如：
-- Go 测试：command="go", args=["test", "./..."]
-- Python 脚本：command="python3", args=["scripts/check.py"]
-- Node 脚本：command="node", args=["scripts/check.js"]
-
-本地执行属于高风险能力，只有用户显式启用 security.shell_enabled，且 command
-位于 shell_allowed_commands 白名单中时，该工具才会注册。
-
-如果当前模型能够看到并调用 run_command，说明本地程序能力已经在本次 Runtime 中启用。
-白名单不匹配会直接返回明确的 Tool Error；exit_code=-1 必须结合 termination_reason 判断：
-- timed_out=true / termination_reason="timeout" 表示超时；
-- termination_reason="signaled" 表示进程被操作系统信号异常终止。
-不要把这两种情况解释成 shell_enabled 未开启或程序不在白名单。`
+	runCommandToolDescription = `在当前 Agent Workspace 执行白名单中的本地程序。不会启动 Shell；command 填程序名，args 逐项填写参数，不解析管道、重定向或 Shell 表达式。工具可见即代表本地程序能力已启用；白名单拒绝会返回 Tool Error。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
 )
 
 // CommandLimits 描述 run_command 的资源边界。
