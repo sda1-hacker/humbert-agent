@@ -1,10 +1,11 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 import { useAgentStore } from "../../stores/agents.js";
 import { useRuntimeStore } from "../../stores/runtime.js";
 import { useSessionStore } from "../../stores/sessions.js";
 import { confirmAction } from "../../utils/confirm.js";
+import { formatDate as localizeDate, t } from "../../i18n/index.js";
 
 const emit = defineEmits(["open-session"]);
 const agents = useAgentStore();
@@ -47,14 +48,14 @@ async function refresh() {
 async function restore(session) {
   if (busyID.value) return;
   if (runtime.isSessionRunning(session.id)) {
-    Message.warning("请先停止当前对话");
+    Message.warning(t("请先停止当前对话"));
     return;
   }
   busyID.value = session.id;
   busyAction.value = "restore";
   try {
     await sessions.setArchived(session.id, false);
-    Message.success("已解除归档");
+    Message.success(t("已解除归档"));
   } catch (error) {
     Message.error(error?.message ?? String(error));
   } finally {
@@ -66,13 +67,13 @@ async function restore(session) {
 async function remove(session) {
   if (busyID.value) return;
   if (runtime.isSessionRunning(session.id)) {
-    Message.warning("请先停止当前对话");
+    Message.warning(t("请先停止当前对话"));
     return;
   }
   const confirmed = await confirmAction({
-    title: "删除归档会话",
-    message: `确定永久删除「${session.title}」及其全部消息吗？如果它属于任务，对应的运行历史也会一并删除。`,
-    confirmText: "永久删除",
+    title: t("删除归档会话"),
+    message: t("确定永久删除「{title}」及其全部消息吗？如果它属于任务，对应的运行历史也会一并删除。", { title: session.title }),
+    confirmText: t("永久删除"),
     danger: true,
   });
   if (!confirmed) return;
@@ -80,7 +81,7 @@ async function remove(session) {
   busyAction.value = "delete";
   try {
     await sessions.remove(session.id);
-    Message.success("归档会话已删除");
+    Message.success(t("归档会话已删除"));
   } catch (error) {
     Message.error(error?.message ?? String(error));
   } finally {
@@ -91,7 +92,7 @@ async function remove(session) {
 
 function formatDate(value) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? "" : localizeDate(date, { dateStyle: "short", timeStyle: "short" });
 }
 
 function open(session) {

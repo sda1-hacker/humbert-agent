@@ -252,6 +252,15 @@ func (t *guardedInvokableTool) invokeRealTool(
 func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result string) (string, error) {
 	limit := t.scope.ToolResultMaxChars
 	chars := utf8.RuneCountInString(result)
+	// context_resource 本身就是读取已归档结果的出口。若再次把它的返回值归档，
+	// 模型拿到的又是一个新的 resource_id，随后会不断读取新资源，原地循环。
+	// 资源工具限制单次读取长度；本轮预算用尽时直接给出终止提示。
+	if t.descriptor.Name == "context_resource" {
+		if (limit > 0 && chars > limit) || !t.scope.ToolResultBudget.reserveFull(chars) {
+			return `{"status":"budget_exhausted","message":"本轮上下文资源读取额度已用完。不要再次调用 context_resource；请根据已获得的信息回答，或说明仍缺少什么。"}`, nil
+		}
+		return result, nil
+	}
 	if t.archiver == nil || strings.TrimSpace(t.scope.SessionID) == "" {
 		return result, nil
 	}
@@ -268,6 +277,14 @@ func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result st
 	}
 	if limit > chars {
 		limit = chars
+	}
+	if t.scope.ToolResultBudget != nil {
+		used, total := t.scope.ToolResultBudget.Usage()
+		remaining := total - used
+		// 归档预览最多占剩余额度的一半，给 context_resource 留下按需读取空间。
+		if limit > remaining/2 {
+			limit = remaining / 2
+		}
 	}
 	limit = t.scope.ToolResultBudget.reservePreview(limit)
 	headCount := limit / 2

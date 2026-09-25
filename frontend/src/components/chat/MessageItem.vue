@@ -136,17 +136,19 @@ const assistantName =
       </div>
 
       <div
+          v-if="message.content"
           class="
           message-bubble
           message-bubble--user
         "
       >
-        <div v-if="message.content" class="message-content message-content--user">{{ message.content }}</div>
-        <MessageAttachments
-            :session-id="message.sessionID"
-            :attachments="message.attachments || []"
-        />
+        <div class="message-content message-content--user">{{ message.content }}</div>
       </div>
+
+      <MessageAttachments
+          :session-id="message.sessionID"
+          :attachments="message.attachments || []"
+      />
 
       <MessageActions
           :message-id="message.id"

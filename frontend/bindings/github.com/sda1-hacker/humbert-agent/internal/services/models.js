@@ -2233,6 +2233,13 @@ export class PermissionRuleDTO {
              * @member
              * @type {string | undefined}
              */
+            this["invocationFingerprint"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
             this["skillName"] = undefined;
         }
         if (/** @type {any} */(false)) {
@@ -2912,13 +2919,6 @@ export class SandboxSettingsRequest {
              */
             this["shellEnabled"] = false;
         }
-        if (!("shellAllowedCommands" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["shellAllowedCommands"] = [];
-        }
 
         Object.assign(this, $$source);
     }
@@ -2929,11 +2929,7 @@ export class SandboxSettingsRequest {
      * @returns {SandboxSettingsRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("shellAllowedCommands" in $$parsedSource) {
-            $$parsedSource["shellAllowedCommands"] = $$createField5_0($$parsedSource["shellAllowedCommands"]);
-        }
         return new SandboxSettingsRequest(/** @type {Partial<SandboxSettingsRequest>} */($$parsedSource));
     }
 }
@@ -3031,13 +3027,6 @@ export class SandboxStatusDTO {
              */
             this["shellEnabled"] = false;
         }
-        if (!("shellAllowedCommands" in $$source)) {
-            /**
-             * @member
-             * @type {string[]}
-             */
-            this["shellAllowedCommands"] = [];
-        }
         if (!("shellRuntimeActive" in $$source)) {
             /**
              * @member
@@ -3055,11 +3044,7 @@ export class SandboxStatusDTO {
      * @returns {SandboxStatusDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField12_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("shellAllowedCommands" in $$parsedSource) {
-            $$parsedSource["shellAllowedCommands"] = $$createField12_0($$parsedSource["shellAllowedCommands"]);
-        }
         return new SandboxStatusDTO(/** @type {Partial<SandboxStatusDTO>} */($$parsedSource));
     }
 }
@@ -5511,6 +5496,13 @@ export class UserProfileDTO {
              * @type {string}
              */
             this["avatar"] = "";
+        }
+        if (!("language" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["language"] = "";
         }
 
         Object.assign(this, $$source);

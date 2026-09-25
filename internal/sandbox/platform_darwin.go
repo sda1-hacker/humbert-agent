@@ -114,7 +114,7 @@ func buildSeatbeltProfile(policy EffectivePolicy, executable string) (string, er
 		}
 
 		// dyld 的 executable mapping 是独立的 Seatbelt operation。只允许系统 Runtime、
-		// 初始白名单程序的 Runtime root，以及当前 Policy 已允许读取的目录映射可执行页。
+		// 初始程序的 Runtime root，以及当前 Policy 已允许读取的目录映射可执行页。
 		// 缺少这条规则时，Python/Node 等动态运行时可能在任何 stdout 产生前就被系统终止。
 		mapRoots := make([]string, 0, len(systemReadRoots)+len(view.ReadOnlyRoots)+len(view.WritableRoots)+4)
 		mapRoots = append(mapRoots, systemReadRoots...)
@@ -128,7 +128,7 @@ func buildSeatbeltProfile(policy EffectivePolicy, executable string) (string, er
 		}
 
 		// Homebrew、自定义工具链等 executable 可能位于系统 Runtime root 以外；初始程序
-		// 已经过 Humbert 白名单校验，因此额外开放其 Runtime 根目录的只读访问。
+		// 已通过程序名和执行路径校验，因此额外开放其 Runtime 根目录的只读访问。
 		for _, root := range seatbeltExecutableRuntimeRoots(executable) {
 			if _, err := os.Stat(root); err == nil {
 				fmt.Fprintf(&b, "(allow file-read* file-test-existence (subpath %s))\n", quote(filepath.Clean(root)))
@@ -179,7 +179,7 @@ func buildSeatbeltProfile(policy EffectivePolicy, executable string) (string, er
 	return b.String(), nil
 }
 
-// seatbeltExecutableRuntimeRoots 返回初始白名单程序正常加载相邻 Runtime/Library 所需的
+// seatbeltExecutableRuntimeRoots 返回初始程序正常加载相邻 Runtime/Library 所需的
 // 最小目录集合。对 /foo/bin/python3 会开放 /foo/bin 与 /foo；如果 executable 是 symlink，
 // 同时考虑最终目标，避免 Homebrew/pyenv 只开放 shim 目录而遗漏真实解释器。
 func seatbeltExecutableRuntimeRoots(executable string) []string {

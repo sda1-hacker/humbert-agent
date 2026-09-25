@@ -17,6 +17,7 @@ Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，�
 | 扩展能力 | 按 Agent 配置内置工具、Skills 和 MCP 连接器；可将显式开放的其他 Agent 作为一次性子 Agent 调用 |
 | 主动任务 | 一次性、间隔、每日、每周及手动任务；聊天中安排提醒；运行记录、重试、通知、审批与执行限额 |
 | 数据管理 | 跨会话正文搜索、工作区文档搜索、会话归档、加密备份与恢复 |
+| 语言 | 界面支持简体中文、英语、日语、韩语；可在「设置 → 语言」切换，Agent 的最终回答默认跟随所选语言 |
 
 ## 快速开始
 
@@ -59,13 +60,15 @@ wails3 dev 会启动桌面应用和前端开发服务。构建桌面程序可运
 
 长对话会在需要时追加压缩检查点，并继续保留完整原始记录。构造模型上下文时，使用最近的有效检查点和其后的原始消息；较旧内容可由历史查询工具按需读取。模型的 thinking 会保存用于当前会话展示和排障，但不写进压缩摘要或派生记忆；历史 thinking 不作为一般聊天上下文反复发送。工具调用及结果作为会话事实保留，进入模型上下文时会受到窗口与输出预算约束。
 
+聊天中的「思考完成」等状态由界面根据运行事件显示；展开后看到的思考正文来自模型的原始 `reasoning_content`，并非界面生成。消息按游标分页加载，初次只读取最近 80 条；展开更早消息才继续读取。语言切换不会翻译或改写已经保存的用户消息、模型回答、思考、工具结果和文件内容。模型的原始思考可能使用与界面不同的语言。
+
 ### 工作区、搜索与浏览器
 
 Agent 可使用应用管理的工作区，也可指向用户选择的目录。工作区文件只在聊天右侧展示，并跟随当前 Agent：左边是目录树，右边预览选中的文件。文件两栏及右侧面板宽度均可拖动调整。右侧面板占据独立的布局列，不会覆盖聊天；窄窗口打开右侧时自动收起左侧导航。右侧搜索按钮可检索工作区 PDF、DOCX、XLSX、PPTX 的 Markdown 正文；结果提供相对路径与行号。单次搜索最多遍历 5000 个文件、索引 1000 份文档；超过范围时可缩小工作区。左侧栏可搜索跨会话的用户和助手消息，并跳转到对应消息；归档会话不会删除其记录。可在“设置 → 归档会话”集中查看、解除归档或永久删除，也可在侧边栏展开归档会话。
 
-开启 browser 内置工具后，Agent 可通过 Chrome DevTools Protocol 使用独立临时浏览器配置执行 open、snapshot、click、type、screenshot、close；当前实现直接使用 CDP，没有引入 Rod。screenshot 会将原始 PNG 保存到当前 Agent 工作区的 `screenshots/`，可从聊天的“本轮文件”打开预览。使用此工具需在本机安装 Chrome；默认路径不可用时可设置 `HUMBERT_BROWSER_CHROME_PATH`。该工具基于网页文本和 CSS 选择器，不提供视觉定位、下载管理或操作整个电脑桌面的能力。它只接受经过公网地址检查的 HTTP/HTTPS 页面，操作按写入风险经过权限策略；网页内容仍是不可信信息。关闭浏览器或应用退出时会清理临时配置。
+开启 Agent 的 browser 工具后，首次打开网页会启动由 Humbert 管理的独立可见 Chrome 窗口。用户和 Agent 查看、操作的是同一网页。工具支持 open、snapshot、click、type、scroll、press、back、forward、refresh、show、screenshot 和 close；网页截图以原始 PNG 保存到当前会话的 `attachments/`，并直接显示在聊天中。需要将截图保存到工作区或其他 Sandbox 允许的目录时，Agent 再调用独立的 `copy_file` 工具，用附件 ID 作为来源、目标路径作为文件名；同一轮和后续轮次都使用这条流程。模型支持视觉时，截图还会生成可供 Agent 使用的画面观察文本。每个 Agent 有独立的 Chrome 配置目录，保存在 `~/.humbert-agent/cache/browser-profiles/`，重启后仍保留网站 Cookie；不会借用用户日常 Chrome 的登录信息，清空该目录会重置浏览器状态，备份不包含此目录。网站仍可能要求安全验证。工具识别到验证页后会停止自动交互，提示用户在可见窗口手动完成，随后 Agent 可调用 snapshot 继续；Humbert 不自动识别或点击验证码。要求本机安装 Chrome，也可用 `HUMBERT_BROWSER_CHROME_PATH` 指定路径。网页只允许经过公网地址检查的 HTTP/HTTPS 目标；网页内容视为不可信信息。聊天中的普通链接仍使用系统默认浏览器打开。
 
-点击对话中的网页链接会使用系统默认浏览器打开。聊天右侧没有内置浏览器；Agent 的 `browser` 工具是独立的可选能力，仅在为 Agent 启用时使用隔离 Chrome。
+启用 `run_command` 后可以直接执行常用本地程序，无需维护程序名白名单。调用不经过 Shell，程序与其子进程在原生文件系统沙箱中只能以只读方式访问工作区；临时写入使用每次调用独立的 TMPDIR。直接删除命令和 `find -exec` 等明显破坏性参数会提前拒绝；解释器与子进程造成的写入也由操作系统沙箱阻断。原生文件隔离不可用时，本地命令拒绝执行。具体调用仍由权限设置决定是否询问，文件修改应使用受控文件工具。
 
 定时与手动任务在左侧“任务”页面管理。
 
@@ -141,12 +144,13 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 ├── mcp/servers.json                # MCP 连接器配置
 ├── cache/
 │   ├── conversation-search.sqlite # 会话正文搜索索引
-│   └── document-search.sqlite     # 工作区文档搜索索引
+│   ├── document-search.sqlite     # 工作区文档搜索索引
+│   └── browser-profiles/          # 各 Agent 独立的 Chrome Cookie 与站点状态
 ├── tmp/
 └── logs/humbert.log
 ~~~
 
-部分文件会在首次使用对应功能时才创建。session.jsonl 是会话消息与工具事务的事实来源；长会话使用内存缓存或 session.locations.jsonl 的字节位置按需读取，不要求每次构造上下文时把整份 JSONL 加载进内存。会话控制面以 agents/session-metadata.sqlite 为事实来源，该数据库使用 WAL，必须包含在离线备份中。旧版会话的 config.json 被忽略；数据库记录缺失时，只能从 JSONL Header 恢复会话身份，标题会成为“恢复的会话”，归档状态会重置。memory.json、位置索引及 cache/*.sqlite 是可重建的派生数据，两个缓存 SQLite 只用于搜索。自定义工作区位于用户指定路径，不一定在上述数据目录内。
+部分文件会在首次使用对应功能时才创建。session.jsonl 是会话消息与工具事务的事实来源；长会话使用内存缓存或 session.locations.jsonl 的字节位置按需读取，不要求每次构造上下文时把整份 JSONL 加载进内存。会话控制面以 agents/session-metadata.sqlite 为事实来源，该数据库使用 WAL，必须包含在离线备份中。旧版会话的 config.json 被忽略；数据库记录缺失时，只能从 JSONL Header 恢复会话身份，标题会成为“恢复的会话”，归档状态会重置。memory.json、位置索引及 cache/*.sqlite 是可重建的派生数据，两个缓存 SQLite 只用于搜索。browser-profiles 则保存可清除的站点状态，不进入备份。自定义工作区位于用户指定路径，不一定在上述数据目录内。
 
 ## 配置与安全
 

@@ -10,8 +10,9 @@ import (
 )
 
 type UserProfileDTO struct {
-	Name   string `json:"name"`
-	Avatar string `json:"avatar"`
+	Name     string `json:"name"`
+	Avatar   string `json:"avatar"`
+	Language string `json:"language"`
 }
 
 type PreferenceService struct {
@@ -37,15 +38,25 @@ func (s *PreferenceService) GetUserProfile() (UserProfileDTO, error) {
 func (s *PreferenceService) UpdateUserProfile(request UserProfileDTO) (UserProfileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	value, err := s.core.Preferences().Update(ctx, preferences.UserProfile{Name: request.Name, Avatar: request.Avatar})
+	value, err := s.core.Preferences().Update(ctx, preferences.UserProfile{Name: request.Name, Avatar: request.Avatar, Language: request.Language})
 	if err != nil {
 		return UserProfileDTO{}, fmt.Errorf("更新用户资料失败: %w", err)
 	}
 	return userProfileDTO(value), nil
 }
 
+func (s *PreferenceService) SetLanguage(language string) (UserProfileDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	value, err := s.core.Preferences().SetLanguage(ctx, language)
+	if err != nil {
+		return UserProfileDTO{}, fmt.Errorf("保存界面语言失败: %w", err)
+	}
+	return userProfileDTO(value), nil
+}
+
 func userProfileDTO(value preferences.UserProfile) UserProfileDTO {
-	return UserProfileDTO{Name: value.Name, Avatar: value.Avatar}
+	return UserProfileDTO{Name: value.Name, Avatar: value.Avatar, Language: value.Language}
 }
 
 // ListPersonalMemories 返回用户可查看、修订和遗忘的跨会话事实。

@@ -29,7 +29,7 @@ const (
 	// 1-2 秒的超时很容易把一次完全正常的短命令误判为失败。
 	minimumCommandTimeout = 5 * time.Second
 
-	runCommandToolDescription = `在当前 Agent Workspace 执行白名单中的本地程序。不会启动 Shell；command 填程序名，args 逐项填写参数，不解析管道、重定向或 Shell 表达式。网页操作和网页截图使用 browser，不要用本工具调用 open 或 screencapture。工具可见即代表本地程序能力已启用；白名单拒绝会返回 Tool Error。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
+	runCommandToolDescription = `在只读 Agent Workspace 中执行本地程序。不会启动 Shell；command 填程序名，args 逐项填写参数。命令及其子进程不能修改或删除工作区文件；临时文件请写入 TMPDIR。网页操作和网页截图使用 browser。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
 )
 
 // CommandLimits 描述 run_command 的资源边界。
@@ -84,7 +84,7 @@ func (l CommandLimits) Validate() error {
 // RunCommandInput 是 run_command 的模型输入。
 type RunCommandInput struct {
 	// Command 只能是程序名称，不能是路径，也不能是一整段 Shell 命令。
-	Command string `json:"command" jsonschema:"description=Allowed executable name only, for example go, git, python3 or node. Do not include a path or shell syntax."`
+	Command string `json:"command" jsonschema:"description=Executable name, for example find, git, go or python3. Do not include a path or shell syntax."`
 
 	// Args 会逐项作为 argv 传递，不经过 Shell 解析。
 	Args []string `json:"args,omitempty" jsonschema:"description=Argument vector passed directly to the executable. Do not combine multiple arguments into a shell command string."`
@@ -132,8 +132,6 @@ type RunCommandFactory struct {
 
 	runner *sandbox.Runner
 
-	allowedCommands map[string]struct{}
-
 	limits CommandLimits
 
 	environment []string
@@ -146,7 +144,6 @@ type RunCommandFactory struct {
 func NewRunCommandFactory(
 	workspaceManager *workspace.Manager,
 	runner *sandbox.Runner,
-	allowedCommands []string,
 	limits CommandLimits,
 	environment []string,
 ) (*RunCommandFactory, error) {
@@ -167,44 +164,10 @@ func NewRunCommandFactory(
 		)
 	}
 
-	allowed :=
-		make(
-			map[string]struct{},
-			len(allowedCommands),
-		)
-
-	for _, command := range allowedCommands {
-		command =
-			normalizeCommandName(
-				command,
-			)
-
-		if err :=
-			validateCommandName(
-				command,
-			); err != nil {
-			return nil, fmt.Errorf(
-				"RunCommand AllowedCommand 无效: %w",
-				err,
-			)
-		}
-
-		allowed[command] =
-			struct{}{}
-	}
-
-	if len(allowed) == 0 {
-		return nil, errors.New(
-			"RunCommand AllowedCommands 不能为空",
-		)
-	}
-
 	return &RunCommandFactory{
 		workspaces: workspaceManager,
 
 		runner: runner,
-
-		allowedCommands: allowed,
 
 		limits: limits,
 
@@ -305,12 +268,8 @@ func (f *RunCommandFactory) run(
 		)
 	}
 
-	if _, allowed :=
-		f.allowedCommands[command]; !allowed {
-		return nil, fmt.Errorf(
-			"run_command 程序 %q 不在 security.shell_allowed_commands 白名单中",
-			command,
-		)
+	if err := rejectDestructiveCommand(command, input.Args); err != nil {
+		return nil, err
 	}
 
 	if err :=
@@ -402,12 +361,13 @@ func (f *RunCommandFactory) run(
 		runCtx,
 		scope.SandboxPolicy(),
 		sandbox.ProcessSpec{
-			Executable: executable,
-			Args:       append([]string(nil), input.Args...),
-			Dir:        workingDirectory,
-			Env:        cloneStringSlice(f.environment),
-			Stdout:     capture,
-			Stderr:     capture,
+			Executable:        executable,
+			Args:              append([]string(nil), input.Args...),
+			Dir:               workingDirectory,
+			Env:               cloneStringSlice(f.environment),
+			Stdout:            capture,
+			Stderr:            capture,
+			ReadOnlyWorkspace: true,
 		},
 	)
 	if ctx.Err() != nil {
@@ -428,7 +388,7 @@ func (f *RunCommandFactory) run(
 	message := ""
 	if processResult.TimedOut {
 		message = fmt.Sprintf(
-			"命令执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时，不表示 Shell 未启用或程序不在白名单。",
+			"命令执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时，不表示 Shell 未启用。",
 			timeout,
 		)
 	} else if terminationReason == "signaled" {
@@ -436,7 +396,7 @@ func (f *RunCommandFactory) run(
 		if detail := strings.TrimSpace(processResult.TerminationDetail); detail != "" {
 			message += " 系统信息：" + detail
 		}
-		message += " 这通常表示本地运行时或原生 Sandbox 启动阶段失败；不要把它解释为 Shell 未启用或命令不在白名单。"
+		message += " 这通常表示本地运行时或原生 Sandbox 启动阶段失败；不要把它解释为 Shell 未启用。"
 	}
 
 	return &RunCommandOutput{
@@ -574,6 +534,35 @@ func validateCommandArguments(
 		}
 	}
 
+	return nil
+}
+
+// rejectDestructiveCommand gives a clear error for common deletion requests.
+// It is a usability check, not the security boundary: arbitrary interpreters
+// and child processes are contained by ReadOnlyWorkspace in the OS sandbox.
+func rejectDestructiveCommand(command string, args []string) error {
+	switch strings.ToLower(command) {
+	case "rm", "rmdir", "unlink", "shred":
+		return fmt.Errorf("run_command 拒绝删除命令 %q；工作区文件只能通过受控文件工具修改", command)
+	case "find":
+		for _, arg := range args {
+			switch strings.ToLower(arg) {
+			case "-delete", "-exec", "-execdir", "-ok", "-okdir":
+				return fmt.Errorf("run_command 拒绝 find %s；工作区文件只能通过受控文件工具修改", arg)
+			}
+		}
+	case "git":
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "-") {
+				continue
+			}
+			switch strings.ToLower(arg) {
+			case "clean", "rm":
+				return fmt.Errorf("run_command 拒绝 git %s；工作区文件只能通过受控文件工具修改", arg)
+			}
+			break
+		}
+	}
 	return nil
 }
 

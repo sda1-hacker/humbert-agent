@@ -7,10 +7,8 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-  Modal,
-} from "@arco-design/web-vue";
+import { Modal } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 import {
   clearPersistentPermissionAllows,
@@ -26,6 +24,7 @@ import {
 import SectionCard from "../ui/SectionCard.vue";
 import EmptyState from "../ui/EmptyState.vue";
 import StatusPill from "../ui/StatusPill.vue";
+import { formatDate, t } from "../../i18n/index.js";
 
 const sessionStore =
     useSessionStore();
@@ -45,7 +44,7 @@ const form = reactive({
   approvalTimeoutMinutes: 30,
 });
 
-const actionOptions = [
+const actionDefinitions = [
   {
     label: "允许",
     value: "allow",
@@ -59,6 +58,7 @@ const actionOptions = [
     value: "deny",
   },
 ];
+const actionOptions = computed(() => actionDefinitions.map((option) => ({ ...option, label: t(option.label) })));
 
 const currentSessionID =
     computed(() =>
@@ -134,24 +134,24 @@ const hasUnsavedChanges =
 function actionText(action) {
   switch (action) {
     case "allow":
-      return "允许";
+      return t("允许");
     case "ask":
-      return "询问";
+      return t("询问");
     case "deny":
-      return "拒绝";
+      return t("拒绝");
     default:
-      return action || "未知";
+      return action || t("未知");
   }
 }
 
 function scopeText(scope) {
   switch (scope) {
     case "session":
-      return "当前会话";
+      return t("当前会话");
     case "agent":
-      return "长期记住";
+      return t("长期记住");
     default:
-      return scope || "未知范围";
+      return scope || t("未知范围");
   }
 }
 
@@ -163,7 +163,7 @@ function formatCreatedAt(value) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return date.toLocaleString();
+  return formatDate(date, { dateStyle: "short", timeStyle: "short" });
 }
 
 function ruleTarget(rule) {
@@ -485,7 +485,7 @@ onMounted(() => {
             <div class="policy-row">
               <div>
                 <div class="policy-row__title">启用操作确认系统</div>
-                <div class="policy-row__description">关闭后默认不会弹出操作确认，但安全沙盒和命令白名单仍然有效。</div>
+                <div class="policy-row__description">关闭后默认不会弹出操作确认；本地命令仍只能只读访问工作区。</div>
               </div>
               <a-switch v-model="form.enabled"/>
             </div>
@@ -517,7 +517,7 @@ onMounted(() => {
             <div class="policy-row">
               <div>
                 <div class="policy-row__title">运行本地程序</div>
-                <div class="policy-row__description">运行本地命令等高风险操作；程序白名单和安全沙盒仍然优先。</div>
+                <div class="policy-row__description">运行本地命令等高风险操作；原生沙盒仍会阻止命令修改或删除工作区文件。</div>
               </div>
               <a-select
                   v-model="form.execAction"

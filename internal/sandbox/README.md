@@ -34,6 +34,6 @@ Profile 决定基本访问范围；Standard 可按规则读取 Home 下普通文
 
 `EffectivePolicy` 是一份规范化的规则快照，描述路径、网络与 NativeMode；`Capability` 告诉调用方当前平台实际可提供什么。文件工具通过 `CheckPath` 与受控句柄守住路径；外部命令还须经 `Runner.Run` 和平台实现施加操作系统级约束。某平台不支持某种隔离时，不能把纯路径检查说成完整进程隔离。
 
-以写入 `workspace/report.md` 为例：先经 Workspace 相对路径规范化，再由 Sandbox 规则决定目标路径是否可写，最后由文件工具以安全句柄执行。以 `run_command` 为例：Permission 先决定是否要人批准，Sandbox Runner 再检查工作目录、网络/原生隔离、环境和超时。批准命令不等于批准任意路径或网络访问。
+以写入 `workspace/report.md` 为例：先经 Workspace 相对路径规范化，再由 Sandbox 规则决定目标路径是否可写，最后由文件工具以安全句柄执行。以 `run_command` 为例：Permission 先决定是否要人批准，Sandbox Runner 再检查工作目录、网络/原生隔离、环境和超时。批准命令不等于批准任意路径或网络访问。`run_command` 和 Skill 脚本在 Runner 中派生只读命令策略：所有工作区及额外写路径降为只读，只有每次调用的临时目录可写；原生文件系统隔离不可用时拒绝执行。
 
 读 `manager.Resolve` 时关注受保护规则和 Agent 额外写目录的合并顺序；读 `pathguard.go` 时关注符号链接和缺失目标；读 `platform_*.go` 时确认某系统实际执行的限制。

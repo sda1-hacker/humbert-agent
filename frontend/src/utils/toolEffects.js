@@ -30,6 +30,25 @@ function parseToolResultObject(call) {
     }
 }
 
+/** 只识别 Humbert browser 自己返回的结构化人工验证标志。 */
+export function browserNeedsHumanVerification(call) {
+    return call?.name === "browser" && call?.status === "completed" &&
+        parseToolResultObject(call).needs_human_verification === true;
+}
+
+/** 从成功的 browser screenshot ToolResult 读取会话附件。 */
+export function browserScreenshotOfCall(call) {
+    if (call?.name !== "browser" || call?.status !== "completed" ||
+        parseToolArguments(call?.arguments || "").action !== "screenshot") return null;
+    const output = parseToolResultObject(call);
+    const attachmentId = readStringProperty(output, "screenshot_attachment_id");
+    if (!attachmentId) return null;
+    return {
+        attachmentId,
+        name: readStringProperty(output, "screenshot_name") || "browser-screenshot.png",
+    };
+}
+
 /**
  * 判断一个 Tool Path 是否能直接交给 WorkspaceService 作为相对路径打开。
  *
@@ -210,14 +229,6 @@ export function fileChangesOfCalls(calls) {
                     readStringProperty(input, "path"),
                     "deleted",
                 );
-                break;
-            }
-
-            case "browser": {
-                if (input.action === "screenshot") {
-                    // 后端只在截图成功保存后返回路径；不能根据调用参数猜测产物。
-                    append(readStringProperty(output, "screenshot_path"), "created");
-                }
                 break;
             }
 

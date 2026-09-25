@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, ref } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 import { exportBackup, scheduleRestore, getPendingBackupStatus, cancelPendingBackup, getPendingRestoreStatus, cancelPendingRestore } from "../../api/app.js";
 import { confirmAction } from "../../utils/confirm.js";
 

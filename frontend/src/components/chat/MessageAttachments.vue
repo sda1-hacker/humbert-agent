@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 import { readAttachment } from "../../api/sessions.js";
 import ImagePreviewDialog from "../ui/ImagePreviewDialog.vue";
 
@@ -166,7 +166,7 @@ watch(() => props.attachments, () => void loadVisibleImages(), { deep: true });
 
 .attachment-image-button {
   display: block;
-  max-width: 280px;
+  max-width: min(100%, 420px);
   padding: 0;
   overflow: hidden;
   border-radius: 9px;
@@ -179,8 +179,8 @@ watch(() => props.attachments, () => void loadVisibleImages(), { deep: true });
 .attachment-image {
   display: block;
   width: auto;
-  max-width: 280px;
-  max-height: 240px;
+  max-width: min(100%, 420px);
+  max-height: 320px;
   object-fit: contain;
 }
 

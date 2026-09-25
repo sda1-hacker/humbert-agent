@@ -6,9 +6,8 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
+import { t } from "../../i18n/index.js";
 
 import {
   IconRefresh,
@@ -179,7 +178,7 @@ function displayName(skill) {
       skill?.alias?.trim() ||
       skill?.name ||
       skill?.directoryName ||
-      "未命名 Skill"
+      t("未命名 Skill")
   );
 }
 

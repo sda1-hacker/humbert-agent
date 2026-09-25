@@ -41,19 +41,19 @@ func TestAggregateToolResultBudgetArchivesCompleteOverflow(t *testing.T) {
 	if archive.originals[pointer.ArtifactID] != "abcdef" {
 		t.Fatal("archived result was not complete")
 	}
-	if len([]rune(pointer.Head+pointer.Tail)) > 4 {
+	if len([]rune(pointer.Head+pointer.Tail)) > 2 {
 		t.Fatalf("preview exceeded shared budget: %#v", pointer)
 	}
 	third, err := tool.protectLargeResult(ctx, strings.Repeat("z", 20))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if json.Unmarshal([]byte(third), &pointer) != nil || pointer.Head != "" || pointer.Tail != "" {
-		t.Fatalf("exhausted budget leaked result: %q", third)
+	if json.Unmarshal([]byte(third), &pointer) != nil || len([]rune(pointer.Head+pointer.Tail)) > 1 {
+		t.Fatalf("archive preview consumed reserved recovery budget: %q", third)
 	}
 	used, limit := budget.Usage()
-	if used != limit {
-		t.Fatalf("usage=%d/%d", used, limit)
+	if used >= limit {
+		t.Fatalf("archive previews left no recovery budget: usage=%d/%d", used, limit)
 	}
 }
 
@@ -69,5 +69,26 @@ func TestResultBudgetSeedsRetainedWindowResults(t *testing.T) {
 	used, _ := budget.Usage()
 	if used != 10 {
 		t.Fatalf("used=%d", used)
+	}
+}
+
+func TestContextResourceResultNeverCreatesAnotherArtifact(t *testing.T) {
+	archive := &resultBudgetArchiver{}
+	budget := NewResultBudget(10)
+	tool := &guardedInvokableTool{
+		descriptor: Descriptor{Name: "context_resource"},
+		scope:      Scope{SessionID: "session", ToolResultMaxChars: 20, ToolResultBudget: budget},
+		archiver:   archive,
+	}
+	result, err := tool.protectLargeResult(context.Background(), "123456")
+	if err != nil || result != "123456" {
+		t.Fatalf("first=%q err=%v", result, err)
+	}
+	result, err = tool.protectLargeResult(context.Background(), "abcdef")
+	if err != nil || !strings.Contains(result, "budget_exhausted") {
+		t.Fatalf("second=%q err=%v", result, err)
+	}
+	if len(archive.originals) != 0 {
+		t.Fatalf("context_resource recursively archived %d results", len(archive.originals))
 	}
 }

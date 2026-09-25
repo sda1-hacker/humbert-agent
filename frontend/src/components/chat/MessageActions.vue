@@ -1,7 +1,5 @@
 <script setup>
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 import {
   IconCopy,

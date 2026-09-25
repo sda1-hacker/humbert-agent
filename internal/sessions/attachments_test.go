@@ -40,6 +40,41 @@ func testDocumentAttachment(t *testing.T) []byte {
 	return buffer.Bytes()
 }
 
+func TestToolImageUsesSessionAttachmentSidecar(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	transcripts, err := transcript.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, transcripts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{store: store, logger: logging.NewBootstrap()}
+	session := Session{ID: "session-tool-image", AgentID: "agent-a", Title: "test", CWD: root, CreatedAt: time.Now().UTC()}
+	if err := store.CreateSession(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	png := []byte("\x89PNG\r\n\x1a\noriginal-image")
+	id, err := service.SaveToolImage(ctx, session.ID, "browser-screenshot.png", "image/png", png)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := store.SessionDirectory(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	onDisk, err := os.ReadFile(filepath.Join(directory, "attachments", id))
+	if err != nil || !bytes.Equal(onDisk, png) {
+		t.Fatalf("tool image not stored as original bytes: %v", err)
+	}
+	read, err := service.ReadAttachment(ctx, session.ID, id)
+	if err != nil || !bytes.Equal(read, png) {
+		t.Fatalf("tool image cannot be read: %v", err)
+	}
+}
+
 func TestDocumentAttachmentIsStoredWithoutEagerExtraction(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

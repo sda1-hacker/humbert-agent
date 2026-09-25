@@ -68,7 +68,7 @@ type ContextResourceOutput struct {
 
 func (f *ContextResourceFactory) Build(ctx context.Context, scope humberttools.Scope) (einotool.InvokableTool, error) {
 	return utils.InferTool(contextResourceToolName,
-		"按需读取没有直接留在模型工作窗口中的当前会话资源。resource_type=artifact 读取超大工具结果；resource_type=attachment 读取较早文本附件。请使用 offset/limit 分段读取，避免再次把大资源一次性塞回上下文。",
+		"仅在当前任务确实需要缺失的中间内容时，按需读取当前会话资源。artifact 是被归档的超大工具结果；attachment 是较早的文本附件。按 offset/limit 分段读取；返回 more=false 后不要重复读取同一范围。",
 		func(callCtx context.Context, input *ContextResourceInput) (*ContextResourceOutput, error) {
 			if input == nil {
 				return nil, errors.New("context_resource 输入不能为空")
@@ -87,6 +87,23 @@ func (f *ContextResourceFactory) Build(ctx context.Context, scope humberttools.S
 			}
 			if limit < 1 || limit > 16000 {
 				return nil, errors.New("limit 必须在 1-16000 之间")
+			}
+			// 为 JSON 字段及转义保留空间，避免读取工具的结果再次触发归档。
+			// 即便模型要求更大 limit，也只返回当前工作窗口能直接容纳的片段。
+			if scope.ToolResultMaxChars > 0 {
+				maxContent := scope.ToolResultMaxChars - 1024
+				if scope.ToolResultBudget != nil {
+					used, total := scope.ToolResultBudget.Usage()
+					if remaining := total - used - 1024; maxContent > remaining {
+						maxContent = remaining
+					}
+				}
+				if maxContent < 1 {
+					return nil, errors.New("本轮上下文资源读取额度已用完；不要重试，请根据已有信息回答")
+				}
+				if limit > maxContent {
+					limit = maxContent
+				}
 			}
 
 			switch resourceType {

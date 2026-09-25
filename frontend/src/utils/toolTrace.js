@@ -29,7 +29,7 @@ export {
     formatStructuredText,
     toolActionLabel,
 } from "./toolProtocol.js";
-export { fileChangesOfCalls, scheduledTasksOfCalls } from "./toolEffects.js";
+export { browserNeedsHumanVerification, browserScreenshotOfCall, fileChangesOfCalls, scheduledTasksOfCalls } from "./toolEffects.js";
 
 /**
  * 从持久化 ToolCall 创建 UI Call。
@@ -181,15 +181,8 @@ function createTraceGroup(
 
         calls: [],
 
-        notes: [],
-
-        /**
-         * Provider 真正返回的 reasoning_content。
-         *
-         * Tool Calling 链可能包含多个 Assistant Step，因此按 Step 保存多个 Segment，
-         * 最终由 AssistantTurn 统一放进可折叠 Thinking Card。
-         */
-        reasoningSegments: [],
+        // 展示投影保留模型步骤与工具调用的原始顺序；JSONL 协议不变。
+        steps: [],
 
         /**
          * callMap 只用于构建阶段快速通过 ToolCallID
@@ -225,17 +218,6 @@ function appendAssistantToolCalls(
     const reasoning =
         reasoningOf(message);
 
-    if (
-        reasoning &&
-        !trace.reasoningSegments.includes(
-            reasoning,
-        )
-    ) {
-        trace.reasoningSegments.push(
-            reasoning,
-        );
-    }
-
     /**
      * 某些模型会在 ToolCall 前公开输出：
      *
@@ -246,11 +228,14 @@ function appendAssistantToolCalls(
      *
      * 它不是隐藏 Chain-of-Thought。
      */
-    if (
-        note &&
-        !trace.notes.includes(note)
-    ) {
-        trace.notes.push(note);
+    if (reasoning || note) {
+        trace.steps.push({
+            type: "thinking",
+            key: `thinking:${message?.id || trace.steps.length}`,
+            content: reasoning,
+            note,
+            status: "completed",
+        });
     }
 
     for (
@@ -272,6 +257,12 @@ function appendAssistantToolCalls(
             );
 
         trace.calls.push(call);
+
+        trace.steps.push({
+            type: "tool",
+            key: `tool:${call.id}`,
+            call,
+        });
 
         trace.callMap.set(
             call.id,
@@ -365,6 +356,12 @@ function appendToolResult(
 
         trace.calls.push(call);
 
+        trace.steps.push({
+            type: "tool",
+            key: `tool:${call.id}`,
+            call,
+        });
+
         trace.callMap.set(
             call.id,
             call,
@@ -429,13 +426,7 @@ function finishTrace(trace) {
  *   message
  * }
  *
- * UI 因此能够固定展示成：
- *
- * Humbert · model
- *
- * 思考过程
- *
- * 最终回答
+ * activity.steps 则保留每个 Assistant Step 与工具请求的时间顺序。
  */
 export function buildConversationBlocks(
     messages,
@@ -477,9 +468,7 @@ export function buildConversationBlocks(
 
                 trace,
 
-                reasoning:
-                    trace.reasoningSegments
-                        .join("\n\n"),
+                activity: trace.steps,
 
                 message:
                     null,
@@ -545,23 +534,21 @@ export function buildConversationBlocks(
                     )
                     : null;
 
-            const reasoningSegments =
-                trace?.reasoningSegments
-                    ? [...trace.reasoningSegments]
-                    : [];
-
             const finalReasoning =
                 reasoningOf(message);
 
-            if (
-                finalReasoning &&
-                !reasoningSegments.includes(
-                    finalReasoning,
-                )
-            ) {
-                reasoningSegments.push(
-                    finalReasoning,
-                );
+            const activity = trace?.steps
+                ? [...trace.steps]
+                : [];
+
+            if (finalReasoning) {
+                activity.push({
+                    type: "thinking",
+                    key: `thinking:${message.id || sequence}`,
+                    content: finalReasoning,
+                    note: "",
+                    status: "completed",
+                });
             }
 
             pendingTrace =
@@ -579,9 +566,7 @@ export function buildConversationBlocks(
 
                 trace,
 
-                reasoning:
-                    reasoningSegments
-                        .join("\n\n"),
+                activity,
 
                 message,
             });

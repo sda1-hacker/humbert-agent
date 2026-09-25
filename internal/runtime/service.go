@@ -1032,6 +1032,26 @@ func runtimeUserVisibleError(err error) string {
 
 	lower := strings.ToLower(err.Error())
 
+	if strings.Contains(lower, "free quota exhausted") ||
+		strings.Contains(lower, "free tier quota") {
+		return "模型服务的免费额度已用尽。请到服务商控制台充值，或关闭“仅使用免费额度”后重试。"
+	}
+	if strings.Contains(lower, "quota exhausted") ||
+		strings.Contains(lower, "insufficient_quota") ||
+		strings.Contains(lower, "exceeded your current quota") ||
+		strings.Contains(lower, "insufficient balance") ||
+		strings.Contains(lower, "insufficient credit") ||
+		strings.Contains(lower, "balance insufficient") ||
+		strings.Contains(lower, "余额不足") ||
+		strings.Contains(lower, "额度不足") {
+		return "模型服务的账户余额或调用额度不足。请检查服务商账户、充值或切换模型后重试。"
+	}
+	if strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "status code: 429") ||
+		strings.Contains(lower, "status: 429") {
+		return "模型服务当前请求过于频繁。请稍后重试，或检查服务商的速率限制。"
+	}
 	if errors.Is(err, context.DeadlineExceeded) ||
 		strings.Contains(lower, "client.timeout") ||
 		strings.Contains(lower, "context deadline exceeded") {
@@ -1045,6 +1065,13 @@ func runtimeUserVisibleError(err error) string {
 		strings.Contains(lower, "safety policy") ||
 		strings.Contains(lower, "sensitive content") {
 		return "模型服务因内容安全策略中止了本次生成。此前已经成功生成的内容已尽量保留。"
+	}
+
+	if strings.Contains(lower, "status code: 401") ||
+		strings.Contains(lower, "status: 401") ||
+		strings.Contains(lower, "status code: 403") ||
+		strings.Contains(lower, "status: 403") {
+		return "模型服务拒绝了本次请求。请检查 API Key、账户权限和所选模型的访问资格。"
 	}
 
 	return "模型生成过程中发生错误。本次已经生成的内容已尽量保留，请稍后重试。"

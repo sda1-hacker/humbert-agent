@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -69,10 +68,9 @@ const (
 //   - Files：Workspace 文件读取、写入与编辑限制；
 //   - WebSearch：实时网页发现、Provider 策略与结果数量；
 //   - WebFetch：读取指定公开 URL 的正文及 SSRF/体积限制；
-//   - Command：本地命令执行开关、白名单和资源限制。
+//   - Command：本地命令执行开关和资源限制。
 //
-// Command.Enabled 和 AllowedCommands 继续读取既有的
-// security.shell_enabled / security.shell_allowed_commands，以保持现有配置兼容。
+// Command.Enabled 读取 security.shell_enabled。
 type ToolConfig struct {
 	Files     FileToolConfig
 	WebSearch WebSearchToolConfig
@@ -157,8 +155,6 @@ type WebFetchToolConfig struct {
 // security.shell_enabled=true 后才会注册。
 type CommandToolConfig struct {
 	Enabled bool
-
-	AllowedCommands []string
 
 	DefaultTimeoutSeconds int
 
@@ -286,11 +282,6 @@ func LoadToolConfig(configFile string) (ToolConfig, error) {
 		Command: CommandToolConfig{
 			Enabled: v.GetBool(
 				"security.shell_enabled",
-			),
-			AllowedCommands: normalizeToolCommands(
-				v.GetStringSlice(
-					"security.shell_allowed_commands",
-				),
 			),
 			DefaultTimeoutSeconds: v.GetInt(
 				"tools.command.default_timeout_seconds",
@@ -609,28 +600,6 @@ func (c CommandToolConfig) Validate() error {
 		)
 	}
 
-	for _, command := range c.AllowedCommands {
-		if filepath.Base(
-			command,
-		) != command ||
-			strings.ContainsAny(
-				command,
-				`/\`,
-			) {
-			return fmt.Errorf(
-				"security.shell_allowed_commands 只能包含程序名称，不能包含路径: %q",
-				command,
-			)
-		}
-	}
-
-	if c.Enabled &&
-		len(c.AllowedCommands) == 0 {
-		return errors.New(
-			"security.shell_enabled=true 时 shell_allowed_commands 不能为空",
-		)
-	}
-
 	return nil
 }
 
@@ -708,57 +677,6 @@ func SafeCommandEnvironment() []string {
 			append(
 				result,
 				key+"="+value,
-			)
-	}
-
-	return result
-}
-
-func normalizeToolCommands(
-	commands []string,
-) []string {
-	result :=
-		make(
-			[]string,
-			0,
-			len(commands),
-		)
-
-	seen :=
-		make(
-			map[string]struct{},
-			len(commands),
-		)
-
-	for _, command := range commands {
-		command =
-			strings.TrimSpace(
-				command,
-			)
-
-		if command == "" {
-			continue
-		}
-
-		if runtime.GOOS == "windows" {
-			command =
-				strings.ToLower(
-					command,
-				)
-		}
-
-		if _, exists :=
-			seen[command]; exists {
-			continue
-		}
-
-		seen[command] =
-			struct{}{}
-
-		result =
-			append(
-				result,
-				command,
 			)
 	}
 
@@ -862,19 +780,6 @@ func setToolDefaults(
 	v.SetDefault(
 		"security.shell_enabled",
 		false,
-	)
-
-	v.SetDefault(
-		"security.shell_allowed_commands",
-		[]string{
-			"go",
-			"git",
-			"node",
-			"npm",
-			"npx",
-			"python",
-			"python3",
-		},
 	)
 
 	v.SetDefault(

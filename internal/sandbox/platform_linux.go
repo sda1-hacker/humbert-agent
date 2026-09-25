@@ -122,7 +122,7 @@ func prepareNativeCommand(policy EffectivePolicy, executable string, rawArgs []s
 			args = append(args, "--ro-bind", root, root)
 		}
 
-		// PATH 白名单程序可能来自 pyenv/Homebrew/custom toolchain。不要为了一个程序
+		// PATH 中的程序可能来自 pyenv/Homebrew/custom toolchain。不要为了一个程序
 		// 暴露整个 /opt 或整个用户 Home；只开放 executable 目录以及同 Runtime 下
 		// 实际存在的 lib/lib64/share 兄弟目录。
 		for _, root := range linuxExecutableRuntimeRoots(executable) {

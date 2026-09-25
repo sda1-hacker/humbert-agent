@@ -4,7 +4,7 @@
 
 ## 决策不是执行边界的全部
 
-`Engine.Evaluate` 对一个具体 `Request` 返回 allow、deny 或 ask。Request 包含工具、风险、Session/Agent 和 `CapabilityIdentity`；`presentation` 把本次操作安全地投影为审批卡。持久化 Agent 规则在 `config/permissions.json`，Session 规则在内存中。Allow 只跳过再次询问，不能绕过工具自己的工作区 Path Guard、命令白名单或 Sandbox。
+`Engine.Evaluate` 对一个具体 `Request` 返回 allow、deny 或 ask。Request 包含工具、风险、Session/Agent 和 `CapabilityIdentity`；`presentation` 把本次操作安全地投影为审批卡。持久化 Agent 规则在 `config/permissions.json`，Session 规则在内存中。Allow 只跳过再次询问，不能绕过工具自己的工作区 Path Guard、命令沙箱。
 
 `run_command` 的可复用授权绑定程序、可执行路径、Sandbox 与本次调用的参数指纹。指纹覆盖完整 `args`、实际工作目录和超时值，规则中不保存可能含密钥的原始参数。相同调用可以选择本会话允许或 Agent 始终允许；参数变化会重新询问。旧版只绑定程序的 Allow 不再命中，Deny 仍生效。用户显式把执行默认策略设为 `allow` 或关闭操作确认时，仍按该全局设置处理。
 
@@ -41,4 +41,4 @@ flowchart TD
 4. 都没有命中时按风险默认策略决定；Ask 生成 ApprovalID，由 Approval Manager 等待人类决策。
 5. allow_once 只恢复本次中断；allow_session/allow_agent 通过 `Grant` 写入相应范围。规则匹配到的 Identity 变化后必须重新问。
 
-这里返回的 `Decision.Action=allow` 只代表这一层同意执行。文件工具依然要通过 Sandbox 路径校验，命令工具依然要通过白名单和 Runner，MCP HTTP 依然要通过网络边界。新增风险等级或规则范围时同时修改 `types.go`、`engine.go`、`presenter.go` 和 Wails DTO。
+这里返回的 `Decision.Action=allow` 只代表这一层同意执行。文件工具依然要通过 Sandbox 路径校验，命令工具依然要通过 Runner 的只读隔离，MCP HTTP 依然要通过网络边界。新增风险等级或规则范围时同时修改 `types.go`、`engine.go`、`presenter.go` 和 Wails DTO。

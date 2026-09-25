@@ -80,6 +80,11 @@ type EffectivePolicy struct {
 	PathRules     []PathRule
 
 	Capability Capability
+
+	// ReadOnlyProcess marks a command-only view. Its workspace is read-only and
+	// only the per-invocation scratch directory may be writable.
+	ReadOnlyProcess bool
+	ProcessTempRoot string
 }
 
 func NormalizeProfile(value Profile, fallback Profile) Profile {
@@ -155,17 +160,30 @@ func (p EffectivePolicy) Validate() error {
 	if len(p.PathRules) == 0 {
 		return errors.New("Sandbox PathRules 不能为空")
 	}
+	workspaceAccess := AccessFull
+	if p.ReadOnlyProcess {
+		workspaceAccess = AccessReadOnly
+		if p.NativeMode == NativeOff || !p.Capability.Available || !p.Capability.Filesystem {
+			return errors.New("只读本地命令需要可用的原生文件系统沙箱")
+		}
+		if strings.TrimSpace(p.ProcessTempRoot) == "" {
+			return errors.New("只读本地命令缺少临时目录")
+		}
+	}
 	workspaceFull := false
 	for _, rule := range p.PathRules {
 		if err := rule.Validate(); err != nil {
 			return err
 		}
-		if pathEqual(rule.Root, p.WorkspaceRoot) && rule.Access == AccessFull {
+		if pathEqual(rule.Root, p.WorkspaceRoot) && rule.Access == workspaceAccess {
 			workspaceFull = true
+		}
+		if p.ReadOnlyProcess && rule.Access > AccessReadOnly && !pathWithin(rule.Root, p.ProcessTempRoot) {
+			return fmt.Errorf("只读本地命令不能写入临时目录以外的路径: %s", rule.Root)
 		}
 	}
 	if !workspaceFull {
-		return errors.New("Sandbox WorkspaceRoot 必须存在 FULL PathRule")
+		return fmt.Errorf("Sandbox WorkspaceRoot 必须存在 %s PathRule", workspaceAccess)
 	}
 	return nil
 }

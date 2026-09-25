@@ -76,8 +76,7 @@ security:
   # run_command 不会执行 shell command string，
   # 而是使用 executable + argv 直接启动程序。
   #
-  # 但本地程序仍具有当前用户真实系统权限，
-  # 所以在 OS Sandbox / Approval UI 完成前不要默认打开。
+  # 任意本地程序受操作确认与原生只读沙箱约束；无原生文件隔离时拒绝运行。
   shell_enabled: true
 
   # Permission + Approval 默认策略。read 通常自动允许；写文件和本地程序执行默认需要
@@ -90,29 +89,6 @@ security:
 
     # 待审批最长保持 30 分钟。超时后按“拒绝本次”恢复 Agent，避免 Session 永久占用。
     approval_timeout_ms: 1800000
-
-  # 即使 shell_enabled=true，
-  # 也只能执行这里列出的 executable 名称。
-  #
-  # 这里只允许程序名称，
-  # 不能填写 /usr/bin/git 等路径。
-  #
-  # 不建议加入：
-  #
-  # bash
-  # sh
-  # zsh
-  # powershell
-  # cmd
-  shell_allowed_commands:
-    - go
-    - git
-    - node
-    - npm
-    - npx
-    - python
-    - python3
-    - bash
 
 tools:
   files:

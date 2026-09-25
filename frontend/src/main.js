@@ -17,6 +17,7 @@ import { createPinia } from "pinia";
 import "@wailsio/runtime";
 
 import App from "./App.vue";
+import { t } from "./i18n/index.js";
 
 import {
     installArco,
@@ -25,6 +26,7 @@ import {
 import "./assets/main.css";
 
 const app = createApp(App);
+app.config.globalProperties.$t = t;
 
 app.use(createPinia());
 

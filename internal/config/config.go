@@ -101,15 +101,6 @@ security:
     write_action: ask
     exec_action: ask
     approval_timeout_ms: 1800000
-  shell_allowed_commands:
-    - go
-    - git
-    - node
-    - npm
-    - npx
-    - python
-    - python3
-    - bash
 `
 
 const defaultPreferencesJSON = `{
@@ -268,15 +259,13 @@ type MCPConfig struct {
 
 // SecurityConfig 保存本地 Tool 的基础安全策略。
 //
-// Shell 默认关闭。即使启用，也只能运行 ShellAllowedCommands 明确允许的程序。
+// Shell 默认关闭。启用后，本地命令仍受逐次授权和原生只读沙箱约束。
 // 后续 Permission/Approval 模块仍应在本配置之上增加运行时授权，而不是把这里
 // 当成最终安全边界。
 type SecurityConfig struct {
 	MaxFileBytes int64 `mapstructure:"max_file_bytes"`
 
 	ShellEnabled bool `mapstructure:"shell_enabled"`
-
-	ShellAllowedCommands []string `mapstructure:"shell_allowed_commands"`
 
 	// Sandbox 描述 Permission 之下的强制执行边界。Permission Allow 永远不能扩大它。
 	Sandbox SandboxConfig `mapstructure:"sandbox"`
@@ -635,51 +624,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.sandbox.default_network_mode", "public")
 	v.SetDefault("security.sandbox.native_mode", "preferred")
 	v.SetDefault("security.sandbox.command_grace_period_ms", 1500)
-	v.SetDefault("security.shell_allowed_commands", []string{
-		"go",
-		"git",
-		"node",
-		"npm",
-		"npx",
-		"python",
-		"python3",
-	})
 }
 
 func normalize(cfg *Config) {
 	cfg.App.Name = strings.TrimSpace(cfg.App.Name)
 	cfg.Logging.Level = strings.ToLower(strings.TrimSpace(cfg.Logging.Level))
 	cfg.Logging.Format = strings.ToLower(strings.TrimSpace(cfg.Logging.Format))
-	cfg.Security.ShellAllowedCommands = normalizeCommands(cfg.Security.ShellAllowedCommands)
 	cfg.Security.Sandbox.DefaultProfile = strings.ToLower(strings.TrimSpace(cfg.Security.Sandbox.DefaultProfile))
 	cfg.Security.Sandbox.DefaultNetworkMode = strings.ToLower(strings.TrimSpace(cfg.Security.Sandbox.DefaultNetworkMode))
 	cfg.Security.Sandbox.NativeMode = strings.ToLower(strings.TrimSpace(cfg.Security.Sandbox.NativeMode))
 	cfg.Security.Permissions = NormalizePermissionConfig(cfg.Security.Permissions)
-}
-
-func normalizeCommands(commands []string) []string {
-	result := make([]string, 0, len(commands))
-	seen := make(map[string]struct{}, len(commands))
-
-	for _, command := range commands {
-		command = strings.TrimSpace(command)
-		if command == "" {
-			continue
-		}
-
-		if runtime.GOOS == "windows" {
-			command = strings.ToLower(command)
-		}
-
-		if _, exists := seen[command]; exists {
-			continue
-		}
-
-		seen[command] = struct{}{}
-		result = append(result, command)
-	}
-
-	return result
 }
 
 func validate(cfg *Config) error {
@@ -792,22 +746,6 @@ func validate(cfg *Config) error {
 			"security.max_file_bytes 必须位于 1-%d 之间",
 			maxAllowedFileBytes,
 		)
-	}
-
-	for _, command := range cfg.Security.ShellAllowedCommands {
-		if filepath.Base(command) != command {
-			return fmt.Errorf(
-				"shell_allowed_commands 只能包含程序名称，不能包含路径: %q",
-				command,
-			)
-		}
-
-		if strings.ContainsAny(command, `/\`) {
-			return fmt.Errorf(
-				"shell_allowed_commands 包含路径分隔符: %q",
-				command,
-			)
-		}
 	}
 
 	return nil

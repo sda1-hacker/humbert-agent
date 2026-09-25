@@ -587,6 +587,33 @@ func (s *Service) ReadAttachment(ctx context.Context, sessionID, id string) ([]b
 	return s.readAttachmentBytes(ctx, sessionID, id)
 }
 
+// SaveToolImage 将工具生成的图片保存为当前会话的原始附件。
+// ToolResult 在 JSONL 中记录返回的 ID；图片字节只保存在 attachments sidecar。
+func (s *Service) SaveToolImage(ctx context.Context, sessionID, name, mimeType string, data []byte) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if int64(len(data)) > maxAttachmentBytes {
+		return "", errors.New("工具图片超过 12 MiB 限制")
+	}
+	if err := validateImageAttachment(name, mimeType, data); err != nil {
+		return "", err
+	}
+	directory, err := s.store.SessionDirectory(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	attachmentDir := filepath.Join(directory, "attachments")
+	if err := ensureAttachmentDirectory(attachmentDir); err != nil {
+		return "", err
+	}
+	id := uuid.NewString()
+	if err := writeAttachmentFile(filepath.Join(attachmentDir, id), data); err != nil {
+		return "", fmt.Errorf("保存工具图片失败: %w", err)
+	}
+	return id, nil
+}
+
 // transcriptEncodeOptions 避免 attachments.go 为零值选项额外引入持久化逻辑。
 func transcriptEncodeOptions() transcript.EncodeOptions { return transcript.EncodeOptions{} }
 

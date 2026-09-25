@@ -75,7 +75,7 @@ func probeNativeCapability() Capability {
 		Filesystem:  false,
 		ProcessTree: true,
 		Network:     false,
-		Reason:      "Windows 当前使用 Restricted Token + Job Object：可降低进程权限并约束进程树，但尚不能可靠实现 Workspace 文件边界或网络隔离；受限 Profile 的本地程序默认拒绝启动，除非用户显式关闭 Native Sandbox",
+		Reason:      "Windows 当前使用 Restricted Token + Job Object：可降低进程权限并约束进程树，但尚不能可靠实现 Workspace 文件边界或网络隔离；run_command 和 Skill 脚本会拒绝执行",
 	}
 }
 

@@ -7,9 +7,7 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 import {
   confirmAction,
@@ -29,6 +27,7 @@ import {
 import {
   useTaskStore,
 } from "../../stores/tasks.js";
+import { formatDate, t } from "../../i18n/index.js";
 
 const emit = defineEmits(["open-session"]);
 
@@ -410,11 +409,11 @@ async function decideApproval(run, decision) {
 }
 
 function agentName(agentID) {
-  return agentStore.items.find((agent) => agent.id === agentID)?.name || "未知 Agent";
+  return agentStore.items.find((agent) => agent.id === agentID)?.name || t("未知 Agent");
 }
 
 function statusText(status) {
-  return ({
+  return t(({
     queued: "排队中",
     starting: "启动中",
     running: "运行中",
@@ -425,25 +424,25 @@ function statusText(status) {
     timed_out: "已超时",
     interrupted: "已中断",
     skipped: "已跳过",
-  })[status] || status;
+  })[status] || status);
 }
 
 function conversationModeText(value) {
-  return value === "continuous" ? "连续对话" : "独立对话";
+  return t(value === "continuous" ? "连续对话" : "独立对话");
 }
 
 function scheduleText(task) {
   const schedule = task.schedule || {};
-  if (schedule.type === "manual") return "仅手动运行";
-  if (schedule.type === "once") return `单次 · ${formatTime(schedule.runAt)}`;
-  if (schedule.type === "interval") return `每 ${schedule.intervalMinutes} 分钟`;
-  if (schedule.type === "daily") return `每天 ${schedule.timeOfDay}`;
+  if (schedule.type === "manual") return t("仅手动运行");
+  if (schedule.type === "once") return t("单次 · {time}", { time: formatTime(schedule.runAt) });
+  if (schedule.type === "interval") return t("每 {count} 分钟", { count: schedule.intervalMinutes });
+  if (schedule.type === "daily") return t("每天 {time}", { time: schedule.timeOfDay });
   if (schedule.type === "weekly") {
     const labels = (schedule.weekdays || [])
-        .map((day) => weekdays.find((item) => item.value === day)?.label)
+        .map((day) => t(weekdays.find((item) => item.value === day)?.label || ""))
         .filter(Boolean)
-        .join("、");
-    return `每周${labels} ${schedule.timeOfDay}`;
+        .join(t("、"));
+    return t("每周{days} {time}", { days: labels, time: schedule.timeOfDay });
   }
   return schedule.type;
 }
@@ -452,13 +451,13 @@ function formatTime(value) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat("zh-CN", {
+  return formatDate(date, {
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  }).format(date);
+  });
 }
 
 function canCancel(run) {
@@ -516,7 +515,7 @@ onMounted(async () => {
           <span class="task-list__topline">
             <strong>{{ task.name }}</strong>
             <span :class="['task-state', `task-state--${task.status}`]">
-              {{ task.status === "active" ? "计划启用" : "已暂停" }}
+              {{ t(task.status === "active" ? "计划启用" : "已暂停") }}
             </span>
           </span>
           <small>{{ agentName(task.agentID) }}</small>
@@ -531,7 +530,7 @@ onMounted(async () => {
         <section v-if="creating || selectedTask" class="task-editor">
           <div class="panel-heading">
             <div>
-              <h2>{{ creating ? "新建任务" : "任务配置" }}</h2>
+              <h2>{{ t(creating ? "新建任务" : "任务配置") }}</h2>
               <p>计划负责触发时间；执行方式决定是启动 Agent，还是仅发送通知。</p>
             </div>
             <a-switch
@@ -575,19 +574,19 @@ onMounted(async () => {
                 <a-option value="continuous">连续对话</a-option>
               </a-select>
               <small class="field-help">
-                {{ form.conversationMode === "continuous"
+                {{ t(form.conversationMode === "continuous"
                   ? "所有运行继续使用同一个对话；如果该对话被手动删除，下次运行会自动新建。"
-                  : "每次运行创建新的对话，适合日报、检查和彼此独立的任务。" }}
+                  : "每次运行创建新的对话，适合日报、检查和彼此独立的任务。") }}
               </small>
             </div>
 
             <div class="field field--wide">
-              <span>{{ form.execution === "notification" ? "通知内容" : "提示词" }}</span>
+              <span>{{ t(form.execution === "notification" ? "通知内容" : "提示词") }}</span>
               <a-textarea
                   v-model="form.prompt"
-                  :aria-label="form.execution === 'notification' ? '通知内容' : '提示词'"
+                  :aria-label="t(form.execution === 'notification' ? '通知内容' : '提示词')"
                   :auto-size="{ minRows: form.execution === 'notification' ? 3 : 5, maxRows: 12 }"
-                  :placeholder="form.execution === 'notification' ? '到点后直接显示这段提醒，不会调用模型。' : '描述任务目标、需要使用的数据和期望输出。'"
+                  :placeholder="t(form.execution === 'notification' ? '到点后直接显示这段提醒，不会调用模型。' : '描述任务目标、需要使用的数据和期望输出。')"
               />
             </div>
 
@@ -631,7 +630,7 @@ onMounted(async () => {
                     type="button"
                     :class="['weekday', { 'weekday--active': form.weekdays.includes(day.value) }]"
                     @click="toggleWeekday(day.value)"
-                >{{ day.label }}</button>
+                >{{ t(day.label) }}</button>
               </div>
             </div>
 
@@ -706,7 +705,7 @@ onMounted(async () => {
               <span>模型 {{ run.modelCalls }}</span>
               <span>工具 {{ run.toolCalls }}</span>
               <span>Token {{ run.totalTokens || 0 }}（入 {{ run.inputTokens || 0 }} / 出 {{ run.outputTokens || 0 }}）</span>
-              <span>{{ run.trigger === "manual" ? "手动" : run.trigger === "retry" ? "重试" : "计划" }}</span>
+              <span>{{ t(run.trigger === "manual" ? "手动" : run.trigger === "retry" ? "重试" : "计划") }}</span>
             </div>
             <p v-if="run.resultPreview" class="run-result">{{ run.resultPreview }}</p>
             <p v-if="run.error" class="run-error">{{ run.error }}</p>

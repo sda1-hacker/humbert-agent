@@ -8,9 +8,7 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../utils/uiMessage.js";
 
 import WindowChrome
   from "../components/window/WindowChrome.vue";
@@ -460,12 +458,15 @@ async function openTaskSession(payload) {
 async function bootstrap() {
   bootstrapError.value = "";
   try {
-    await Promise.all([modelStore.load(), agentStore.load()]);
+    await Promise.all([
+      modelStore.load(),
+      agentStore.load(),
+      preferenceStore.load().catch((error) => {
+        console.warn("[Preferences] 用户资料加载失败，继续使用缓存语言", error);
+      }),
+    ]);
     bootstrapReady.value = true;
     await Promise.all([
-      preferenceStore.load().catch((error) => {
-        console.warn("[Preferences] 用户资料加载失败，继续使用默认身份", error);
-      }),
       taskStore.load(),
       proactiveStore.load().catch((error) => {
         console.warn("[Proactive] 主动助手状态加载失败", error);

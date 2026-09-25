@@ -1,10 +1,11 @@
 <script setup>
 import { computed, onMounted, reactive, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 import { useAgentStore } from "../../stores/agents.js";
 import { useProactiveStore } from "../../stores/proactive.js";
 import SectionCard from "../ui/SectionCard.vue";
+import { t, formatDate } from "../../i18n/index.js";
 
 const proactiveStore = useProactiveStore();
 const agentStore = useAgentStore();
@@ -20,11 +21,12 @@ const ruleDefinitions = [
   { key: "workspace_changed", title: "工作区变化", description: "心跳发现 Agent 工作区文件变化时。" },
 ];
 
-const actionOptions = [
+const actionDefinitions = [
   { value: "ignore", label: "忽略" },
   { value: "notify", label: "通知我" },
   { value: "run_agent", label: "交给 Agent 处理" },
 ];
+const actionOptions = computed(() => actionDefinitions.map((option) => ({ ...option, label: t(option.label) })));
 
 function defaultRules() {
   return Object.fromEntries(ruleDefinitions.map((definition) => [definition.key, {
@@ -68,7 +70,7 @@ watch(() => proactiveStore.settings, copySettings, { immediate: true });
 async function save() {
   try {
     await proactiveStore.save(JSON.parse(JSON.stringify(form)));
-    Message.success("主动助手设置已保存");
+    Message.success(t("主动助手设置已保存"));
   } catch (error) {
     Message.error(error?.message ?? String(error));
   }
@@ -77,7 +79,7 @@ async function save() {
 async function runHeartbeat() {
   try {
     await proactiveStore.runHeartbeat();
-    Message.success("巡检已完成");
+    Message.success(t("巡检已完成"));
   } catch (error) {
     Message.error(error?.message ?? String(error));
   }
@@ -85,26 +87,26 @@ async function runHeartbeat() {
 
 async function enableDesktopNotifications() {
   if (!("Notification" in globalThis)) {
-    Message.warning("当前桌面 WebView 不支持系统通知 API，将继续使用应用内通知");
+    Message.warning(t("当前桌面 WebView 不支持系统通知 API，将继续使用应用内通知"));
     return;
   }
   try {
     const result = await globalThis.Notification.requestPermission();
-    if (result === "granted") Message.success("系统通知已允许");
-    else Message.warning("系统通知未获允许，将继续使用应用内通知");
+    if (result === "granted") Message.success(t("系统通知已允许"));
+    else Message.warning(t("系统通知未获允许，将继续使用应用内通知"));
   } catch (error) {
-    Message.warning(error?.message ?? "无法请求系统通知权限");
+    Message.warning(error?.message ?? t("无法请求系统通知权限"));
   }
 }
 
 function formatTime(value) {
   if (!value) return "—";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : formatDate(date, { dateStyle: "short", timeStyle: "short" });
 }
 
 function recordTitle(record) {
-  return record?.event?.title || record?.event?.kind || "主动事件";
+  return record?.event?.title || record?.event?.kind || t("主动事件");
 }
 
 function recordStatus(record) {
@@ -115,7 +117,7 @@ function recordStatus(record) {
     succeeded: "已处理",
     failed: "处理失败",
   };
-  return map[record?.status] || record?.status || "未知";
+  return t(map[record?.status] || record?.status || "未知");
 }
 
 onMounted(async () => {
@@ -175,8 +177,8 @@ onMounted(async () => {
         <div v-for="definition in ruleDefinitions" :key="definition.key" class="rule-card">
           <div class="rule-card__header">
             <div>
-              <strong>{{ definition.title }}</strong>
-              <p>{{ definition.description }}</p>
+              <strong>{{ t(definition.title) }}</strong>
+              <p>{{ t(definition.description) }}</p>
             </div>
             <a-switch v-model="form.rules[definition.key].enabled" />
           </div>

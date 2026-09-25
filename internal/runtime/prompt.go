@@ -61,7 +61,12 @@ func buildRuntimeInstruction(
 		builder.WriteString("已知 URL 直接用 web_fetch；精确事实读取原页面，不把搜索摘要当作正文。\n")
 	}
 	if hasTool(available, "browser") {
-		builder.WriteString("打开网页、交互和网页截图用 browser；截图使用 screenshot 动作。不要用 run_command 调用 open 或 screencapture。\n")
+		builder.WriteString("打开网页、交互和网页截图用 browser；用户与 Agent 共用可见的 Chrome 页面，截图使用 screenshot 动作并读取 visual_observation。若 browser 返回 needs_human_verification，告知用户在该 Chrome 窗口手动完成验证；不要用工具识别或点击验证码。用户确认完成后再用 snapshot 继续。不要用 run_command 调用 open 或 screencapture。\n")
+		builder.WriteString("browser screenshot 将截图保存为会话附件并在聊天中展示。")
+		if hasTool(available, "copy_file") {
+			builder.WriteString("用户要求把截图保存或重命名到指定目录时，接着用 copy_file 的 attachment_id 和 destination 复制；后续轮次也可复制已有附件。")
+		}
+		builder.WriteString("最终回答只需简述完成情况，不要重复附件编号或整段网页内容，除非用户要求。\n")
 	} else if hasTool(available, "run_command") {
 		builder.WriteString("run_command 不用于打开网页或截图；当前没有 browser 时，如实说明无法生成网页截图。\n")
 	}
@@ -70,6 +75,9 @@ func buildRuntimeInstruction(
 	}
 	if hasTool(available, "run_command") && hasTool(available, "glob_files") {
 		builder.WriteString("查找文件优先用 glob_files。\n")
+	}
+	if hasTool(available, "context_resource") {
+		builder.WriteString("仅在缺少完成任务必需的信息时读取 context_resource；同一资源范围不要重复读取，more=false 或读取额度耗尽后继续完成回答。\n")
 	}
 	if hasTool(available, "schedule_task") {
 		if hasTool(available, "get_current_time") {

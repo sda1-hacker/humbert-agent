@@ -124,30 +124,28 @@ type BuiltinToolDTO struct {
 
 // SandboxStatusDTO 描述当前平台实际可用的原生隔离能力及全局默认值。
 type SandboxStatusDTO struct {
-	Platform             string   `json:"platform"`
-	Backend              string   `json:"backend"`
-	Available            bool     `json:"available"`
-	Reason               string   `json:"reason"`
-	Filesystem           bool     `json:"filesystem"`
-	ProcessTree          bool     `json:"processTree"`
-	Network              bool     `json:"network"`
-	DefaultProfile       string   `json:"defaultProfile"`
-	DefaultNetworkMode   string   `json:"defaultNetworkMode"`
-	DefaultNativeMode    string   `json:"defaultNativeMode"`
-	CommandGracePeriodMS int      `json:"commandGracePeriodMS"`
-	ShellEnabled         bool     `json:"shellEnabled"`
-	ShellAllowedCommands []string `json:"shellAllowedCommands"`
-	ShellRuntimeActive   bool     `json:"shellRuntimeActive"`
+	Platform             string `json:"platform"`
+	Backend              string `json:"backend"`
+	Available            bool   `json:"available"`
+	Reason               string `json:"reason"`
+	Filesystem           bool   `json:"filesystem"`
+	ProcessTree          bool   `json:"processTree"`
+	Network              bool   `json:"network"`
+	DefaultProfile       string `json:"defaultProfile"`
+	DefaultNetworkMode   string `json:"defaultNetworkMode"`
+	DefaultNativeMode    string `json:"defaultNativeMode"`
+	CommandGracePeriodMS int    `json:"commandGracePeriodMS"`
+	ShellEnabled         bool   `json:"shellEnabled"`
+	ShellRuntimeActive   bool   `json:"shellRuntimeActive"`
 }
 
 // SandboxSettingsRequest 是 Settings/Sandbox 可修改的应用级默认策略。
 type SandboxSettingsRequest struct {
-	DefaultProfile       string   `json:"defaultProfile"`
-	DefaultNetworkMode   string   `json:"defaultNetworkMode"`
-	DefaultNativeMode    string   `json:"defaultNativeMode"`
-	CommandGracePeriodMS int      `json:"commandGracePeriodMS"`
-	ShellEnabled         bool     `json:"shellEnabled"`
-	ShellAllowedCommands []string `json:"shellAllowedCommands"`
+	DefaultProfile       string `json:"defaultProfile"`
+	DefaultNetworkMode   string `json:"defaultNetworkMode"`
+	DefaultNativeMode    string `json:"defaultNativeMode"`
+	CommandGracePeriodMS int    `json:"commandGracePeriodMS"`
+	ShellEnabled         bool   `json:"shellEnabled"`
 }
 
 // SandboxDiagnosticCheckDTO 是一次安全自检的单项结果。
@@ -536,7 +534,6 @@ func (s *AgentService) GetSandboxStatus() SandboxStatusDTO {
 		DefaultNetworkMode: string(cfg.DefaultNetworkMode), DefaultNativeMode: string(cfg.DefaultNativeMode),
 		CommandGracePeriodMS: int(cfg.CommandGracePeriod / time.Millisecond),
 		ShellEnabled:         s.core.Config().Security.ShellEnabled,
-		ShellAllowedCommands: append([]string(nil), s.core.Config().Security.ShellAllowedCommands...),
 		ShellRuntimeActive:   runtimeShellActive,
 	}
 }
@@ -556,16 +553,11 @@ func (s *AgentService) UpdateSandboxSettings(request SandboxSettingsRequest) (Sa
 
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	commands, err := config.NormalizeAndValidateShellCommands(request.ShellEnabled, request.ShellAllowedCommands)
-	if err != nil {
-		return SandboxStatusDTO{}, fmt.Errorf("本地程序设置无效: %w", err)
-	}
 	if err := config.SaveSandboxAndShellConfig(
 		ctx,
 		s.core.Config().Paths.ConfigFile,
 		cfg,
 		request.ShellEnabled,
-		commands,
 	); err != nil {
 		return SandboxStatusDTO{}, err
 	}
@@ -581,7 +573,6 @@ func (s *AgentService) UpdateSandboxSettings(request SandboxSettingsRequest) (Sa
 	}
 	s.core.Config().Security.Sandbox = cfg
 	s.core.Config().Security.ShellEnabled = request.ShellEnabled
-	s.core.Config().Security.ShellAllowedCommands = append([]string(nil), commands...)
 
 	s.core.Logger().Info(
 		ctx,
@@ -592,7 +583,6 @@ func (s *AgentService) UpdateSandboxSettings(request SandboxSettingsRequest) (Sa
 		"native_mode", cfg.NativeMode,
 		"command_grace_period_ms", cfg.CommandGracePeriodMS,
 		"shell_enabled", request.ShellEnabled,
-		"shell_allowed_commands", strings.Join(commands, ","),
 	)
 	return s.GetSandboxStatus(), nil
 }

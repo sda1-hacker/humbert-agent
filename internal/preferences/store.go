@@ -15,8 +15,20 @@ import (
 const schemaVersion = 1
 
 type UserProfile struct {
-	Name   string `json:"name"`
-	Avatar string `json:"avatar,omitempty"`
+	Name     string `json:"name"`
+	Avatar   string `json:"avatar,omitempty"`
+	Language string `json:"language,omitempty"`
+}
+
+const DefaultLanguage = "zh-CN"
+
+func SupportedLanguage(value string) bool {
+	switch value {
+	case "zh-CN", "en-US", "ja-JP", "ko-KR":
+		return true
+	default:
+		return false
+	}
 }
 
 type document struct {
@@ -66,21 +78,48 @@ func (s *Store) Update(ctx context.Context, profile UserProfile) (UserProfile, e
 	if err != nil {
 		return UserProfile{}, err
 	}
-	profile = UserProfile{Name: name, Avatar: normalizedAvatar}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous, err := s.readLocked(ctx)
+	if err != nil {
+		return UserProfile{}, err
+	}
+	// 旧版调用只提交名称和头像时，语言设置不能被清空。
+	if profile.Language == "" {
+		profile.Language = previous.User.Language
+	}
+	if !SupportedLanguage(profile.Language) {
+		return UserProfile{}, errors.New("不支持的界面语言")
+	}
+	profile = UserProfile{Name: name, Avatar: normalizedAvatar, Language: profile.Language}
 	if err := atomicfile.WriteJSON(ctx, s.path, 0o600, document{SchemaVersion: schemaVersion, User: profile}); err != nil {
 		return UserProfile{}, fmt.Errorf("保存用户资料失败: %w", err)
 	}
 	return profile, nil
 }
 
+func (s *Store) SetLanguage(ctx context.Context, language string) (UserProfile, error) {
+	if !SupportedLanguage(language) {
+		return UserProfile{}, errors.New("不支持的界面语言")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	value, err := s.readLocked(ctx)
+	if err != nil {
+		return UserProfile{}, err
+	}
+	value.User.Language = language
+	if err := atomicfile.WriteJSON(ctx, s.path, 0o600, value); err != nil {
+		return UserProfile{}, fmt.Errorf("保存界面语言失败: %w", err)
+	}
+	return value.User, nil
+}
+
 func (s *Store) readLocked(ctx context.Context) (document, error) {
 	var value document
 	if err := atomicfile.ReadJSON(ctx, s.path, &value); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			value = document{SchemaVersion: schemaVersion, User: UserProfile{Name: "你"}}
+			value = document{SchemaVersion: schemaVersion, User: UserProfile{Name: "你", Language: DefaultLanguage}}
 			if writeErr := atomicfile.WriteJSON(ctx, s.path, 0o600, value); writeErr != nil {
 				return document{}, writeErr
 			}
@@ -93,6 +132,12 @@ func (s *Store) readLocked(ctx context.Context) (document, error) {
 	}
 	if strings.TrimSpace(value.User.Name) == "" {
 		value.User.Name = "你"
+	}
+	if value.User.Language == "" {
+		value.User.Language = DefaultLanguage
+	}
+	if !SupportedLanguage(value.User.Language) {
+		return document{}, fmt.Errorf("不支持的界面语言: %s", value.User.Language)
 	}
 	normalizedAvatar, err := avatar.NormalizeDataURL(value.User.Avatar)
 	if err != nil {

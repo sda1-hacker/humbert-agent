@@ -8,9 +8,7 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 import {
   IconDown,
@@ -139,6 +137,13 @@ const running =
         ),
     );
 
+const terminalError = computed(() =>
+    runtimeStore.terminalError(sessionStore.selectedID),
+);
+const terminalErrorRequestID = computed(() =>
+    runtimeStore.terminalErrorRequestID(sessionStore.selectedID),
+);
+
 const streamingModel =
     computed(() => {
       const modelID =
@@ -255,9 +260,9 @@ async function loadOlderMessages() {
   }
 }
 
-const currentLiveTools =
+const currentLiveActivity =
     computed(() =>
-        runtimeStore.liveTools(
+        runtimeStore.liveActivity(
             sessionStore.selectedID,
         ),
     );
@@ -431,8 +436,12 @@ watch(
     },
 );
 
+watch(terminalError, (value) => {
+  if (value) void scrollToBottom();
+});
+
 watch(
-    currentLiveTools,
+    currentLiveActivity,
 
     () => {
       void scrollToBottom();
@@ -540,10 +549,13 @@ onUnmounted(() => {
               :trace="
               block.trace
             "
+              :activity="block.activity"
               :agent-name="
               currentAgentName
             "
               :agent-avatar="currentAgentAvatar"
+              :agent-id="sessionStore.agentID || agentStore.selectedID"
+              :session-id="sessionStore.selectedID"
               :model-name="
               modelNameForMessage(
                 block.message,
@@ -554,17 +566,7 @@ onUnmounted(() => {
           />
         </template>
 
-        <!--
-          实时 Turn：
-
-          Humbert · Model
-
-          思考过程
-          ├─ Tool 1
-          └─ Tool 2
-
-          最终回答
-        -->
+        <!-- 实时步骤只存在于内存；完成后从 JSONL 重建同样的有序时间线。 -->
         <LiveAssistantTurn
             v-if="
             running ||
@@ -574,6 +576,8 @@ onUnmounted(() => {
             currentAgentName
           "
             :agent-avatar="currentAgentAvatar"
+            :agent-id="sessionStore.agentID || agentStore.selectedID"
+            :session-id="sessionStore.selectedID"
             :model-name="
             currentModelName
           "
@@ -583,9 +587,7 @@ onUnmounted(() => {
             :running="
             running
           "
-            :tools="
-            currentLiveTools
-          "
+            :activity="currentLiveActivity"
             :approval="
             currentApproval
           "
@@ -598,7 +600,28 @@ onUnmounted(() => {
             @approval-decision="
             resolveCurrentApproval
           "
+            @open-workspace-file="openWorkspaceFile"
         />
+
+        <div
+            v-if="terminalError && !sessionStore.searchWindowActive && !running"
+            class="message-turn-error"
+            role="alert"
+        >
+          <div class="message-turn-error__heading">
+            <strong>这次回复失败</strong>
+            <button
+                type="button"
+                aria-label="关闭错误提示"
+                @click="runtimeStore.dismissTerminalError(sessionStore.selectedID)"
+            >关闭</button>
+          </div>
+          <p>{{ terminalError }}</p>
+          <details v-if="terminalErrorRequestID">
+            <summary>诊断信息</summary>
+            <span>请求编号：{{ terminalErrorRequestID }}</span>
+          </details>
+        </div>
 
         <div
             class="
@@ -629,6 +652,25 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.message-turn-error {
+  max-width: 650px;
+  margin: 8px 0 26px 40px;
+  padding: 14px 16px;
+  border: 1px solid var(--h-danger-border);
+  border-radius: var(--h-radius-md);
+  background: var(--h-danger-soft);
+  color: var(--h-text);
+  font: 12px/1.6 var(--h-ui);
+}
+.message-turn-error__heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.message-turn-error__heading strong { color: var(--h-danger); font-size: 13px; font-weight: 600; }
+.message-turn-error__heading button { border: 0; background: transparent; color: var(--h-text-muted); font: inherit; cursor: pointer; }
+.message-turn-error__heading button:hover { color: var(--h-danger); }
+.message-turn-error__heading button:focus-visible { outline: 2px solid var(--h-accent); outline-offset: 2px; }
+.message-turn-error p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-turn-error details { margin-top: 10px; color: var(--h-text-muted); }
+.message-turn-error summary { width: fit-content; cursor: pointer; }
+.message-turn-error details span { display: block; margin-top: 4px; font: 10px/1.5 var(--h-mono); overflow-wrap: anywhere; }
 .message-viewport :deep(.message-search-highlight) { outline: 2px solid var(--h-primary); outline-offset: 4px; border-radius: 8px; }
 /* 已分页加载的旧消息留在 DOM 中以保持滚动位置；跳过视口外内容的布局与绘制。 */
 @supports (content-visibility: auto) {

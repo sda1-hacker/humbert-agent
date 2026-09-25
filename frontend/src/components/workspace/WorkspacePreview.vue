@@ -1,6 +1,10 @@
 <script setup>
 import {
   computed,
+  onMounted,
+  onUnmounted,
+  ref,
+  watch,
 } from "vue";
 
 import {
@@ -22,6 +26,60 @@ const props = defineProps({
     default: false,
   },
 });
+
+const imageViewport = ref(null);
+const imageSize = ref({ width: 0, height: 0 });
+const viewportSize = ref({ width: 0, height: 0 });
+const manualScale = ref(null);
+let resizeObserver;
+
+const fitScale = computed(() => {
+  const { width, height } = imageSize.value;
+  if (!width || !height || !viewportSize.value.width || !viewportSize.value.height) return 1;
+  return Math.max(0.01, Math.min(1, (viewportSize.value.width - 40) / width, (viewportSize.value.height - 40) / height));
+});
+const imageScale = computed(() => manualScale.value ?? fitScale.value);
+const imageStyle = computed(() => ({
+  width: `${imageSize.value.width * imageScale.value}px`,
+  height: `${imageSize.value.height * imageScale.value}px`,
+}));
+
+function updateViewportSize() {
+  viewportSize.value = {
+    width: imageViewport.value?.clientWidth ?? 0,
+    height: imageViewport.value?.clientHeight ?? 0,
+  };
+}
+function onImageLoad(event) {
+  imageSize.value = {
+    width: event.target.naturalWidth,
+    height: event.target.naturalHeight,
+  };
+  updateViewportSize();
+}
+function zoom(factor) {
+  manualScale.value = Math.min(4, Math.max(0.02, Number((imageScale.value * factor).toFixed(3))));
+}
+function onImageWheel(event) {
+  event.preventDefault();
+  zoom(event.deltaY < 0 ? 1.15 : 1 / 1.15);
+}
+
+watch(() => [props.preview?.path, props.preview?.dataURL], () => {
+  manualScale.value = null;
+});
+onMounted(() => {
+  resizeObserver = new ResizeObserver(updateViewportSize);
+  if (imageViewport.value) resizeObserver.observe(imageViewport.value);
+});
+watch(imageViewport, (current, previous) => {
+  if (previous) resizeObserver?.unobserve(previous);
+  if (current) {
+    resizeObserver?.observe(current);
+    updateViewportSize();
+  }
+});
+onUnmounted(() => resizeObserver?.disconnect());
 
 const languageHint = computed(() => {
   const path = props.preview?.path ?? "";
@@ -104,13 +162,26 @@ const languageHint = computed(() => {
         -->
         <div
             v-else-if="preview.kind === 'image' && preview.dataURL"
-            class="workspace-preview__image-wrap"
+            class="workspace-preview__image-shell"
         >
-          <img
-              :src="preview.dataURL"
-              :alt="preview.name"
-              class="workspace-preview__image"
-          />
+          <div class="workspace-preview__image-toolbar" aria-label="图片缩放">
+            <button type="button" aria-label="缩小图片" title="缩小" @click="zoom(1 / 1.25)">−</button>
+            <span aria-live="polite">{{ Math.round(imageScale * 100) }}%</span>
+            <button type="button" aria-label="放大图片" title="放大" @click="zoom(1.25)">＋</button>
+            <button type="button" class="workspace-preview__image-action" title="让图片适合预览区域" @click="manualScale = null">适合窗口</button>
+            <button type="button" class="workspace-preview__image-action" title="按图片原始像素显示" @click="manualScale = 1">原始大小</button>
+          </div>
+          <div ref="imageViewport" class="workspace-preview__image-viewport" @wheel="onImageWheel">
+            <div class="workspace-preview__image-wrap">
+              <img
+                  :src="preview.dataURL"
+                  :alt="preview.name"
+                  :style="imageStyle"
+                  class="workspace-preview__image"
+                  @load="onImageLoad"
+              />
+            </div>
+          </div>
         </div>
 
         <div
@@ -203,11 +274,62 @@ const languageHint = computed(() => {
   white-space: pre;
 }
 
-.workspace-preview__image-wrap {
+.workspace-preview__image-shell {
   display: grid;
-  min-height: 100%;
-  place-items: center;
-  padding: 26px;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.workspace-preview__image-toolbar {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--h-border);
+  background: var(--h-bg);
+}
+
+.workspace-preview__image-toolbar button {
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--h-border);
+  border-radius: var(--h-radius-sm);
+  background: var(--h-surface);
+  color: var(--h-text-secondary);
+  cursor: pointer;
+}
+
+.workspace-preview__image-toolbar button:hover {
+  border-color: var(--h-accent-border);
+  color: var(--h-accent);
+}
+
+.workspace-preview__image-toolbar button:focus-visible {
+  outline: 2px solid var(--h-accent);
+  outline-offset: 2px;
+}
+
+.workspace-preview__image-toolbar span {
+  min-width: 40px;
+  color: var(--h-text-muted);
+  font: 11px var(--h-ui);
+  text-align: center;
+}
+
+.workspace-preview__image-toolbar .workspace-preview__image-action {
+  font: 10px var(--h-ui);
+  white-space: nowrap;
+}
+
+.workspace-preview__image-viewport {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
   background-color: var(--h-surface);
   background-image:
       linear-gradient(45deg, color-mix(in srgb, var(--h-border) 52%, transparent) 25%, transparent 25%),
@@ -218,10 +340,20 @@ const languageHint = computed(() => {
   background-size: 20px 20px;
 }
 
+.workspace-preview__image-wrap {
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 20px;
+}
+
 .workspace-preview__image {
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  display: block;
+  flex: none;
 }
 
 .workspace-preview__empty {

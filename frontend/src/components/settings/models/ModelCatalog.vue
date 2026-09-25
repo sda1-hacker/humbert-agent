@@ -6,9 +6,8 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../../utils/uiMessage.js";
+import { t } from "../../../i18n/index.js";
 
 import {
   confirmAction,
@@ -503,7 +502,7 @@ watch(
                 <a-option value="enabled">支持</a-option>
                 <a-option value="disabled">不支持</a-option>
               </a-select>
-              <template #extra><span class="field-help">{{ field.help }}</span></template>
+              <template #extra><span class="field-help">{{ t(field.help) }}</span></template>
             </a-form-item>
           </div>
         </div>

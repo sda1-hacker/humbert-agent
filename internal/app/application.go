@@ -347,6 +347,8 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		sandboxManager,
 		permissionEngine,
 		skillManager,
+		agentService,
+		modelRegistry,
 		func(callCtx context.Context, agentID string, skillName string) error {
 			_, enableErr := agentService.EnableSkillForAgent(callCtx, agentID, skillName)
 			return enableErr

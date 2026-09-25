@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../../utils/uiMessage.js";
 
 import { useModelStore } from "../../../stores/models.js";
 import SectionCard from "../../ui/SectionCard.vue";

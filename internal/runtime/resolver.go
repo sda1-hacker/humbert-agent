@@ -119,6 +119,10 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 	if err != nil {
 		return collaboration.BuiltAgent{}, err
 	}
+	instruction, err = r.withResponseLanguage(ctx, instruction)
+	if err != nil {
+		return collaboration.BuiltAgent{}, err
+	}
 	instruction = strings.TrimSpace(instruction + `
 
 ## 子 Agent 协作约束
@@ -875,6 +879,10 @@ func (r *Resolver) resolveContextBase(
 	if err != nil {
 		return resolvedContextBase{}, err
 	}
+	instruction, err = r.withResponseLanguage(ctx, instruction)
+	if err != nil {
+		return resolvedContextBase{}, err
+	}
 	if len(mcpSnapshot.Failures) > 0 {
 		serverNames := make([]string, 0, len(mcpSnapshot.Failures))
 		for _, failure := range mcpSnapshot.Failures {
@@ -992,6 +1000,28 @@ func (r *Resolver) withPersonalMemory(ctx context.Context, instruction string) (
 	}
 	builder.WriteString("</user_managed_memory>")
 	return builder.String(), nil
+}
+
+// withResponseLanguage 只约束面向用户的正文；Provider 的 reasoning_content 属于原始模型数据，
+// 不能假装系统设置已经翻译或改写了它。
+func (r *Resolver) withResponseLanguage(ctx context.Context, instruction string) (string, error) {
+	if r.personalMemory == nil {
+		return "", errors.New("Preferences Store 未初始化")
+	}
+	profile, err := r.personalMemory.Get(ctx)
+	if err != nil {
+		return "", fmt.Errorf("读取回复语言失败: %w", err)
+	}
+	name := map[string]string{
+		"zh-CN": "Simplified Chinese",
+		"en-US": "English",
+		"ja-JP": "Japanese",
+		"ko-KR": "Korean",
+	}[profile.Language]
+	if name == "" {
+		name = "Simplified Chinese"
+	}
+	return instruction + "\n\n<response_language>\nReply to the user in " + name + " (" + profile.Language + ") unless the user explicitly requests another language. Keep code, paths, URLs, and quoted source text unchanged. Do not reveal internal reasoning.\n</response_language>", nil
 }
 
 func cloneOptionalStrings(values []string) []string {

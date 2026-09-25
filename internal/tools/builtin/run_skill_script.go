@@ -28,10 +28,10 @@ const (
 - 只能选择当前 Turn 已启用、已冻结 Identity 的 Skill；不能执行任意本地路径。
 - script 必须位于该 Skill 的 scripts/ 目录；可传 scripts/check-update.sh 或 check-update.sh，两者会规范化为同一脚本身份，并且 Humbert 必须能识别其解释器。
 - Skill 会先复制到当前 Workspace 的临时 Stage；真实 ~/.humbert-agent/skills 安装目录不会直接交给脚本修改。
-- 解释器仍必须位于 security.shell_allowed_commands 白名单中。
+- 解释器由 Skill 元数据识别，并在 Sandbox 中执行。
 - 执行继续经过 Permission + Approval、Agent Sandbox、网络策略、超时和输出上限。
 - 不经过 Shell，不支持 &&、|、$() 等 Shell 拼接语法。
-- 如果 exit_code=-1，必须结合 termination_reason 判断 timeout 或 signaled；白名单或 Sandbox 配置错误会以明确 Tool Error 返回。`
+- 如果 exit_code=-1，必须结合 termination_reason 判断 timeout 或 signaled；Sandbox 配置错误会以明确 Tool Error 返回。`
 )
 
 // RunSkillScriptInput 是 run_skill_script 的模型输入。
@@ -67,19 +67,17 @@ type RunSkillScriptOutput struct {
 
 // RunSkillScriptFactory 让标准 Agent Skill 的 scripts/ 能在现有 Humbert 安全边界内执行。
 type RunSkillScriptFactory struct {
-	skills          *skills.Manager
-	workspaces      *workspace.Manager
-	runner          *sandbox.Runner
-	allowedCommands map[string]struct{}
-	limits          CommandLimits
-	environment     []string
+	skills      *skills.Manager
+	workspaces  *workspace.Manager
+	runner      *sandbox.Runner
+	limits      CommandLimits
+	environment []string
 }
 
 func NewRunSkillScriptFactory(
 	skillManager *skills.Manager,
 	workspaceManager *workspace.Manager,
 	runner *sandbox.Runner,
-	allowedCommands []string,
 	limits CommandLimits,
 	environment []string,
 ) (*RunSkillScriptFactory, error) {
@@ -95,24 +93,12 @@ func NewRunSkillScriptFactory(
 	if err := limits.Validate(); err != nil {
 		return nil, fmt.Errorf("RunSkillScript Limits 无效: %w", err)
 	}
-	allowed := make(map[string]struct{}, len(allowedCommands))
-	for _, command := range allowedCommands {
-		command = normalizeCommandName(command)
-		if err := validateCommandName(command); err != nil {
-			return nil, fmt.Errorf("RunSkillScript AllowedCommand 无效: %w", err)
-		}
-		allowed[command] = struct{}{}
-	}
-	if len(allowed) == 0 {
-		return nil, errors.New("RunSkillScript AllowedCommands 不能为空")
-	}
 	return &RunSkillScriptFactory{
-		skills:          skillManager,
-		workspaces:      workspaceManager,
-		runner:          runner,
-		allowedCommands: allowed,
-		limits:          limits,
-		environment:     cloneStringSlice(environment),
+		skills:      skillManager,
+		workspaces:  workspaceManager,
+		runner:      runner,
+		limits:      limits,
+		environment: cloneStringSlice(environment),
 	}, nil
 }
 
@@ -197,8 +183,8 @@ func (f *RunSkillScriptFactory) run(
 		return nil, fmt.Errorf("脚本 %q 的运行时当前不受支持", scriptPath)
 	}
 	command := normalizeCommandName(scriptRuntime.Command)
-	if _, allowed := f.allowedCommands[command]; !allowed {
-		return nil, fmt.Errorf("Skill 脚本解释器 %q 不在 security.shell_allowed_commands 白名单中", command)
+	if err := validateCommandName(command); err != nil {
+		return nil, fmt.Errorf("Skill 脚本解释器无效: %w", err)
 	}
 	if err := validateCommandArguments(input.Args, f.limits); err != nil {
 		return nil, fmt.Errorf("run_skill_script args 无效: %w", err)
@@ -264,12 +250,13 @@ func (f *RunSkillScriptFactory) run(
 		runCtx,
 		scope.SandboxPolicy(),
 		sandbox.ProcessSpec{
-			Executable: executable,
-			Args:       argv,
-			Dir:        workingDirectory,
-			Env:        cloneStringSlice(f.environment),
-			Stdout:     capture,
-			Stderr:     capture,
+			Executable:        executable,
+			Args:              argv,
+			Dir:               workingDirectory,
+			Env:               cloneStringSlice(f.environment),
+			Stdout:            capture,
+			Stderr:            capture,
+			ReadOnlyWorkspace: true,
 		},
 	)
 	if ctx.Err() != nil {

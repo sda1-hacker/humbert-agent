@@ -11,6 +11,10 @@ export function updateUserProfile(request) {
     return Call.ByName(`${serviceName}.UpdateUserProfile`, request);
 }
 
+export function saveLanguage(language) {
+    return Call.ByName(`${serviceName}.SetLanguage`, language);
+}
+
 export function listPersonalMemories() {
     return Call.ByName(`${serviceName}.ListPersonalMemories`);
 }

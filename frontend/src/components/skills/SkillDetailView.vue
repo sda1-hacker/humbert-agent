@@ -5,9 +5,8 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
+import { t, formatDate } from "../../i18n/index.js";
 
 import {
   confirmAction,
@@ -124,7 +123,7 @@ const displayName =
         props.skill?.alias?.trim() ||
         props.skill?.name ||
         props.skill?.directoryName ||
-        "未命名 Skill"
+        t("未命名 Skill")
     ));
 
 const usedByAgents =
@@ -379,7 +378,7 @@ function formatUpdatedAt(value) {
       date.getTime(),
   )
       ? value
-      : date.toLocaleString();
+      : formatDate(date, { dateStyle: "short", timeStyle: "short" });
 }
 
 function shortIdentity(value) {
@@ -974,7 +973,7 @@ watch(
               :color="skillStatusColor"
               size="small"
           >
-            {{ skillStatusLabel }}
+            {{ t(skillStatusLabel) }}
           </a-tag>
         </div>
 
@@ -1130,7 +1129,7 @@ watch(
             }}
           </a-tag>
         </div>
-        <p>脚本只会通过 <code>run_skill_script</code> 在当前 Workspace 的临时副本中执行，并继续受命令白名单、Sandbox、Permission
+        <p>脚本只会通过 <code>run_skill_script</code> 在当前 Workspace 的临时副本中执行，并继续受只读命令沙盒、Permission
           与 Approval 约束。</p>
       </div>
     </section>
@@ -1170,7 +1169,7 @@ watch(
           </div>
 
           <div class="skill-source__title-row">
-            <strong>{{ sourceLabel }}</strong>
+            <strong>{{ t(sourceLabel) }}</strong>
 
             <a-tag
                 v-if="source.known"

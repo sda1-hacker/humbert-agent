@@ -1,7 +1,7 @@
 <script setup>
 import { safeUrl } from "../../utils/markdown.js";
 import { Browser } from "@wailsio/runtime";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 defineProps({ tokens: { type: Array, default: () => [] } });
 

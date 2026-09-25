@@ -21,6 +21,9 @@ type ProcessSpec struct {
 	Stdin      io.Reader
 	Stdout     io.Writer
 	Stderr     io.Writer
+	// ReadOnlyWorkspace forces OS-level read-only access to the workspace.
+	// This is required for arbitrary local commands, including interpreters.
+	ReadOnlyWorkspace bool
 }
 
 // ProcessResult 是统一 ProcessRunner 的终态。
@@ -57,9 +60,12 @@ func prepareRuntimeTemp(workspaceRoot string) (string, func(), error) {
 func withRuntimeTempEnvironment(values []string, runtimeTemp string) []string {
 	result := make([]string, 0, len(values)+4)
 	overrides := map[string]string{
-		"TMPDIR": runtimeTemp,
-		"TMP":    runtimeTemp,
-		"TEMP":   runtimeTemp,
+		"TMPDIR":           runtimeTemp,
+		"TMP":              runtimeTemp,
+		"TEMP":             runtimeTemp,
+		"GOCACHE":          filepath.Join(runtimeTemp, "go-cache"),
+		"XDG_CACHE_HOME":   filepath.Join(runtimeTemp, "cache"),
+		"NPM_CONFIG_CACHE": filepath.Join(runtimeTemp, "npm-cache"),
 		// 避免 Python 从只读 Runtime/Library 路径导入模块时尝试写 __pycache__。
 		"PYTHONDONTWRITEBYTECODE": "1",
 	}
@@ -79,7 +85,7 @@ func withRuntimeTempEnvironment(values []string, runtimeTemp string) []string {
 		}
 		result = append(result, value)
 	}
-	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "PYTHONDONTWRITEBYTECODE"} {
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP", "GOCACHE", "XDG_CACHE_HOME", "NPM_CONFIG_CACHE", "PYTHONDONTWRITEBYTECODE"} {
 		if _, exists := seen[key]; exists {
 			continue
 		}
@@ -131,6 +137,12 @@ func (r *Runner) Run(ctx context.Context, policy EffectivePolicy, spec ProcessSp
 		return ProcessResult{}, err
 	}
 	defer tempCleanup()
+	if spec.ReadOnlyWorkspace {
+		policy, err = r.readOnlyCommandPolicy(policy, runtimeTemp)
+		if err != nil {
+			return ProcessResult{}, err
+		}
+	}
 
 	executable, args, nativeCleanup, nativeUsed, err := prepareNativeCommand(policy, spec.Executable, spec.Args, resolvedDir)
 	if err != nil {
@@ -214,7 +226,7 @@ func (r *Runner) Run(ctx context.Context, policy EffectivePolicy, spec ProcessSp
 		result.ExitCode = exitErr.ExitCode()
 		// Go 在 Unix 进程被 signal 终止时会返回 ExitCode=-1。之前上层把这种情况
 		// 错误展示为普通 "exited"，导致模型把真正的 Sandbox/Runtime 崩溃原因猜成
-		// shell_enabled 或白名单问题。这里保留 Wait 的真实错误文本用于诊断。
+		// shell_enabled 或沙箱问题。这里保留 Wait 的真实错误文本用于诊断。
 		if result.ExitCode == -1 {
 			result.TerminationReason = "signaled"
 			result.TerminationDetail = exitErr.Error()
@@ -222,4 +234,46 @@ func (r *Runner) Run(ctx context.Context, policy EffectivePolicy, spec ProcessSp
 		return result, nil
 	}
 	return ProcessResult{}, fmt.Errorf("等待 Sandbox 进程失败: %w", waitErr)
+}
+
+// readOnlyCommandPolicy downgrades every writable grant before spawning an
+// arbitrary executable. A command name/argv filter cannot contain Python,
+// Node, find -exec, git hooks, or a child process; the OS sandbox can.
+func (r *Runner) readOnlyCommandPolicy(original EffectivePolicy, runtimeTemp string) (EffectivePolicy, error) {
+	if original.NativeMode == NativeOff || !original.Capability.Available || !original.Capability.Filesystem {
+		return EffectivePolicy{}, errors.New("本地命令需要原生文件系统沙箱；无法保证工作区只读，已拒绝执行")
+	}
+	p := original
+	if p.Profile == ProfileFullAccess {
+		p.Profile = ProfileStandard
+		p.PathRules = append([]PathRule(nil), r.manager.protectedRules...)
+		if home, err := os.UserHomeDir(); err == nil {
+			if root, err := CanonicalRoot(home); err == nil {
+				p.PathRules = append(p.PathRules, PathRule{Root: root, Access: AccessReadOnly, Source: RuleSourceStandardHome})
+			}
+		}
+	} else {
+		p.PathRules = append([]PathRule(nil), original.PathRules...)
+	}
+	workspaceFound := false
+	for i := range p.PathRules {
+		if p.PathRules[i].Access > AccessReadOnly {
+			p.PathRules[i].Access = AccessReadOnly
+		}
+		if pathEqual(p.PathRules[i].Root, p.WorkspaceRoot) {
+			p.PathRules[i].Access = AccessReadOnly
+			workspaceFound = true
+		}
+	}
+	if !workspaceFound {
+		p.PathRules = append(p.PathRules, PathRule{Root: p.WorkspaceRoot, Access: AccessReadOnly, Source: RuleSourceWorkspace})
+	}
+	p.PathRules = append(p.PathRules, PathRule{Root: runtimeTemp, Access: AccessReadWrite, Source: RuleSourceWorkspace})
+	p.PathRules = sortedPathRules(p.PathRules)
+	p.ReadOnlyProcess = true
+	p.ProcessTempRoot = runtimeTemp
+	if err := p.Validate(); err != nil {
+		return EffectivePolicy{}, err
+	}
+	return p, nil
 }

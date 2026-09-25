@@ -3,11 +3,7 @@ import {
   computed,
 } from "vue";
 
-import ThinkingProcessCard
-  from "./ThinkingProcessCard.vue";
-
-import ToolTraceGroup
-  from "./ToolTraceGroup.vue";
+import ActivityTimeline from "./ActivityTimeline.vue";
 
 import ApprovalCard
   from "./ApprovalCard.vue";
@@ -30,6 +26,13 @@ const props =
         default: "",
       },
 
+      agentId: {
+        type: String,
+        default: "",
+      },
+
+      sessionId: { type: String, default: "" },
+
       modelName: {
         type: String,
         default: "",
@@ -40,19 +43,11 @@ const props =
         default: "",
       },
 
-      reasoning: {
-        type: String,
-        default: "",
-      },
+      activity: { type: Array, default: () => [] },
 
       running: {
         type: Boolean,
         default: false,
-      },
-
-      tools: {
-        type: Array,
-        default: () => [],
       },
 
       /** 当前 Turn 正在等待的 Human Approval。 */
@@ -75,6 +70,7 @@ const props =
 const emit =
     defineEmits([
       "approval-decision",
+      "open-workspace-file",
     ]);
 
 const authorText =
@@ -93,47 +89,6 @@ const answering =
         props.content.length > 0,
     );
 
-const hasReasoning =
-    computed(() =>
-        props.reasoning.trim().length > 0,
-    );
-
-const hasTools =
-    computed(() =>
-        props.tools.length > 0,
-    );
-
-const showThinking =
-    computed(() =>
-        hasReasoning.value ||
-        (
-            props.running &&
-            !answering.value &&
-            !hasTools.value
-        ),
-    );
-
-/**
- * 一旦最终正文开始输出，当前 Reasoning 阶段视为结束。后续 Tool Calling Round 如果再次
- * 产生 reasoning.delta，RuntimeStore 仍会继续追加内容；只要最终正文尚未开始，卡片保持
- * “思考中”。
- */
-const reasoningRunning =
-    computed(() =>
-        props.running &&
-        !answering.value,
-    );
-
-const liveTrace =
-    computed(() => ({
-      key:
-          "live-tool-trace",
-
-      notes: [],
-
-      calls:
-      props.tools,
-    }));
 </script>
 
 <template>
@@ -143,24 +98,13 @@ const liveTrace =
       <span>{{ authorText }}</span>
     </header>
 
-    <!--
-      Thinking 与 Tool Calling 是两个不同概念：
-
-      - ThinkingProcessCard 只展示 Provider reasoning_content；
-      - ToolTraceGroup 只展示真实 Tool Lifecycle。
-
-      两者可以同时存在，不再出现“思考过程 · N 个工具”这种概念混合。
-    -->
-    <ThinkingProcessCard
-        v-if="showThinking"
-        :content="reasoning"
-        :running="reasoningRunning"
-    />
-
-    <ToolTraceGroup
-        v-if="hasTools"
-        :trace="liveTrace"
-        :live="running && !answering"
+    <ActivityTimeline
+        v-if="activity.length || !answering"
+        :steps="activity"
+        :agent-id="agentId"
+        :session-id="sessionId"
+        :running="running && !answering"
+        @open-workspace-file="emit('open-workspace-file', $event)"
     />
 
     <ApprovalCard

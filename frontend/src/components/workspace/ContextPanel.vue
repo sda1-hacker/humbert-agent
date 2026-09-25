@@ -1,6 +1,6 @@
 <script setup>
 import { onUnmounted, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 import { searchWorkspaceDocuments } from "../../api/workspace.js";
 import { pollIndexedSearch } from "../../utils/searchPolling.js";
 import { useAgentStore } from "../../stores/agents.js";

@@ -369,15 +369,13 @@ export const useRuntimeStore =
                  */
                 liveToolCalls: {},
 
+                /** sessionID -> 本次运行的有序展示步骤，终态后由 JSONL 历史重建。 */
+                liveActivities: {},
+
                 /**
                  * sessionID -> partial assistant visible text
                  */
                 streamingContents: {},
-
-                /**
-                 * sessionID -> partial provider reasoning text
-                 */
-                streamingReasonings: {},
 
                 /**
                  * StartTurn binding 尚未返回的 Session。
@@ -397,6 +395,9 @@ export const useRuntimeStore =
                  * 错误不是 Session 持久化事实，因此只保存在当前前端进程；下一次发送会清理。
                  */
                 terminalErrors: {},
+
+                /** sessionID -> 失败请求编号；只用于在页面上定位本地日志。 */
+                terminalErrorRequests: {},
 
                 // 保存初始化失败的消息收据；同一内容重试时复用后端消息，避免重复追加。
                 failedStarts: {},
@@ -474,16 +475,6 @@ export const useRuntimeStore =
                             );
                         },
 
-                streamingReasoning:
-                    (state) =>
-                        (sessionID) => {
-                            return (
-                                state.streamingReasonings[
-                                    sessionID
-                                    ] ?? ""
-                            );
-                        },
-
                 terminalError:
                     (state) =>
                         (sessionID) => {
@@ -493,6 +484,12 @@ export const useRuntimeStore =
                                     ] ?? ""
                             );
                         },
+
+                terminalErrorRequestID:
+                    (state) =>
+                        (sessionID) => (
+                            state.terminalErrorRequests[sessionID] ?? ""
+                        ),
 
                 modelIDForSession:
                     (state) =>
@@ -519,6 +516,10 @@ export const useRuntimeStore =
                                 sessionID
                                 ] ?? []
                         ),
+
+                liveActivity:
+                    (state) =>
+                        (sessionID) => state.liveActivities[sessionID] ?? [],
 
                 contextUsage:
                     (state) =>
@@ -600,6 +601,11 @@ export const useRuntimeStore =
             },
 
             actions: {
+                dismissTerminalError(sessionID) {
+                    delete this.terminalErrors[sessionID];
+                    delete this.terminalErrorRequests[sessionID];
+                },
+
                 /**
                  * 全应用只注册一个 Wails Runtime Listener。
                  */
@@ -664,6 +670,20 @@ export const useRuntimeStore =
                         kind === "reasoning"
                             ? pendingReasoningDeltaBuffers
                             : pendingContentDeltaBuffers;
+
+                    if (kind === "reasoning") {
+                        const steps = this.liveActivities[sessionID] ?? [];
+                        if (steps.at(-1)?.type !== "thinking") {
+                            steps.push({
+                                type: "thinking",
+                                key: `thinking:live:${steps.length}`,
+                                content: "",
+                                note: "",
+                                status: "running",
+                            });
+                            this.liveActivities[sessionID] = steps;
+                        }
+                    }
 
                     target.set(
                         sessionID,
@@ -754,14 +774,11 @@ export const useRuntimeStore =
                     }
 
                     if (reasoningDelta) {
-                        this.streamingReasonings[
-                            sessionID
-                            ] =
-                            (
-                                this.streamingReasonings[
-                                    sessionID
-                                    ] ?? ""
-                            ) + reasoningDelta;
+                        const steps = this.liveActivities[sessionID] ?? [];
+                        const last = steps.at(-1);
+                        if (last?.type === "thinking") {
+                            last.content += reasoningDelta;
+                        }
                     }
                 },
 
@@ -850,6 +867,16 @@ export const useRuntimeStore =
                         default:
                             break;
                     }
+
+
+                    const steps = this.liveActivities[sessionID] ?? [];
+                    if (steps.at(-1)?.type === "thinking") {
+                        steps.at(-1).status = "completed";
+                    }
+                    if (!steps.some((step) => step.type === "tool" && step.call?.id === callID)) {
+                        steps.push({ type: "tool", key: `tool:live:${callID}`, call });
+                        this.liveActivities[sessionID] = steps;
+                    }
                 },
 
                 /**
@@ -936,6 +963,7 @@ export const useRuntimeStore =
                             delete this.activeRuns[sessionID];
                             delete this.activeModels[sessionID];
                             delete this.liveToolCalls[sessionID];
+                            delete this.liveActivities[sessionID];
                             const pending = this.pendingApprovals[sessionID];
                             if (pending?.id) {
                                 delete this.approvalResolving[pending.id];
@@ -1060,13 +1088,10 @@ export const useRuntimeStore =
                         sessionID
                         ] = "";
 
-                    this.streamingReasonings[
-                        sessionID
-                        ] = "";
-
                     this.liveToolCalls[
                         sessionID
                         ] = [];
+                    this.liveActivities[sessionID] = [];
                     delete this.runStates[
                         sessionID
                         ];
@@ -1074,6 +1099,7 @@ export const useRuntimeStore =
                     delete this.terminalErrors[
                         sessionID
                         ];
+                    delete this.terminalErrorRequests[sessionID];
 
                     try {
                         const retry = this.failedStarts[sessionID];
@@ -1092,6 +1118,7 @@ export const useRuntimeStore =
                                 userMessageID: result.userMessageID,
                             };
                             this.terminalErrors[sessionID] = result.startError;
+                            this.terminalErrorRequests[sessionID] = result.requestID ?? "";
                             throw new Error(result.startError);
                         }
                         delete this.failedStarts[sessionID];
@@ -1171,6 +1198,10 @@ export const useRuntimeStore =
                     } catch (error) {
                         // 发送失败也可能已经写入历史，刷新后让用户看到真实已保存的输入。
                         // 刷新失败保留原始发送错误；收据不清除，下一次重试仍可复用。
+                        if (!this.terminalErrors[sessionID]) {
+                            this.terminalErrors[sessionID] =
+                                "消息发送失败。请检查会话或模型设置后重试。";
+                        }
                         try {
                             await useSessionStore().refreshMessages(sessionID);
                         } catch {
@@ -1184,11 +1215,7 @@ export const useRuntimeStore =
                             .streamingContents[
                             sessionID
                             ];
-
-                        delete this
-                            .streamingReasonings[
-                            sessionID
-                            ];
+                        delete this.liveActivities[sessionID];
 
                         throw error;
                     } finally {
@@ -1317,14 +1344,11 @@ export const useRuntimeStore =
                             this.liveToolCalls[
                                 data.sessionID
                                 ] = [];
+                            this.liveActivities[data.sessionID] = [];
 
                             this.streamingContents[
                                 data.sessionID
                                 ] = "";
-                            this.streamingReasonings[
-                                data.sessionID
-                                ] = "";
-
                             break;
                         }
 
@@ -1388,6 +1412,12 @@ export const useRuntimeStore =
                                 this.runStates[data.sessionID].phase = "running";
                             }
 
+                            const lastStep = this.liveActivities[data.sessionID]?.at(-1);
+                            if (lastStep?.type === "thinking" && lastStep.status === "running") {
+                                this.flushStreamingDelta(data.sessionID);
+                                lastStep.status = "completed";
+                            }
+
                             this.queueStreamingDelta(
                                 data.sessionID,
                                 "content",
@@ -1405,6 +1435,7 @@ export const useRuntimeStore =
                                 break;
                             }
                             this.activeRuns[data.sessionID] = data.requestID;
+                            this.flushStreamingDelta(data.sessionID);
                             this.applyToolLifecycleEvent(data);
                             if (
                                 this.runStates[data.sessionID]?.requestID === data.requestID
@@ -1510,6 +1541,7 @@ export const useRuntimeStore =
                             data.sessionID
                             ] =
                             data.error.trim();
+                        this.terminalErrorRequests[data.sessionID] = data.requestID ?? "";
                     } else if (
                         data.type ===
                         "turn.completed"
@@ -1517,6 +1549,7 @@ export const useRuntimeStore =
                         delete this.terminalErrors[
                             data.sessionID
                             ];
+                        delete this.terminalErrorRequests[data.sessionID];
                     }
 
                     const sessionStore =
@@ -1545,11 +1578,6 @@ export const useRuntimeStore =
                             ];
 
                         delete this
-                            .streamingReasonings[
-                            data.sessionID
-                            ];
-
-                        delete this
                             .activeModels[
                             data.sessionID
                             ];
@@ -1560,6 +1588,7 @@ export const useRuntimeStore =
                         delete this.liveToolCalls[
                             data.sessionID
                             ];
+                        delete this.liveActivities[data.sessionID];
                     }
                 },
             },

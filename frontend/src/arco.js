@@ -15,6 +15,7 @@ import Tabs from "@arco-design/web-vue/es/tabs/index.js";
 import Tag from "@arco-design/web-vue/es/tag/index.js";
 import Textarea from "@arco-design/web-vue/es/textarea/index.js";
 import Tooltip from "@arco-design/web-vue/es/tooltip/index.js";
+import ConfigProvider from "@arco-design/web-vue/es/config-provider/index.js";
 
 import "@arco-design/web-vue/es/alert/style/css.js";
 import "@arco-design/web-vue/es/button/style/css.js";
@@ -53,6 +54,7 @@ const components = [
   Tag,
   Textarea,
   Tooltip,
+  ConfigProvider,
 ];
 
 // 只注册模板实际使用的 Arco 组件。各插件会同时注册自己的子组件，例如

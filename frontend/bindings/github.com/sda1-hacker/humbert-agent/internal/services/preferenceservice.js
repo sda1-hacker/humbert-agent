@@ -64,6 +64,16 @@ export function ListPersonalMemories() {
 }
 
 /**
+ * @param {string} language
+ * @returns {$CancellablePromise<$models.UserProfileDTO>}
+ */
+export function SetLanguage(language) {
+    return $Call.ByID(427204361, language).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType1($result);
+    }));
+}
+
+/**
  * @param {string} id
  * @param {string} text
  * @returns {$CancellablePromise<preferences$0.PersonalMemory>}

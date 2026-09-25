@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, reactive, ref } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 import { usePreferenceStore } from "../../stores/preferences.js";
 import IdentityAvatar from "../ui/IdentityAvatar.vue";
 import { addPersonalMemory, deletePersonalMemory, listPersonalMemories, updatePersonalMemory } from "../../api/preferences.js";

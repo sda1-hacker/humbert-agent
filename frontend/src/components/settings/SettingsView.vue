@@ -21,6 +21,8 @@ import AppPageHeader from "../ui/AppPageHeader.vue";
 import UserProfileSettings from "./UserProfileSettings.vue";
 import DataSettings from "./DataSettings.vue";
 import ArchivedSessionsSettings from "./ArchivedSessionsSettings.vue";
+import LanguageSettings from "./LanguageSettings.vue";
+import { t } from "../../i18n/index.js";
 
 const props = defineProps({
   initialKey: {
@@ -35,7 +37,18 @@ const emit = defineEmits([
   "open-session",
 ]);
 
-const navigationGroups = [
+const rawNavigationGroups = [
+  {
+    key: "general",
+    title: "通用",
+    items: [{
+      key: "language",
+      title: "语言",
+      description: "选择界面与 Agent 默认回答使用的语言。",
+      keywords: ["语言", "language", "locale", "日本語", "한국어"],
+      glyph: "L",
+    }],
+  },
   {
     key: "personal",
     title: "个人",
@@ -132,10 +145,19 @@ const navigationGroups = [
   },
 ];
 
-const allItems = navigationGroups.flatMap((group) => group.items);
+const navigationGroups = computed(() => rawNavigationGroups.map((group) => ({
+  ...group,
+  title: t(group.title),
+  items: group.items.map((item) => ({
+    ...item,
+    title: t(item.title),
+    description: t(item.description),
+  })),
+})));
+const allItems = computed(() => navigationGroups.value.flatMap((group) => group.items));
 
 function validKey(value) {
-  return allItems.some((item) => item.key === value)
+  return allItems.value.some((item) => item.key === value)
       ? value
       : "models";
 }
@@ -167,9 +189,9 @@ onErrorCaptured((error, _instance, info) => {
 
 const filteredGroups = computed(() => {
   const keyword = query.value.trim().toLowerCase();
-  if (!keyword) return navigationGroups;
+  if (!keyword) return navigationGroups.value;
 
-  return navigationGroups
+  return navigationGroups.value
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => [
@@ -182,7 +204,7 @@ const filteredGroups = computed(() => {
 });
 
 const activeItem = computed(() => (
-    allItems.find((item) => item.key === activeKey.value) ?? allItems[0]
+    allItems.value.find((item) => item.key === activeKey.value) ?? allItems.value[0]
 ));
 
 function selectItem(key) {
@@ -253,7 +275,8 @@ function selectItem(key) {
           />
 
           <section class="settings-content__body">
-            <UserProfileSettings v-if="activeKey === 'profile'"/>
+            <LanguageSettings v-if="activeKey === 'language'"/>
+            <UserProfileSettings v-else-if="activeKey === 'profile'"/>
             <DataSettings v-else-if="activeKey === 'data'"/>
             <ArchivedSessionsSettings v-else-if="activeKey === 'archived'" @open-session="emit('open-session', $event)"/>
             <ModelCatalog v-else-if="activeKey === 'models'"/>
@@ -267,7 +290,7 @@ function selectItem(key) {
                 class="settings-child-host"
             >
               <div v-if="childRenderError" class="settings-child-error">
-                <strong>{{ activeKey === 'skills' ? '技能页面渲染失败' : '连接器页面渲染失败' }}</strong>
+                <strong>{{ $t(activeKey === 'skills' ? '技能页面渲染失败' : '连接器页面渲染失败') }}</strong>
                 <span>{{ childRenderError }}</span>
                 <button type="button" @click="childRenderError = ''">重新显示</button>
               </div>

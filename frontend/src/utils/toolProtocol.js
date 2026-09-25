@@ -4,6 +4,7 @@
  * 这里只解释消息协议，不判断一次调用是否真正修改了文件或创建了任务。
  * 副作用投影见 toolEffects.js；时间线拼接见 toolTrace.js。
  */
+import { t } from "../i18n/index.js";
 
 /**
  * 判断 value 是否为普通对象。
@@ -199,13 +200,12 @@ export function toolDisplayName(
 
         schedule_task:
             "安排提醒或任务",
+
+        context_resource:
+            "读取上下文资料",
     };
 
-    return (
-        names[toolName] ||
-        toolName ||
-        "未知工具"
-    );
+    return t(names[toolName] || toolName || "未知工具");
 }
 
 /**
@@ -330,10 +330,10 @@ export function toolActionLabel(
                 !path ||
                 path === "."
             ) {
-                return "查看 Workspace 根目录";
+                return t("查看 Workspace 根目录");
             }
 
-            return `查看 ${path} 目录`;
+            return t("查看 {path} 目录", { path });
         }
 
         case "read_file": {
@@ -344,10 +344,10 @@ export function toolActionLabel(
                 );
 
             if (path) {
-                return `读取 ${path}`;
+                return t("读取 {path}", { path });
             }
 
-            return "读取文件";
+            return t("读取文件");
         }
 
         case "write_file": {
@@ -358,10 +358,10 @@ export function toolActionLabel(
                 );
 
             if (path) {
-                return `写入 ${path}`;
+                return t("写入 {path}", { path });
             }
 
-            return "写入文件";
+            return t("写入文件");
         }
 
         case "edit_file": {
@@ -372,10 +372,10 @@ export function toolActionLabel(
                 );
 
             if (path) {
-                return `编辑 ${path}`;
+                return t("编辑 {path}", { path });
             }
 
-            return "编辑文件";
+            return t("编辑文件");
         }
 
         case "glob": {
@@ -386,10 +386,10 @@ export function toolActionLabel(
                 );
 
             if (pattern) {
-                return `查找 ${pattern}`;
+                return t("查找 {pattern}", { pattern });
             }
 
-            return "查找文件";
+            return t("查找文件");
         }
 
         case "grep": {
@@ -400,15 +400,15 @@ export function toolActionLabel(
                 );
 
             if (query) {
-                return `搜索「${query}」`;
+                return t("搜索「{query}」", { query });
             }
 
-            return "搜索内容";
+            return t("搜索内容");
         }
 
         case "shell_execute":
         case "run_command":
-            return "执行命令";
+            return t("执行命令");
 
         case "http_request": {
             const url =
@@ -418,10 +418,10 @@ export function toolActionLabel(
                 );
 
             if (url) {
-                return `请求 ${url}`;
+                return t("请求 {url}", { url });
             }
 
-            return "发送 HTTP 请求";
+            return t("发送 HTTP 请求");
         }
 
         case "web_search": {
@@ -432,10 +432,10 @@ export function toolActionLabel(
                 );
 
             if (query) {
-                return `搜索「${query}」`;
+                return t("搜索「{query}」", { query });
             }
 
-            return "搜索网页";
+            return t("搜索网页");
         }
 
         case "web_fetch": {
@@ -446,22 +446,25 @@ export function toolActionLabel(
                 );
 
             if (url) {
-                return `读取 ${url}`;
+                return t("读取 {url}", { url });
             }
 
-            return "读取网页";
+            return t("读取网页");
         }
 
         case "browser": {
             const action = readStringProperty(argumentsObject, "action");
-            if (action === "screenshot") return "截取网页";
-            if (action === "open") return "打开网页";
-            if (action === "snapshot") return "查看网页";
-            if (action === "click") return "点击网页元素";
-            if (action === "type") return "输入网页内容";
-            if (action === "close") return "关闭浏览器";
-            return "浏览网页";
+            if (action === "screenshot") return t("截取网页");
+            if (action === "open") return t("打开网页");
+            if (action === "snapshot") return t("查看网页");
+            if (action === "click") return t("点击网页元素");
+            if (action === "type") return t("输入网页内容");
+            if (action === "close") return t("关闭浏览器");
+            return t("浏览网页");
         }
+
+        case "context_resource":
+            return t("读取上下文资料");
 
         default:
             return toolDisplayName(

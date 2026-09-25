@@ -5,9 +5,8 @@ import {
   ref,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
+import { t } from "../../i18n/index.js";
 
 import {
   IconFolder,
@@ -75,7 +74,7 @@ const installableDiscoveryCandidates = computed(() =>
 );
 
 function displayName(skill) {
-  return skill?.alias?.trim() || skill?.name || skill?.directoryName || "未命名 Skill";
+  return skill?.alias?.trim() || skill?.name || skill?.directoryName || t("未命名 Skill");
 }
 
 function usedByAgents(skill) {
@@ -359,7 +358,7 @@ onMounted(load);
                   <strong>{{ candidate.name || candidate.path }}</strong>
                   <code>{{ candidate.path }}</code>
                   <StatusPill
-                      :label="discoveryCandidateStatus(candidate).label"
+                      :label="t(discoveryCandidateStatus(candidate).label)"
                       :tone="discoveryCandidateStatus(candidate).tone"
                       :dot="false"
                   />
@@ -426,7 +425,7 @@ onMounted(load);
               <strong>{{ displayName(skill) }}</strong>
               <code v-if="skill.alias">{{ skill.name }}</code>
               <StatusPill
-                  :label="skillStatus(skill).label"
+                  :label="t(skillStatus(skill).label)"
                   :tone="skillStatus(skill).tone"
                   :dot="false"
               />

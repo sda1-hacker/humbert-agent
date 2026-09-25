@@ -1,172 +1,184 @@
-# Humbert Agent 开发规范
+# Humbert Agent 项目开发规范
 
-本文档是 Humbert Agent 后续代码生成、修改、重构和评审的工程约束。除非项目负责人明确修改本规范，否则新增代码与修改代码均应遵守。
+本文面向为 Humbert Agent 编写、修改和评审代码的开发者。项目当前处于开发试验阶段；规范以**保持功能正确、边界清晰、代码容易阅读**为目标。产品介绍与运行方法见 [README.md](README.md)，各模块实现见 [架构手册](docs/architecture/README.md)，领域事实与生命周期见 [领域边界](docs/architecture/domain-boundaries.md)。
 
-## 1. 代码必须完整可用
+当规范与实际代码不一致时，先确认代码是否存在缺陷，再在同一次变更中更新代码或规范；不要让过期文档长期充当事实。安全和数据事实来源的约束不能仅因某个旧实现不同而跳过。
 
-- 每个函数必须实现完整功能。
-- 禁止提交 `TODO`、伪代码、占位实现或 `panic("not implemented")`。
-- 不允许省略需求要求的关键逻辑。
-- 当前需求要求实现的功能，必须提供可编译、可运行的真实代码。
+## 1. 开发原则
 
-## 2. 统一日志
+1. **先理解链路，再修改局部。** 找到入口、调用者、持久化位置、权限边界和 UI 投影；只修改完成需求所需的模块。
+2. **功能完整优先于代码行数。** 删除重复逻辑、无用状态和过时兼容层；不要用隐式副作用或复杂通用框架换取表面上的短代码。
+3. **一个模块只承担明确职责。** 浏览器负责网页交互与截图，文件工具负责复制和写入，Session 负责附件原件与消息事实。跨能力的用户请求由 Agent 连续调用工具完成，不把某一种自然语言说法写死在工具内部。
+4. **事实只有一个来源。** 实时事件、前端 Store、内存缓存、搜索索引与预览模型都是投影，不能反向覆盖权威记录。
+5. **错误可诊断、可恢复。** 失败应保留原因和请求标识，用户可见操作失败必须在界面上反馈；不能把失败伪装成已完成，也不能盲目重试可能已经产生副作用的动作。
+6. **当前开发阶段不做无需求的旧版兼容。** 改变本地格式或接口时，可同步更新调用方、测试、示例配置和文档，并明确说明需要清理或重建的本地数据。正式发布并承诺数据兼容后，再为已发布格式设计迁移。
 
-- 项目统一使用 `internal/logging`。
-- 业务代码禁止随意使用 `fmt.Println`、`fmt.Printf`、`log.Println` 等作为日志输出。
-- 使用统一日志级别：`Debug`、`Info`、`Warn`、`Error`。
-- 日志应尽量携带可诊断上下文字段，例如：`request_id`、`session_id`、`agent_id`、`operation`、`duration_ms`。
-- 禁止在日志中输出密码、Token、API Key、Cookie、完整 Credential、敏感 Tool 参数或其他 Secret。
+不要提交伪实现、无期限的 `TODO`、死代码或与需求无关的重构。确实需要分期实现的能力，应在用户可见功能上诚实标明当前范围。
 
-## 3. 中文注释
+## 2. 代码地图与依赖方向
 
-核心类型、接口、结构体、公共函数及复杂逻辑必须提供有意义的中文注释。注释不仅说明“做什么”，还应在必要时解释：
+| 位置 | 职责 | 修改时首先核对 |
+| --- | --- | --- |
+| `cmd/desktop/`、`cmd/data/` | 桌面入口与离线数据命令 | 启动、关闭、备份前置条件 |
+| `internal/app/` | 依赖组装、工具注册、生命周期 | 构造失败、关闭顺序、可选能力 |
+| `internal/services/` | Wails 服务与 DTO 边界 | 前端调用参数、错误与事件协议 |
+| `internal/runtime/` | 一次 Turn 的占用、快照、Eino 执行、审批恢复 | 消息落盘顺序、取消、终态 |
+| `internal/contextengine/` | 上下文窗口、Token 预算、压缩 | Tool 事务完整性、检查点来源 |
+| `internal/agents/`、`internal/sessions/`、`internal/transcript/` | Agent、会话元数据、附件与 JSONL | 权威记录、并发、重建 |
+| `internal/tools/`、`internal/tools/builtin/` | 工具注册、授权包装、内置工具 | Scope、Permission、Sandbox、结果预算 |
+| `internal/permission/`、`internal/approval/`、`internal/sandbox/` | 授权、人工确认、系统边界 | 越权、重放、副作用 |
+| `internal/models/`、`internal/multimodal/`、`internal/documenttext/` | 模型、视觉与文档处理 | 能力声明、输入上限、不可信内容 |
+| `internal/skills/`、`internal/mcp/`、`internal/collaboration/` | 扩展与子 Agent | 外部输入、工具可见性、权限继承 |
+| `internal/tasks/`、`internal/proactive/` | 定时与主动执行 | 幂等、重试、关闭与限额 |
+| `internal/searchindex/`、`internal/databackup/` | 可重建搜索索引与用户备份 | 事实来源、恢复完整性 |
+| `frontend/src/api/`、`stores/`、`components/` | Wails 桥、界面状态与展示 | 事件竞态、DTO、国际化、交互 |
 
-- 为什么这样设计；
-- 生命周期与资源所有权；
-- 关键边界条件；
-- 错误处理策略；
-- 与其他模块的关系；
-- 并发和安全约束。
+允许的主要依赖方向是：**UI → Wails Service → Application/Domain → Store 或外部适配器**。领域逻辑不应依赖 Vue、Wails 组件或页面状态；组件也不应重新实现权限、Session 恢复或数据库规则。新增抽象应隔离真实边界，避免建立职责不明的 `utils`、`common`、`manager` 大包。
 
-避免重复代码本身含义的无意义注释。
+阅读一次聊天可从 `ChatService.StartTurn` 追到 `runtime.Service`、`Resolver`、`Executor`、`sessions.Service`，再沿 `humbert:runtime:event` 回到前端 `stores/runtime.js`。详细断点见 [代码阅读导引](docs/architecture/code-reading-guide.md)。
 
-## 4. 配置统一使用 Viper
+## 3. Go 代码规范
 
-- 应用启动配置统一由 `internal/config` 使用 Viper 加载。
-- 业务代码禁止直接读取环境变量或自行解析 `config.yaml`。
-- 配置支持：合理默认值、配置文件、环境变量覆盖。
-- Provider、Model、Agent、Session 等动态领域状态不塞入 Viper；它们由各自 Store 管理。
-- API Key、Token 等敏感信息与普通配置分离，统一进入 `secrets/` 对应 Credential Store，不得硬编码。
+### 命名与组织
 
-## 5. 错误处理
+- Package 使用简短、具体的小写名称；导出标识符表达稳定职责，内部细节保持非导出。
+- 一个函数只处理一段清晰流程。验证、读取、状态转换和持久化复杂时可提取小函数，但不要为单次调用建立空洞接口。
+- 接口通常定义在使用方，包含完成任务所需的最小方法集。构造函数校验必需依赖，避免运行中才发现 nil。
+- 优先复用现有 `Scope`、Store、PathGuard、原子文件和错误类型；不要复制一份近似安全逻辑。
+- 公共类型、接口、关键状态机和不直观的安全/并发决定使用中文注释，说明**为什么**和**边界在哪里**。简单赋值无需逐行解释；代码、协议字段和外部 API 名称保持原文。
+- 保持 `gofmt` 输出；不要手工对齐 Go 代码，也不要为当前需求之外的风格修改制造大 diff。
 
-- 禁止忽略重要 `error`。
-- 向上返回错误时增加业务上下文，例如：`fmt.Errorf("读取配置失败: %w", err)`。
-- 需要上层判断的错误使用稳定 Sentinel Error 或自定义错误类型，并通过 `errors.Is` / `errors.As` 判断。
-- 禁止通过比较错误字符串判断错误类型。
-- 清理阶段若错误不会改变主操作结果，应明确说明为何属于 best-effort；否则必须返回或记录。
+### Context、错误与资源
 
-## 6. 工程结构
+- 文件 I/O、数据库、网络、外部进程、模型调用和长任务接受或传递 `context.Context`；不要用 `context.Background()` 丢掉本轮取消信号。
+- 包装错误时保留 `%w`；稳定分支使用 `errors.Is` / `errors.As` 或明确错误类型，不比较错误字符串。
+- 部分成功必须明确表达，例如“附件已创建，但复制失败”；不能在出错时返回看似完整的成功结果。
+- 文件、连接、进程、计时器、goroutine 都要有 Owner 和关闭路径。后台循环应能在应用关闭时停止；`defer` 与补偿清理要覆盖失败分支。
+- 禁止忽略会改变结果的错误。仅允许有理由的 best-effort 清理，并让日志或注释说明原因。
 
-- 保持高内聚、低耦合。
-- Package 只承担清晰职责。
-- 禁止为了方便随意创建 `utils`、`common`、`misc` 等职责模糊目录。
-- 不为了抽象而抽象；只有当抽象能够隔离明确的领域或基础设施边界时才引入接口。
-- Domain 不直接依赖 Wails、Vue 或具体持久化实现。
-- Wails/HTTP/CLI 等都属于 Adapter，通过 Application Service 进入核心逻辑。
+### 并发
 
-## 7. Context 与并发
+- 同一 Session 的 Turn、压缩、删除和审批恢复遵守现有 reservation 边界；不同 Session 应能并行运行。
+- Turn 解析完成后的模型、工具、权限、工作区和 Context 快照视为不可变。运行中配置变化只影响后续 Turn。
+- 不在持有全局锁时做模型调用、网络等待或大文件解析。数据库事务和文件锁范围要短，状态转换必须可追踪。
+- 对可能重试的写入考虑幂等键与崩溃窗口；不能因为模型或 UI 再发一次请求就重复执行已有副作用。
 
-- 网络、文件 IO、数据库、外部进程、模型调用和长时间任务优先接收 `context.Context`。
-- 禁止创建无法取消、无法退出、无法回收资源的 goroutine。
-- 后台任务必须有明确 Owner、Context、退出路径和资源回收策略。
-- 高频运行时状态避免全局写锁；Session Transcript 采用 per-file/per-session 串行化，不同 Session 应允许并行执行。
-- 低频 Provider/Model/Agent 配置更新允许使用领域级互斥锁保护“读-改-原子写回”。
+### 日志与可观测性
 
-## 8. 安全要求
+- 统一使用 `internal/logging` 的结构化日志，按 Debug、Info、Warn、Error 区分诊断与故障；业务逻辑不使用 `fmt.Println` 代替日志。
+- 重要运行记录带上适用的 `operation`、`request_id`、`run_id`、`session_id`、`agent_id`、`tool_call_id` 和耗时。不要为了“日志更详细”写入完整提示词、文件内容或工具参数。
+- 事件、日志和 JSONL 各司其职：事件用于即时 UI，日志用于诊断，JSONL 用于会话事实。排查问题时用稳定 ID 串联，不靠时间戳猜测同一次调用。
 
-所有用户输入和外部输入默认不可信，必须考虑：
+## 4. 数据、持久化与格式变更
 
-- 路径穿越和符号链接逃逸；
-- 命令注入；
-- 越权文件访问；
-- SSRF 和不安全网络目标；
-- 敏感信息泄漏；
-- 非法配置或损坏持久化数据。
+当前数据边界如下；具体目录及恢复流程以 [Session 章节](internal/sessions/README.md) 和 [领域边界](docs/architecture/domain-boundaries.md) 为准。
 
-未经验证的输入不得直接传递给 Shell、文件系统、SQL 或外部进程。敏感数据不得进入普通日志和普通配置文件。
+| 数据 | 权威位置 | 约束 |
+| --- | --- | --- |
+| 会话消息、thinking、ToolCall、ToolResult、压缩检查点 | `agents/<agent-id>/sessions/<session-id>/session.jsonl` | 追加式事实；不能用 UI 事件替代 |
+| 会话标题、归属、归档、排序时间 | `agents/session-metadata.sqlite` | 控制面事实；WAL；必须纳入备份 |
+| 上传文件、浏览器截图等原件 | 当前 Session 的 `attachments/` | JSONL 只保存引用和必要元数据，不保存 Base64 |
+| 会话位置索引、派生记忆 | `session.locations.jsonl`、`memory.json` | 可从事实来源重建 |
+| 跨会话和文档搜索 | `cache/*.sqlite` | 可重建索引；不承载唯一用户事实 |
+| Provider/模型、Agent、任务等配置 | 对应领域 Store | 不擅自复制到另一份配置源 |
+| 密钥 | 系统凭据库与 `secrets/` 的受控索引 | 不写入普通配置、JSONL 或日志 |
 
-## 9. 测试要求
+- 新增持久化字段前回答：谁拥有它、谁写入、谁读取、是否需备份、崩溃后如何恢复。避免“一份事实写到 JSONL、SQLite、前端 Store 三处”。
+- JSONL 消息、ToolCall 和 ToolResult 必须保持可对应的稳定 ID 与顺序；压缩不能拆散工具事务，也不能把历史 thinking 当普通上下文反复发送。
+- 长会话读取应利用位置索引、窗口和按需查询，不能为了一个页面或一个 Turn 无条件加载整份 JSONL。派生索引失效时应可重建。
+- SQLite 写入采用已有 Store 和事务边界；并发访问遵循连接池、忙等待及 WAL 约定。修改数据库结构时同时检查查询、备份、恢复与崩溃测试。
+- 小 JSON 配置使用现有原子写入机制；不要 `os.WriteFile` 直接覆盖唯一事实文件。
+- **开发阶段格式调整**：可直接改为新 schema，并让本地测试数据重建；同步删除旧字段、旧分支、旧示例和旧文档，不为未发布的试验格式叠加迁移。若变更会使现有本地数据不能读取，在交付说明中写明需要清理的准确目录或文件，避免让开发者误删整个用户目录。对已经发布且承诺兼容的数据，必须另行设计版本迁移、备份和失败回滚。
 
-- 核心逻辑必须有测试。
-- 修改 Bug 时增加对应回归测试。
-- 并发、持久化和安全边界应优先增加测试。
-- 完成代码后尽量真实执行：
+## 5. Agent、工具与提示词
+
+### 工具边界
+
+新增内置工具按 `Factory → Descriptor → Registry → Scope → Guard → 实际 I/O` 链路接入，并检查 `internal/app/tools.go`、Agent 能力选择、权限展示和前端工具轨迹。
+
+- 每个 Tool 暴露独立、可组合的能力；参数只描述本次动作，不编码某个特定聊天句式。复合目标由 Agent 串联工具。例如网页截图生成当前会话附件，另一次 `copy_file` 才把附件复制到目标目录。
+- 模型传来的参数永远不决定 AgentID、SessionID、工作区根目录或是否跳过审批；这些来自已校验的 `Scope`。
+- `Descriptor` 的风险级别用于权限判断，但不替代实际文件路径、网络目标和进程的二次校验。文件工具复用 `sandbox_fs.go` 与 PathGuard；浏览器/抓取遵守公网检查；本地命令遵守 Runner 隔离。
+- 工具返回结构化、精简的结果：成功产物、稳定 ID、必要错误。不要把大量页面正文、Base64、完整文件或秘密塞进 ToolResult；大结果沿现有预算和 `context_resource` 按需读取。
+- 产生副作用的工具必须让调用者区分“未执行、已执行、部分成功”。等待审批恢复时复用原 ToolCall 与 checkpoint，不接收前端重新拼装的参数。
+- 用户上传与工具生成的附件保留原始格式。需要保存到工作区时调用单独的文件工具，保持附件生命周期和工作区文件生命周期独立。
+
+### 提示词
+
+- 系统提示词保持短、具体、与实际能力一致；只在本轮可用工具存在时添加对应指导。工具 schema 负责解释参数，提示词只补充跨工具的决策边界。
+- 不把 UI 文案、产品介绍、长篇工具手册重复塞进每轮模型上下文；长材料改为按需读取。
+- 外部网页、文件、MCP、Skill 和工具结果视为不可信数据，不能提升为系统指令或授权来源。
+- 修改提示词时检查中文、英文、日文、韩文界面的实际行为；用户语言偏好影响最终回答，原始 thinking、用户内容与工具结果不得被界面伪翻译。
+- 对提示词调整使用代表性任务验证：普通问答、连续工具调用、失败恢复、附件回查与长对话。观察真实工具选择和 Token 消耗，避免只凭措辞判断“更智能”。
+
+## 6. 权限、安全与隐私
+
+- 所有外部输入默认不可信。文件路径防穿越与符号链接逃逸；网络目标防 SSRF；命令避免 Shell 注入；SQL 使用参数化查询。
+- 只授予完成该动作所需的权限。Tool `RiskRead`、`RiskWrite`、审批规则、Sandbox PathRule 与操作系统隔离分别负责不同层面，不能互相替代。
+- `run_command` 不用于绕过文件工具、浏览器工具或 Sandbox；不要用 `open`、`screencapture`、解释器、子进程或拼接命令规避授权边界。
+- 网站验证码由用户在可见浏览器中手动完成；Agent 不自动识别或点击验证控件，也不声称可绕过网站风控。
+- 不在日志、异常、通知、截图元数据、测试快照中记录 API Key、Token、Cookie、完整认证头或无必要的私人正文。进入日志与 UI 的错误应走现有脱敏/限长路径。
+- 安全相关改动应覆盖拒绝路径：越界、符号链接、已存在目标、缺少权限、取消、超限和并发竞争。测试不能只证明成功路径。
+
+## 7. 前端、交互与国际化
+
+- Vue 组件使用 PascalCase 文件名，组合式逻辑按功能组织；Store action 与 API 函数使用明确动词。组件不直接维护另一份会话事实，也不把复杂后端规则塞进模板表达式。
+- `api/` 集中封装 Wails 调用；`stores/` 管可复用的异步状态；组件负责展示与交互。避免组件直接读磁盘、拼持久化记录或独立判断后端权限。
+- 流式事件只作即时反馈。Turn 终态从 Session API 读取完整消息，并以 SessionID、RequestID、ToolCallID 校正竞态；失败要在对应会话显示可理解的原因。
+- 工具调用、思考、附件和文件变化从**真实消息与 ToolResult**投影，不随机生成过程，不根据参数推测工具成功。可折叠细节的箭头、状态和键盘语义保持一致。
+- 保持聊天为主、右侧文件预览为辅的简洁布局；新增页面或控件先考虑是否可以放入已有流。窄窗口、空状态、加载、失败和审批等待都需可用。
+- 静态界面文案统一使用 `frontend/src/i18n/`，维护 `zh-CN`、`en-US`、`ja-JP`、`ko-KR` 四种语言及占位参数。用户消息、模型回答、原始 thinking、文件正文和工具返回属于数据，不能传入静态文案翻译函数。
+- 图片预览、下载、放大缩小等操作应基于原件或明确的预览资源；避免在 UI 中混淆会话附件与工作区文件。
+- 修改 Wails 服务方法或 DTO 时同步核对 `frontend/src/api/`、事件消费者、页面错误处理与需要时的 bindings。当前前端通过 `Call.ByName` 调用服务；生成 bindings 是可选维护步骤，不能假设生成文件就是唯一调用入口。
+
+## 8. 配置、依赖与构建
+
+- 启动级配置在 `internal/config` 统一管理，提供默认值、校验和 `config.example.yaml` 示例。Provider、模型、Agent、Session 等动态状态由对应 Store 管，不塞入 Viper。新增环境变量入口应记录用途；既有浏览器 Chrome 路径覆盖属于明确的运行环境例外。
+- 新依赖应说明解决的问题、维护状态、平台支持、许可证和打包影响。优先使用项目已有库；不要为少量简单逻辑引入大型框架。
+- 修改 `go.mod`、`go.sum`、`frontend/package.json` 或锁文件时一并验证干净安装、构建和相关平台条件。不要手改生成的 Wails/Vite 产物来修复源码问题。
+- 桌面构建涉及 Wails 3、Go、Node 与平台依赖；无桌面环境时仍应完成可运行的 Go/前端检查，并如实说明未执行的 GUI 验证。
+
+## 9. 测试与验证
+
+测试按风险设计，不为简单转发、样式细节或实现镜像添加脆弱测试。修复 Bug 时优先给**原先会失败、修复后会通过**的回归用例；数据、安全、并发与工具链路需覆盖关键失败路径。
+
+| 变更 | 最低验证重点 |
+| --- | --- |
+| Go 领域逻辑 | 相关包测试、`go test ./...`、`go vet ./...` |
+| JSONL、SQLite、备份 | 崩溃/重启、并发、恢复、旧索引重建与数据一致性 |
+| 权限、Sandbox、工具 | 授权/拒绝、越界、取消、重复调用、结构化结果 |
+| Runtime/Context/提示词 | ToolCall/ToolResult 顺序、压缩、失败后继续、真实模型任务抽查 |
+| Vue 页面、状态、i18n | `npm test`、`npm run build`；交互改动再用桌面应用人工查看 |
+| Wails 接口 | Go 编译、前端参数、事件载荷和桌面启动链路 |
+
+从仓库根目录执行常用检查：
 
 ```bash
-gofmt -w <modified-go-files>
+gofmt -w <本次修改的 Go 文件>
 go test ./...
 go vet ./...
+git diff --check
+cd frontend
+npm test
+npm run build
 ```
 
-- 不允许声称测试通过但实际上没有执行。
-- 如果受 Go 版本、网络、系统依赖或 CI 环境限制无法执行，必须如实记录具体原因。
+首次安装前端依赖使用 `cd frontend && npm ci`。运行桌面开发环境使用 `wails3 dev`；需要发版时再做 `wails3 build` 和目标平台打包检查。网络、浏览器或系统 API 测试可能依赖本机权限；若无法执行，记录**具体命令、失败原因和已通过的替代检查**，绝不把“编译成功”写成“功能已实测”。验证充分后停止重复跑无关测试。
 
-## 10. 修改原则
+## 10. 文档与评审交付
 
-- 修改前先阅读并理解现有代码和依赖关系。
-- 优先复用已有实现。
-- 不擅自修改与当前需求无关的代码。
-- 不进行无关的大规模重构。
-- 修改现有文件时尽量保持原有代码风格、公开 API 和兼容性。
-- 删除代码前必须确认没有调用方，并在变更说明中列出删除原因。
+- 修改模块职责、数据格式、工具契约、权限边界或用户流程时，同步更新对应包的 `README.md`、[架构手册索引](docs/architecture/README.md)、根 [README.md](README.md) 或配置示例中受影响的内容。文档中的图应与代码链路相符。
+- 对外用户说明写“怎么用、失败会怎样”；开发文档写“入口、状态、数据、并发、错误与验证”。不要把实现细节塞进产品界面，也不要把营销描述当工程规范。
+- 评审时依次检查：目标是否完整、是否出现第二份事实、是否突破 Scope/Sandbox、失败是否可见、关闭和重试是否安全、测试是否覆盖实际风险、四种语言是否齐全。
+- 提交说明应写清：改了什么、为什么、验证了什么、仍有哪些实际限制。涉及数据重建时给出准确路径和操作条件；涉及未执行的端到端验证时直说。
+- 一个提交尽量对应一个可理解的意图；重命名、格式整理和行为修改尽可能分开。评审前查看 `git diff`，移除调试输出、临时文件、个人路径、密钥和意外生成物。不要把 `frontend/dist/`、`node_modules/` 或用户数据目录提交进仓库。
 
-## 11. 输出与交付
+## 11. 常见改动的推荐顺序
 
-每次实现任务至少说明：
+**新增工具**：确认能力边界 → 定义独立输入/输出 → 实现 Factory 与 I/O 校验 → 注册工具与风险级别 → 添加成功及拒绝测试 → 更新提示词和 UI 投影 → 更新模块文档。
 
-- 修改了什么；
-- 新增了什么；
-- 为什么这样设计；
-- 如何运行和测试；
-- 实际执行了哪些验证；
-- 哪些验证因环境限制未执行；
-- 哪些旧文件已经可以删除或已经删除。
+**修改聊天消息或附件**：先确定 JSONL 事实和附件原件的关系 → 修改 Session/Transcript → 修改 Runtime 投影与 Context → 修改 Wails DTO 和前端消息展示 → 检查压缩、历史回查、重试与备份。
 
-提供文件代码时必须是完整文件，不使用“省略”“其他代码不变”等方式跳过关键实现。
+**修改页面**：先确认现有 Store/API 是否能提供真实数据 → 设计加载、空态和错误态 → 更新组件与四种语言 → 构建并在桌面环境核对主要交互。
 
-## 12. 当前 Local-first 持久化基线
-
-SQLite 只用于可重建的搜索索引，不承担 Runtime 状态和会话事实存储。当前主要目录如下；某些文件在首次使用对应功能时才创建：
-
-```text
-~/.humbert-agent/
-├── config.yaml
-├── config/
-│   ├── providers.json
-│   ├── models.json
-│   ├── preferences.json
-│   ├── permissions.json
-│   ├── personal-memory.json
-│   └── proactive.json
-├── secrets/
-├── agents/
-│   └── <agent-id>/
-│       ├── config.json
-│       ├── sessions/
-│       │   └── <session-id>/
-│       │       ├── config.json
-│       │       ├── session.jsonl
-│       │       ├── session.locations.jsonl
-│       │       ├── memory.json
-│       │       ├── attachments/
-│       │       ├── context-artifacts/
-│       │       └── subagents/
-│       └── tasks/<task-id>/
-│           ├── config.json
-│           └── runs/<run-id>.json
-├── workspaces/
-├── skills/
-├── mcp/servers.json
-├── cache/
-│   ├── conversation-search.sqlite
-│   └── document-search.sqlite
-└── logs/humbert.log
-```
-
-其中：
-
-- `config.yaml`：Viper 启动级配置；
-- `providers.json`：Provider 非敏感元数据；
-- `models.json`：Model 配置；
-- `preferences.json` 与 `personal-memory.json`：用户偏好及确认保存的个人记忆；
-- `secrets/`：Credential 索引和迁移数据；桌面密钥使用系统凭据库；
-- `agents/<id>/config.json`：Agent Profile；
-- `sessions/<id>/config.json`：会话配置；
-- `sessions/<id>/session.jsonl`：消息、工具事务和压缩检查点的事实来源；
-- `sessions/<id>/memory.json`、`session.locations.jsonl`：可重建的记忆和字节位置索引；
-- `tasks/<id>/runs/`：任务调度、状态与摘要；完整执行消息仍在对应 Session；
-- `cache/*.sqlite`：可重建的跨会话与文档搜索索引；
-- `workspaces/`：应用托管的工作目录；自定义工作区可在此目录之外。
-
-配置 JSON 使用“同目录临时文件 + fsync + rename”原子替换；Session 使用 append-only JSONL 与 per-file 锁。可重建索引只能作为 Cache，不能成为第二份持久化事实来源。详细的代码入口和数据流见 [代码阅读导引](docs/architecture/code-reading-guide.md)。
+**修改数据格式**：列出权威文件与派生索引 → 明确开发阶段是否直接重建 → 同步写入/读取/备份/恢复 → 删除旧代码与旧说明 → 用真实数据生命周期测试验证。

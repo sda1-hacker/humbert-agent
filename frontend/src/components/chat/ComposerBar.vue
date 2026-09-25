@@ -5,9 +5,7 @@ import {
   watch,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 import {
   IconSend,
@@ -643,10 +641,9 @@ async function send() {
       [sessionID]: pendingAttachments,
     };
 
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    if (!runtimeStore.terminalError(sessionID)) {
+      Message.error(error?.message ?? String(error));
+    }
   } finally {
     sending.value = false;
   }

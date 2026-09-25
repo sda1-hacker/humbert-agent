@@ -6,9 +6,7 @@ import {
   ref,
 } from "vue";
 
-import {
-  Message,
-} from "@arco-design/web-vue";
+import { Message } from "../../utils/uiMessage.js";
 
 import {
   getSandboxStatus,
@@ -33,12 +31,10 @@ const form = reactive({
   defaultNativeMode: "preferred",
   commandGracePeriodMS: 1500,
   shellEnabled: false,
-  shellCommandsText: "python3\npython\ngit\ngo\nnode\nnpm\nnpx",
 });
 
 const initialShell = reactive({
   enabled: false,
-  commands: "",
 });
 
 const sandboxEnabled = computed({
@@ -59,12 +55,15 @@ const networkEnabled = computed({
 const strictMode = computed(() => form.defaultProfile === "workspace_only");
 
 const localProgramIsolationNote = computed(() => {
-  if (!form.shellEnabled || !sandboxEnabled.value) return "";
+  if (!form.shellEnabled) return "";
+  if (form.defaultNativeMode === "off") {
+    return "关闭原生隔离时，run_command 和 Skill 脚本无法保证工作区只读，因此会拒绝执行。";
+  }
   if (status.value?.platform === "windows" && !status.value?.filesystem) {
-    return "Windows 当前不能为 Python、Node 等本地程序提供与文件工具相同的目录隔离。安全沙盒开启时，Humbert 会拒绝启动受限本地程序；只有在高级设置中明确关闭“本地程序隔离”后才会按当前 Windows 用户权限运行。";
+    return "Windows 当前无法为任意本地命令保证工作区只读，因此 run_command 会拒绝执行。";
   }
   if (!status.value?.available || !status.value?.filesystem) {
-    return "当前系统无法建立可靠的本地程序文件隔离。为避免静默降级，安全沙盒开启时 Humbert 会拒绝启动 Python、Node、Skill 脚本和 stdio MCP 等本地进程。";
+    return "当前系统无法建立可靠的本地程序文件隔离，run_command 和 Skill 脚本会拒绝执行。";
   }
   return "";
 });
@@ -119,24 +118,11 @@ function applyStatus(value) {
   form.defaultNativeMode = value.defaultNativeMode || "preferred";
   form.commandGracePeriodMS = Number(value.commandGracePeriodMS || 1500);
   form.shellEnabled = Boolean(value.shellEnabled);
-  form.shellCommandsText = Array.isArray(value.shellAllowedCommands)
-      ? value.shellAllowedCommands.join("\n")
-      : "";
   initialShell.enabled = form.shellEnabled;
-  initialShell.commands = normalizeCommandText(form.shellCommandsText).join("\n");
-}
-
-function normalizeCommandText(value) {
-  return String(value || "")
-      .split(/[\n,]+/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .filter((item, index, all) => all.indexOf(item) === index);
 }
 
 const shellNeedsRestart = computed(() => {
-  const commands = normalizeCommandText(form.shellCommandsText).join("\n");
-  return form.shellEnabled !== initialShell.enabled || commands !== initialShell.commands;
+  return form.shellEnabled !== initialShell.enabled;
 });
 
 async function load() {
@@ -161,7 +147,6 @@ async function save() {
       defaultNativeMode: form.defaultNativeMode,
       commandGracePeriodMS: Number(form.commandGracePeriodMS),
       shellEnabled: form.shellEnabled,
-      shellAllowedCommands: normalizeCommandText(form.shellCommandsText),
     });
     const changedShell = shellNeedsRestart.value;
     applyStatus(value);
@@ -269,7 +254,7 @@ onMounted(load);
             <div>
               <strong>允许运行本地程序</strong>
               <span>
-                允许 Agent 在操作确认和沙盒约束下运行 Python、Git、Node 等本地程序。修改后需要重启 Humbert 才会生效。
+                允许 Agent 在操作确认和原生沙盒约束下运行本地程序。命令对工作区只有读取权限，不能修改或删除文件。修改后需要重启 Humbert。
               </span>
               <small v-if="status.shellEnabled !== status.shellRuntimeActive" class="restart-note">
                 当前配置与运行状态不同，请重启 Humbert 完成切换。
@@ -324,24 +309,13 @@ onMounted(load);
               </div>
 
               <div class="policy-field">
-                <span>允许的本地程序</span>
-                <a-textarea
-                    v-model="form.shellCommandsText"
-                    aria-label="允许的本地程序"
-                    :auto-size="{ minRows: 4, maxRows: 8 }"
-                    placeholder="每行一个程序，例如 python3"
-                />
-                <small>这里只填写程序名称，不填写路径或 Shell 命令。推荐保留 python3、git、go、node 等你确实需要的程序。</small>
-              </div>
-
-              <div class="policy-field">
                 <span>本地程序隔离</span>
                 <a-select v-model="form.defaultNativeMode" aria-label="本地程序隔离">
                   <a-option value="preferred">自动使用</a-option>
                   <a-option value="required">必须使用</a-option>
                   <a-option value="off">关闭</a-option>
                 </a-select>
-                <small>“必须使用”会在当前系统无法满足隔离要求时拒绝启动 Python、Node、Skill、stdio MCP 等本地程序。</small>
+                <small>任意命令和 Skill 脚本始终要求原生文件隔离；stdio MCP 按选定策略执行。</small>
               </div>
 
               <div class="policy-field">
