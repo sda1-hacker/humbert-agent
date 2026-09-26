@@ -252,25 +252,32 @@ func (t *guardedInvokableTool) invokeRealTool(
 func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result string) (string, error) {
 	limit := t.scope.ToolResultMaxChars
 	chars := utf8.RuneCountInString(result)
-	// context_resource 本身就是读取已归档结果的出口。若再次把它的返回值归档，
-	// 模型拿到的又是一个新的 resource_id，随后会不断读取新资源，原地循环。
-	// 资源工具限制单次读取长度；本轮预算用尽时直接给出终止提示。
+
+	// context_resource 是归档/省略内容的恢复通道，绝不能再次归档它自己的返回值，
+	// 否则模型会拿到新的 resource_id 并形成递归读取链。
+	//
+	// 它使用 ResultBudget 的 recovery 通道：普通 ToolResult/Preview 无法消耗
+	// recovery reserve，因此即使本轮已经产生多个大结果，仍尽量保证至少一次
+	// 有意义的资源回读。额度不足属于正常控制流，不作为 Tool error 返回。
 	if t.descriptor.Name == "context_resource" {
-		if (limit > 0 && chars > limit) || !t.scope.ToolResultBudget.reserveFull(chars) {
-			return `{"status":"budget_exhausted","message":"本轮上下文资源读取额度已用完。不要再次调用 context_resource；请根据已获得的信息回答，或说明仍缺少什么。"}`, nil
+		if (limit > 0 && chars > limit) || !t.scope.ToolResultBudget.reserveRecovery(chars) {
+			return contextResourceBudgetExhaustedResult(), nil
 		}
 		return result, nil
 	}
+
 	if t.archiver == nil || strings.TrimSpace(t.scope.SessionID) == "" {
 		return result, nil
 	}
 	if (limit <= 0 || chars <= limit) && t.scope.ToolResultBudget.reserveFull(chars) {
 		return result, nil
 	}
+
 	id, err := t.archiver.Archive(ctx, t.scope.SessionID, t.descriptor.Name, result)
 	if err != nil {
 		return "", fmt.Errorf("保存 Tool %q 超大完整结果失败: %w", t.descriptor.Name, err)
 	}
+
 	runes := []rune(result)
 	if limit <= 0 {
 		limit = chars
@@ -278,19 +285,16 @@ func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result st
 	if limit > chars {
 		limit = chars
 	}
-	if t.scope.ToolResultBudget != nil {
-		used, total := t.scope.ToolResultBudget.Usage()
-		remaining := total - used
-		// 归档预览最多占剩余额度的一半，给 context_resource 留下按需读取空间。
-		if limit > remaining/2 {
-			limit = remaining / 2
-		}
-	}
+
+	// Preview 只允许消费 general pool。旧实现用 remaining/2 做指数衰减，连续
+	// 出现大结果时会很快把可恢复空间压到 1K 以下；现在由 ResultBudget 明确保护
+	// recovery reserve，所以这里直接取当前 general pool 能容纳的最大预览即可。
 	limit = t.scope.ToolResultBudget.reservePreview(limit)
 	headCount := limit / 2
 	tailCount := limit - headCount
 	head := string(runes[:headCount])
 	tail := string(runes[len(runes)-tailCount:])
+
 	payload := map[string]any{
 		"humbert_context_result_truncated": true,
 		"artifact_id":                      id, // 兼容上一版会话记录
@@ -307,6 +311,10 @@ func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result st
 		return "", err
 	}
 	return string(encoded), nil
+}
+
+func contextResourceBudgetExhaustedResult() string {
+	return `{"status":"budget_exhausted","message":"本轮上下文资源读取额度已用完。不要再次调用 context_resource；请根据已获得的信息回答，或明确说明仍缺少什么。"}`
 }
 
 func permissionDeniedResult(toolName string) string {

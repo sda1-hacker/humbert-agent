@@ -17,16 +17,77 @@ func (a *resultBudgetArchiver) Archive(_ context.Context, _, _, content string) 
 	a.originals[id] = content
 	return id, nil
 }
-func TestAggregateToolResultBudgetArchivesCompleteOverflow(t *testing.T) {
+
+func TestGeneralResultsCannotConsumeRecoveryReserve(t *testing.T) {
+	budget := NewResultBudgetWithRecovery(10, 3)
+
+	if !budget.reserveFull(7) {
+		t.Fatal("general result should fill the general pool")
+	}
+	if budget.reserveFull(1) {
+		t.Fatal("general result consumed protected recovery reserve")
+	}
+	if got := budget.GeneralRemaining(); got != 0 {
+		t.Fatalf("general remaining=%d, want 0", got)
+	}
+	if got := budget.RecoveryRemaining(); got != 3 {
+		t.Fatalf("recovery remaining=%d, want 3", got)
+	}
+}
+
+func TestRecoveryCanBorrowUnusedGeneralCapacity(t *testing.T) {
+	budget := NewResultBudgetWithRecovery(10, 3)
+
+	if !budget.reserveRecovery(8) {
+		t.Fatal("recovery should be able to use unused general capacity")
+	}
+	if got := budget.RecoveryRemaining(); got != 2 {
+		t.Fatalf("recovery remaining=%d, want 2", got)
+	}
+	if budget.reserveFull(3) {
+		t.Fatal("general result exceeded total budget after recovery borrowed capacity")
+	}
+	if !budget.reserveFull(2) {
+		t.Fatal("remaining total/general capacity should still be usable")
+	}
+}
+
+func TestSeedUsedDoesNotChargeHistoricalToolResultsToCurrentTurn(t *testing.T) {
+	budget := NewResultBudgetWithRecovery(10, 3)
+	budget.SeedUsed(10)
+
+	if !budget.reserveFull(7) {
+		t.Fatal("historical ToolResults must not consume the current turn general budget")
+	}
+	if !budget.reserveRecovery(3) {
+		t.Fatal("historical ToolResults must not consume the current turn recovery budget")
+	}
+	used, total := budget.Usage()
+	if used != 10 || total != 10 {
+		t.Fatalf("usage=%d/%d, want 10/10", used, total)
+	}
+}
+
+func TestAggregateToolResultBudgetArchivesOverflowWithoutConsumingRecoveryReserve(t *testing.T) {
 	ctx := context.Background()
 	archive := &resultBudgetArchiver{}
-	budget := NewResultBudget(10)
-	tool := &guardedInvokableTool{descriptor: Descriptor{Name: "read_file"}, scope: Scope{SessionID: "session", ToolResultMaxChars: 100, ToolResultBudget: budget}, archiver: archive}
-	first, err := tool.protectLargeResult(ctx, "123456")
-	if err != nil || first != "123456" {
+	budget := NewResultBudgetWithRecovery(20, 6)
+	tool := &guardedInvokableTool{
+		descriptor: Descriptor{Name: "read_file"},
+		scope: Scope{
+			SessionID:          "session",
+			ToolResultMaxChars: 100,
+			ToolResultBudget:   budget,
+		},
+		archiver: archive,
+	}
+
+	first, err := tool.protectLargeResult(ctx, "1234567890")
+	if err != nil || first != "1234567890" {
 		t.Fatalf("first=%q err=%v", first, err)
 	}
-	second, err := tool.protectLargeResult(ctx, "abcdef")
+
+	second, err := tool.protectLargeResult(ctx, "abcdefghij")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,60 +96,68 @@ func TestAggregateToolResultBudgetArchivesCompleteOverflow(t *testing.T) {
 		Head       string `json:"head"`
 		Tail       string `json:"tail"`
 	}
-	if json.Unmarshal([]byte(second), &pointer) != nil || pointer.ArtifactID == "" {
-		t.Fatalf("missing archive pointer: %q", second)
+	if err := json.Unmarshal([]byte(second), &pointer); err != nil || pointer.ArtifactID == "" {
+		t.Fatalf("missing archive pointer: %q err=%v", second, err)
 	}
-	if archive.originals[pointer.ArtifactID] != "abcdef" {
+	if archive.originals[pointer.ArtifactID] != "abcdefghij" {
 		t.Fatal("archived result was not complete")
 	}
-	if len([]rune(pointer.Head+pointer.Tail)) > 2 {
-		t.Fatalf("preview exceeded shared budget: %#v", pointer)
+	if got := len([]rune(pointer.Head + pointer.Tail)); got != 4 {
+		t.Fatalf("preview chars=%d, want 4", got)
 	}
-	third, err := tool.protectLargeResult(ctx, strings.Repeat("z", 20))
-	if err != nil {
-		t.Fatal(err)
+
+	if got := budget.GeneralRemaining(); got != 0 {
+		t.Fatalf("general remaining=%d, want 0", got)
 	}
-	if json.Unmarshal([]byte(third), &pointer) != nil || len([]rune(pointer.Head+pointer.Tail)) > 1 {
-		t.Fatalf("archive preview consumed reserved recovery budget: %q", third)
-	}
-	used, limit := budget.Usage()
-	if used >= limit {
-		t.Fatalf("archive previews left no recovery budget: usage=%d/%d", used, limit)
+	if got := budget.RecoveryRemaining(); got != 6 {
+		t.Fatalf("archive preview consumed protected recovery reserve: remaining=%d", got)
 	}
 }
 
-func TestResultBudgetSeedsRetainedWindowResults(t *testing.T) {
-	budget := NewResultBudget(10)
-	budget.SeedUsed(8)
-	if budget.reserveFull(3) {
-		t.Fatal("new result exceeded remaining window budget")
-	}
-	if !budget.reserveFull(2) {
-		t.Fatal("remaining window budget was lost")
-	}
-	used, _ := budget.Usage()
-	if used != 10 {
-		t.Fatalf("used=%d", used)
-	}
-}
-
-func TestContextResourceResultNeverCreatesAnotherArtifact(t *testing.T) {
+func TestContextResourceUsesRecoveryBudgetAndNeverCreatesAnotherArtifact(t *testing.T) {
 	archive := &resultBudgetArchiver{}
-	budget := NewResultBudget(10)
+	budget := NewResultBudgetWithRecovery(10, 4)
+
+	// Exhaust the normal/general pool first.
+	if !budget.reserveFull(6) {
+		t.Fatal("failed to fill general pool")
+	}
+
 	tool := &guardedInvokableTool{
 		descriptor: Descriptor{Name: "context_resource"},
-		scope:      Scope{SessionID: "session", ToolResultMaxChars: 20, ToolResultBudget: budget},
-		archiver:   archive,
+		scope: Scope{
+			SessionID:          "session",
+			ToolResultMaxChars: 20,
+			ToolResultBudget:   budget,
+		},
+		archiver: archive,
 	}
-	result, err := tool.protectLargeResult(context.Background(), "123456")
-	if err != nil || result != "123456" {
-		t.Fatalf("first=%q err=%v", result, err)
+
+	result, err := tool.protectLargeResult(context.Background(), "1234")
+	if err != nil || result != "1234" {
+		t.Fatalf("recovery result=%q err=%v", result, err)
 	}
-	result, err = tool.protectLargeResult(context.Background(), "abcdef")
+
+	result, err = tool.protectLargeResult(context.Background(), "x")
 	if err != nil || !strings.Contains(result, "budget_exhausted") {
-		t.Fatalf("second=%q err=%v", result, err)
+		t.Fatalf("exhausted result=%q err=%v", result, err)
 	}
 	if len(archive.originals) != 0 {
 		t.Fatalf("context_resource recursively archived %d results", len(archive.originals))
+	}
+}
+
+func TestDefaultRecoveryReserveKeepsMeaningfulCapacity(t *testing.T) {
+	budget := NewResultBudget(32768)
+	generalUsed, generalLimit := budget.GeneralUsage()
+	if generalUsed != 0 {
+		t.Fatalf("general used=%d, want 0", generalUsed)
+	}
+	if generalLimit != 24576 {
+		t.Fatalf("general limit=%d, want 24576", generalLimit)
+	}
+	_, reserve := budget.RecoveryUsage()
+	if reserve != 8192 {
+		t.Fatalf("recovery reserve=%d, want 8192", reserve)
 	}
 }

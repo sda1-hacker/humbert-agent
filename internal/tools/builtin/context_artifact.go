@@ -18,6 +18,11 @@ const contextResourceToolName = "context_resource"
 const (
 	contextResourceTypeArtifact   = "artifact"
 	contextResourceTypeAttachment = "attachment"
+
+	// context_resource 的最终 ToolResult 会被 InferTool 编码为 JSON；这里给字段名、
+	// resource_id、转义等控制信息预留空间，避免内容片段本身把整个 recovery budget
+	// 顶满。最终的精确额度仍由 Guard 的 reserveRecovery 做兜底。
+	contextResourceEnvelopeReserveChars = 1024
 )
 
 // ContextArtifactReader 读取被上下文保护层移出模型工作窗口的完整工具结果。
@@ -54,21 +59,23 @@ type ContextResourceInput struct {
 }
 
 type ContextResourceOutput struct {
-	ResourceType string `json:"resource_type"`
-	ResourceID   string `json:"resource_id"`
+	Status       string `json:"status,omitempty"`
+	Message      string `json:"message,omitempty"`
+	ResourceType string `json:"resource_type,omitempty"`
+	ResourceID   string `json:"resource_id,omitempty"`
 	ToolName     string `json:"tool_name,omitempty"`
 	Name         string `json:"name,omitempty"`
 	MIMEType     string `json:"mime_type,omitempty"`
-	Offset       int    `json:"offset"`
-	End          int    `json:"end"`
-	TotalChars   int    `json:"total_chars"`
-	More         bool   `json:"more"`
-	Content      string `json:"content"`
+	Offset       int    `json:"offset,omitempty"`
+	End          int    `json:"end,omitempty"`
+	TotalChars   int    `json:"total_chars,omitempty"`
+	More         bool   `json:"more,omitempty"`
+	Content      string `json:"content,omitempty"`
 }
 
 func (f *ContextResourceFactory) Build(ctx context.Context, scope humberttools.Scope) (einotool.InvokableTool, error) {
 	return utils.InferTool(contextResourceToolName,
-		"仅在当前任务确实需要缺失的中间内容时，按需读取当前会话资源。artifact 是被归档的超大工具结果；attachment 是较早的文本附件。按 offset/limit 分段读取；返回 more=false 后不要重复读取同一范围。",
+		"仅在当前任务确实需要缺失的中间内容时，按需读取当前会话资源。artifact 是被归档的超大工具结果；attachment 是较早的文本附件。按 offset/limit 分段读取；返回 more=false 后不要重复读取同一范围；status=budget_exhausted 时不要重试。",
 		func(callCtx context.Context, input *ContextResourceInput) (*ContextResourceOutput, error) {
 			if input == nil {
 				return nil, errors.New("context_resource 输入不能为空")
@@ -78,9 +85,13 @@ func (f *ContextResourceFactory) Build(ctx context.Context, scope humberttools.S
 			if resourceID == "" {
 				return nil, errors.New("resource_id 不能为空")
 			}
+			if resourceType != contextResourceTypeArtifact && resourceType != contextResourceTypeAttachment {
+				return nil, fmt.Errorf("resource_type 必须是 %q 或 %q", contextResourceTypeArtifact, contextResourceTypeAttachment)
+			}
 			if input.Offset < 0 {
 				return nil, errors.New("offset 不能小于 0")
 			}
+
 			limit := input.Limit
 			if limit == 0 {
 				limit = 8000
@@ -88,22 +99,34 @@ func (f *ContextResourceFactory) Build(ctx context.Context, scope humberttools.S
 			if limit < 1 || limit > 16000 {
 				return nil, errors.New("limit 必须在 1-16000 之间")
 			}
-			// 为 JSON 字段及转义保留空间，避免读取工具的结果再次触发归档。
-			// 即便模型要求更大 limit，也只返回当前工作窗口能直接容纳的片段。
+
+			// 资源读取属于恢复流量，只受“单结果上限 + RecoveryRemaining”约束。
+			// 普通 ToolResult 和归档 Preview 无法消耗 recovery reserve，因此这里不会再被
+			// 本轮其它大结果提前挤死。预算不足属于正常控制流，不返回 Go error。
+			maxContent := limit
 			if scope.ToolResultMaxChars > 0 {
-				maxContent := scope.ToolResultMaxChars - 1024
-				if scope.ToolResultBudget != nil {
-					used, total := scope.ToolResultBudget.Usage()
-					if remaining := total - used - 1024; maxContent > remaining {
-						maxContent = remaining
-					}
+				bySingleResult := scope.ToolResultMaxChars - contextResourceEnvelopeReserveChars
+				if bySingleResult < 1 {
+					return contextResourceBudgetExhausted(resourceType, resourceID), nil
 				}
-				if maxContent < 1 {
-					return nil, errors.New("本轮上下文资源读取额度已用完；不要重试，请根据已有信息回答")
+				if maxContent > bySingleResult {
+					maxContent = bySingleResult
 				}
-				if limit > maxContent {
-					limit = maxContent
+			}
+			if scope.ToolResultBudget != nil {
+				remaining := scope.ToolResultBudget.RecoveryRemaining() - contextResourceEnvelopeReserveChars
+				if remaining < 1 {
+					return contextResourceBudgetExhausted(resourceType, resourceID), nil
 				}
+				if maxContent > remaining {
+					maxContent = remaining
+				}
+			}
+			if maxContent < 1 {
+				return contextResourceBudgetExhausted(resourceType, resourceID), nil
+			}
+			if limit > maxContent {
+				limit = maxContent
 			}
 
 			switch resourceType {
@@ -111,10 +134,18 @@ func (f *ContextResourceFactory) Build(ctx context.Context, scope humberttools.S
 				return f.readArtifact(callCtx, scope, resourceID, input.Offset, limit)
 			case contextResourceTypeAttachment:
 				return f.readAttachment(callCtx, scope, resourceID, input.Offset, limit)
-			default:
-				return nil, fmt.Errorf("resource_type 必须是 %q 或 %q", contextResourceTypeArtifact, contextResourceTypeAttachment)
 			}
+			return nil, errors.New("无法识别的 context_resource 资源类型")
 		})
+}
+
+func contextResourceBudgetExhausted(resourceType, resourceID string) *ContextResourceOutput {
+	return &ContextResourceOutput{
+		Status:       "budget_exhausted",
+		Message:      "本轮上下文资源读取额度已用完。不要再次调用 context_resource；请根据已获得的信息回答，或明确说明仍缺少什么。",
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+	}
 }
 
 func (f *ContextResourceFactory) readArtifact(ctx context.Context, scope humberttools.Scope, id string, offset, limit int) (*ContextResourceOutput, error) {
@@ -131,6 +162,7 @@ func (f *ContextResourceFactory) readArtifact(ctx context.Context, scope humbert
 		return nil, err
 	}
 	return &ContextResourceOutput{
+		Status:       "ok",
 		ResourceType: contextResourceTypeArtifact,
 		ResourceID:   id,
 		ToolName:     toolName,
@@ -183,7 +215,18 @@ func (f *ContextResourceFactory) readAttachment(ctx context.Context, scope humbe
 	if err != nil {
 		return nil, err
 	}
-	return &ContextResourceOutput{ResourceType: contextResourceTypeAttachment, ResourceID: id, Name: found.Name, MIMEType: found.MIMEType, Offset: offset, End: end, TotalChars: len(runes), More: end < len(runes), Content: string(runes[offset:end])}, nil
+	return &ContextResourceOutput{
+		Status:       "ok",
+		ResourceType: contextResourceTypeAttachment,
+		ResourceID:   id,
+		Name:         found.Name,
+		MIMEType:     found.MIMEType,
+		Offset:       offset,
+		End:          end,
+		TotalChars:   len(runes),
+		More:         end < len(runes),
+		Content:      string(runes[offset:end]),
+	}, nil
 }
 
 func contextResourceRange(offset, limit, total int, label string) (int, error) {
