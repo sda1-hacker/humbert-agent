@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
@@ -31,10 +30,7 @@ type SessionDTO struct {
 	UpdatedAt string `json:"updatedAt"`
 }
 
-// MessageDTO 是当前聊天前端使用的只读兼容投影。
-//
-// 真实持久化已经完全切换到 JSONL v3 typed message + Eino schema.Message。本 DTO 不会
-// 写回磁盘，只为了在 Process Timeline 前端完成重构前继续兼容现有 toolTrace.js。
+// MessageDTO 是聊天界面的唯一只读协议，由持久化消息投影得到，不写回历史。
 type MessageDTO struct {
 	MessageNo int64 `json:"messageNo"`
 
@@ -46,11 +42,26 @@ type MessageDTO struct {
 
 	Content string `json:"content"`
 
-	Metadata map[string]any `json:"metadata"`
+	Metadata MessageMetadataDTO `json:"metadata"`
 
 	Attachments []AttachmentDTO `json:"attachments,omitempty"`
 
 	CreatedAt string `json:"createdAt"`
+}
+
+// MessageMetadataDTO 显式约束 UI 需要的字段，避免各入口自行拼接无类型 metadata。
+type MessageMetadataDTO struct {
+	Reasoning     string            `json:"reasoning_content,omitempty"`
+	ToolCalls     []schema.ToolCall `json:"tool_calls,omitempty"`
+	ProviderID    string            `json:"provider_id,omitempty"`
+	ModelName     string            `json:"model_name,omitempty"`
+	ResponseModel string            `json:"response_model,omitempty"`
+	ResponseID    string            `json:"response_id,omitempty"`
+	StopReason    string            `json:"stop_reason,omitempty"`
+	Incomplete    bool              `json:"incomplete,omitempty"`
+	ToolCallID    string            `json:"tool_call_id,omitempty"`
+	ToolName      string            `json:"tool_name,omitempty"`
+	IsError       bool              `json:"is_error,omitempty"`
 }
 
 // MessagePageDTO 是聊天界面的游标分页结果。
@@ -79,16 +90,8 @@ type AttachmentContentDTO struct {
 
 // SessionService 是 Session Domain 的 Wails Adapter。
 type SessionService struct {
-	core           *coreapp.Application
-	searchMu       sync.Mutex
-	search         *searchindex.Index
-	searchCtx      context.Context
-	searchCancel   context.CancelFunc
-	searchWorkers  sync.WaitGroup
-	searchReaders  sync.WaitGroup
-	searchUpdating bool
-	searchChecked  time.Time
-	searchError    string
+	core   *coreapp.Application
+	search *searchindex.Controller
 }
 
 type SessionSearchDTO struct {
@@ -99,25 +102,10 @@ type SessionSearchDTO struct {
 
 // NewSessionService 创建 SessionService。
 func NewSessionService(core *coreapp.Application) *SessionService {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &SessionService{core: core, searchCtx: ctx, searchCancel: cancel}
+	return &SessionService{core: core, search: searchindex.NewController(filepath.Join(core.Config().Paths.CacheDir, "conversation-search.sqlite"))}
 }
 
-func (s *SessionService) ServiceShutdown() error {
-	s.searchMu.Lock()
-	s.searchCancel()
-	s.searchMu.Unlock()
-	s.searchWorkers.Wait()
-	s.searchReaders.Wait()
-	s.searchMu.Lock()
-	defer s.searchMu.Unlock()
-	if s.search != nil {
-		index := s.search
-		s.search = nil
-		return index.Close()
-	}
-	return nil
-}
+func (s *SessionService) ServiceShutdown() error { return s.search.Close() }
 
 // Search 先读可丢弃的 SQLite 投影；过期检查在后台执行。前端按 updating 轮询，
 // 因此首轮建索引不会把一次搜索请求挂起到两分钟。
@@ -129,119 +117,20 @@ func (s *SessionService) Search(query string) (SessionSearchDTO, error) {
 	if len([]rune(query)) > 200 {
 		return SessionSearchDTO{}, fmt.Errorf("搜索词不能超过 200 字")
 	}
-	s.searchMu.Lock()
-	if err := s.searchCtx.Err(); err != nil {
-		s.searchMu.Unlock()
+	index, status, release, err := s.search.Acquire("sessions", func(ctx context.Context, index *searchindex.Index) error {
+		return searchindex.RefreshSessions(ctx, index, s.core.Agents(), s.core.Sessions())
+	})
+	if err != nil {
 		return SessionSearchDTO{}, err
 	}
-	if s.search == nil {
-		index, err := searchindex.Open(filepath.Join(s.core.Config().Paths.CacheDir, "conversation-search.sqlite"))
-		if err != nil {
-			s.searchMu.Unlock()
-			return SessionSearchDTO{}, err
-		}
-		s.search = index
-	}
-	index := s.search
-	if s.searchCtx.Err() == nil && !s.searchUpdating && time.Since(s.searchChecked) > 10*time.Second {
-		s.searchUpdating = true
-		s.searchError = ""
-		s.searchWorkers.Add(1)
-		go s.refreshSearchIndex(index)
-	}
-	updating, lastError := s.searchUpdating, s.searchError
-	s.searchReaders.Add(1)
-	s.searchMu.Unlock()
-	defer s.searchReaders.Done()
+	defer release()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	results, err := index.Search(ctx, query, 50)
 	if err != nil {
 		return SessionSearchDTO{}, err
 	}
-	return SessionSearchDTO{Results: results, Updating: updating, Error: lastError}, nil
-}
-
-func (s *SessionService) refreshSearchIndex(index *searchindex.Index) {
-	defer s.searchWorkers.Done()
-	ctx, cancel := context.WithTimeout(s.searchCtx, 2*time.Minute)
-	defer cancel()
-	err := s.updateSearchIndex(ctx, index)
-	s.searchMu.Lock()
-	s.searchUpdating = false
-	s.searchChecked = time.Now()
-	s.searchError = ""
-	if err != nil && s.searchCtx.Err() == nil {
-		s.searchError = err.Error()
-	}
-	s.searchMu.Unlock()
-}
-
-// updateSearchIndex 只重建 revision 改变的会话；JSONL 始终是权威数据。
-func (s *SessionService) updateSearchIndex(ctx context.Context, index *searchindex.Index) error {
-	agents, err := s.core.Agents().List(ctx)
-	if err != nil {
-		return err
-	}
-	keep := make(map[string]bool)
-	for _, agent := range agents {
-		sessions, err := s.core.Sessions().List(ctx, agent.Agent.ID)
-		if err != nil {
-			return err
-		}
-		for _, session := range sessions {
-			keep[session.ID] = true
-			revision := session.UpdatedAt.UnixNano()
-			cached, exists, err := index.CachedSession(ctx, session.ID)
-			if err != nil {
-				return err
-			}
-			indexed := searchindex.Session{ID: session.ID, AgentID: session.AgentID, Title: session.Title, Archived: session.Archived, Revision: revision}
-			if exists && cached.Revision == revision {
-				if cached.Title != indexed.Title || cached.Archived != indexed.Archived || cached.AgentID != indexed.AgentID {
-					if err := index.UpdateSessionMetadata(ctx, indexed); err != nil {
-						return err
-					}
-				}
-				continue
-			}
-			if err := index.ReplaceStream(ctx, indexed, func(add func(searchindex.Message) error) error {
-				var insertErr error
-				visitErr := s.core.Sessions().VisitActiveBranchReverse(ctx, session.ID, func(entry transcript.Entry) bool {
-					if entry.Type != transcript.EntryMessage || entry.Message == nil {
-						return true
-					}
-					role := entry.Message.Role
-					if role != transcript.RoleUser && role != transcript.RoleAssistant {
-						return true
-					}
-					var content strings.Builder
-					for _, block := range entry.Message.Content {
-						if block.Type == transcript.ContentText {
-							content.WriteString(block.Text)
-							content.WriteByte('\n')
-						}
-						if block.Type == transcript.ContentFile {
-							content.WriteString(block.ExtractedText)
-							content.WriteByte('\n')
-						}
-					}
-					insertErr = add(searchindex.Message{EntryID: entry.ID, Role: string(role), Timestamp: entry.Timestamp, Content: content.String()})
-					return insertErr == nil
-				})
-				if visitErr != nil {
-					return visitErr
-				}
-				return insertErr
-			}); err != nil {
-				return err
-			}
-		}
-	}
-	if err := index.Prune(ctx, keep); err != nil {
-		return err
-	}
-	return nil
+	return SessionSearchDTO{Results: results, Updating: status.Updating, Error: status.Error}, nil
 }
 
 // List 返回 Agent 的 Sessions。
@@ -434,63 +323,28 @@ func messageDTO(value sessions.Message, messageNo int64) (MessageDTO, error) {
 		return MessageDTO{}, fmt.Errorf("Eino Message 为空")
 	}
 
-	role := ""
-	metadata := make(map[string]any)
+	role := string(value.Message.Role)
+	metadata := MessageMetadataDTO{}
 	content := runtimeMessageText(value.Message)
 	attachments := runtimeMessageAttachments(value.Message)
-
 	switch value.Message.Role {
 	case schema.User:
-		role = "user"
-
 	case schema.Assistant:
-		role = "assistant"
-		if reasoning := runtimeMessageReasoning(value.Message); reasoning != "" {
-			metadata["reasoning_content"] = reasoning
+		metadata.Reasoning = runtimeMessageReasoning(value.Message)
+		metadata.ToolCalls = value.Message.ToolCalls
+		metadata.ProviderID = value.Persistence.Provider
+		metadata.ModelName = value.Persistence.Model
+		metadata.ResponseModel = value.Persistence.ResponseModel
+		metadata.ResponseID = value.Persistence.ResponseID
+		metadata.StopReason = string(value.StopReason)
+		switch value.StopReason {
+		case "length", "error", "aborted", "deferred":
+			metadata.Incomplete = true
 		}
-		if len(value.Message.ToolCalls) > 0 {
-			toolCalls := make([]map[string]any, 0, len(value.Message.ToolCalls))
-			for _, call := range value.Message.ToolCalls {
-				toolCalls = append(toolCalls, map[string]any{
-					"id":   call.ID,
-					"type": call.Type,
-					"function": map[string]any{
-						"name":      call.Function.Name,
-						"arguments": call.Function.Arguments,
-					},
-				})
-			}
-			metadata["tool_calls"] = toolCalls
-		}
-		if value.Persistence.Provider != "" {
-			metadata["provider_id"] = value.Persistence.Provider
-		}
-		if value.Persistence.Model != "" {
-			metadata["model_name"] = value.Persistence.Model
-		}
-		if value.Persistence.ResponseModel != "" {
-			metadata["response_model"] = value.Persistence.ResponseModel
-		}
-		if value.Persistence.ResponseID != "" {
-			metadata["response_id"] = value.Persistence.ResponseID
-		}
-		if value.StopReason != "" {
-			metadata["stop_reason"] = string(value.StopReason)
-
-			switch value.StopReason {
-			case "length", "error", "aborted", "deferred":
-				// 这些终态都表示本次 Assistant Step 没有正常完成。前端只需要一个
-				// 明确的展示标记，不需要把 Runtime Error 文本复制进 Session JSONL。
-				metadata["incomplete"] = true
-			}
-		}
-
 	case schema.Tool:
-		role = "tool"
-		metadata["tool_call_id"] = value.Message.ToolCallID
-		metadata["tool_name"] = value.Message.ToolName
-		metadata["is_error"] = value.Persistence.IsError
-
+		metadata.ToolCallID = value.Message.ToolCallID
+		metadata.ToolName = value.Message.ToolName
+		metadata.IsError = value.Persistence.IsError
 	default:
 		return MessageDTO{}, fmt.Errorf("不支持的 Eino Message Role: %q", value.Message.Role)
 	}

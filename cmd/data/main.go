@@ -12,6 +12,7 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/credential"
 	"github.com/sda1-hacker/humbert-agent/internal/databackup"
+	"github.com/sda1-hacker/humbert-agent/internal/instancelock"
 )
 
 func main() {
@@ -35,6 +36,8 @@ func main() {
 		if *output == "" || *passphraseFile == "" || !*offline {
 			usage()
 		}
+		lock := acquireDataLock(*root)
+		defer lock.Close()
 		passphrase, err := readPassphrase(*passphraseFile, *root)
 		if err != nil {
 			fail(err)
@@ -83,6 +86,8 @@ func main() {
 		if *archive == "" || !*offline {
 			usage()
 		}
+		lock := acquireDataLock(*root)
+		defer lock.Close()
 		var rollback string
 		if databackup.IsEncrypted(*archive) {
 			passphrase, readErr := readPassphrase(*passphraseFile, "")
@@ -109,6 +114,16 @@ func main() {
 	default:
 		usage()
 	}
+}
+
+// 离线标志表达操作意图，系统锁验证事实；CLI 与桌面实例必须使用同一把锁。
+// verify 只检查独立归档，不需要锁住应用数据目录。
+func acquireDataLock(root string) *instancelock.Lock {
+	lock, err := instancelock.Acquire(root)
+	if err != nil {
+		fail(err)
+	}
+	return lock
 }
 
 func usage() {

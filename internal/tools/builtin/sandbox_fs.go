@@ -19,6 +19,7 @@ type sandboxTarget struct {
 	absolute string
 	display  string
 	decision sandbox.PathDecision
+	policy   sandbox.EffectivePolicy
 }
 
 // openSandboxTarget 先通过 PathGuard 对具体业务动作做裁决，再使用命中的 PathRule Root
@@ -65,7 +66,18 @@ func openSandboxTarget(ctx context.Context, scope humberttools.Scope, input stri
 		absolute: absolute,
 		display:  display,
 		decision: decision,
+		policy:   policy,
 	}, nil
+}
+
+// canReadChild 对每个后代重新裁决：父目录可读不代表其中的受保护目录也可读。
+// 遍历期间被删除的文件直接跳过，其余策略或文件系统错误不能伪装成空结果。
+func (t *sandboxTarget) canReadChild(relative string) (bool, error) {
+	_, err := t.policy.CheckPath(filepath.Join(t.rootPath, relative), sandbox.OpRead)
+	if errors.Is(err, sandbox.ErrPathDenied) || errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 func (t *sandboxTarget) Close() error {

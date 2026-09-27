@@ -90,9 +90,9 @@ func (f *gitReadFactory) Build(ctx context.Context, scope humberttools.Scope) (e
 			if input != nil && strings.TrimSpace(input.Path) != "" {
 				path = input.Path
 			}
-			args := []string{"diff", "--no-ext-diff", "--"}
+			args := []string{"diff", "--no-ext-diff", "--no-textconv", "--"}
 			if input != nil && input.Staged {
-				args = []string{"diff", "--cached", "--no-ext-diff", "--"}
+				args = []string{"diff", "--cached", "--no-ext-diff", "--no-textconv", "--"}
 			}
 			if input != nil && strings.TrimSpace(input.File) != "" {
 				if strings.Contains(input.File, "..") || strings.HasPrefix(input.File, "/") {
@@ -142,7 +142,13 @@ func (f *gitReadFactory) run(ctx context.Context, scope humberttools.Scope, path
 	out := newBoundedCommandOutput(f.maxOutputBytes)
 	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	result, err := f.runner.Run(cmdCtx, policy, sandbox.ProcessSpec{Executable: gitPath, Args: args, Dir: dir, Env: f.environment, Stdout: out, Stderr: out})
+	// Git 的仓库配置可以启动外部程序。禁用已知入口，同时由操作系统兜底保证只读；
+	// 即使用户关闭原生沙箱，也不能把标为 RiskRead 的工具静默降级成可写进程。
+	args = append([]string{"--no-pager", "-c", "core.fsmonitor=false", "-c", "status.submoduleSummary=false"}, args...)
+	result, err := f.runner.Run(cmdCtx, policy, sandbox.ProcessSpec{
+		Executable: gitPath, Args: args, Dir: dir, Env: f.environment, Stdout: out, Stderr: out,
+		ReadOnlyWorkspace: true,
+	})
 	if err != nil {
 		return nil, err
 	}

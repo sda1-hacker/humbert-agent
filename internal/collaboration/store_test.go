@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/components/tool/utils"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
@@ -136,7 +139,7 @@ func TestRunAgentReturnsChildResultAndPersistsAudit(t *testing.T) {
 		t.Fatal(err)
 	}
 	scope := humberttools.Scope{RequestID: "request", RunID: "run", SessionID: "session", AgentID: "parent"}
-	ctx := humberttools.WithCallContext(context.Background(), "call-1", RunAgentToolName)
+	ctx := testToolContext(t, "call-1", RunAgentToolName)
 	output, err := manager.RunAgent(ctx, RunInput{ChildAgentID: "child", Task: "只核对这一条事实", ParentScope: scope})
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +190,7 @@ func TestRunAgentRejectsAgentWithoutOptIn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := humberttools.WithCallContext(context.Background(), "call", RunAgentToolName)
+	ctx := testToolContext(t, "call", RunAgentToolName)
 	_, err = manager.RunAgent(ctx, RunInput{
 		ChildAgentID: "private", Task: "task",
 		ParentScope: humberttools.Scope{RequestID: "request", RunID: "run", SessionID: "session", AgentID: "parent"},
@@ -220,4 +223,23 @@ func TestParentRunFinishedMarksPendingAuditInterrupted(t *testing.T) {
 	if err != nil || !found || loaded.Status != StatusInterrupted || loaded.FinishedAt == nil {
 		t.Fatalf("loaded=(%+v,%v,%v)", loaded, found, err)
 	}
+}
+
+// 通过真实 Eino ToolsNode 注入调用身份，避免测试依赖私有 Context key。
+func testToolContext(t *testing.T, id, name string) context.Context {
+	t.Helper()
+	var captured context.Context
+	instance, err := utils.InferTool(name, "capture", func(ctx context.Context, _ *struct{}) (string, error) { captured = ctx; return "ok", nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := compose.NewToolNode(context.Background(), &compose.ToolsNodeConfig{Tools: []tool.BaseTool{instance}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = node.Invoke(context.Background(), &schema.Message{Role: schema.Assistant, ToolCalls: []schema.ToolCall{{ID: id, Function: schema.FunctionCall{Name: name, Arguments: "{}"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return captured
 }

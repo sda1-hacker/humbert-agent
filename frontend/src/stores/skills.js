@@ -1,3 +1,4 @@
+import { beginLatestRequest } from "../utils/latestRequest.js";
 import {
     defineStore,
 } from "pinia";
@@ -40,15 +41,15 @@ export const useSkillStore =
                  * 重新读取后端 Skill Catalog 与 Agent 引用关系。
                  */
                 async load() {
-                    if (this.loading) {
-                        return;
-                    }
+                    // 保存后的读取必须真正发起，不能被保存前的在途请求吞掉。
+                    const isCurrent = beginLatestRequest(this, "skills");
 
                     this.loading = true;
                     this.loadError = "";
                     try {
                         const state =
                             await getSkillState();
+                        if (!isCurrent()) return;
 
                         this.rootDir =
                             state?.rootDir ?? "";
@@ -70,11 +71,12 @@ export const useSkillStore =
                                 : [];
                         this.loaded = true;
                     } catch (error) {
+                        if (!isCurrent()) return;
                         this.loadError =
                             error?.message ?? String(error);
                         throw error;
                     } finally {
-                        this.loading = false;
+                        if (isCurrent()) this.loading = false;
                     }
                 },
 

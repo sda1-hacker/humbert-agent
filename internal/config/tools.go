@@ -13,8 +13,6 @@ import (
 const (
 	defaultMaxReadableFileBytes int64 = 2 * 1024 * 1024
 	defaultMaxWritableFileBytes int64 = 2 * 1024 * 1024
-	defaultMaxReadOutputBytes         = 128 * 1024
-	defaultReadLines                  = 200
 	defaultMaxReadLines               = 1000
 	defaultMaxListEntries             = 1000
 
@@ -39,7 +37,6 @@ const (
 	// 即使用户通过 config.yaml 或环境变量设置更大的值，也不会允许突破。
 	absoluteMaxReadableFileBytes int64 = 64 * 1024 * 1024
 	absoluteMaxWritableFileBytes int64 = 64 * 1024 * 1024
-	absoluteMaxReadOutputBytes         = 2 * 1024 * 1024
 	absoluteMaxReadLines               = 10000
 	absoluteMaxListEntries             = 10000
 
@@ -89,12 +86,6 @@ type FileToolConfig struct {
 	// MaxWritableFileBytes 是 write_file / edit_file 允许生成的最大文件大小。
 	MaxWritableFileBytes int64
 
-	// MaxReadOutputBytes 是 read_file 单次最多返回给模型的文本字节数。
-	MaxReadOutputBytes int
-
-	// DefaultReadLines 是没有显式 line_count 时的默认读取行数。
-	DefaultReadLines int
-
 	// MaxReadLines 是模型单次 read_file 可以请求的最大行数。
 	MaxReadLines int
 
@@ -105,15 +96,14 @@ type FileToolConfig struct {
 // WebSearchToolConfig 是 web_search 的运行参数。
 //
 // Provider 默认使用 auto。auto 会把“搜索 Provider 选择与fallback”
-// 封装在一次 Tool 调用内部：优先使用已配置的 API Provider，然后使用
-// AnySearch 匿名免费 API，最后才回退到 Bing / DuckDuckGo HTML 搜索。
+// 封装在一次 Tool 调用内部：依次尝试 AnySearch 匿名 API、Bing 和 DuckDuckGo。
 //
 // 这样模型无需为了同一个查询连续调用多个搜索工具，也不会因为某一个免费搜索页
 // 临时返回低质量结果就立刻把错误摘要当成事实。
 type WebSearchToolConfig struct {
 	Enabled bool
 
-	// Provider 支持 auto、anysearch_free、anysearch、tavily、brave、serper、bing、duckduckgo。
+	// Provider 支持 auto、anysearch_free、bing、duckduckgo。
 	Provider string
 
 	TimeoutSeconds int
@@ -224,12 +214,6 @@ func LoadToolConfig(configFile string) (ToolConfig, error) {
 			),
 			MaxWritableFileBytes: v.GetInt64(
 				"tools.files.max_writable_file_bytes",
-			),
-			MaxReadOutputBytes: v.GetInt(
-				"tools.files.max_read_output_bytes",
-			),
-			DefaultReadLines: v.GetInt(
-				"tools.files.default_read_lines",
 			),
 			MaxReadLines: v.GetInt(
 				"tools.files.max_read_lines",
@@ -362,34 +346,6 @@ func (c FileToolConfig) Validate() error {
 		)
 	}
 
-	if c.MaxReadOutputBytes <= 0 {
-		return errors.New(
-			"tools.files.max_read_output_bytes 必须大于 0",
-		)
-	}
-
-	if c.MaxReadOutputBytes >
-		absoluteMaxReadOutputBytes {
-		return fmt.Errorf(
-			"tools.files.max_read_output_bytes 不能超过 %d",
-			absoluteMaxReadOutputBytes,
-		)
-	}
-
-	if int64(
-		c.MaxReadOutputBytes,
-	) > c.MaxReadableFileBytes {
-		return errors.New(
-			"tools.files.max_read_output_bytes 不能大于 max_readable_file_bytes",
-		)
-	}
-
-	if c.DefaultReadLines <= 0 {
-		return errors.New(
-			"tools.files.default_read_lines 必须大于 0",
-		)
-	}
-
 	if c.MaxReadLines <= 0 {
 		return errors.New(
 			"tools.files.max_read_lines 必须大于 0",
@@ -401,13 +357,6 @@ func (c FileToolConfig) Validate() error {
 		return fmt.Errorf(
 			"tools.files.max_read_lines 不能超过 %d",
 			absoluteMaxReadLines,
-		)
-	}
-
-	if c.DefaultReadLines >
-		c.MaxReadLines {
-		return errors.New(
-			"tools.files.default_read_lines 不能大于 max_read_lines",
 		)
 	}
 
@@ -440,10 +389,6 @@ func (c WebSearchToolConfig) Validate() error {
 	switch provider {
 	case "auto",
 		"anysearch_free",
-		"anysearch",
-		"tavily",
-		"brave",
-		"serper",
 		"bing",
 		"duckduckgo":
 		// 合法 Provider。
@@ -700,16 +645,6 @@ func setToolDefaults(
 	v.SetDefault(
 		"tools.files.max_writable_file_bytes",
 		defaultMaxWritableFileBytes,
-	)
-
-	v.SetDefault(
-		"tools.files.max_read_output_bytes",
-		defaultMaxReadOutputBytes,
-	)
-
-	v.SetDefault(
-		"tools.files.default_read_lines",
-		defaultReadLines,
 	)
 
 	v.SetDefault(

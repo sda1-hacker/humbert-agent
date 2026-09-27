@@ -1,13 +1,9 @@
 package runtime
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync/atomic"
-	"time"
-
-	"github.com/cloudwego/eino/adk"
 )
 
 var ErrExecutionLimitExceeded = errors.New("任务运行已达到执行上限")
@@ -25,31 +21,38 @@ func (s *executionLimitState) beforeModelCall() error {
 	if err := s.checkTokens(); err != nil {
 		return err
 	}
-	if s == nil || s.maxModelCalls <= 0 {
+	if s == nil {
 		return nil
 	}
-	current := s.modelCalls.Add(1)
-	if current > s.maxModelCalls {
-		return fmt.Errorf("%w: 模型调用次数超过 %d", ErrExecutionLimitExceeded, s.maxModelCalls)
-	}
-	return nil
+	return reserveCall(&s.modelCalls, s.maxModelCalls, "模型")
 }
 
 func (s *executionLimitState) beforeToolCall() error {
 	if err := s.checkTokens(); err != nil {
 		return err
 	}
-	if s == nil || s.maxToolCalls <= 0 {
+	if s == nil {
 		return nil
 	}
-	current := s.toolCalls.Add(1)
-	if current > s.maxToolCalls {
-		return fmt.Errorf("%w: 工具调用次数超过 %d", ErrExecutionLimitExceeded, s.maxToolCalls)
+	return reserveCall(&s.toolCalls, s.maxToolCalls, "工具")
+}
+
+// 并发子 Agent 在调用前原子预留次数；被拒绝的调用不增加已执行次数。
+func reserveCall(counter *atomic.Int64, limit int64, kind string) error {
+	for {
+		current := counter.Load()
+		if limit > 0 && current >= limit {
+			return fmt.Errorf("%w: %s调用次数达到 %d", ErrExecutionLimitExceeded, kind, limit)
+		}
+		if counter.CompareAndSwap(current, current+1) {
+			return nil
+		}
 	}
-	return nil
 }
 
 func (s *executionLimitState) checkTokens() error {
+	// Token 按 Provider 已报告用量累计，达到上限后禁止后续调用；不是调用前精确配额。
+	// 当前响应或已经在途的并发响应仍可能跨过阈值，未报告的用量不能伪造为精确统计。
 	if s != nil && s.maxTotalTokens > 0 && s.totalTokens.Load() >= s.maxTotalTokens {
 		return fmt.Errorf("%w: Token 用量达到 %d", ErrExecutionLimitExceeded, s.maxTotalTokens)
 	}
@@ -61,30 +64,6 @@ func (s *executionLimitState) addTokens(count int) {
 		s.totalTokens.Add(int64(count))
 	}
 }
-
-type executionLimitMiddleware struct {
-	*adk.BaseChatModelAgentMiddleware
-	snapshot *Snapshot
-	state    *executionLimitState
-}
-
-func (m *executionLimitMiddleware) BeforeModelRewriteState(ctx context.Context, state *adk.ChatModelAgentState, modelContext *adk.ModelContext) (context.Context, *adk.ChatModelAgentState, error) {
-	if err := ctx.Err(); err != nil {
-		return ctx, state, err
-	}
-	if err := m.state.beforeModelCall(); err != nil {
-		return ctx, state, err
-	}
-	if m.snapshot != nil {
-		reportToolLifecycleEvent(ctx, m.snapshot, Event{
-			Type:       EventModelStarted,
-			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
-		})
-	}
-	return ctx, state, nil
-}
-
-var _ adk.ChatModelAgentMiddleware = (*executionLimitMiddleware)(nil)
 
 func prepareExecutionLimitState(limits ExecutionLimits) (*executionLimitState, error) {
 	if limits.MaxDuration < 0 || limits.MaxModelCalls < 0 || limits.MaxToolCalls < 0 || limits.MaxTotalTokens < 0 {
@@ -111,14 +90,7 @@ func configureExecutionLimits(snapshot *Snapshot, limits ExecutionLimits, prepar
 			return err
 		}
 	}
-	if state == nil {
-		return nil
-	}
 	snapshot.limitState = state
-	snapshot.AgentHandlers = append(snapshot.AgentHandlers, &executionLimitMiddleware{
-		BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{},
-		snapshot:                     snapshot,
-		state:                        state,
-	})
+	snapshot.Model = trackModel(snapshot.Model, snapshot)
 	return nil
 }

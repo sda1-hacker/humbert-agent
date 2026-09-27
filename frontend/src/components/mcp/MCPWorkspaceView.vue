@@ -1,4 +1,6 @@
 <script setup>
+import { storeToRefs } from "pinia";
+import { useMCPStore } from "../../stores/mcp.js";
 import {
   computed,
   onMounted,
@@ -24,13 +26,9 @@ import EmptyState from "../ui/EmptyState.vue";
 import StatusPill from "../ui/StatusPill.vue";
 
 import {
-  discoverMCPTools,
-  refreshMCPTools,
   getAgentMCPTools,
-  listMCPServers,
   setAgentMCPTools,
   setMCPToolRisk,
-  testMCPConnection,
 } from "../../api/mcp.js";
 
 import {
@@ -50,14 +48,15 @@ const emit = defineEmits([
 
 const agentStore = useAgentStore();
 
-const servers = ref([]);
+const mcpStore = useMCPStore();
+const { servers, loading } = storeToRefs(mcpStore);
 const selectedAgentID = ref("");
 const selections = ref([]);
-const loading = ref(false);
+
 const savingSelection = ref(false);
-const connectionState = reactive({});
-const toolCatalog = reactive({});
-const catalogLoading = reactive({});
+const connectionState = mcpStore.connectionState;
+const toolCatalog = mcpStore.toolCatalog;
+const catalogLoading = mcpStore.catalogLoading;
 const expandedServers = reactive({});
 const selectedToolDetail = ref(null);
 
@@ -90,10 +89,6 @@ const detailTool = computed(() => {
 });
 
 
-function normaliseServers(values) {
-  return Array.isArray(values) ? values : [];
-}
-
 function normaliseSelections(values) {
   return Array.isArray(values)
       ? values.map((value) => ({
@@ -104,35 +99,7 @@ function normaliseSelections(values) {
 }
 
 async function loadServers() {
-  loading.value = true;
-  try {
-    servers.value = normaliseServers(await listMCPServers());
-    const serverIDs = new Set(servers.value.map((server) => server?.id).filter(Boolean));
-    for (const key of Object.keys(toolCatalog)) {
-      if (!serverIDs.has(key)) delete toolCatalog[key];
-    }
-    for (const key of Object.keys(catalogLoading)) {
-      if (!serverIDs.has(key)) delete catalogLoading[key];
-    }
-    for (const key of Object.keys(expandedServers)) {
-      if (!serverIDs.has(key)) delete expandedServers[key];
-    }
-    for (const key of Object.keys(connectionState)) delete connectionState[key];
-    for (const server of servers.value) {
-      const state = server?.connectionState || (server?.enabled === false ? "disabled" : "disconnected");
-      const hasError = Boolean(server?.lastError) && (state === "error" || state === "degraded");
-      connectionState[server.id] = {
-        ok: state === "connected",
-        tone: mcpConnectionStateTone(state),
-        text: mcpConnectionStateLabel(state),
-        detail: hasError ? server.lastError : "",
-      };
-    }
-  } catch (error) {
-    Message.error(error?.message ?? String(error));
-  } finally {
-    loading.value = false;
-  }
+  try { await mcpStore.load(); } catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
 async function loadAgentSelection() {
@@ -304,91 +271,18 @@ async function toggleAllTools(serverID, enabled) {
 }
 
 async function refreshTools(server, announce = true, force = true) {
-  if (!server?.id || catalogLoading[server.id]) return;
-  if (server?.enabled === false) {
-    Message.warning(`「${server.name}」已停用，请先到设置中启用`);
-    return;
-  }
-
-  catalogLoading[server.id] = true;
-  connectionState[server.id] = {
-    ok: false,
-    tone: "pending",
-    text: "正在连接",
-    detail: force ? "正在刷新 Tool Catalog…" : "正在读取 Tool Catalog…",
-  };
+  if (catalogLoading[server?.id]) return;
   try {
-    const values = force ? await refreshMCPTools(server.id) : await discoverMCPTools(server.id);
-    toolCatalog[server.id] = Array.isArray(values) ? values : [];
+    await mcpStore.operate(server, "discover", force);
     expandedServers[server.id] = true;
-    server.connectionState = "connected";
-    server.connected = true;
-    server.lastError = "";
-    connectionState[server.id] = {
-      ok: true,
-      tone: "ok",
-      text: "已连接",
-      detail: `已读取 ${toolCatalog[server.id].length} 个 Tool`,
-    };
     if (announce) Message.success(`已读取 ${toolCatalog[server.id].length} 个 Tool`);
-  } catch (error) {
-    const message = error?.message ?? String(error);
-    server.connectionState = "error";
-    server.connected = false;
-    server.lastError = message;
-    connectionState[server.id] = {
-      ok: false,
-      tone: "error",
-      text: "连接失败",
-      detail: message,
-    };
-    Message.error(message);
-  } finally {
-    catalogLoading[server.id] = false;
-  }
+  } catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
 async function testServer(server) {
-  if (!server?.id || catalogLoading[server.id]) return;
-  if (server?.enabled === false) {
-    Message.warning(`「${server.name}」已停用，请先到设置中启用`);
-    return;
-  }
-
-  catalogLoading[server.id] = true;
-  connectionState[server.id] = {
-    ok: false,
-    tone: "pending",
-    text: "正在连接",
-    detail: "正在执行 initialize + tools/list…",
-  };
-  try {
-    const result = await testMCPConnection(server.id);
-    server.connectionState = "connected";
-    server.connected = true;
-    server.lastError = "";
-    connectionState[server.id] = {
-      ok: true,
-      tone: "ok",
-      text: "已连接",
-      detail: `${result?.toolCount ?? 0} 个 Tool · ${result?.durationMS ?? 0}ms`,
-    };
-    Message.success(`「${server.name}」连接成功`);
-  } catch (error) {
-    const message = error?.message ?? String(error);
-    server.connectionState = "error";
-    server.connected = false;
-    server.lastError = message;
-    connectionState[server.id] = {
-      ok: false,
-      tone: "error",
-      text: "连接失败",
-      detail: message,
-    };
-    Message.error(message);
-  } finally {
-    catalogLoading[server.id] = false;
-  }
+  if (mcpStore.catalogLoading[server?.id]) return;
+  try { await mcpStore.operate(server, "test"); Message.success(`「${server.name}」连接成功`); }
+  catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
 watch(

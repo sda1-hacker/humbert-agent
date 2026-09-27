@@ -1,4 +1,9 @@
 <script setup>
+import { beginLatestRequest } from "../../utils/latestRequest.js";
+
+// 目录请求按组件实例隔离，保存后的刷新使较早响应失效。
+const catalogRequests = {};
+let pendingCatalogLoad = null;
 import {
   computed,
   onMounted,
@@ -146,23 +151,32 @@ function applyDiscovery(result, context) {
       .map((candidate) => candidate.path);
 }
 
-async function load() {
-  if (loading.value) return;
+async function load({ force = false } = {}) {
+  // 普通读取共享当前请求；保存后强制刷新，不允许复用保存前的快照。
+  if (pendingCatalogLoad && !force) return pendingCatalogLoad;
+  const isCurrent = beginLatestRequest(catalogRequests, "catalog");
+  pendingCatalogLoad = readCatalog(isCurrent);
+  try { return await pendingCatalogLoad; }
+  finally { if (isCurrent()) pendingCatalogLoad = null; }
+}
 
+async function readCatalog(isCurrent) {
   loading.value = true;
   loadError.value = "";
   sourceError.value = "";
 
   try {
     const state = normalizeState(await getSkillState());
+    if (!isCurrent()) return;
     rootDir.value = state.rootDir;
     sourceError.value = state.sourceError;
     skills.value = state.skills;
   } catch (error) {
+    if (!isCurrent()) return;
     loadError.value = error?.message ?? String(error);
     console.error("[SkillPackageSettings] 加载 Skills 失败", error);
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
@@ -231,7 +245,7 @@ async function installSelectedPackages() {
       result = await installDiscoveredSkillsFromURL(context.source, paths);
     }
     const count = Array.isArray(result) ? result.length : paths.length;
-    await load();
+    await load({ force: true });
     resetDiscovery();
     remoteURL.value = "";
     remoteSkillPath.value = "";

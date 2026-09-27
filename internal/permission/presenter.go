@@ -116,8 +116,7 @@ func BuildPresentation(request Request) (Presentation, error) {
 		}, nil
 	case "write_file":
 		var input struct {
-			Path      string `json:"path"`
-			Overwrite bool   `json:"overwrite"`
+			Path string `json:"file_path"`
 		}
 		if err := json.Unmarshal([]byte(request.Arguments), &input); err != nil {
 			return Presentation{}, fmt.Errorf("解析 write_file 审批参数失败: %w", err)
@@ -127,15 +126,15 @@ func BuildPresentation(request Request) (Presentation, error) {
 			Description: "该操作会修改当前 Agent Workspace 中的文件。长期授权只在当前安全沙盒身份不变时复用。",
 			Fields: []PresentationField{
 				{Label: "文件", Value: safeField(input.Path)},
-				{Label: "模式", Value: map[bool]string{true: "覆盖已有文件", false: "仅创建新文件"}[input.Overwrite]},
+				{Label: "模式", Value: "创建或覆盖文件"},
 			},
 		}, nil
 
 	case "edit_file":
 		var input struct {
-			Path       string `json:"path"`
-			OldText    string `json:"old_text"`
-			NewText    string `json:"new_text"`
+			Path       string `json:"file_path"`
+			OldText    string `json:"old_string"`
+			NewText    string `json:"new_string"`
 			ReplaceAll bool   `json:"replace_all"`
 		}
 		if err := json.Unmarshal([]byte(request.Arguments), &input); err != nil {
@@ -146,7 +145,7 @@ func BuildPresentation(request Request) (Presentation, error) {
 			Description: "该操作会修改当前 Agent Workspace 中的已有文件。文本正文不会显示在审批卡片中。",
 			Fields: []PresentationField{
 				{Label: "文件", Value: safeField(input.Path)},
-				{Label: "替换范围", Value: map[bool]string{true: "全部匹配", false: "首个匹配"}[input.ReplaceAll]},
+				{Label: "替换范围", Value: map[bool]string{true: "全部匹配", false: "唯一匹配"}[input.ReplaceAll]},
 				{Label: "原文本长度", Value: fmt.Sprintf("%d 字符", len([]rune(input.OldText)))},
 				{Label: "新文本长度", Value: fmt.Sprintf("%d 字符", len([]rune(input.NewText)))},
 			},

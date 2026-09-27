@@ -24,8 +24,6 @@ const (
 	defaultContextKeepRecentMinTokens  = 8 * 1024
 	defaultContextKeepRecentMaxTokens  = 32 * 1024
 	defaultContextSerializerMaxChars   = 4000
-	defaultMemoryTurnInterval          = 10
-	defaultMemoryTokenInterval         = 12 * 1024
 	defaultContextOperationTimeoutMS   = 120000
 
 	defaultPermissionApprovalTimeoutMS = 30 * 60 * 1000
@@ -38,13 +36,11 @@ const (
 	defaultSkillDownloadTimeoutMS  = 120000
 	defaultSkillMaxRedirects       = 5
 
-	defaultMCPConnectTimeoutMS            = 15000
-	defaultMCPMaxToolsPerServer           = 64
-	defaultMCPMaxToolPages                = 20
-	defaultMCPMaxToolDescriptionChars     = 4000
-	defaultMCPMaxToolResultChars          = 100000
-	defaultMCPPreserveToolResultTailChars = 4000
-	defaultMCPCatalogTTLMS                = 60000
+	defaultMCPConnectTimeoutMS        = 15000
+	defaultMCPMaxToolsPerServer       = 64
+	defaultMCPMaxToolPages            = 20
+	defaultMCPMaxToolDescriptionChars = 4000
+	defaultMCPCatalogTTLMS            = 60000
 
 	maxAllowedFileBytes = int64(64 * 1024 * 1024)
 )
@@ -67,8 +63,6 @@ runtime:
     keep_recent_min_tokens: 8192
     keep_recent_max_tokens: 32768
     serializer_max_chars: 4000
-    memory_turn_interval: 10
-    memory_token_interval: 12288
     operation_timeout_ms: 120000
   skills:
     max_definition_bytes: 524288
@@ -83,8 +77,6 @@ runtime:
     max_tools_per_server: 64
     max_tool_pages: 20
     max_tool_description_chars: 4000
-    max_tool_result_chars: 100000
-    preserve_tool_result_tail_chars: 4000
     catalog_ttl_ms: 60000
 
 security:
@@ -159,14 +151,8 @@ type RuntimeConfig struct {
 	MCP MCPConfig `mapstructure:"mcp"`
 }
 
-// ContextConfig 保存 ContextEngine 与 Session Memory 的应用级策略。
-//
-// 这些值通过 Viper 统一加载，可由 config.yaml 和 HUMBERT_RUNTIME_CONTEXT_* 环境变量
-// 覆盖。模型自身的 ContextWindow/MaxOutputTokens 不在这里，因为它们属于每个 Model
-// 的动态配置。ContextConfig 只描述“何时压缩、保留多少近期历史、何时刷新 Session
-// Memory”等全局策略。
-//
-// 所有比例均使用 0-1 小数；Token 数均为逻辑预算而不是字节数。
+// ContextConfig 描述压缩阈值、保留窗口和单次摘要限制。
+// 配置来自 YAML 或 HUMBERT_RUNTIME_CONTEXT_*，模型能力来自每个模型自己的配置。
 type ContextConfig struct {
 	// AutoCompaction 控制是否在下一次模型调用前自动执行压缩。手动压缩不受此开关影响。
 	AutoCompaction bool `mapstructure:"auto_compaction"`
@@ -186,15 +172,10 @@ type ContextConfig struct {
 	KeepRecentMinTokens int     `mapstructure:"keep_recent_min_tokens"`
 	KeepRecentMaxTokens int     `mapstructure:"keep_recent_max_tokens"`
 
-	// SerializerMaxChars 控制压缩时单个字段的长度，也决定 Memory 每次滚动合并的
-	// 输入预算。Memory 会顺序处理全部语义历史，不截去中间消息。
+	// SerializerMaxChars 控制摘要输入中单个字段的长度；原始历史始终保留。
 	SerializerMaxChars int `mapstructure:"serializer_max_chars"`
 
-	// MemoryTurnInterval/MemoryTokenInterval 控制 Session Memory 的增量刷新节奏。
-	MemoryTurnInterval  int `mapstructure:"memory_turn_interval"`
-	MemoryTokenInterval int `mapstructure:"memory_token_interval"`
-
-	// OperationTimeoutMS 是手动压缩、自动压缩和 Memory 更新的单次上限。所有调用仍
+	// OperationTimeoutMS 是手动和自动压缩的单次上限。所有调用仍
 	// 继承上层 Context，因此应用关闭或 Turn 取消时能够及时退出。
 	OperationTimeoutMS int `mapstructure:"operation_timeout_ms"`
 }
@@ -245,12 +226,6 @@ type MCPConfig struct {
 
 	// MaxToolDescriptionChars 防止异常长 Tool 描述大量占用模型输入。
 	MaxToolDescriptionChars int `mapstructure:"max_tool_description_chars"`
-
-	// MaxToolResultChars 限制 officialmcp 返回给 Agent 的单次 ToolResult 字符数。
-	MaxToolResultChars int `mapstructure:"max_tool_result_chars"`
-
-	// PreserveToolResultTailChars 在裁剪超长结果时保留尾部，便于错误摘要/分页信息不丢失。
-	PreserveToolResultTailChars int `mapstructure:"preserve_tool_result_tail_chars"`
 
 	// CatalogTTLMS 控制 Desktop 控制面 tools/list Catalog 缓存时间。Runtime 在真正构建
 	// Agent Tool 时仍由 Eino officialmcp 校验当前 Server Catalog，不依赖该缓存。
@@ -596,8 +571,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("runtime.context.keep_recent_min_tokens", defaultContextKeepRecentMinTokens)
 	v.SetDefault("runtime.context.keep_recent_max_tokens", defaultContextKeepRecentMaxTokens)
 	v.SetDefault("runtime.context.serializer_max_chars", defaultContextSerializerMaxChars)
-	v.SetDefault("runtime.context.memory_turn_interval", defaultMemoryTurnInterval)
-	v.SetDefault("runtime.context.memory_token_interval", defaultMemoryTokenInterval)
 	v.SetDefault("runtime.context.operation_timeout_ms", defaultContextOperationTimeoutMS)
 	v.SetDefault("runtime.skills.max_definition_bytes", defaultSkillMaxDefinitionBytes)
 	v.SetDefault("runtime.skills.max_asset_bytes", defaultSkillMaxAssetBytes)
@@ -610,8 +583,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("runtime.mcp.max_tools_per_server", defaultMCPMaxToolsPerServer)
 	v.SetDefault("runtime.mcp.max_tool_pages", defaultMCPMaxToolPages)
 	v.SetDefault("runtime.mcp.max_tool_description_chars", defaultMCPMaxToolDescriptionChars)
-	v.SetDefault("runtime.mcp.max_tool_result_chars", defaultMCPMaxToolResultChars)
-	v.SetDefault("runtime.mcp.preserve_tool_result_tail_chars", defaultMCPPreserveToolResultTailChars)
 	v.SetDefault("runtime.mcp.catalog_ttl_ms", defaultMCPCatalogTTLMS)
 	v.SetDefault("security.max_file_bytes", defaultMaxFileBytes)
 	v.SetDefault("security.permissions.enabled", true)
@@ -676,12 +647,6 @@ func validate(cfg *Config) error {
 	if contextConfig.SerializerMaxChars < 256 || contextConfig.SerializerMaxChars > 65536 {
 		return errors.New("runtime.context.serializer_max_chars 必须位于 256-65536 之间")
 	}
-	if contextConfig.MemoryTurnInterval < 1 || contextConfig.MemoryTurnInterval > 1000 {
-		return errors.New("runtime.context.memory_turn_interval 必须位于 1-1000 之间")
-	}
-	if contextConfig.MemoryTokenInterval < 256 {
-		return errors.New("runtime.context.memory_token_interval 不能小于 256")
-	}
 	if contextConfig.OperationTimeoutMS < 1000 || contextConfig.OperationTimeoutMS > 10*60*1000 {
 		return errors.New("runtime.context.operation_timeout_ms 必须位于 1000-600000 之间")
 	}
@@ -723,13 +688,6 @@ func validate(cfg *Config) error {
 	}
 	if mcpConfig.MaxToolDescriptionChars < 256 || mcpConfig.MaxToolDescriptionChars > 65536 {
 		return errors.New("runtime.mcp.max_tool_description_chars 必须位于 256-65536 之间")
-	}
-	if mcpConfig.MaxToolResultChars < 1024 || mcpConfig.MaxToolResultChars > 2*1024*1024 {
-		return errors.New("runtime.mcp.max_tool_result_chars 必须位于 1024-2097152 之间")
-	}
-	if mcpConfig.PreserveToolResultTailChars < 0 ||
-		mcpConfig.PreserveToolResultTailChars > mcpConfig.MaxToolResultChars {
-		return errors.New("runtime.mcp.preserve_tool_result_tail_chars 必须位于 0-max_tool_result_chars 之间")
 	}
 
 	if err := ValidateSandboxConfig(cfg.Security.Sandbox); err != nil {

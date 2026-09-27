@@ -40,6 +40,8 @@ type activeRun struct {
 	// Service.mu 下访问。approvalDone 用来停止该请求对应的 timeout worker。
 	waitingApprovalID string
 	approvalDone      chan struct{}
+	// 保存失败只唤醒原超时 worker；缓冲保留先于 worker 等待发生的状态变更。
+	approvalRetry chan struct{}
 }
 
 // RunLifecycleObserver 观察父 Turn 的最终清理，用于收敛依附于该 Turn 的轻量运行状态。
@@ -195,7 +197,7 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 		return receipt, err
 	}
 	snapshot, err := s.resolver.ResolveTurn(ctx, requestID, runID, sessionID, ResolveTurnOptions{
-		BeforeAuxiliaryModel: limitState.beforeModelCall,
+		limitState: limitState,
 	})
 	if err != nil {
 		s.logger.Warn(
@@ -343,7 +345,6 @@ func (s *Service) ContextOverview(ctx context.Context, sessionID string) (Contex
 func (s *Service) ManualCompact(
 	ctx context.Context,
 	sessionID string,
-	updateMemory bool,
 ) (ManualCompactionResult, error) {
 	if ctx == nil {
 		return ManualCompactionResult{}, errors.New("context.Context 不能为空")
@@ -375,7 +376,7 @@ func (s *Service) ManualCompact(
 	defer s.releaseReservation(sessionID, requestID)
 
 	startedAt := time.Now()
-	result, err := s.resolver.ManualCompact(ctx, sessionID, updateMemory)
+	result, err := s.resolver.ManualCompact(ctx, sessionID)
 	if err != nil {
 		return ManualCompactionResult{}, err
 	}
@@ -384,9 +385,7 @@ func (s *Service) ManualCompact(
 		"用户手动 Context 压缩完成",
 		"operation", "runtime.context.manual_compact",
 		"session_id", sessionID,
-		"update_memory", updateMemory,
 		"compacted", result.Compaction.Compacted,
-		"memory_updated", result.Memory.Updated,
 		logging.Duration(startedAt),
 	)
 	return result, nil
@@ -557,6 +556,11 @@ func (s *Service) ResolveApproval(
 	}
 	defer finish()
 
+	return s.resolveApproval(ctx, approvalID, input.Decision)
+}
+
+// resolveApproval 处理已登记的 Service 操作；权限保存与超时收尾共用同一份 ActiveRun。
+func (s *Service) resolveApproval(ctx context.Context, approvalID string, decision approval.Decision) (ResolveApprovalResult, error) {
 	request, exists := s.approvals.Get(approvalID)
 	if !exists {
 		return ResolveApprovalResult{}, fmt.Errorf("%w: %s", approval.ErrNotFound, approvalID)
@@ -580,8 +584,18 @@ func (s *Service) ResolveApproval(
 		return ResolveApprovalResult{}, fmt.Errorf("%w: Runtime Checkpoint 已失效，请重新发送本次请求", approval.ErrNotPending)
 	}
 
-	resolution, err := s.approvals.Resolve(ctx, approvalID, input.Decision)
+	resolution, err := s.approvals.Resolve(ctx, approvalID, decision)
 	if err != nil {
+		// Resolve 可能在保存失败后从 Resolving 恢复 Pending。即使已过期，也由原
+		// worker 重新领取超时责任；不能直接返回并让会话永久停在等待审批。
+		s.mu.Lock()
+		if current := s.activeByRequest[request.RequestID]; current == active && active.waitingApprovalID == approvalID {
+			select {
+			case active.approvalRetry <- struct{}{}:
+			default:
+			}
+		}
+		s.mu.Unlock()
 		return ResolveApprovalResult{}, err
 	}
 
@@ -612,7 +626,7 @@ func (s *Service) ResolveApproval(
 		ModelRevision:    active.snapshot.ModelRevision,
 		ToolRevision:     active.snapshot.ToolRevision,
 		Approval:         &resolvedRequest,
-		ApprovalDecision: input.Decision,
+		ApprovalDecision: decision,
 		OccurredAt:       time.Now().UTC().Format(time.RFC3339Nano),
 	})
 
@@ -741,6 +755,7 @@ func (s *Service) registerInterruptedRun(active *activeRun, interrupted *Interru
 	}
 
 	done := make(chan struct{})
+	retry := make(chan struct{}, 1)
 	s.mu.Lock()
 	current, exists := s.activeByRequest[active.RequestID]
 	if !exists || current != active {
@@ -751,6 +766,7 @@ func (s *Service) registerInterruptedRun(active *activeRun, interrupted *Interru
 	}
 	active.waitingApprovalID = request.ID
 	active.approvalDone = done
+	active.approvalRetry = retry
 	active.phase = RunPhaseWaitingApproval
 	s.wg.Add(1)
 	s.mu.Unlock()
@@ -767,16 +783,16 @@ func (s *Service) registerInterruptedRun(active *activeRun, interrupted *Interru
 		OccurredAt:    time.Now().UTC().Format(time.RFC3339Nano),
 	})
 
-	go s.awaitApproval(active, request, done)
+	go s.awaitApproval(active, request, done, retry)
 	return nil
 }
 
 // awaitApproval 是每个 Pending Approval 唯一的受控超时 worker。
 //
-// 它只等待三个事件：用户已经处理、Run Context 取消、到达 ExpiresAt。所有分支都退出并由
-// Service.wg 回收，不会创建悬挂 goroutine。超时会以 Approved=false 恢复 Agent，而不是
-// 把整个 Turn 直接判为失败。
-func (s *Service) awaitApproval(active *activeRun, request approval.Request, done <-chan struct{}) {
+// 到期时若权限仍在保存，继续等待处理结果：成功由 done 结束等待，失败由 retry 唤醒，
+// 取消由 Run Context 收尾。重试沿用原 ExpiresAt，不延长审批期限，也不另开超时 worker。
+// 真正领取超时后以 Approved=false 恢复 Agent，让模型处理未获授权的调用。
+func (s *Service) awaitApproval(active *activeRun, request approval.Request, done, retry <-chan struct{}) {
 	defer s.wg.Done()
 
 	delay := time.Until(request.ExpiresAt)
@@ -786,13 +802,48 @@ func (s *Service) awaitApproval(active *activeRun, request approval.Request, don
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
-	select {
-	case <-done:
-		return
-	case <-active.ctx.Done():
-		s.finalizeWaitingCancellation(active, request.ID)
-		return
-	case <-timer.C:
+	var resolution approval.Resolution
+	for {
+		select {
+		case <-done:
+			return
+		case <-active.ctx.Done():
+			s.finalizeWaitingCancellation(active, request.ID)
+			return
+		case <-timer.C:
+		case <-retry:
+		}
+		if time.Now().Before(request.ExpiresAt) {
+			continue
+		}
+
+		var expired bool
+		var err error
+		resolution, expired, err = s.approvals.Expire(request.ID)
+		if err != nil {
+			s.logger.Error(
+				context.Background(),
+				"生成 Approval 超时恢复参数失败",
+				"operation", "approval.expire",
+				"request_id", active.RequestID,
+				"run_id", active.RunID,
+				"session_id", active.SessionID,
+				"approval_id", request.ID,
+				"error", err,
+			)
+			active.cancel()
+			s.finalizeWaitingCancellation(active, request.ID)
+			return
+		}
+		if expired {
+			break
+		}
+		current, exists := s.approvals.Get(request.ID)
+		if !exists || (current.Status != approval.StatusPending && current.Status != approval.StatusResolving) {
+			return
+		}
+		// Resolving 只是保存进行中，不代表已有恢复 worker。Pending 也可能是
+		// Expire 返回后才恢复的状态；缓冲中的 retry 会让下一轮继续领取。
 	}
 
 	checkpointExists, checkpointErr := active.checkpointStore.Has(context.WithoutCancel(active.ctx), active.RunID)
@@ -812,26 +863,6 @@ func (s *Service) awaitApproval(active *activeRun, request approval.Request, don
 		return
 	}
 
-	resolution, expired, err := s.approvals.Expire(request.ID)
-	if err != nil {
-		s.logger.Error(
-			context.Background(),
-			"生成 Approval 超时恢复参数失败",
-			"operation", "approval.expire",
-			"request_id", active.RequestID,
-			"run_id", active.RunID,
-			"session_id", active.SessionID,
-			"approval_id", request.ID,
-			"error", err,
-		)
-		active.cancel()
-		s.finalizeWaitingCancellation(active, request.ID)
-		return
-	}
-	if !expired {
-		return
-	}
-
 	s.mu.Lock()
 	current, exists := s.activeByRequest[active.RequestID]
 	if !exists || current != active || active.waitingApprovalID != request.ID {
@@ -840,6 +871,7 @@ func (s *Service) awaitApproval(active *activeRun, request approval.Request, don
 	}
 	active.waitingApprovalID = ""
 	active.approvalDone = nil
+	active.approvalRetry = nil
 	active.phase = RunPhaseRunning
 	s.mu.Unlock()
 
@@ -885,7 +917,7 @@ func (s *Service) completeTurn(active *activeRun, result ExecutionResult) {
 	if maintenanceErr := s.resolver.MaintainAfterTurn(maintenanceCtx, snapshot); maintenanceErr != nil {
 		s.logger.Warn(
 			maintenanceCtx,
-			"Turn 完成后的 Context/Memory 维护失败",
+			"Turn 完成后的 Context 维护失败",
 			"operation", "runtime.turn.maintenance",
 			"request_id", snapshot.RequestID,
 			"run_id", snapshot.RunID,
@@ -1232,6 +1264,7 @@ func signalApprovalDoneLocked(active *activeRun) {
 	}
 	close(active.approvalDone)
 	active.approvalDone = nil
+	active.approvalRetry = nil
 }
 
 func (s *Service) finalizeWaitingCancellation(active *activeRun, approvalID string) {

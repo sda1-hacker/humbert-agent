@@ -222,8 +222,11 @@ const contextRingOffset =
 
 const canSend =
     computed(() => (
+        // Agent 切换的 watcher 尚未完成时，也要校验会话归属，不能只检查旧 selectedID 非空。
+        sessionStore.agentID === agentStore.selectedID &&
+        !sessionStore.loading &&
         Boolean(
-            sessionStore.selectedID,
+            sessionStore.selectedSession,
         ) &&
         Boolean(
             selectedModelID.value,
@@ -672,15 +675,8 @@ async function stop() {
   }
 }
 
-/**
- * 执行 Context 菜单中的手动压缩动作。
- *
- * updateMemory=false 只产生 CompactionEntry；true 会在同一后端操作中额外刷新当前 Session
- * Memory。前端不会在运行中的 Turn 上强行压缩，后端仍会再次做 Session Busy 校验。
- */
-async function runCompaction(
-    updateMemory,
-) {
+/** 手动压缩与正常 Turn 共用后端会话锁，避免并发改写上下文。 */
+async function runCompaction() {
   const sessionID =
       sessionStore.selectedID;
 
@@ -696,7 +692,6 @@ async function runCompaction(
         await runtimeStore
             .compactSessionContext(
                 sessionID,
-                updateMemory,
             );
 
     const compacted =
@@ -704,12 +699,6 @@ async function runCompaction(
             result?.compaction
                 ?.compacted,
         );
-    const memoryUpdated =
-        Boolean(
-            result?.memory
-                ?.updated,
-        );
-
     if (compacted) {
       const before =
           formatTokens(
@@ -725,19 +714,7 @@ async function runCompaction(
           );
 
       Message.success(
-          updateMemory
-              ? `Context 已压缩并更新 Session Memory · ${before} → ${after}`
-              : `Context 已压缩 · ${before} → ${after}`,
-      );
-      return;
-    }
-
-    if (
-        updateMemory &&
-        memoryUpdated
-    ) {
-      Message.success(
-          "当前没有可安全压缩的历史，Session Memory 已更新",
+          `Context 已压缩 · ${before} → ${after}`,
       );
       return;
     }
@@ -858,7 +835,7 @@ watch(
 
           <!--
             Context 环形进度只展示 ContextEngine 的估算值，不自己重新计算 Token。
-            Dropdown 的两个动作和后端 ManualCompact(updateMemory) 一一对应。
+            手动操作与自动压缩使用同一个摘要入口。
           -->
           <a-dropdown
               trigger="click"
@@ -942,16 +919,6 @@ watch(
                       </div>
 
                       <div class="context-tooltip__row">
-                        <span>Session Memory</span>
-                        <span>{{ formatTokens(contextUsage.memoryTokens) }}</span>
-                      </div>
-
-                      <div v-if="contextUsage.referenceTokens" class="context-tooltip__row">
-                        <span>后台结果</span>
-                        <span>{{ formatTokens(contextUsage.referenceTokens) }}</span>
-                      </div>
-
-                      <div class="context-tooltip__row">
                         <span>压缩摘要</span>
                         <span>{{ formatTokens(contextUsage.checkpointTokens) }}</span>
                       </div>
@@ -984,7 +951,7 @@ watch(
 
                         <div class="context-tooltip__row">
                           <span>注入状态</span>
-                          <span class="context-tooltip__value">Memory {{ contextAssembly.memoryInjected ? "是" : "否" }} · Checkpoint {{
+                          <span class="context-tooltip__value">Checkpoint {{
                               contextAssembly.checkpointInjected ? "是" : "否"
                             }}</span>
                         </div>
@@ -1025,7 +992,7 @@ watch(
                         <div class="context-tooltip__row">
                           <span>模型角色</span>
                           <span class="context-tooltip__value"
-                                :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · Memory ${contextManifest.modelRoles?.memoryModelID || '--'} · 图片 ${contextManifest.modelRoles?.imageModelID || '--'}`">Chat / Utility / Memory{{
+                                :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · 图片 ${contextManifest.modelRoles?.imageModelID || '--'}`">Chat / Utility{{
                               contextManifest.modelRoles?.imageModelID ? ' / 图片' : ''
                             }}</span>
                         </div>
@@ -1100,16 +1067,9 @@ watch(
             <template #content>
               <a-doption
                   :disabled="running || contextCompacting"
-                  @click="runCompaction(false)"
+                  @click="runCompaction()"
               >
                 压缩
-              </a-doption>
-
-              <a-doption
-                  :disabled="running || contextCompacting"
-                  @click="runCompaction(true)"
-              >
-                压缩并更新
               </a-doption>
             </template>
           </a-dropdown>

@@ -652,7 +652,7 @@ func (r *Registry) DeleteModel(
 		}
 		if agentCount > 0 {
 			return fmt.Errorf(
-				"%w: 当前仍有 %d 个 Agent 在 Chat/Utility/Memory 角色中使用该模型，请先切换相关模型角色",
+				"%w: 当前仍有 %d 个 Agent 在 Chat/Utility 角色中使用该模型，请先切换相关模型角色",
 				ErrModelInUse,
 				agentCount,
 			)
@@ -684,76 +684,6 @@ func (r *Registry) DeleteModel(
 	)
 
 	return nil
-}
-
-// Resolve 根据 Model ID 返回一个可复用的 Eino ToolCallingChatModel。
-//
-// Resolve 是后续 RuntimeResolver 唯一应该调用的模型解析接口。
-//
-// cache 命中时不重新读取 Credential 或创建 HTTP Client。
-// 当任何 Provider/Model 配置变化时，整个缓存会被清空，下一次 Resolve
-// 自动创建使用最新配置的 Model 实例。
-func (r *Registry) Resolve(
-	ctx context.Context,
-	id string,
-) (
-	einomodel.ToolCallingChatModel,
-	error,
-) {
-	r.mu.RLock()
-
-	if cached, exists :=
-		r.cache[id]; exists {
-		r.mu.RUnlock()
-
-		return cached, nil
-	}
-
-	r.mu.RUnlock()
-
-	// 使用写锁进行 double-check，
-	// 防止多个并发 Turn 同时为同一个 Model 创建多个实例。
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if cached, exists :=
-		r.cache[id]; exists {
-		return cached, nil
-	}
-
-	resolved, err :=
-		r.store.ResolveModel(
-			ctx,
-			id,
-		)
-	if err != nil {
-		return nil, err
-	}
-
-	if !resolved.Model.Enabled {
-		return nil, fmt.Errorf(
-			"%w: %s",
-			ErrModelDisabled,
-			id,
-		)
-	}
-
-	instance, err :=
-		r.factory.Create(
-			ctx,
-			resolved,
-		)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"创建模型运行实例失败: %w",
-			err,
-		)
-	}
-
-	r.cache[id] =
-		instance
-
-	return instance, nil
 }
 
 // TestModel 真正向模型发送一次最小请求。

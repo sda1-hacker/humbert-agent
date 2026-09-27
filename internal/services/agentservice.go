@@ -16,7 +16,6 @@ import (
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
-	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -100,13 +99,11 @@ type AgentModelRequest struct {
 // AgentModelRolesDTO 是 Agent 的可选辅助模型角色。Chat Model 仍由 ModelID 表示。
 type AgentModelRolesDTO struct {
 	UtilityModelID string `json:"utilityModelID"`
-	MemoryModelID  string `json:"memoryModelID"`
 }
 
 // AgentModelRolesRequest 只更新辅助模型角色。空字符串表示使用 Runtime 回退链。
 type AgentModelRolesRequest struct {
 	UtilityModelID string `json:"utilityModelID"`
-	MemoryModelID  string `json:"memoryModelID"`
 }
 
 // AgentSkillsRequest 只修改启用的 Skill 引用。
@@ -180,24 +177,19 @@ type CreateAgentRequest struct {
 
 // UpdateAgentRequest 是修改 Agent 的 Desktop DTO。
 type UpdateAgentRequest struct {
-	Name                   string             `json:"name"`
-	Avatar                 string             `json:"avatar"`
-	SubagentEnabled        bool               `json:"subagentEnabled"`
-	Instruction            string             `json:"instruction"`
-	ModelID                string             `json:"modelID"`
-	ModelRolesConfigured   bool               `json:"modelRolesConfigured"`
-	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
-	EnabledSkills          []string           `json:"enabledSkills"`
-	WorkspaceMode          string             `json:"workspaceMode"`
-	WorkspacePath          string             `json:"workspacePath"`
-	BuiltinToolsConfigured bool               `json:"builtinToolsConfigured"`
-	EnabledBuiltinTools    []string           `json:"enabledBuiltinTools"`
+	Name                string              `json:"name"`
+	Avatar              string              `json:"avatar"`
+	SubagentEnabled     bool                `json:"subagentEnabled"`
+	Instruction         string              `json:"instruction"`
+	ModelID             string              `json:"modelID"`
+	ModelRoles          *AgentModelRolesDTO `json:"modelRoles"`
+	EnabledSkills       []string            `json:"enabledSkills"`
+	WorkspaceMode       string              `json:"workspaceMode"`
+	WorkspacePath       string              `json:"workspacePath"`
+	EnabledBuiltinTools *[]string           `json:"enabledBuiltinTools"`
 
-	// SandboxConfigured 区分“调用方没有修改 Sandbox”和“显式把 Sandbox
-	// 改回继承应用默认值”。这与 BuiltinToolsConfigured 的语义一致，避免
-	// 只修改 Model 等其它字段时把安全策略意外覆盖为零值。
-	SandboxConfigured bool             `json:"sandboxConfigured"`
-	Sandbox           SandboxPolicyDTO `json:"sandbox"`
+	// nil 表示未提交；空对象表示恢复应用默认策略。
+	Sandbox *SandboxPolicyDTO `json:"sandbox"`
 }
 
 // AgentService 是 Agent Domain Service 的 Wails Adapter。
@@ -326,7 +318,7 @@ func (s *AgentService) CreateAgent(
 		if err := s.validateBuiltinToolNames(request.EnabledBuiltinTools); err != nil {
 			return AgentDTO{}, err
 		}
-		createInput.EnabledBuiltinTools = filterRemovedBuiltinTools(request.EnabledBuiltinTools)
+		createInput.EnabledBuiltinTools = request.EnabledBuiltinTools
 	}
 
 	value, err :=
@@ -388,19 +380,19 @@ func (s *AgentService) UpdateAgent(
 	var enabledBuiltinTools *[]string
 	var sandboxPolicy *sandbox.AgentPolicy
 	var modelRoles *agents.ModelRoles
-	if request.ModelRolesConfigured {
-		roles := modelRolesFromDTO(request.ModelRoles)
+	if request.ModelRoles != nil {
+		roles := modelRolesFromDTO(*request.ModelRoles)
 		modelRoles = &roles
 	}
-	if request.SandboxConfigured {
-		policy := sandboxPolicyFromDTO(request.Sandbox)
+	if request.Sandbox != nil {
+		policy := sandboxPolicyFromDTO(*request.Sandbox)
 		sandboxPolicy = &policy
 	}
-	if request.BuiltinToolsConfigured {
-		if err := s.validateBuiltinToolNames(request.EnabledBuiltinTools); err != nil {
+	if request.EnabledBuiltinTools != nil {
+		if err := s.validateBuiltinToolNames(*request.EnabledBuiltinTools); err != nil {
 			return AgentDTO{}, err
 		}
-		enabled := filterRemovedBuiltinTools(request.EnabledBuiltinTools)
+		enabled := *request.EnabledBuiltinTools
 		enabledBuiltinTools = &enabled
 	}
 	subagentEnabled := request.SubagentEnabled
@@ -468,13 +460,12 @@ func (s *AgentService) SetAgentModel(id string, request AgentModelRequest) (Agen
 	return s.toDTO(value)
 }
 
-// SetAgentModelRoles 只修改 Utility/Memory 模型角色。
+// SetAgentModelRoles 只修改 Utility 模型角色。
 func (s *AgentService) SetAgentModelRoles(id string, request AgentModelRolesRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
 	value, err := s.core.Agents().SetModelRoles(ctx, id, agents.ModelRoles{
 		UtilityModelID: request.UtilityModelID,
-		MemoryModelID:  request.MemoryModelID,
 	})
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent Model Roles 失败: %w", err)
@@ -741,7 +732,7 @@ func errorDetail(err error, fallback string) string {
 func (s *AgentService) UpdateAgentSecurity(id string, request AgentSecurityRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	enabled := filterRemovedBuiltinTools(request.EnabledBuiltinTools)
+	enabled := request.EnabledBuiltinTools
 	if err := s.validateBuiltinToolNames(enabled); err != nil {
 		return AgentDTO{}, err
 	}
@@ -765,7 +756,7 @@ func (s *AgentService) SelectSandboxDirectory(currentPath string) (string, error
 
 // DeleteAgent 删除完整 Agent Aggregate。
 //
-// 删除 Agent 会一并删除它的全部 Session、附件、Session Memory、Profile 与 Managed
+// 删除 Agent 会一并删除它的全部 Session、附件、Profile 与 Managed
 // Workspace；Custom Workspace 只解除引用。
 func (s *AgentService) DeleteAgent(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
@@ -869,7 +860,7 @@ func (s *AgentService) toDTO(
 
 		EnabledSkills: append([]string(nil), value.Agent.EnabledSkills...),
 
-		EnabledBuiltinTools:    filterRemovedBuiltinTools(value.Agent.EnabledBuiltinTools),
+		EnabledBuiltinTools:    value.Agent.EnabledBuiltinTools,
 		BuiltinToolsConfigured: value.Agent.EnabledBuiltinTools != nil,
 		AvailableBuiltinTools:  s.ListBuiltinTools(),
 		Sandbox:                sandboxPolicyDTO(value.Agent.Sandbox),
@@ -900,14 +891,12 @@ func (s *AgentService) toDTO(
 func modelRolesFromDTO(value AgentModelRolesDTO) agents.ModelRoles {
 	return agents.ModelRoles{
 		UtilityModelID: value.UtilityModelID,
-		MemoryModelID:  value.MemoryModelID,
 	}
 }
 
 func modelRolesDTO(value agents.ModelRoles) AgentModelRolesDTO {
 	return AgentModelRolesDTO{
 		UtilityModelID: value.UtilityModelID,
-		MemoryModelID:  value.MemoryModelID,
 	}
 }
 
@@ -941,9 +930,6 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 			continue
 		}
 		if _, ok := known[name]; !ok {
-			if humberttools.IsRemovedBuiltinTool(name) {
-				continue
-			}
 			return fmt.Errorf("Builtin Tool 不存在或当前配置未启用: %s", name)
 		}
 		if _, duplicate := seen[name]; duplicate {
@@ -952,18 +938,6 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 		seen[name] = struct{}{}
 	}
 	return nil
-}
-
-func filterRemovedBuiltinTools(values []string) []string {
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" || humberttools.IsRemovedBuiltinTool(value) {
-			continue
-		}
-		result = append(result, value)
-	}
-	return result
 }
 
 func builtinToolCategory(name string) string {

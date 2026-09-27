@@ -156,8 +156,8 @@ func (m *Manager) Resolve(ctx context.Context, approvalID string, decision Decis
 		return Resolution{}, fmt.Errorf("%w: %s status=%s", ErrNotPending, approvalID, request.Status)
 	}
 	if time.Now().UTC().After(request.ExpiresAt) {
-		request.Status = StatusExpired
-		m.requests[approvalID] = request
+		// 过期点击只拒绝用户操作；Pending→Expired 必须由超时 worker 领取，
+		// 因为它同时负责恢复/结束 Runtime。这里抢先改状态会让 worker 丢失收尾责任。
 		m.mu.Unlock()
 		return Resolution{}, fmt.Errorf("%w: %s status=%s", ErrNotPending, approvalID, StatusExpired)
 	}

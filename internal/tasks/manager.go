@@ -123,13 +123,14 @@ func (m *Manager) Close(ctx context.Context) error {
 	m.cancel()
 	now := time.Now().UTC()
 	for _, runID := range runIDs {
-		if run, err := m.store.GetRun(context.Background(), runID); err == nil && !run.Status.Terminal() {
-			run.Status = RunInterrupted
-			run.Error = "应用关闭时任务仍在运行；为避免重放工具副作用，本次运行已中断。"
-			run.Approval = nil
-			run.FinishedAt = &now
-			_ = m.store.UpdateRun(context.Background(), run)
-		}
+		_, _ = m.store.MutateRun(context.Background(), runID, func(run *Run) error {
+			if run.Status.Terminal() {
+				return nil
+			}
+			run.Status, run.Error = RunInterrupted, "应用关闭时任务仍在运行；为避免重放工具副作用，本次运行已中断。"
+			run.Approval, run.FinishedAt = nil, &now
+			return nil
+		})
 	}
 	for _, requestID := range requests {
 		_ = m.runtime.CancelTurn(requestID)

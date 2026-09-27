@@ -35,3 +35,17 @@ func TestProactiveEventFromTaskMarksLongRunningAndUsesTaskName(t *testing.T) {
 		t.Fatalf("event title = %q, expected task name", event.Title)
 	}
 }
+
+func TestTaskNotificationTargetsOriginAndKeepsStableDedupKey(t *testing.T) {
+	run := tasks.Run{ID: "run", TaskID: "task", SessionID: "execution", Execution: tasks.ExecutionAgent, Status: tasks.RunSucceeded}
+	task := tasks.Task{ID: "task", Name: "整理", Origin: "chat", OriginRef: "origin"}
+	value := tasks.Event{Type: "run.succeeded", Task: &task, Run: &run}
+	first, ok := proactiveEventFromTask(value)
+	second, _ := proactiveEventFromTask(value)
+	if !ok || first.SessionID != "origin" || first.Key != second.Key || first.Key == "" {
+		t.Fatalf("notification route/dedup: %#v", first)
+	}
+	if run.SessionID != "execution" {
+		t.Fatal("execution session changed")
+	}
+}

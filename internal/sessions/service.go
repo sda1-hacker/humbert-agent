@@ -326,32 +326,9 @@ func (s *Service) MessagePage(
 	return s.store.ListMessagePage(ctx, sessionID, beforeEntryID, limit)
 }
 
-// BuildContext 返回当前 Active Branch 对应的 Eino Runtime Messages。
-// JSONL Wire -> schema.Message 的恢复只在 transcript.DecodeMessage 中实现；附件统一在完整
-// Message 列表上水合，以便应用与 Runtime Provider 请求相同的历史图片重放窗口。
-func (s *Service) BuildContext(
-	ctx context.Context,
-	sessionID string,
-	limit int,
-) ([]*schema.Message, error) {
-	messages, err := s.Messages(ctx, sessionID, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]*schema.Message, 0, len(messages))
-	for _, stored := range messages {
-		if stored.Message == nil {
-			return nil, fmt.Errorf("Session Entry %s 恢复得到空 Eino Message", stored.EntryID)
-		}
-		result = append(result, stored.Message)
-	}
-	return s.HydrateMessages(ctx, sessionID, result)
-}
-
-// LoadTranscript 返回当前 Session 的完整 Tree 投影，供 ContextEngine 与 Session Memory 使用。
+// LoadTranscript 返回当前 Session 的完整 Tree 投影，供 ContextEngine 使用。
 //
-// 这是内部领域 API，不应直接暴露给 Wails。这样 Context/Memory 能复用 Session Store
+// 这是内部领域 API，不应直接暴露给 Wails。这样 Context 能复用 Session Store
 // 的 sessionID -> agentID 安全定位，同时普通 UI 仍只看到稳定 DTO。
 func (s *Service) LoadTranscript(ctx context.Context, sessionID string) (transcript.Document, error) {
 	document, err := s.store.LoadTranscript(ctx, sessionID)

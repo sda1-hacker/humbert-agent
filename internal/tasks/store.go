@@ -1,7 +1,9 @@
 package tasks
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -386,16 +388,51 @@ func (s *Store) getRunLocked(ctx context.Context, id string) (Run, error) {
 	return s.readRunLocked(ctx, ref.AgentID, ref.TaskID, id)
 }
 
-func (s *Store) UpdateRun(ctx context.Context, value Run) error {
+// MutateRun 在同一把锁内读取、修改并持久化最新记录，禁止调用方回写旧快照。
+// 回调只能修改传入对象，不能再次调用 Store；终态仅允许补齐 Runtime 身份。
+func (s *Store) MutateRun(ctx context.Context, id string, mutate func(*Run) error) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous, err := s.getRunLocked(ctx, id)
+	if err != nil {
+		return Run{}, err
+	}
+	value := previous
+	// 先冻结原始内容，回调即使原地修改 Approval/时间指针，也能正确检测变更。
+	original, err := json.Marshal(previous)
+	if err != nil {
+		return Run{}, err
+	}
+	if err := mutate(&value); err != nil {
+		return Run{}, err
+	}
+	if value.ID != previous.ID || value.TaskID != previous.TaskID || value.AgentID != previous.AgentID {
+		return Run{}, errors.New("不能修改 TaskRun 所属身份")
+	}
+	if previous.Status.Terminal() {
+		check := value
+		check.RequestID, check.RuntimeRunID = previous.RequestID, previous.RuntimeRunID
+		checked, err := json.Marshal(check)
+		if err != nil {
+			return Run{}, err
+		}
+		if !bytes.Equal(checked, original) {
+			return Run{}, errors.New("不能修改已结束 TaskRun 的状态或结果")
+		}
+	}
 	if err := validateStoredRun(value); err != nil {
-		return fmt.Errorf("TaskRun 内容无效: %w", err)
+		return Run{}, fmt.Errorf("TaskRun 内容无效: %w", err)
 	}
-	if _, err := s.getRunLocked(ctx, value.ID); err != nil {
-		return err
+	updated, err := json.Marshal(value)
+	if err != nil {
+		return Run{}, err
 	}
-	return s.writeRunLocked(ctx, value)
+	if !bytes.Equal(updated, original) {
+		if err := s.writeRunLocked(ctx, value); err != nil {
+			return Run{}, err
+		}
+	}
+	return value, nil
 }
 
 func (s *Store) ListRuns(ctx context.Context, taskID string) ([]Run, error) {

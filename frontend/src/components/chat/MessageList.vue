@@ -299,34 +299,7 @@ function modelNameForMessage(
   const metadata =
       metadataOf(message);
 
-  const modelID =
-      typeof metadata.model_id ===
-      "string"
-          ? metadata.model_id
-          : (
-              typeof metadata.modelID ===
-              "string"
-                  ? metadata.modelID
-                  : ""
-          );
-
-  if (modelID) {
-    const model =
-        modelStore.modelByID(
-            modelID,
-        );
-
-    if (model?.displayName) {
-      return model.displayName;
-    }
-  }
-
-  return (
-      agentStore
-          .selectedAgent
-          ?.modelDisplayName ||
-      ""
-  );
+  return metadata.response_model || metadata.model_name || "";
 }
 
 function handleScroll() {

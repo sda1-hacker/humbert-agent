@@ -21,28 +21,29 @@ func TestExecutionLimitStateCountsAttemptedToolCalls(t *testing.T) {
 }
 
 func TestConfigureExecutionLimitsInstallsModelCounter(t *testing.T) {
-	snapshot := &Snapshot{}
+	model := &countingBudgetModel{}
+	snapshot := &Snapshot{Model: model}
 	err := configureExecutionLimits(snapshot, ExecutionLimits{
 		MaxDuration: time.Minute, MaxModelCalls: 2, MaxToolCalls: 3,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.limitState == nil || len(snapshot.AgentHandlers) != 1 {
-		t.Fatalf("limits were not installed: %+v", snapshot.ExecutionLimits)
+	if snapshot.limitState == nil {
+		t.Fatal("budget state missing")
 	}
-	middleware, ok := snapshot.AgentHandlers[0].(*executionLimitMiddleware)
-	if !ok {
-		t.Fatalf("handler type=%T", snapshot.AgentHandlers[0])
-	}
-	for index := 0; index < 2; index++ {
-		if _, _, err := middleware.BeforeModelRewriteState(context.Background(), nil, nil); err != nil {
+	for range 2 {
+		if _, err := snapshot.Model.Generate(context.Background(), nil); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := middleware.BeforeModelRewriteState(context.Background(), nil, nil); !errors.Is(err, ErrExecutionLimitExceeded) {
+	if _, err := snapshot.Model.Generate(context.Background(), nil); !errors.Is(err, ErrExecutionLimitExceeded) {
 		t.Fatalf("error=%v want ErrExecutionLimitExceeded", err)
 	}
+	if model.calls.Load() != 2 {
+		t.Fatalf("actual calls=%d", model.calls.Load())
+	}
+
 }
 
 func TestConfigureExecutionLimitsRejectsNegativeValues(t *testing.T) {

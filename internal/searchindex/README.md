@@ -21,6 +21,8 @@ flowchart LR
 
 | 文件 | 阅读重点 |
 | --- | --- |
+| `controller.go` | 懒加载、刷新去重、取消与读者等待。 |
+| `sessions.go`、`document_scan.go` | 从权威数据增量构建索引。 |
 | `index.go` | `Open`、`ReplaceStream`、`Search`、Session metadata。 |
 | `documents.go` | `DocumentCurrent`、`ReplaceDocument`、`SearchDocuments`。 |
 

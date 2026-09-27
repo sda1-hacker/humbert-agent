@@ -23,15 +23,11 @@ runtime:
     keep_recent_min_tokens: 8192
     keep_recent_max_tokens: 32768
 
-    # 单条消息块送给内部摘要/Memory 模型的最大字符数；同时会派生全局输入上限。
+    # 单条消息块送给摘要模型的最大字符数。
     # 原始 JSONL 不会截断。
     serializer_max_chars: 4000
 
-    # 单 Session Memory 自动刷新阈值，满足任一条件即可刷新。
-    memory_turn_interval: 10
-    memory_token_interval: 12288
-
-    # Compaction / Memory 单次模型调用最长 120 秒。
+    # 摘要模型单次调用最长 120 秒。
     operation_timeout_ms: 120000
   skills:
     # 单个 SKILL.md 最大 512 KiB。
@@ -58,10 +54,7 @@ runtime:
     max_tool_pages: 20
     # 进入模型上下文的单个 MCP Tool 描述最大字符数。
     max_tool_description_chars: 4000
-    # 单次 MCP ToolResult 最大字符数。
-    max_tool_result_chars: 100000
-    # ToolResult 被裁剪时额外保留的尾部字符数。
-    preserve_tool_result_tail_chars: 4000
+    # 工具目录缓存有效期；工具结果由统一 Reduction 归档，不在 MCP 层裁剪。
     catalog_ttl_ms: 6000
 
 security:
@@ -106,13 +99,6 @@ tools:
     # write_file / edit_file
     # 允许创建或修改后的最大文件大小。
     max_writable_file_bytes: 2097152
-
-    # 单次 read_file 最多返回给模型的文本字节数。
-    # edit_file 的变更预览也使用该值作为预算。
-    max_read_output_bytes: 131072
-
-    # 未指定 line_count 时默认读取多少行。
-    default_read_lines: 200
 
     # 单次允许请求的最大行数。
     max_read_lines: 1000

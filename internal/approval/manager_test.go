@@ -45,6 +45,29 @@ func approvalInfo() InterruptInfo {
 	}
 }
 
+func TestExpiredClickLeavesTimeoutOwnership(t *testing.T) {
+	manager, _ := newApprovalManager(t, time.Minute)
+	request, err := manager.Register(context.Background(), approvalInfo(), "interrupt", "checkpoint")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 固定已过期状态，精确覆盖点击先于 worker 的顺序，不依赖调度器和 sleep。
+	manager.mu.Lock()
+	request.ExpiresAt = time.Now().Add(-time.Second)
+	manager.requests[request.ID] = request
+	manager.mu.Unlock()
+	if _, err := manager.Resolve(context.Background(), request.ID, DecisionAllowOnce); !errors.Is(err, ErrNotPending) {
+		t.Fatalf("expired click accepted: %v", err)
+	}
+	resolution, ok, err := manager.Expire(request.ID)
+	if err != nil || !ok || resolution.Approved {
+		t.Fatalf("timeout lost ownership: %+v %v %v", resolution, ok, err)
+	}
+	if _, ok, err := manager.Expire(request.ID); err != nil || ok {
+		t.Fatalf("duplicate expiry: %v %v", ok, err)
+	}
+}
+
 func TestResolveAllowSessionCreatesReusableRule(t *testing.T) {
 	manager, engine := newApprovalManager(t, time.Minute)
 	ctx := context.Background()

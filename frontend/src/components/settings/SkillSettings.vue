@@ -1,4 +1,9 @@
 <script setup>
+import { beginLatestRequest } from "../../utils/latestRequest.js";
+
+// 目录请求按组件实例隔离，保存后的刷新使较早响应失效。
+const catalogRequests = {};
+let pendingCatalogLoad = null;
 import {
   computed,
   onMounted,
@@ -356,30 +361,19 @@ function syncAgentStore(agentID) {
     return;
   }
 
-  const index =
-      agentStore.items.findIndex(
-          (agent) =>
-              agent.id === agentID,
-      );
-
-  if (index < 0) {
-    return;
-  }
-
-  agentStore.items[index] = {
-    ...agentStore.items[index],
-
-    enabledSkills: [
-      ...refreshed.enabledSkills,
-    ],
-  };
+  agentStore.applySkillSelection(agentID, refreshed.enabledSkills);
 }
 
-async function load() {
-  if (loading.value) {
-    return;
-  }
+async function load({ force = false } = {}) {
+  // 普通读取共享当前请求；保存后强制刷新，不允许复用保存前的快照。
+  if (pendingCatalogLoad && !force) return pendingCatalogLoad;
+  const isCurrent = beginLatestRequest(catalogRequests, "catalog");
+  pendingCatalogLoad = readCatalog(isCurrent);
+  try { return await pendingCatalogLoad; }
+  finally { if (isCurrent()) pendingCatalogLoad = null; }
+}
 
+async function readCatalog(isCurrent) {
   loading.value = true;
   loadError.value = "";
   sourceError.value = "";
@@ -390,6 +384,7 @@ async function load() {
   try {
     const raw =
         await getSkillState();
+    if (!isCurrent()) return;
 
     const state =
         normalizeState(raw);
@@ -450,6 +445,7 @@ async function load() {
                     )
             );
   } catch (error) {
+    if (!isCurrent()) return;
     loadError.value =
         error?.message ??
         String(error);
@@ -459,7 +455,7 @@ async function load() {
         error,
     );
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
@@ -515,7 +511,7 @@ async function setSkillEnabled(
       );
     }
 
-    await load();
+    await load({ force: true });
     syncAgentStore(agent.id);
 
     Message.success(
@@ -569,7 +565,7 @@ async function removeUnavailableReference(
         agent.id,
     );
 
-    await load();
+    await load({ force: true });
     syncAgentStore(agent.id);
 
     Message.success(
@@ -861,7 +857,7 @@ onMounted(load);
                 :disabled="
                   !selectedAgent ||
                   Boolean(updatingKey) ||
-                  ((!skill.valid || skill.runtimeStatus === 'unsupporte') && !enabledForSelectedAgent(skill.name))
+                  ((!skill.valid || skill.runtimeStatus === 'unsupported') && !enabledForSelectedAgent(skill.name))
             "
                 @change="onSkillSwitchChange(skill, $event)"
             />

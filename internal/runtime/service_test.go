@@ -86,10 +86,10 @@ func (m unusedModel) WithTools([]*schema.ToolInfo) (einomodel.ToolCallingChatMod
 	return m, nil
 }
 
-func TestCancelStopsPostTurnMaintenanceAndPublishesCancelled(t *testing.T) {
+func TestCompletedTurnDoesNotGenerateAnotherSummary(t *testing.T) {
 	repo := &blockedMaintenanceRepository{entered: make(chan struct{})}
 	logger := logging.NewBootstrap()
-	engine, err := contextengine.NewEngine(config.ContextConfig{AutoCompaction: true, OperationTimeoutMS: 10000}, repo, contextengine.NewApproxEstimator(), logger, nil)
+	engine, err := contextengine.NewEngine(config.ContextConfig{AutoCompaction: true, OperationTimeoutMS: 10000}, repo, contextengine.NewApproxEstimator(), logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,28 +119,17 @@ func TestCancelStopsPostTurnMaintenanceAndPublishesCancelled(t *testing.T) {
 	done := make(chan struct{})
 	go func() { s.completeTurn(active, ExecutionResult{}); close(done) }()
 	select {
-	case <-repo.entered:
-	case <-time.After(time.Second):
-		t.Fatal("maintenance did not start")
-	}
-	if state := s.activeRunStatus("session"); state == nil || state.Phase != RunPhaseMaintaining {
-		t.Fatalf("maintenance phase missing: %#v", state)
-	}
-	if err := s.CancelTurn("request"); err != nil {
-		t.Fatal(err)
-	}
-	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("maintenance ignored cancellation")
+		t.Fatal("turn did not finish")
 	}
 	select {
 	case got := <-terminal:
-		if got != EventTurnCancelled {
+		if got != EventTurnCompleted {
 			t.Fatalf("wrong terminal event: %s", got)
 		}
 	default:
-		t.Fatal("missing cancellation event")
+		t.Fatal("missing completion event")
 	}
 	if s.activeRunStatus("session") != nil {
 		t.Fatal("session reservation not released")

@@ -95,3 +95,42 @@ func assertAgentPreserved(t *testing.T, got, before Agent, operation string, all
 		}
 	}
 }
+
+// 并发局部保存必须基于锁内最新配置，不能采用调用方预先读取的旧副本。
+func TestConcurrentMutationsPreserveEveryUpdate(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	transcripts, err := transcript.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, root, transcripts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Create(ctx, Agent{ID: "concurrent", Name: "Concurrent"}); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 24)
+	for i := 0; i < 24; i++ {
+		go func() {
+			<-start
+			_, err := store.Mutate(ctx, "concurrent", func(agent *Agent) error { agent.Instruction += "x"; return nil })
+			results <- err
+		}()
+	}
+	close(start)
+	for i := 0; i < 24; i++ {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	value, err := store.Get(ctx, "concurrent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(value.Agent.Instruction) != 24 {
+		t.Fatalf("lost concurrent writes: %q", value.Agent.Instruction)
+	}
+}

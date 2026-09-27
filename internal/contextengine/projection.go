@@ -1,10 +1,12 @@
 package contextengine
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/adk/middlewares/patchtoolcalls"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
 
@@ -28,8 +30,6 @@ type projectionResult struct {
 	LatestCompactionID string
 
 	Window WindowState
-
-	Retained RetainedState
 }
 
 // projectActiveBranch 将 Transcript ActiveBranch 投影成主模型可见的 Eino Messages。
@@ -40,7 +40,6 @@ type projectionResult struct {
 func projectActiveBranch(
 	document transcript.Document,
 	policy ReasoningReplayPolicy,
-	toolResultBudget ...int,
 ) (projectionResult, error) {
 	branch := document.ActiveBranch
 	if len(branch) == 0 {
@@ -67,7 +66,6 @@ func projectActiveBranch(
 
 	if latest != nil {
 		result.LatestCompactionID = latest.ID
-		result.Retained = retainedStateFromCompaction(latest)
 		result.Window.CheckpointID = latest.ID
 		if document.ContextWindow.Valid {
 			result.Window.Generation = document.ContextWindow.Generation
@@ -117,7 +115,6 @@ func projectActiveBranch(
 	// 最终回答/工具事务，避免历史 Thinking 在长会话中反复占用大量上下文。显式 Include/Omit
 	// 仍保持原有语义。
 	latestUserIndex := latestUserMessageIndex(branch, startIndex)
-	entryIDs := make([]string, 0, len(branch)-startIndex)
 
 	for index := startIndex; index < len(branch); index++ {
 		entry := branch[index]
@@ -134,17 +131,26 @@ func projectActiveBranch(
 
 		effectivePolicy := reasoningPolicyForIndex(policy, index, latestUserIndex)
 		message := applyReasoningReplayPolicy(decoded.Message, effectivePolicy)
-		message = normalizeLegacyContextToolGuidance(message)
+		message.Extra = cloneExtra(message.Extra)
+		message.Extra[entryIDKey] = entry.ID
 		result.RecentMessages = append(result.RecentMessages, message)
-		entryIDs = append(entryIDs, entry.ID)
-	}
-	if len(toolResultBudget) > 0 && toolResultBudget[0] > 0 {
-		limitWindowToolResults(result.RecentMessages, entryIDs, toolResultBudget[0])
 	}
 
 	// 历史可能在审批、工具执行或结果落盘时中断。只修复模型投影，不伪造真实执行结果，
 	// 也不修改原始 Transcript；未知结果必须明确告诉模型，避免自动重放有副作用的调用。
-	result.RecentMessages = closeInterruptedToolCalls(result.RecentMessages)
+	patcher, err := patchtoolcalls.New(context.Background(), &patchtoolcalls.Config{
+		PatchedToolResultGenerator: func(context.Context, string, string, *schema.ToolArgument) (*patchtoolcalls.PatchedToolResult, error) {
+			return &patchtoolcalls.PatchedToolResult{Content: `{"status":"unknown","message":"上次执行已中断，结果未知。先核实实际状态，不要自动重放有副作用的工具调用。"}`}, nil
+		},
+	})
+	if err != nil {
+		return projectionResult{}, err
+	}
+	_, state, err := patcher.BeforeModelRewriteState(context.Background(), &adk.ChatModelAgentState{Messages: result.RecentMessages}, nil)
+	if err != nil {
+		return projectionResult{}, err
+	}
+	result.RecentMessages = state.Messages
 	result.Messages = result.RecentMessages
 	if result.Checkpoint != nil {
 		result.Messages = append([]*schema.Message{result.Checkpoint}, result.RecentMessages...)
@@ -157,9 +163,6 @@ func compactionCheckpointText(entry *transcript.Entry) string {
 		return ""
 	}
 	checkpointText := compactionCheckpointPrefix + strings.TrimSpace(entry.Summary)
-	if strings.Contains(checkpointText, "history_search") || strings.Contains(checkpointText, "history_read") {
-		checkpointText += "\n\n[工具兼容说明]\n旧检查点中提到的 history_search/history_read 已合并为 session_history：先 action=search 定位，再 action=read 读取原文。"
-	}
 	if entry.Details != nil && entry.Details.SourceEntryCount > 0 {
 		checkpointText += fmt.Sprintf(
 			"\n\n[History recovery]\n这个检查点由 %d 条原始历史生成，来源范围 %s .. %s。若需要检查点未保留的旧细节，请使用 session_history：先 action=search 定位 entry_id，再 action=read 回查完整会话记录。",
@@ -167,26 +170,6 @@ func compactionCheckpointText(entry *transcript.Entry) string {
 		)
 	}
 	return checkpointText
-}
-
-// Keep the most recent tool outputs within one window-wide content allowance.
-// Replaced results retain their ToolCallID and can be read verbatim from JSONL.
-func limitWindowToolResults(messages []*schema.Message, entryIDs []string, limit int) {
-	used := 0
-	for i := len(messages) - 1; i >= 0; i-- {
-		message := messages[i]
-		if message == nil || message.Role != schema.Tool {
-			continue
-		}
-		chars := utf8.RuneCountInString(message.Content)
-		if used+chars <= limit {
-			used += chars
-			continue
-		}
-		clone := *message
-		clone.Content = "[Earlier tool result omitted from the active context. Full original record: session_history action=read, entry_id=" + entryIDs[i] + ". Verify the result before relying on it.]"
-		messages[i] = &clone
-	}
 }
 
 func latestUserMessageIndex(branch []transcript.Entry, start int) int {
@@ -275,58 +258,6 @@ func applyReasoningReplayPolicy(message *schema.Message, policy ReasoningReplayP
 
 // normalizeLegacyContextToolGuidance 只迁移 Humbert 自己生成的旧 ToolResult 引导文本，
 // 不改写用户/助手正文。这样上一版已经持久化的超大结果仍能引导模型使用新的统一资源工具。
-func normalizeLegacyContextToolGuidance(message *schema.Message) *schema.Message {
-	if message == nil || message.Role != schema.Tool || !strings.Contains(message.Content, "humbert_context_result_truncated") {
-		return message
-	}
-	if !strings.Contains(message.Content, "context_artifact_read") {
-		return message
-	}
-	clone := *message
-	clone.Content = strings.ReplaceAll(
-		clone.Content,
-		"使用 context_artifact_read 按区间读取",
-		"调用 context_resource，并使用 resource_type=artifact、resource_id=artifact_id 按区间读取",
-	)
-	return &clone
-}
-
-// closeInterruptedToolCalls 在下一条非 Tool 消息之前补齐缺失结果。
-// 顺序按原 ToolCalls 保持稳定；孤立、重复或非法 ID 不在此处猜测修复，交给严格校验拒绝。
-func closeInterruptedToolCalls(messages []*schema.Message) []*schema.Message {
-	result := make([]*schema.Message, 0, len(messages))
-	var pending []schema.ToolCall
-	answered := make(map[string]bool)
-	flush := func() {
-		for _, call := range pending {
-			if !answered[call.ID] {
-				result = append(result, schema.ToolMessage(
-					`{"status":"unknown","error":"No tool result was recorded before execution was interrupted. The action may have occurred. Verify its effects before any retry; do not automatically repeat side effects."}`,
-					call.ID, schema.WithToolName(call.Function.Name),
-				))
-			}
-		}
-		pending = nil
-		clear(answered)
-	}
-	for _, message := range messages {
-		if message == nil {
-			continue
-		}
-		if message.Role != schema.Tool {
-			flush()
-		}
-		result = append(result, message)
-		if message.Role == schema.Assistant {
-			pending = message.ToolCalls
-		} else if message.Role == schema.Tool {
-			answered[message.ToolCallID] = true
-		}
-	}
-	flush()
-	return result
-}
-
 // validateProjectedToolTransactions 双向校验调用与结果，拒绝未闭合、重复和跨消息边界的事务。
 func validateProjectedToolTransactions(messages []*schema.Message) error {
 	pending := make(map[string]struct{})
@@ -365,4 +296,13 @@ func validateProjectedToolTransactions(messages []*schema.Message) error {
 		return errors.New("Context Tool Transaction 不完整: 存在未完成的 ToolCall")
 	}
 	return nil
+}
+
+// cloneExtra 防止运行时身份标记回写共享的历史消息。
+func cloneExtra(value map[string]any) map[string]any {
+	result := make(map[string]any, len(value)+1)
+	for k, v := range value {
+		result[k] = v
+	}
+	return result
 }

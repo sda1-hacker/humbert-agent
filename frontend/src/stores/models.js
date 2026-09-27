@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { beginLatestRequest, invalidateRequests } from "../utils/latestRequest.js";
 
 import {
     createModel as apiCreateModel,
@@ -75,11 +76,13 @@ export const useModelStore =
                  * 从 Go ModelRegistry 重新读取完整状态。
                  */
                 async load() {
+                    const isCurrent = beginLatestRequest(this, "models");
                     this.loading = true;
 
                     try {
                         const result =
                             await getModelState();
+                        if (!isCurrent()) return;
 
                         this.revision =
                             Number(
@@ -103,8 +106,10 @@ export const useModelStore =
                         this.multimedia = {
                             imageModelID: result.multimedia?.imageModelID ?? "",
                         };
+                    } catch (error) {
+                        if (isCurrent()) throw error;
                     } finally {
-                        this.loading = false;
+                        if (isCurrent()) this.loading = false;
                     }
                 },
 
@@ -184,6 +189,9 @@ export const useModelStore =
 
                 async updateMultimediaConfig(request) {
                     const result = await apiUpdateMultimediaConfig(request);
+                    // 保存成功后，保存前的完整快照不能再撤销本次修改。
+                    invalidateRequests(this, "models");
+                    this.loading = false;
                     this.multimedia = {
                         imageModelID: result?.imageModelID ?? "",
                     };

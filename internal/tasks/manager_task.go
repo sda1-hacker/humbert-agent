@@ -155,10 +155,13 @@ func (m *Manager) Delete(ctx context.Context, id string) ([]string, error) {
 		if runs[index].Status != RunQueued {
 			continue
 		}
-		runs[index].Status = RunCancelled
-		runs[index].Error = "任务已删除，尚未开始的运行已取消。"
-		runs[index].FinishedAt = &now
-		if err := m.store.UpdateRun(ctx, runs[index]); err != nil {
+		if _, err := m.store.MutateRun(ctx, runs[index].ID, func(run *Run) error {
+			if run.Status != RunQueued {
+				return ErrTaskBusy
+			}
+			run.Status, run.Error, run.FinishedAt = RunCancelled, "任务已删除，尚未开始的运行已取消。", &now
+			return nil
+		}); err != nil {
 			return nil, err
 		}
 	}

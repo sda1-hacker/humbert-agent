@@ -125,6 +125,12 @@ func copyFile(ctx context.Context, scope humberttools.Scope, input *CopyFileInpu
 	if src != nil && sameSandboxPath(src.absolute, dst.absolute) {
 		return nil, errors.New("source 与 destination 不能指向同一个文件")
 	}
+	unlock, err := lockFileTargets(ctx, src, dst)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	var sourceVersion fileVersion
 	var data []byte
 	limit := maxBytes
 	if attachmentID != "" {
@@ -148,6 +154,7 @@ func copyFile(ctx context.Context, scope humberttools.Scope, input *CopyFileInpu
 		if statErr != nil {
 			return nil, statErr
 		}
+		sourceVersion.info = info
 		if !info.Mode().IsRegular() {
 			return nil, errors.New("source 必须是普通文件")
 		}
@@ -165,12 +172,10 @@ func copyFile(ctx context.Context, scope humberttools.Scope, input *CopyFileInpu
 	if err := ensureRootParentDirectory(dst.root, dst.relative); err != nil {
 		return nil, err
 	}
-	existed := false
 	mode := fs.FileMode(0o600)
 	di, statErr := dst.root.Lstat(dst.relative)
 	switch {
 	case statErr == nil:
-		existed = true
 		if di.Mode()&fs.ModeSymlink != 0 || !di.Mode().IsRegular() {
 			return nil, errors.New("destination 必须是普通文件且不能是符号链接")
 		}
@@ -184,10 +189,14 @@ func copyFile(ctx context.Context, scope humberttools.Scope, input *CopyFileInpu
 	default:
 		return nil, statErr
 	}
-	if err := atomicWriteWorkspaceFile(ctx, dst.root, dst.relative, data, mode, existed); err != nil {
+	if err := atomicWriteWorkspaceFile(ctx, dst.root, dst.relative, data, mode, fileVersion{info: di}); err != nil {
 		return nil, err
 	}
 	if move {
+		sourceVersion.content = data
+		if err := sourceVersion.check(ctx, src.root, src.relative); err != nil {
+			return nil, fmt.Errorf("目标已写入，source 已变化，保留 source: %w", err)
+		}
 		if err := src.root.Remove(src.relative); err != nil {
 			return nil, fmt.Errorf("目标已写入，但删除 source 失败: %w", err)
 		}
@@ -221,6 +230,11 @@ func (f *DeleteFileFactory) Build(ctx context.Context, scope humberttools.Scope)
 		if target.relative == "." {
 			return nil, errors.New("不能删除 Sandbox 根目录")
 		}
+		unlock, err := lockFileTargets(callCtx, target)
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
 		info, err := target.root.Lstat(target.relative)
 		if err != nil {
 			return nil, err

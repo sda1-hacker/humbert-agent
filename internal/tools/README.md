@@ -1,37 +1,29 @@
-# Tools：能力注册、授权包装与结果预算
+# Tools：能力注册、授权和 Eino Reduction
 
 [总目录](../../docs/architecture/README.md) · [内置工具](builtin/README.md) · [Permission](../permission/README.md)
 
-## 一次 Tool 从配置到执行
-
-`app.buildToolRegistry` 注册各 Builtin 的 Factory/Descriptor；Agent Profile 保存选中的名字。`Registry.Resolve` 用本轮 Scope 构造具体 Eino Tool，并包装权限判断与调用上下文。Scope 含 Agent/Session、工作区、Sandbox、审批、结果预算等，不能从模型传入的 JSON 自行推导授权对象。MCP 与 Skill Tool 最终并入 Runtime Snapshot。
+`Registry.Resolve` 根据冻结的 Scope 构造工具。Scope 的 Agent、Session、工作区与安全策略来自 Runtime，模型参数不能修改这些身份。所有 Builtin 与 MCP 工具进入同一套 Permission Guard，Ask 通过 Eino interrupt/checkpoint 恢复原调用，不接受前端重新提供参数。
 
 ```mermaid
 flowchart LR
-  F[Factory + Descriptor] --> R[Registry.Register]
-  A[Agent Tool 选择] --> S[Registry.Resolve(scope)]
-  R --> S
-  S --> G[GuardInvokableTool]
-  G --> P[Permission / Approval]
-  P --> B[Builtin InvokableRun]
-  B --> X[Sandbox / Workspace]
-  B --> Q[ResultBudget / context-artifact]
+  F[Factory / MCP Adapter] --> G[Permission Guard]
+  G --> I[实际 I/O 与 Sandbox]
+  I --> R[Eino Reduction]
+  R --> A[完整结果存入 contextartifact]
+  R --> P[预览和资源 ID]
+  P --> C[context_resource 分页恢复]
 ```
 
-`Descriptor` 定义名称、风险及能力身份；`capability_identity.go` 把参数与执行目标转换为可匹配的身份。`guarded_tool.go` 在真实调用前执行 Permission，Ask 时触发 Eino interrupt，并在大结果出现时交给 `contextartifact` 保存全文、返回可回查预览。`result_budget.go` 限制整个窗口内 Tool 输出量；`call_context.go` 传稳定 ToolCall ID 给审计和恢复逻辑。
+`guarded_tool.go` 只管理授权；`reduction.go` 负责所有工具结果的归档与清理。单个长结果先保存全文再返回预览；累计上下文到阈值后由 Eino 清理旧轮次。`ClearAtLeastTokens` 启用 Eino 的副本改写，原始消息和工具参数不被修改。`skill` 与 `context_resource` 不被递归归档。
 
-| 文件 | 重点 |
+没有独立的 ResultBudget、恢复额度池或自定义 ToolCallID context key。ToolCallID 直接使用 `compose.GetToolCallID`。未知工具配置直接报错，不保留旧 delegation 工具名称的兼容分支。
+
+| 文件 | 职责 |
 | --- | --- |
-| `registry.go` | 注册、去重、关闭、按 Agent 选择解析本轮工具。 |
-| `types.go` | `Factory`、`Descriptor`、`Scope` 的契约。 |
-| `guarded_tool.go`、`permission.go` | 授权、Eino interrupt/恢复与大结果保护。 |
-| `capability_identity.go` | 规则匹配所需的工具目标。 |
-| `result_budget.go` | 工具内容窗口预算。 |
+| `registry.go` | 注册、能力选择、冻结工具与关闭 |
+| `types.go` | Factory、Descriptor、Scope 契约 |
+| `guarded_tool.go`、`permission.go` | 授权与审批恢复 |
+| `capability_identity.go` | 授权规则匹配所需身份 |
+| `reduction.go` | Eino 与会话归档资源协议之间的适配 |
 
-新增工具先实现 Factory/Descriptor，再在 `app/tools.go` 注册；在实际 I/O 处再次校验 Sandbox/Workspace。仅设置 Descriptor 风险不能替代文件或网络边界。
-
-## Scope 是工具的信任边界
-
-模型生成的 JSON 只是一份调用参数，不能决定自己属于哪个 Session、能访问哪个工作区或是否跳过审批。`Scope` 由 Resolver 从已验证的 Agent/Session/Sandbox 快照构建；Factory 的 `Build` 把 Scope 固定到 Tool 实例。`GuardInvokableTool` 在每次调用前根据 Descriptor 与参数生成 CapabilityIdentity 并交给 Permission。Ask 中断保存原始调用状态，恢复时不接受前端重新提交的参数。
-
-Tool 输出也有边界：`ResultBudget` 限制整轮保留的文字量；超出阈值时 `contextartifact.Store.Archive` 可保留原文并返回可回查 ID。Transcript 写入完整工具事务，ContextEngine 在模型输入中可能进一步缩短旧工具结果。调试时分别看 Tool 原始返回、JSONL ToolResult 和下一次模型输入，三者长度可能不同。
+文件工具的 schema、解析和显示由 Eino filesystem 提供；`builtin/filesystem.go` 实现受限 Backend，保留 PathGuard、os.Root、UTF-8、大小限制和原子写入。`apply_patch`、移动/复制/删除、命令沙箱仍是独立产品能力，不能用普通读写工具替代其行为。

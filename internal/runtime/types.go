@@ -13,7 +13,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
-	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
@@ -179,12 +178,11 @@ type RuntimeManifest struct {
 }
 
 // RuntimeModelRolesManifest 描述本次 Resolve 后各角色实际使用的模型。
-// Utility/Memory 字段已经应用回退链；ImageModelID 来自应用级多媒体设置并仅作为视觉辅助。
+// Utility 字段已经应用回退链；ImageModelID 来自应用级多媒体设置并仅作为视觉辅助。
 // ActiveModelID/ActiveRole 为兼容现有 UI 保留；视觉桥接后它们始终指向 Chat Model。
 type RuntimeModelRolesManifest struct {
 	ChatModelID    string `json:"chatModelID"`
 	UtilityModelID string `json:"utilityModelID"`
-	MemoryModelID  string `json:"memoryModelID"`
 	ImageModelID   string `json:"imageModelID,omitempty"`
 	ActiveModelID  string `json:"activeModelID"`
 	ActiveRole     string `json:"activeRole"`
@@ -267,11 +265,7 @@ type Snapshot struct {
 
 	AgentName string
 
-	// BaseInstruction 是不包含 Session Memory 的稳定运行时指令。ContextEngine 每次重建
-	// Context 时会在它之上动态注入当前 Session Key Facts，避免重复拼接 Memory。
-	BaseInstruction string
-
-	// Instruction 是本次 Turn 初始模型调用使用的最终指令，已经包含 Session Memory。
+	// Instruction 是本轮冻结的系统指令，包含用户明确保存的个人偏好。
 	Instruction string
 
 	// ModelID 是 Humbert models.json 中的配置 ID，只用于 Runtime Event/日志。
@@ -282,16 +276,6 @@ type Snapshot struct {
 	ModelRole string
 
 	ModelCapabilities models.Capabilities
-
-	ReasoningPolicy contextengine.ReasoningReplayPolicy
-
-	CompactionModel einomodel.ToolCallingChatModel
-
-	CompactionContextWindow int
-
-	CompactionMaxOutputTokens int
-
-	MemoryModel einomodel.ToolCallingChatModel
 
 	ToolRevision uint64
 
@@ -346,11 +330,7 @@ type Snapshot struct {
 
 	ContextAssembly contextengine.Assembly
 
-	// PreRunCompacted 表示本 Turn 在首次 Provider 调用前已经发生过至少一次 durable
-	// Compaction。该标记只存在于本 Turn Snapshot，不写入 Session；Turn 完成后的派生维护
-	// 使用它强制刷新 Session Memory，避免“发送前已压缩，但完成后没有再次压缩”时 Memory
-	// Cursor 长时间停留在旧历史。
-	PreRunCompacted bool
+	ContextHandler *contextengine.MidRunCompactor
 
 	// AgentHandlers 只包含本 Turn 冻结的 Eino ChatModelAgent Handler。当前 Context Handler
 	// 使用 BeforeModelRewriteState 保护同一个 ReAct tool loop 的 Context，不直接写 JSONL。
@@ -391,10 +371,9 @@ type ExecutionLimits struct {
 	MaxTotalTokens int
 }
 
-// ResolveTurnOptions 只承载必须发生在 Snapshot 构建期间的运行控制。视觉辅助模型在
-// Provider Context 形成前执行，因此必须通过这里接入任务的模型调用上限。
+// ResolveTurnOptions 将同一个任务预算传入 Snapshot 构建期间的摘要和视觉调用。
 type ResolveTurnOptions struct {
-	BeforeAuxiliaryModel func() error
+	limitState *executionLimitState
 }
 
 // StartTurnResult 是异步 Turn 启动结果。
@@ -418,14 +397,9 @@ type StartTurnResult struct {
 	Runtime RuntimeManifest `json:"runtime"`
 }
 
-// ManualCompactionResult 是用户主动执行“压缩”或“压缩并更新”的结果。
-//
-// Memory 仅在 updateMemory=true 且刷新成功时 Updated=true；普通压缩不会隐式更新 Memory，
-// 与前端两个菜单动作保持清晰语义。
+// ManualCompactionResult 是手动压缩后的持久化结果和预算。
 type ManualCompactionResult struct {
 	Compaction contextengine.CompactResult `json:"compaction"`
-
-	Memory memory.RefreshResult `json:"memory"`
 
 	ContextUsage contextengine.Usage `json:"contextUsage"`
 }

@@ -357,7 +357,7 @@ func (s *Store) ListMessagePage(
 
 // LoadTranscript 返回指定 Session 的完整 JSONL Tree 内存投影。
 //
-// 该方法只提供给 ContextEngine/Memory 等需要理解 Compaction 与 ActiveBranch 的内部
+// 该方法只提供给 ContextEngine 等需要理解 Compaction 与 ActiveBranch 的内部
 // 领域模块。普通聊天 UI 仍应使用 ListMessages，避免上层依赖 Transcript Wire Schema。
 func (s *Store) LoadTranscript(ctx context.Context, sessionID string) (transcript.Document, error) {
 	session, err := s.GetSession(ctx, sessionID)
@@ -427,7 +427,7 @@ func (s *Store) AppendCompaction(
 
 // SessionDirectory 返回指定 Session 的受控数据目录。
 //
-// Memory Store 使用该目录写 memory.json。目录路径由 TranscriptStore 在 Humbert
+// 附件和上下文资源通过该目录保存。目录路径由 TranscriptStore 在 Humbert
 // agents root 下推导并校验，调用方不得把用户输入直接拼接到文件路径。
 func (s *Store) SessionDirectory(ctx context.Context, sessionID string) (string, error) {
 	if ctx == nil {

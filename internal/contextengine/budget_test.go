@@ -17,8 +17,6 @@ func testContextConfig() config.ContextConfig {
 		KeepRecentMinTokens:  8 * 1024,
 		KeepRecentMaxTokens:  32 * 1024,
 		SerializerMaxChars:   4000,
-		MemoryTurnInterval:   10,
-		MemoryTokenInterval:  12 * 1024,
 		OperationTimeoutMS:   120000,
 	}
 }

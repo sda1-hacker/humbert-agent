@@ -4,15 +4,11 @@ import (
 	"context"
 	"fmt"
 	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
-	"io"
-	"io/fs"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
-	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
@@ -75,21 +71,8 @@ type WorkspacePreviewDTO struct {
 // 所有查询都要求 AgentID，并由 Core 的 WorkspaceView Service 重新解析该 Agent 当前
 // Workspace；前端不能提交绝对 Workspace Root 来读取任意目录。
 type WorkspaceService struct {
-	core       *coreapp.Application
-	docMu      sync.Mutex
-	docStateMu sync.Mutex
-	docIndex   *searchindex.Index
-	docCtx     context.Context
-	docCancel  context.CancelFunc
-	docWorkers sync.WaitGroup
-	docReaders sync.WaitGroup
-	docStates  map[string]documentRefreshState
-}
-
-type documentRefreshState struct {
-	updating  bool
-	checked   time.Time
-	lastError string
+	core      *coreapp.Application
+	documents *searchindex.Controller
 }
 
 type DocumentSearchDTO struct {
@@ -99,25 +82,10 @@ type DocumentSearchDTO struct {
 }
 
 func NewWorkspaceService(core *coreapp.Application) *WorkspaceService {
-	ctx, cancel := context.WithCancel(context.Background())
-	return &WorkspaceService{core: core, docCtx: ctx, docCancel: cancel, docStates: make(map[string]documentRefreshState)}
+	return &WorkspaceService{core: core, documents: searchindex.NewController(filepath.Join(core.Config().Paths.CacheDir, "document-search.sqlite"))}
 }
 
-func (s *WorkspaceService) ServiceShutdown() error {
-	s.docStateMu.Lock()
-	s.docCancel()
-	s.docStateMu.Unlock()
-	s.docWorkers.Wait()
-	s.docReaders.Wait()
-	s.docStateMu.Lock()
-	defer s.docStateMu.Unlock()
-	if s.docIndex != nil {
-		index := s.docIndex
-		s.docIndex = nil
-		return index.Close()
-	}
-	return nil
-}
+func (s *WorkspaceService) ServiceShutdown() error { return s.documents.Close() }
 
 func (s *WorkspaceService) ServiceName() string { return "WorkspaceService" }
 
@@ -173,131 +141,18 @@ func (s *WorkspaceService) SearchDocuments(agentID, query string) (DocumentSearc
 	if err != nil {
 		return DocumentSearchDTO{}, err
 	}
-	s.docStateMu.Lock()
-	if err := s.docCtx.Err(); err != nil {
-		s.docStateMu.Unlock()
+	index, status, release, err := s.documents.Acquire(agentID+"\x00"+resolved.RootDir, func(ctx context.Context, index *searchindex.Index) error {
+		return searchindex.RefreshDocuments(ctx, index, s.core.Workspaces(), agentID, resolved)
+	})
+	if err != nil {
 		return DocumentSearchDTO{}, err
 	}
-	if s.docIndex == nil {
-		s.docIndex, err = searchindex.Open(filepath.Join(s.core.Config().Paths.CacheDir, "document-search.sqlite"))
-		if err != nil {
-			s.docStateMu.Unlock()
-			return DocumentSearchDTO{}, err
-		}
-	}
-	index := s.docIndex
-	key := agentID + "\x00" + resolved.RootDir
-	state := s.docStates[key]
-	if s.docCtx.Err() == nil && !state.updating && time.Since(state.checked) > 10*time.Second {
-		state.updating = true
-		state.lastError = ""
-		s.docStates[key] = state
-		s.docWorkers.Add(1)
-		go s.refreshDocumentIndex(index, agentID, resolved, key)
-	}
-	s.docReaders.Add(1)
-	s.docStateMu.Unlock()
-	defer s.docReaders.Done()
+	defer release()
 	results, err := index.SearchDocuments(ctx, agentID, resolved.RootDir, query, 50)
 	if err != nil {
 		return DocumentSearchDTO{}, err
 	}
-	return DocumentSearchDTO{Results: results, Updating: state.updating, Error: state.lastError}, nil
-}
-
-func (s *WorkspaceService) refreshDocumentIndex(index *searchindex.Index, agentID string, resolved workspace.Workspace, key string) {
-	defer s.docWorkers.Done()
-	ctx, cancel := context.WithTimeout(s.docCtx, 2*time.Minute)
-	defer cancel()
-	s.docMu.Lock()
-	err := s.updateDocumentIndex(ctx, index, agentID, resolved)
-	s.docMu.Unlock()
-	s.docStateMu.Lock()
-	state := s.docStates[key]
-	state.updating, state.checked, state.lastError = false, time.Now(), ""
-	if err != nil && s.docCtx.Err() == nil {
-		state.lastError = err.Error()
-	}
-	s.docStates[key] = state
-	s.docStateMu.Unlock()
-}
-
-func (s *WorkspaceService) updateDocumentIndex(ctx context.Context, index *searchindex.Index, agentID string, resolved workspace.Workspace) error {
-	root, err := s.core.Workspaces().OpenRoot(ctx, resolved)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	seen := make(map[string]bool)
-	files, docs := 0, 0
-	truncated := false
-	err = filepath.WalkDir(resolved.RootDir, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if path == resolved.RootDir {
-			return nil
-		}
-		if entry.IsDir() {
-			switch strings.ToLower(entry.Name()) {
-			case ".git", ".idea", ".vscode", "node_modules", "vendor", "dist", "build", ".next", ".cache":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			return nil
-		}
-		files++
-		if files > 5000 || docs >= 1000 {
-			truncated = true
-			return fs.SkipAll
-		}
-		if documenttext.MIMEForName(entry.Name()) == "" {
-			return nil
-		}
-		docs++
-		rel, err := filepath.Rel(resolved.RootDir, path)
-		if err != nil {
-			return nil
-		}
-		seen[rel] = true
-		stat, err := entry.Info()
-		if err != nil || !stat.Mode().IsRegular() || stat.Size() <= 0 || stat.Size() > 12<<20 {
-			return nil
-		}
-		current, err := index.DocumentCurrent(ctx, agentID, resolved.RootDir, rel, stat.Size(), stat.ModTime().UnixNano())
-		if err != nil || current {
-			return err
-		}
-		file, err := root.Open(rel)
-		if err != nil {
-			return nil
-		}
-		data, readErr := io.ReadAll(io.LimitReader(file, (12<<20)+1))
-		file.Close()
-		if readErr != nil || len(data) > 12<<20 {
-			return nil
-		}
-		plain, _, extractErr := documenttext.Extract(ctx, entry.Name(), documenttext.MIMEForName(entry.Name()), data)
-		if extractErr != nil {
-			// Unsupported or scanned documents have no searchable text until changed.
-			plain = ""
-		}
-		return index.ReplaceDocument(ctx, agentID, resolved.RootDir, rel, stat.Size(), stat.ModTime().UnixNano(), plain)
-	})
-	if err != nil && err != fs.SkipAll {
-		return err
-	}
-	if !truncated {
-		if err := index.PruneDocuments(ctx, agentID, resolved.RootDir, seen); err != nil {
-			return err
-		}
-	}
-	return nil
+	return DocumentSearchDTO{Results: results, Updating: status.Updating, Error: status.Error}, nil
 }
 
 func workspaceOverviewDTO(value workspaceview.Overview) WorkspaceOverviewDTO {

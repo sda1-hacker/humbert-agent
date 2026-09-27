@@ -9,7 +9,7 @@ import (
 )
 
 // CalculateBudget 根据模型能力与 ContextConfig 计算“基础预算”。此时尚不知道当前 Turn
-// 的 System/Tool/Memory 固定开销，因此 PreferredRecentTokens 只代表期望值；Engine.Build
+// 的 System/Tool 固定开销，因此 PreferredRecentTokens 只代表期望值；Engine.Build
 // 会再调用 ResolveBudgetForFixedContext 得到真正的 TargetRecentTokens。
 func CalculateBudget(cfg config.ContextConfig, contextWindow int, maxOutputTokens int) (Budget, error) {
 	if contextWindow <= 0 {

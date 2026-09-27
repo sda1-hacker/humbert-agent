@@ -2,11 +2,9 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -26,7 +24,6 @@ func GuardInvokableTool(
 	descriptor Descriptor,
 	scope Scope,
 	instance einotool.InvokableTool,
-	archivers ...ResultArchiver,
 ) (einotool.BaseTool, error) {
 	if ctx == nil {
 		return nil, errors.New("保护 Tool 失败: context.Context 不能为空")
@@ -60,16 +57,11 @@ func GuardInvokableTool(
 		)
 	}
 
-	var archiver ResultArchiver
-	if len(archivers) > 0 {
-		archiver = archivers[0]
-	}
 	return &guardedInvokableTool{
 		tool:       instance,
 		descriptor: descriptor,
 		scope:      scope,
 		authorizer: authorizer,
-		archiver:   archiver,
 	}, nil
 }
 
@@ -94,7 +86,6 @@ type guardedInvokableTool struct {
 	descriptor Descriptor
 	scope      Scope
 	authorizer Authorizer
-	archiver   ResultArchiver
 }
 
 const approvalCheckpointStatePrefix = "humbert-tool-approval-v1:"
@@ -246,75 +237,7 @@ func (t *guardedInvokableTool) invokeRealTool(
 	if err != nil {
 		return "", fmt.Errorf("Tool %q 执行失败: %w", t.descriptor.Name, err)
 	}
-	return t.protectLargeResult(ctx, result)
-}
-
-func (t *guardedInvokableTool) protectLargeResult(ctx context.Context, result string) (string, error) {
-	limit := t.scope.ToolResultMaxChars
-	chars := utf8.RuneCountInString(result)
-
-	// context_resource 是归档/省略内容的恢复通道，绝不能再次归档它自己的返回值，
-	// 否则模型会拿到新的 resource_id 并形成递归读取链。
-	//
-	// 它使用 ResultBudget 的 recovery 通道：普通 ToolResult/Preview 无法消耗
-	// recovery reserve，因此即使本轮已经产生多个大结果，仍尽量保证至少一次
-	// 有意义的资源回读。额度不足属于正常控制流，不作为 Tool error 返回。
-	if t.descriptor.Name == "context_resource" {
-		if (limit > 0 && chars > limit) || !t.scope.ToolResultBudget.reserveRecovery(chars) {
-			return contextResourceBudgetExhaustedResult(), nil
-		}
-		return result, nil
-	}
-
-	if t.archiver == nil || strings.TrimSpace(t.scope.SessionID) == "" {
-		return result, nil
-	}
-	if (limit <= 0 || chars <= limit) && t.scope.ToolResultBudget.reserveFull(chars) {
-		return result, nil
-	}
-
-	id, err := t.archiver.Archive(ctx, t.scope.SessionID, t.descriptor.Name, result)
-	if err != nil {
-		return "", fmt.Errorf("保存 Tool %q 超大完整结果失败: %w", t.descriptor.Name, err)
-	}
-
-	runes := []rune(result)
-	if limit <= 0 {
-		limit = chars
-	}
-	if limit > chars {
-		limit = chars
-	}
-
-	// Preview 只允许消费 general pool。旧实现用 remaining/2 做指数衰减，连续
-	// 出现大结果时会很快把可恢复空间压到 1K 以下；现在由 ResultBudget 明确保护
-	// recovery reserve，所以这里直接取当前 general pool 能容纳的最大预览即可。
-	limit = t.scope.ToolResultBudget.reservePreview(limit)
-	headCount := limit / 2
-	tailCount := limit - headCount
-	head := string(runes[:headCount])
-	tail := string(runes[len(runes)-tailCount:])
-
-	payload := map[string]any{
-		"humbert_context_result_truncated": true,
-		"artifact_id":                      id, // 兼容上一版会话记录
-		"resource_type":                    "artifact",
-		"resource_id":                      id,
-		"tool":                             t.descriptor.Name,
-		"original_chars":                   len(runes),
-		"head":                             head,
-		"tail":                             tail,
-		"instruction":                      "完整结果已保存在会话上下文资源中；需要中间内容时调用 context_resource，并使用 resource_type=artifact、resource_id=上述编号按区间读取。",
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return "", err
-	}
-	return string(encoded), nil
-}
-
-func contextResourceBudgetExhaustedResult() string {
-	return `{"status":"budget_exhausted","message":"本轮上下文资源读取额度已用完。不要再次调用 context_resource；请根据已获得的信息回答，或明确说明仍缺少什么。"}`
+	return result, nil
 }
 
 func permissionDeniedResult(toolName string) string {

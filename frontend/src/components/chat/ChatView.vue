@@ -38,8 +38,9 @@ const sessionStore =
     MessageList 只会占用剩余空间，并在内部产生滚动。
   -->
   <main class="chat-view">
+    <!-- 切换时暂时清空 selectedID，但保留输入组件，避免销毁尚未发送的附件草稿。 -->
     <template
-        v-if="sessionStore.selectedID"
+        v-if="sessionStore.selectedID || sessionStore.loading"
     >
       <MessageList
           @open-workspace-file="emit('open-workspace-file', $event)"

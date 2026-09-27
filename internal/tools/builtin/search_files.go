@@ -1,255 +1,14 @@
 package builtin
 
 import (
-	"bufio"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
-
-	"github.com/bmatcuk/doublestar/v4"
-	einotool "github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/components/tool/utils"
-
-	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
-	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
-	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
-
-const (
-	globFilesToolName     = "glob_files"
-	grepFilesToolName     = "grep_files"
-	searchFilesMaxResults = 500
-)
-
-type GlobFilesInput struct {
-	Path       string `json:"path,omitempty" jsonschema:"description=Directory to search. Relative paths are resolved from the current workspace."`
-	Pattern    string `json:"pattern" jsonschema:"description=Glob pattern. Without / it matches names recursively (for example *.go); with / it matches paths below path (for example src/**/*.go)."`
-	FileType   string `json:"file_type,omitempty" jsonschema:"description=Return file (default), directory, or all."`
-	MaxResults int    `json:"max_results,omitempty" jsonschema:"description=Maximum results to return. Defaults to 200 and is capped at 500."`
-}
-
-type GlobFilesOutput struct {
-	Files     []string `json:"files"`
-	Truncated bool     `json:"truncated"`
-}
-
-type GlobFilesFactory struct{}
-
-func NewGlobFilesFactory() *GlobFilesFactory { return &GlobFilesFactory{} }
-func (f *GlobFilesFactory) Descriptor() humberttools.Descriptor {
-	return humberttools.Descriptor{Name: globFilesToolName, Risk: humberttools.RiskRead}
-}
-func (f *GlobFilesFactory) Build(ctx context.Context, scope humberttools.Scope) (einotool.InvokableTool, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return utils.InferTool(globFilesToolName,
-		"Find files or directories by name or relative path glob inside the current Agent Sandbox. Supports ** across directories; does not follow symbolic-link directories.",
-		func(callCtx context.Context, input *GlobFilesInput) (*GlobFilesOutput, error) {
-			if input == nil || strings.TrimSpace(input.Pattern) == "" {
-				return nil, errors.New("glob_files pattern 不能为空")
-			}
-			pattern := strings.TrimSpace(input.Pattern)
-			if !doublestar.ValidatePattern(pattern) {
-				return nil, errors.New("glob_files pattern 无效")
-			}
-			fileType := strings.TrimSpace(input.FileType)
-			if fileType == "" {
-				fileType = "file"
-			}
-			if fileType != "file" && fileType != "directory" && fileType != "all" {
-				return nil, errors.New("glob_files file_type 只能是 file、directory 或 all")
-			}
-			limit := input.MaxResults
-			if limit <= 0 {
-				limit = 200
-			}
-			if limit > searchFilesMaxResults {
-				limit = searchFilesMaxResults
-			}
-			target, err := openSandboxTarget(callCtx, scope, defaultSearchPath(input.Path), sandbox.OpSearch)
-			if err != nil {
-				return nil, fmt.Errorf("glob_files 路径被 Sandbox 拒绝: %w", err)
-			}
-			defer target.Close()
-			files := make([]string, 0, limit)
-			truncated := false
-			err = walkRoot(callCtx, target, func(rel string, entry fs.DirEntry) error {
-				if (entry.IsDir() && fileType == "file") || (!entry.IsDir() && fileType == "directory") {
-					return nil
-				}
-				candidate := entry.Name()
-				if strings.Contains(pattern, "/") {
-					searchRelative, relErr := filepath.Rel(target.relative, rel)
-					if relErr != nil {
-						return relErr
-					}
-					candidate = filepath.ToSlash(searchRelative)
-				}
-				if !doublestar.MatchUnvalidated(pattern, candidate) {
-					return nil
-				}
-				display := displayRootChild(target, rel)
-				files = append(files, display)
-				if len(files) >= limit {
-					truncated = true
-					return errStopWalk
-				}
-				return nil
-			})
-			if err != nil && !errors.Is(err, errStopWalk) {
-				return nil, err
-			}
-			sort.Strings(files)
-			return &GlobFilesOutput{Files: files, Truncated: truncated}, nil
-		},
-	)
-}
-
-type GrepFilesInput struct {
-	Pattern       string `json:"pattern" jsonschema:"description=Regular expression to search for."`
-	Path          string `json:"path,omitempty" jsonschema:"description=Directory to search. Relative paths are resolved from the workspace."`
-	FileGlob      string `json:"file_glob,omitempty" jsonschema:"description=Optional file-name glob such as *.go."`
-	CaseSensitive bool   `json:"case_sensitive,omitempty" jsonschema:"description=Use case-sensitive matching. Defaults to false."`
-	MaxResults    int    `json:"max_results,omitempty" jsonschema:"description=Maximum matching lines. Defaults to 200 and is capped at 500."`
-}
-
-type GrepMatch struct {
-	Path string `json:"path"`
-	Line int    `json:"line"`
-	Text string `json:"text"`
-}
-type GrepFilesOutput struct {
-	Matches   []GrepMatch `json:"matches"`
-	Truncated bool        `json:"truncated"`
-}
-type GrepFilesFactory struct{}
-
-func NewGrepFilesFactory() *GrepFilesFactory { return &GrepFilesFactory{} }
-func (f *GrepFilesFactory) Descriptor() humberttools.Descriptor {
-	return humberttools.Descriptor{Name: grepFilesToolName, Risk: humberttools.RiskRead}
-}
-func (f *GrepFilesFactory) Build(ctx context.Context, scope humberttools.Scope) (einotool.InvokableTool, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return utils.InferTool(grepFilesToolName,
-		"Search UTF-8 files and Markdown extracted from PDF/Office documents with a regular expression inside directories allowed by the Agent Sandbox. Results include file path and extracted-Markdown line number; cite path:line when answering from a result. Does not follow symbolic-link directories.",
-		func(callCtx context.Context, input *GrepFilesInput) (*GrepFilesOutput, error) {
-			if input == nil || strings.TrimSpace(input.Pattern) == "" {
-				return nil, errors.New("grep_files pattern 不能为空")
-			}
-			pattern := input.Pattern
-			if !input.CaseSensitive {
-				pattern = "(?i)" + pattern
-			}
-			re, err := regexp.Compile(pattern)
-			if err != nil {
-				return nil, fmt.Errorf("grep_files 正则无效: %w", err)
-			}
-			if input.FileGlob != "" {
-				if _, err := filepath.Match(input.FileGlob, "probe"); err != nil {
-					return nil, fmt.Errorf("file_glob 无效: %w", err)
-				}
-			}
-			limit := input.MaxResults
-			if limit <= 0 {
-				limit = 200
-			}
-			if limit > searchFilesMaxResults {
-				limit = searchFilesMaxResults
-			}
-			target, err := openSandboxTarget(callCtx, scope, defaultSearchPath(input.Path), sandbox.OpSearch)
-			if err != nil {
-				return nil, fmt.Errorf("grep_files 路径被 Sandbox 拒绝: %w", err)
-			}
-			defer target.Close()
-			matches := make([]GrepMatch, 0, limit)
-			truncated := false
-			err = walkRoot(callCtx, target, func(rel string, entry fs.DirEntry) error {
-				if entry.IsDir() {
-					return nil
-				}
-				if input.FileGlob != "" {
-					ok, _ := filepath.Match(input.FileGlob, entry.Name())
-					if !ok {
-						return nil
-					}
-				}
-				f, openErr := target.root.Open(rel)
-				if openErr != nil {
-					return nil
-				}
-				defer f.Close()
-				if mime := documenttext.MIMEForName(entry.Name()); mime != "" {
-					info, statErr := f.Stat()
-					if statErr != nil || info.Size() > 12<<20 {
-						return nil
-					}
-					data, readErr := io.ReadAll(io.LimitReader(f, (12<<20)+1))
-					if readErr != nil {
-						return nil
-					}
-					plain, _, extractErr := documenttext.Extract(callCtx, entry.Name(), mime, data)
-					if extractErr != nil {
-						return nil
-					}
-					for index, lineText := range strings.Split(plain, "\n") {
-						if !re.MatchString(lineText) {
-							continue
-						}
-						if len(lineText) > 2000 {
-							lineText = lineText[:2000] + "…"
-						}
-						matches = append(matches, GrepMatch{Path: displayRootChild(target, rel), Line: index + 1, Text: lineText})
-						if len(matches) >= limit {
-							truncated = true
-							return errStopWalk
-						}
-					}
-					return nil
-				}
-				scanner := bufio.NewScanner(f)
-				scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-				line := 0
-				for scanner.Scan() {
-					if err := callCtx.Err(); err != nil {
-						return err
-					}
-					line++
-					text := scanner.Text()
-					if re.MatchString(text) {
-						if len(text) > 2000 {
-							text = text[:2000] + "…"
-						}
-						matches = append(matches, GrepMatch{Path: displayRootChild(target, rel), Line: line, Text: text})
-						if len(matches) >= limit {
-							truncated = true
-							return errStopWalk
-						}
-					}
-				}
-				if scanErr := scanner.Err(); scanErr != nil {
-					// 单个超长行/不可读文件不应让整个搜索失败；该文件直接跳过。
-					return nil
-				}
-				return nil
-			})
-			if err != nil && !errors.Is(err, errStopWalk) {
-				return nil, err
-			}
-			return &GrepFilesOutput{Matches: matches, Truncated: truncated}, nil
-		},
-	)
-}
-
-var errStopWalk = errors.New("stop walk")
 
 func defaultSearchPath(path string) string {
 	if strings.TrimSpace(path) == "" {
@@ -273,12 +32,15 @@ func displayRootChild(target *sandboxTarget, rel string) string {
 
 func walkRoot(ctx context.Context, target *sandboxTarget, visit func(rel string, entry fs.DirEntry) error) error {
 	start := target.relative
-	if start == "." {
-		start = "."
-	}
+	// 超过上限返回明确错误，调用方可缩小 path；不能把截断结果伪装成完整搜索。
+	const maxVisited = 20000
+	visited := 0
 	var walk func(string) error
 	walk = func(rel string) error {
 		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if allowed, err := target.canReadChild(rel); err != nil || !allowed {
 			return err
 		}
 		f, err := target.root.Open(rel)
@@ -295,10 +57,14 @@ func walkRoot(ctx context.Context, target *sandboxTarget, visit func(rel string,
 			entry := fs.FileInfoToDirEntry(info)
 			return visit(rel, entry)
 		}
-		entries, err := f.ReadDir(-1)
+		entries, err := f.ReadDir(maxVisited - visited + 1)
 		f.Close()
-		if err != nil {
-			return nil
+		if err != nil && err != io.EOF {
+			return err
+		}
+		visited += len(entries)
+		if visited > maxVisited {
+			return errors.New("扫描超过 20000 个目录项，请缩小 path 范围")
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 		for _, entry := range entries {
@@ -310,6 +76,11 @@ func walkRoot(ctx context.Context, target *sandboxTarget, visit func(rel string,
 				continue
 			}
 			if entry.Type()&fs.ModeSymlink != 0 {
+				continue
+			}
+			if allowed, err := target.canReadChild(child); err != nil {
+				return err
+			} else if !allowed {
 				continue
 			}
 			if err := visit(child, entry); err != nil {

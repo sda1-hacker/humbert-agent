@@ -138,13 +138,38 @@ func (s *Store) Create(ctx context.Context, value Agent) error {
 	return nil
 }
 
-// Update 原子更新 Agent Profile。
-func (s *Store) Update(ctx context.Context, value Agent) error {
-	if err := validateStoreContext(ctx, "更新 Agent Profile"); err != nil {
-		return err
+// Mutate 在同一把锁内读取最新 Profile 并修改字段，避免局部保存覆盖其他并发修改。
+// 依赖其他模块的校验应在进入这里前完成，闭包只操作内存字段，防止跨模块死锁。
+func (s *Store) Mutate(ctx context.Context, id string, patch func(*Agent) error) (Agent, error) {
+	if err := validateStoreContext(ctx, "更新 Agent"); err != nil {
+		return Agent{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	current, err := s.readAgentLocked(ctx, id)
+	if err != nil {
+		return Agent{}, err
+	}
+	if patch == nil {
+		return Agent{}, errors.New("Agent patch 不能为空")
+	}
+	if err := patch(&current); err != nil {
+		return Agent{}, err
+	}
+	if current.ID != id {
+		return Agent{}, errors.New("不能修改 Agent 身份")
+	}
+	current.UpdatedAt = time.Now().UTC()
+	if err := s.updateLocked(ctx, current); err != nil {
+		return Agent{}, err
+	}
+	return current, nil
+}
+
+func (s *Store) updateLocked(ctx context.Context, value Agent) error {
+	if err := validateStoreContext(ctx, "更新 Agent Profile"); err != nil {
+		return err
+	}
 
 	path, directory, err := s.configPath(value.ID)
 	if err != nil {
@@ -394,8 +419,7 @@ func (s *Store) CountAgentsByModel(ctx context.Context, modelID string) (int, er
 	for _, value := range values {
 		agent := value.Agent
 		if agent.ModelID == modelID ||
-			agent.ModelRoles.UtilityModelID == modelID ||
-			agent.ModelRoles.MemoryModelID == modelID {
+			agent.ModelRoles.UtilityModelID == modelID {
 			count++
 		}
 	}

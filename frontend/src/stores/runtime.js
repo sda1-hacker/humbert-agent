@@ -26,6 +26,7 @@ const runtimeEventName =
     "humbert:runtime:event";
 
 let unsubscribeRuntimeEvent = null;
+let contextRequestSerial = 0;
 
 /**
  * 同一动画帧内尚未提交给 Vue 的 Assistant Text Delta。
@@ -170,7 +171,6 @@ function normalizeContextAssembly(value) {
         assistantMessageCount: number(value.assistantMessageCount),
         toolResultCount: number(value.toolResultCount),
         toolCallCount: number(value.toolCallCount),
-        memoryInjected: Boolean(value.memoryInjected),
         checkpointInjected: Boolean(value.checkpointInjected),
         latestCompactionID:
             typeof value.latestCompactionID === "string"
@@ -231,10 +231,6 @@ function normalizeContextUsage(value) {
         Number(value.systemTokens);
     const toolTokens =
         Number(value.toolTokens);
-    const memoryTokens =
-        Number(value.memoryTokens);
-    const referenceTokens =
-        Number(value.referenceTokens);
     const checkpointTokens =
         Number(value.checkpointTokens);
     const messageTokens =
@@ -267,14 +263,6 @@ function normalizeContextUsage(value) {
         toolTokens:
             Number.isFinite(toolTokens)
                 ? Math.max(0, toolTokens)
-                : 0,
-        memoryTokens:
-            Number.isFinite(memoryTokens)
-                ? Math.max(0, memoryTokens)
-                : 0,
-        referenceTokens:
-            Number.isFinite(referenceTokens)
-                ? Math.max(0, referenceTokens)
                 : 0,
         checkpointTokens:
             Number.isFinite(checkpointTokens)
@@ -348,34 +336,8 @@ export const useRuntimeStore =
         "runtime",
         {
             state: () => ({
-                /**
-                 * sessionID -> requestID
-                 */
-                activeRuns: {},
-
-                /**
-                 * sessionID -> modelID
-                 */
-                activeModels: {},
-
-                /**
-                 * sessionID -> 当前活动 Turn 的统一生命周期状态。
-                 */
-                runStates: {},
-
-                /**
-                 * sessionID -> 当前活动 Turn 的实时 Tool Lifecycle。
-                 * 历史 Tool Trace 仍然以 Session JSONL 为准。
-                 */
-                liveToolCalls: {},
-
-                /** sessionID -> 本次运行的有序展示步骤，终态后由 JSONL 历史重建。 */
-                liveActivities: {},
-
-                /**
-                 * sessionID -> partial assistant visible text
-                 */
-                streamingContents: {},
+                // 单个会话的活动请求、模型、审批、工具和流式内容一起创建、一起清理。
+                runs: {},
 
                 /**
                  * StartTurn binding 尚未返回的 Session。
@@ -436,14 +398,6 @@ export const useRuntimeStore =
                  */
                 contextErrors: {},
 
-                /**
-                 * sessionID -> 当前待处理 Approval Request。
-                 *
-                 * Approval 是进程内 Runtime Control State，不写入 Session Transcript。后端
-                 * approval.requested/resolved/expired 事件是唯一事实源，前端只缓存安全 DTO。
-                 */
-                pendingApprovals: {},
-
                 /** approvalID -> 是否正在提交用户决策。 */
                 approvalResolving: {},
 
@@ -456,9 +410,7 @@ export const useRuntimeStore =
                     (state) =>
                         (sessionID) => {
                             return Boolean(
-                                state.activeRuns[
-                                    sessionID
-                                    ] ||
+                                state.runs[sessionID]?.requestID ||
                                 state.startingSessions[
                                     sessionID
                                     ],
@@ -469,9 +421,7 @@ export const useRuntimeStore =
                     (state) =>
                         (sessionID) => {
                             return (
-                                state.streamingContents[
-                                    sessionID
-                                    ] ?? ""
+                                state.runs[sessionID]?.text ?? ""
                             );
                         },
 
@@ -495,31 +445,25 @@ export const useRuntimeStore =
                     (state) =>
                         (sessionID) => {
                             return (
-                                state.activeModels[
-                                    sessionID
-                                    ] ?? ""
+                                state.runs[sessionID]?.modelID ?? ""
                             );
                         },
 
                 runState:
                     (state) =>
                         (sessionID) => (
-                            state.runStates[
-                                sessionID
-                                ] ?? null
+                            state.runs[sessionID]?.status ?? null
                         ),
 
                 liveTools:
                     (state) =>
                         (sessionID) => (
-                            state.liveToolCalls[
-                                sessionID
-                                ] ?? []
+                            state.runs[sessionID]?.tools ?? []
                         ),
 
                 liveActivity:
                     (state) =>
-                        (sessionID) => state.liveActivities[sessionID] ?? [],
+                        (sessionID) => state.runs[sessionID]?.activities ?? [],
 
                 contextUsage:
                     (state) =>
@@ -578,9 +522,7 @@ export const useRuntimeStore =
                 pendingApproval:
                     (state) =>
                         (sessionID) => (
-                            state.pendingApprovals[
-                                sessionID
-                                ] ?? null
+                            state.runs[sessionID]?.approval ?? null
                         ),
 
                 isApprovalResolving:
@@ -601,6 +543,9 @@ export const useRuntimeStore =
             },
 
             actions: {
+                ensureRun(sessionID) {
+                    return this.runs[sessionID] ??= {};
+                },
                 dismissTerminalError(sessionID) {
                     delete this.terminalErrors[sessionID];
                     delete this.terminalErrorRequests[sessionID];
@@ -672,7 +617,7 @@ export const useRuntimeStore =
                             : pendingContentDeltaBuffers;
 
                     if (kind === "reasoning") {
-                        const steps = this.liveActivities[sessionID] ?? [];
+                        const steps = this.ensureRun(sessionID).activities ?? [];
                         if (steps.at(-1)?.type !== "thinking") {
                             steps.push({
                                 type: "thinking",
@@ -681,7 +626,7 @@ export const useRuntimeStore =
                                 note: "",
                                 status: "running",
                             });
-                            this.liveActivities[sessionID] = steps;
+                            this.ensureRun(sessionID).activities = steps;
                         }
                     }
 
@@ -763,18 +708,14 @@ export const useRuntimeStore =
                     );
 
                     if (contentDelta) {
-                        this.streamingContents[
-                            sessionID
-                            ] =
+                        this.ensureRun(sessionID).text =
                             (
-                                this.streamingContents[
-                                    sessionID
-                                    ] ?? ""
+                                this.ensureRun(sessionID).text ?? ""
                             ) + contentDelta;
                     }
 
                     if (reasoningDelta) {
-                        const steps = this.liveActivities[sessionID] ?? [];
+                        const steps = this.ensureRun(sessionID).activities ?? [];
                         const last = steps.at(-1);
                         if (last?.type === "thinking") {
                             last.content += reasoningDelta;
@@ -824,14 +765,14 @@ export const useRuntimeStore =
                         return;
                     }
 
-                    const calls = Array.isArray(this.liveToolCalls[sessionID])
-                        ? this.liveToolCalls[sessionID]
+                    const calls = Array.isArray(this.ensureRun(sessionID).tools)
+                        ? this.ensureRun(sessionID).tools
                         : [];
                     let call = calls.find((item) => item.id === callID) ?? null;
                     if (!call) {
                         call = createLiveToolCall(event);
                         calls.push(call);
-                        this.liveToolCalls[sessionID] = calls;
+                        this.ensureRun(sessionID).tools = calls;
                     }
 
                     if (event.toolName) {
@@ -869,13 +810,13 @@ export const useRuntimeStore =
                     }
 
 
-                    const steps = this.liveActivities[sessionID] ?? [];
+                    const steps = this.ensureRun(sessionID).activities ?? [];
                     if (steps.at(-1)?.type === "thinking") {
                         steps.at(-1).status = "completed";
                     }
                     if (!steps.some((step) => step.type === "tool" && step.call?.id === callID)) {
                         steps.push({ type: "tool", key: `tool:live:${callID}`, call });
-                        this.liveActivities[sessionID] = steps;
+                        this.ensureRun(sessionID).activities = steps;
                     }
                 },
 
@@ -893,15 +834,21 @@ export const useRuntimeStore =
                         return null;
                     }
 
-                    this.contextLoading[
-                        sessionID
-                        ] = true;
+                    const requestToken = ++contextRequestSerial;
+                    const observedRun = this.runs[sessionID];
+                    const observedRevision = observedRun?.revision ?? 0;
+                    const observedRequestID = observedRun?.requestID;
+                    this.contextLoading[sessionID] = requestToken;
 
                     try {
                         const raw =
                             await getContextOverview(
                                 sessionID,
                             );
+                        // IPC 返回期间可能已有新事件或新查询；旧快照不能覆盖更新的运行态。
+                        const current = this.runs[sessionID];
+                        if (this.contextLoading[sessionID] !== requestToken || current !== observedRun ||
+                            (current?.revision ?? 0) !== observedRevision || current?.requestID !== observedRequestID) return null;
                         const usage =
                             normalizeContextUsage(
                                 raw?.usage,
@@ -938,38 +885,28 @@ export const useRuntimeStore =
                         // Overview.Active 是后端活动 Run 的恢复入口。它让 UI 在重新挂载、
                         // 切换 Session 后不必完全依赖“恰好没有错过”的 turn.started event。
                         if (active) {
-                            this.runStates[
-                                sessionID
-                                ] = active;
-                            this.activeRuns[
-                                sessionID
-                                ] = active.requestID;
-                            this.activeModels[
-                                sessionID
-                                ] = active.runtime?.modelID ?? "";
+                            this.ensureRun(sessionID).status = active;
+                            this.ensureRun(sessionID).requestID = active.requestID;
+                            this.ensureRun(sessionID).modelID = active.runtime?.modelID ?? "";
                             if (active.approval?.id) {
-                                this.pendingApprovals[
-                                    sessionID
-                                    ] = active.approval;
+                                this.ensureRun(sessionID).approval = active.approval;
                             } else {
-                                delete this.pendingApprovals[
-                                    sessionID
-                                    ];
+                                delete this.ensureRun(sessionID).approval;
                             }
                         } else if (!this.startingSessions[sessionID]) {
                             // 如果 UI 错过了终态 Event（例如 WebView 重新挂载），Overview 是
                             // 后端活动 Run 的恢复真相；没有 active 就清理前端陈旧运行态。
-                            delete this.runStates[sessionID];
-                            delete this.activeRuns[sessionID];
-                            delete this.activeModels[sessionID];
-                            delete this.liveToolCalls[sessionID];
-                            delete this.liveActivities[sessionID];
-                            const pending = this.pendingApprovals[sessionID];
+                            delete this.ensureRun(sessionID).status;
+                            delete this.ensureRun(sessionID).requestID;
+                            delete this.ensureRun(sessionID).modelID;
+                            delete this.ensureRun(sessionID).tools;
+                            delete this.ensureRun(sessionID).activities;
+                            const pending = this.ensureRun(sessionID).approval;
                             if (pending?.id) {
                                 delete this.approvalResolving[pending.id];
                                 delete this.approvalErrors[pending.id];
                             }
-                            delete this.pendingApprovals[sessionID];
+                            delete this.ensureRun(sessionID).approval;
                         }
 
                         delete this.contextErrors[
@@ -978,6 +915,7 @@ export const useRuntimeStore =
 
                         return usage;
                     } catch (error) {
+                        if (this.contextLoading[sessionID] !== requestToken) return null;
                         this.contextErrors[
                             sessionID
                             ] =
@@ -990,9 +928,7 @@ export const useRuntimeStore =
 
                         return null;
                     } finally {
-                        delete this.contextLoading[
-                            sessionID
-                            ];
+                        if (this.contextLoading[sessionID] === requestToken) delete this.contextLoading[sessionID];
                     }
                 },
 
@@ -1005,7 +941,6 @@ export const useRuntimeStore =
                  */
                 async compactSessionContext(
                     sessionID,
-                    updateMemory = false,
                 ) {
                     if (!sessionID) {
                         throw new Error(
@@ -1030,7 +965,6 @@ export const useRuntimeStore =
                         const result =
                             await compactContext(
                                 sessionID,
-                                updateMemory,
                             );
                         const usage =
                             normalizeContextUsage(
@@ -1084,17 +1018,11 @@ export const useRuntimeStore =
                         sessionID
                         ] = true;
 
-                    this.streamingContents[
-                        sessionID
-                        ] = "";
+                    this.ensureRun(sessionID).text = "";
 
-                    this.liveToolCalls[
-                        sessionID
-                        ] = [];
-                    this.liveActivities[sessionID] = [];
-                    delete this.runStates[
-                        sessionID
-                        ];
+                    this.ensureRun(sessionID).tools = [];
+                    this.ensureRun(sessionID).activities = [];
+                    delete this.ensureRun(sessionID).status;
 
                     delete this.terminalErrors[
                         sessionID
@@ -1129,9 +1057,7 @@ export const useRuntimeStore =
                                 ] !==
                             result.requestID
                         ) {
-                            this.activeRuns[
-                                sessionID
-                                ] =
+                            this.ensureRun(sessionID).requestID =
                                 result.requestID;
                         }
 
@@ -1169,12 +1095,12 @@ export const useRuntimeStore =
                             if (
                                 this.terminalRequests[sessionID] !== result.requestID
                             ) {
-                                this.runStates[sessionID] = {
+                                this.ensureRun(sessionID).status = {
                                     requestID: result.requestID,
                                     runID: result.runID ?? "",
                                     sessionID,
-                                    phase: this.runStates[sessionID]?.requestID === result.requestID
-                                        ? this.runStates[sessionID].phase : "running",
+                                    phase: this.ensureRun(sessionID).status?.requestID === result.requestID
+                                        ? this.ensureRun(sessionID).status.phase : "running",
                                     startedAt: "",
                                     waitingApprovalID: "",
                                     approval: null,
@@ -1211,11 +1137,8 @@ export const useRuntimeStore =
                             sessionID,
                         );
 
-                        delete this
-                            .streamingContents[
-                            sessionID
-                            ];
-                        delete this.liveActivities[sessionID];
+                        delete this.ensureRun(sessionID).text;
+                        delete this.ensureRun(sessionID).activities;
 
                         throw error;
                     } finally {
@@ -1260,18 +1183,16 @@ export const useRuntimeStore =
 
                 async cancel(sessionID) {
                     const requestID =
-                        this.activeRuns[
-                            sessionID
-                            ];
+                        this.ensureRun(sessionID).requestID;
 
                     if (!requestID) {
                         return;
                     }
 
                     const previousPhase =
-                        this.runStates[sessionID]?.phase ?? "running";
-                    if (this.runStates[sessionID]) {
-                        this.runStates[sessionID].phase = "cancelling";
+                        this.ensureRun(sessionID).status?.phase ?? "running";
+                    if (this.ensureRun(sessionID).status) {
+                        this.ensureRun(sessionID).status.phase = "cancelling";
                     }
 
                     try {
@@ -1280,9 +1201,9 @@ export const useRuntimeStore =
                         );
                     } catch (error) {
                         if (
-                            this.runStates[sessionID]?.requestID === requestID
+                            this.ensureRun(sessionID).status?.requestID === requestID
                         ) {
-                            this.runStates[sessionID].phase = previousPhase;
+                            this.ensureRun(sessionID).status.phase = previousPhase;
                         }
                         throw error;
                     }
@@ -1301,9 +1222,15 @@ export const useRuntimeStore =
                         return;
                     }
 
+                    const current = this.runs[data.sessionID];
+                    if (data.requestID && this.terminalRequests[data.sessionID] === data.requestID) return;
+                    if (data.type !== "turn.started" && current?.requestID && data.requestID &&
+                        current.requestID !== data.requestID) return;
+                    this.ensureRun(data.sessionID).revision = (current?.revision ?? 0) + 1;
+
                     switch (data.type) {
                         case "turn.maintaining": {
-                            const run = this.runStates[data.sessionID];
+                            const run = this.ensureRun(data.sessionID).status;
                             if (run?.requestID === data.requestID && run.phase !== "cancelling") {
                                 run.phase = "maintaining";
                             }
@@ -1323,15 +1250,9 @@ export const useRuntimeStore =
                                     ] = frozenManifest;
                             }
 
-                            this.activeRuns[
-                                data.sessionID
-                                ] = data.requestID;
-                            this.activeModels[
-                                data.sessionID
-                                ] = data.modelID ?? "";
-                            this.runStates[
-                                data.sessionID
-                                ] = {
+                            this.ensureRun(data.sessionID).requestID = data.requestID;
+                            this.ensureRun(data.sessionID).modelID = data.modelID ?? "";
+                            this.ensureRun(data.sessionID).status = {
                                 requestID: data.requestID ?? "",
                                 runID: data.runID ?? "",
                                 sessionID: data.sessionID,
@@ -1341,14 +1262,10 @@ export const useRuntimeStore =
                                 approval: null,
                                 runtime: frozenManifest,
                             };
-                            this.liveToolCalls[
-                                data.sessionID
-                                ] = [];
-                            this.liveActivities[data.sessionID] = [];
+                            this.ensureRun(data.sessionID).tools = [];
+                            this.ensureRun(data.sessionID).activities = [];
 
-                            this.streamingContents[
-                                data.sessionID
-                                ] = "";
+                            this.ensureRun(data.sessionID).text = "";
                             break;
                         }
 
@@ -1362,20 +1279,16 @@ export const useRuntimeStore =
                                 break;
                             }
 
-                            this.activeRuns[
-                                data.sessionID
-                                ] =
+                            this.ensureRun(data.sessionID).requestID =
                                 data.requestID;
 
-                            this.activeModels[
-                                data.sessionID
-                                ] =
+                            this.ensureRun(data.sessionID).modelID =
                                 data.modelID ?? "";
 
                             if (
-                                this.runStates[data.sessionID]?.requestID === data.requestID
+                                this.ensureRun(data.sessionID).status?.requestID === data.requestID
                             ) {
-                                this.runStates[data.sessionID].phase = "running";
+                                this.ensureRun(data.sessionID).status.phase = "running";
                             }
 
                             this.queueStreamingDelta(
@@ -1396,23 +1309,19 @@ export const useRuntimeStore =
                                 break;
                             }
 
-                            this.activeRuns[
-                                data.sessionID
-                                ] =
+                            this.ensureRun(data.sessionID).requestID =
                                 data.requestID;
 
-                            this.activeModels[
-                                data.sessionID
-                                ] =
+                            this.ensureRun(data.sessionID).modelID =
                                 data.modelID ?? "";
 
                             if (
-                                this.runStates[data.sessionID]?.requestID === data.requestID
+                                this.ensureRun(data.sessionID).status?.requestID === data.requestID
                             ) {
-                                this.runStates[data.sessionID].phase = "running";
+                                this.ensureRun(data.sessionID).status.phase = "running";
                             }
 
-                            const lastStep = this.liveActivities[data.sessionID]?.at(-1);
+                            const lastStep = this.ensureRun(data.sessionID).activities?.at(-1);
                             if (lastStep?.type === "thinking" && lastStep.status === "running") {
                                 this.flushStreamingDelta(data.sessionID);
                                 lastStep.status = "completed";
@@ -1434,13 +1343,13 @@ export const useRuntimeStore =
                             ) {
                                 break;
                             }
-                            this.activeRuns[data.sessionID] = data.requestID;
+                            this.ensureRun(data.sessionID).requestID = data.requestID;
                             this.flushStreamingDelta(data.sessionID);
                             this.applyToolLifecycleEvent(data);
                             if (
-                                this.runStates[data.sessionID]?.requestID === data.requestID
+                                this.ensureRun(data.sessionID).status?.requestID === data.requestID
                             ) {
-                                this.runStates[data.sessionID].phase = "running";
+                                this.ensureRun(data.sessionID).status.phase = "running";
                             }
                             break;
 
@@ -1451,14 +1360,14 @@ export const useRuntimeStore =
                                 typeof approval === "object" &&
                                 approval.id
                             ) {
-                                this.pendingApprovals[data.sessionID] = approval;
+                                this.ensureRun(data.sessionID).approval = approval;
                                 delete this.approvalErrors[approval.id];
                                 if (
-                                    this.runStates[data.sessionID]?.requestID === data.requestID
+                                    this.ensureRun(data.sessionID).status?.requestID === data.requestID
                                 ) {
-                                    this.runStates[data.sessionID].phase = "waiting_approval";
-                                    this.runStates[data.sessionID].waitingApprovalID = approval.id;
-                                    this.runStates[data.sessionID].approval = approval;
+                                    this.ensureRun(data.sessionID).status.phase = "waiting_approval";
+                                    this.ensureRun(data.sessionID).status.waitingApprovalID = approval.id;
+                                    this.ensureRun(data.sessionID).status.approval = approval;
                                 }
                             }
                             break;
@@ -1467,23 +1376,23 @@ export const useRuntimeStore =
                         case "approval.resolved":
                         case "approval.expired": {
                             const approvalID = data.approval?.id;
-                            const current = this.pendingApprovals[data.sessionID];
+                            const current = this.ensureRun(data.sessionID).approval;
                             if (
                                 current &&
                                 (!approvalID || current.id === approvalID)
                             ) {
-                                delete this.pendingApprovals[data.sessionID];
+                                delete this.ensureRun(data.sessionID).approval;
                             }
                             if (approvalID) {
                                 delete this.approvalResolving[approvalID];
                                 delete this.approvalErrors[approvalID];
                             }
                             if (
-                                this.runStates[data.sessionID]?.requestID === data.requestID
+                                this.ensureRun(data.sessionID).status?.requestID === data.requestID
                             ) {
-                                this.runStates[data.sessionID].phase = "running";
-                                this.runStates[data.sessionID].waitingApprovalID = "";
-                                this.runStates[data.sessionID].approval = null;
+                                this.ensureRun(data.sessionID).status.phase = "running";
+                                this.ensureRun(data.sessionID).status.waitingApprovalID = "";
+                                this.ensureRun(data.sessionID).status.approval = null;
                             }
                             break;
                         }
@@ -1515,17 +1424,15 @@ export const useRuntimeStore =
                         ] =
                         data.requestID;
 
-                    delete this.activeRuns[
-                        data.sessionID
-                        ];
+                    delete this.ensureRun(data.sessionID).requestID;
 
                     const pendingApproval =
-                        this.pendingApprovals[data.sessionID];
+                        this.ensureRun(data.sessionID).approval;
                     if (
                         pendingApproval &&
                         (!data.requestID || pendingApproval.requestID === data.requestID)
                     ) {
-                        delete this.pendingApprovals[data.sessionID];
+                        delete this.ensureRun(data.sessionID).approval;
                         delete this.approvalResolving[pendingApproval.id];
                         delete this.approvalErrors[pendingApproval.id];
                     }
@@ -1568,27 +1475,11 @@ export const useRuntimeStore =
                             },
                         );
                     } finally {
-                        this.discardStreamingDelta(
-                            data.sessionID,
-                        );
-
-                        delete this
-                            .streamingContents[
-                            data.sessionID
-                            ];
-
-                        delete this
-                            .activeModels[
-                            data.sessionID
-                            ];
-
-                        delete this.runStates[
-                            data.sessionID
-                            ];
-                        delete this.liveToolCalls[
-                            data.sessionID
-                            ];
-                        delete this.liveActivities[data.sessionID];
+                        const current = this.runs[data.sessionID];
+                        if (!current?.requestID || current.requestID === data.requestID) {
+                            this.discardStreamingDelta(data.sessionID);
+                            delete this.runs[data.sessionID];
+                        }
                     }
                 },
             },

@@ -100,7 +100,7 @@ async function finish() {
       name: agentName.value.trim(), modelID: modelID.value,
       workspaceMode: "managed", workspacePath: "", instruction: "",
       avatar: "", subagentEnabled: false,
-      modelRoles: { utilityModelID: "", memoryModelID: "" }, enabledSkills: [],
+      modelRoles: { utilityModelID: "" }, enabledSkills: [],
       builtinToolsConfigured: true,
       enabledBuiltinTools: enableTools.value && diagnostic.value?.toolsSupported ? defaultBuiltinTools(builtinTools.value) : [],
       sandbox: { profile: "", additionalWritePaths: [], networkMode: "", nativeMode: "" },

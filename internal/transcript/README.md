@@ -15,7 +15,7 @@ flowchart LR
   J -.重建.-> I[session.locations.jsonl]
 ```
 
-JSONL 的物理行序不等于模型历史：`loadLocked` 建立 `entryByID`，`buildActiveBranch` 从当前 Leaf 沿 `parentId` 反向回溯。被放弃的分支仍留在文件中，但不进入当前模型上下文。`Document.Entries` 是完整节点集合，`ActiveBranch` 是当前分支。大文件的 `Lineage` 只保留轻量身份，用于 Memory cursor 校验。
+JSONL 的物理行序不等于模型历史：`loadLocked` 建立 `entryByID`，`buildActiveBranch` 从当前 Leaf 沿 `parentId` 反向回溯。被放弃的分支仍留在文件中，但不进入当前模型上下文。`Document.Entries` 是完整节点集合，`ActiveBranch` 是当前分支。大文件的 `Lineage` 只保留轻量身份，用于分支身份和来源校验。
 
 ## 写入、读取与恢复
 

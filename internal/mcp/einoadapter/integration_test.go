@@ -43,7 +43,7 @@ func TestHTTPMCPConfigurationDiscoveryAndInvocation(t *testing.T) {
 	})
 	httpServer := httptest.NewServer(sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return server }, nil))
 	defer httpServer.Close()
-	cfg := config.MCPConfig{ConnectTimeoutMS: 2000, MaxToolsPerServer: 64, MaxToolPages: 10, MaxToolDescriptionChars: 2000, MaxToolResultChars: 2000}
+	cfg := config.MCPConfig{ConnectTimeoutMS: 2000, MaxToolsPerServer: 64, MaxToolPages: 10, MaxToolDescriptionChars: 2000}
 	store, err := hmcp.NewStore(ctx, filepath.Join(t.TempDir(), "servers.json"))
 	if err != nil {
 		t.Fatal(err)

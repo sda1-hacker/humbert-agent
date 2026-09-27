@@ -20,7 +20,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/mcp/einoadapter"
-	"github.com/sda1-hacker/humbert-agent/internal/memory"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/notifications"
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
@@ -119,8 +118,6 @@ type Application struct {
 	sessionStore *sessions.Store
 
 	contextEngine *contextengine.Engine
-
-	memory *memory.Manager
 
 	runtime *agentruntime.Service
 
@@ -361,30 +358,13 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		return nil, fmt.Errorf("初始化 ToolRegistry 失败: %w", err)
 	}
 
-	// Context 与 Memory 共用同一个近似 Token Estimator，保证自动刷新阈值、
-	// Compaction Planner 和 Composer Usage 使用一致口径。Session Memory 是派生状态，
-	// Store 只通过 SessionService 获取受控目录，不自行拼接用户输入路径。
+	// 上下文摘要是唯一自动派生记忆；个人记忆由用户明确保存。
 	tokenEstimator := contextengine.NewApproxEstimator()
-	memoryStore, err := memory.NewStore(sessionService)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Session Memory Store 失败: %w", err)
-	}
-	memoryManager, err := memory.NewManager(
-		cfg.Runtime.Context,
-		memoryStore,
-		sessionService,
-		tokenEstimator,
-		logger,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Session Memory Manager 失败: %w", err)
-	}
 	contextEngine, err := contextengine.NewEngine(
 		cfg.Runtime.Context,
 		sessionService,
 		tokenEstimator,
 		logger,
-		memoryManager,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 ContextEngine 失败: %w", err)
@@ -427,7 +407,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		skillManager,
 		mcpManager,
 		contextEngine,
-		memoryManager,
 		preferenceStore,
 		runtimeReporter,
 	)
@@ -489,6 +468,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	proactiveManager, err := proactive.NewManager(
 		proactiveStore,
 		taskManager,
+		approvalManager,
 		events,
 		notificationService,
 		proactive.NewWorkspaceMonitor(agentService, workspaceManager),
@@ -522,7 +502,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		sessions:      sessionService,
 		sessionStore:  sessionStore,
 		contextEngine: contextEngine,
-		memory:        memoryManager,
 		runtime:       runtimeService,
 		tasks:         taskManager,
 		collaboration: collaborationManager,

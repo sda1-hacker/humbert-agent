@@ -12,3 +12,5 @@ flowchart LR
 ```
 
 阅读 `main.go` 的参数分派，然后到 `databackup/encrypted.go` 与 `archive.go` 跟实际文件操作。恢复前必须验证归档并保留回退目录；CLI 不应在 Wails/Runtime 正运行时替换数据根。
+
+backup / restore 会取得与桌面应用相同的数据目录进程锁，`-offline` 不能绕过实际占用检查。verify 只读取独立归档，无须锁住应用数据。

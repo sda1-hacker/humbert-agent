@@ -55,7 +55,7 @@ func runStdioInvocation(t *testing.T, mode string) (int, hmcp.RuntimeStatus) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.MCPConfig{ConnectTimeoutMS: 2000, MaxToolsPerServer: 64, MaxToolPages: 10, MaxToolResultChars: 2000}
+	cfg := config.MCPConfig{ConnectTimeoutMS: 2000, MaxToolsPerServer: 64, MaxToolPages: 10}
 	backend, err := NewBackend(cfg, integrationAuthorizer{permission.ActionAllow}, nil, &sandbox.Manager{}, logging.NewBootstrap())
 	if err != nil {
 		t.Fatal(err)

@@ -13,10 +13,10 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/compose"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
-	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
 
 const maxTaskChars = 32000
@@ -79,11 +79,11 @@ func (m *Manager) RunAgent(ctx context.Context, input RunInput) (RunOutput, erro
 	if len([]rune(input.Task)) > maxTaskChars {
 		return RunOutput{}, fmt.Errorf("run_agent task 不能超过 %d 个字符", maxTaskChars)
 	}
-	call, ok := humberttools.CallContextFrom(ctx)
-	if !ok {
+	callID := compose.GetToolCallID(ctx)
+	if callID == "" {
 		return RunOutput{}, errors.New("run_agent 缺少 ToolCall 上下文")
 	}
-	runID := stableRunID(input.ParentScope.RequestID, call.ID)
+	runID := stableRunID(input.ParentScope.RequestID, callID)
 	now := time.Now().UTC()
 	record, found, err := m.store.Load(context.WithoutCancel(ctx), input.ParentScope.SessionID, runID)
 	if err != nil {
@@ -93,14 +93,14 @@ func (m *Manager) RunAgent(ctx context.Context, input RunInput) (RunOutput, erro
 		record = Run{
 			ID: runID, ParentAgentID: input.ParentScope.AgentID, ParentSessionID: input.ParentScope.SessionID,
 			ParentRequestID: input.ParentScope.RequestID, ParentRunID: input.ParentScope.RunID,
-			ToolCallID: call.ID, ChildAgentID: input.ChildAgentID, Task: input.Task,
+			ToolCallID: callID, ChildAgentID: input.ChildAgentID, Task: input.Task,
 			Status: StatusRunning, StartedAt: now, UpdatedAt: now,
 		}
 	} else if record.ParentAgentID != input.ParentScope.AgentID ||
 		record.ParentSessionID != input.ParentScope.SessionID ||
 		record.ParentRequestID != input.ParentScope.RequestID ||
 		record.ParentRunID != input.ParentScope.RunID ||
-		record.ToolCallID != call.ID ||
+		record.ToolCallID != callID ||
 		record.ChildAgentID != input.ChildAgentID || record.Task != input.Task {
 		return RunOutput{}, errors.New("审批恢复后的 run_agent 参数与原调用不一致")
 	} else if record.Status == StatusSucceeded {

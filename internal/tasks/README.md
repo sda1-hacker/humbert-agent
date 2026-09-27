@@ -21,6 +21,8 @@ flowchart LR
 
 `Schedule` 支持 manual、once、interval、daily、weekly，`schedule.go` 处理时区和下一次触发。`schedulerLoop` 只在应用进程运行时扫描；`enqueueDue` 按 misfire/overlap 规则入队并更新下次时间；`dispatchLocked` 再次核对任务是否暂停和 Agent 是否可用，按全局及单 Agent 并发上限启动。手动 `RunNow` 和内部 `RunAutomation` 复用队列/Run Store。
 
+`Status` 表示用户是否启用任务，`NextRunAt` 表示计划的下一次触发。一次性任务触发后只清空 `NextRunAt`，不自动暂停，保证本次已入队的运行及失败重试仍能执行。用户主动暂停仍会取消尚未启动的自动运行。
+
 ```mermaid
 stateDiagram-v2
   [*] --> queued
@@ -45,7 +47,7 @@ stateDiagram-v2
 | `manager.go` | 依赖、启动/关闭、Agent 删除期间的并发边界。 |
 | `manager_task.go` | 创建/更新/暂停/删除及 Session 引用清理。 |
 | `manager_schedule.go` | 入队、调度、Session 选择与启动。 |
-| `manager_events.go` | Runtime Event → Run 状态、通知、重试。 |
+| `manager_events.go` | Runtime Event → Run 状态、任务事件、重试；Agent 结果通知交由 Proactive。 |
 
 调试时用 `TaskID → RunID → SessionID → Runtime RequestID` 跟踪，区分调度失败和模型执行失败。`Run` 只是控制面与摘要，详情到对应 Session JSONL 查。
 
@@ -58,3 +60,5 @@ stateDiagram-v2
 5. 失败且允许重试时 `maybeRetry` 创建子 Run；启动恢复 `recoverRetries` 依靠 ParentRunID 去重。
 
 暂停 Task 与调度周期共用 `cycleMu`，防止调度器拿着旧的 active 快照在暂停后继续入队。`DeleteRun` 与 `ClearRuns` 会计算剩余 Run 和 `PersistentSessionID` 的引用，只删无人引用的专用 Session。计划任务不在应用退出后后台继续运行；应用重新启动才执行错过任务策略。
+
+所有 TaskRun 读改写使用 `Store.MutateRun`，回调在 Store 锁内作用于最新记录。启动回填只补 RequestID/RuntimeRunID，已完成状态与结果不可被覆盖。事件计数、失败收敛和关闭中断也使用这个入口；回调不能再调用 Store 或外部服务。

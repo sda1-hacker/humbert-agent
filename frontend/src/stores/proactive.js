@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { Events } from "@wailsio/runtime";
+import { beginLatestRequest, invalidateRequests } from "../utils/latestRequest.js";
 
 import {
     getProactiveSettings,
@@ -36,6 +37,7 @@ export const useProactiveStore = defineStore("proactive", {
                 unsubscribeProactive = Events.On(proactiveEventName, (event) => {
                     const payload = event?.data;
                     if (payload?.status) {
+                        invalidateRequests(this, "status");
                         this.status = normalizeStatus(payload.status);
                     }
                     if (payload?.record) {
@@ -44,7 +46,8 @@ export const useProactiveStore = defineStore("proactive", {
                     if (refreshTimer !== null) clearTimeout(refreshTimer);
                     refreshTimer = setTimeout(() => {
                         refreshTimer = null;
-                        void this.refreshStatus();
+                        // 事件可能淘汰正在读取的列表；重新取完整目录以补齐其他记录。
+                        void Promise.all([this.refreshStatus(), this.refreshRecords()]).catch(console.error);
                     }, 120);
                 });
             }
@@ -58,6 +61,8 @@ export const useProactiveStore = defineStore("proactive", {
         },
 
         disposeEvents() {
+            invalidateRequests(this);
+            this.loading = false;
             if (unsubscribeProactive) {
                 unsubscribeProactive();
                 unsubscribeProactive = null;
@@ -73,29 +78,40 @@ export const useProactiveStore = defineStore("proactive", {
         },
 
         async load() {
+            const isCurrent = beginLatestRequest(this, "load");
             this.loading = true;
             try {
-                const [settings, status, records, notifications] = await Promise.all([
-                    getProactiveSettings(),
-                    getProactiveStatus(),
-                    listProactiveRecords(50),
+                const [, , , notifications] = await Promise.all([
+                    this.refreshSettings(),
+                    this.refreshStatus(),
+                    this.refreshRecords(),
                     listRecentNotifications(20),
                 ]);
-                this.settings = normalizeSettings(settings);
-                this.status = normalizeStatus(status);
-                this.records = Array.isArray(records) ? records : [];
+                if (!isCurrent()) return;
                 for (const notification of (Array.isArray(notifications) ? notifications : [])) {
                     this.ingestNotification(notification);
                 }
+            } catch (error) {
+                if (isCurrent()) throw error;
             } finally {
-                this.loading = false;
+                if (isCurrent()) this.loading = false;
             }
+        },
+
+        async refreshSettings() {
+            const isCurrent = beginLatestRequest(this, "settings");
+            try {
+                const value = await getProactiveSettings();
+                if (isCurrent()) this.settings = normalizeSettings(value);
+                return this.settings;
+            } catch (error) { if (isCurrent()) throw error; }
         },
 
         async save(value) {
             this.saving = true;
             try {
                 const updated = await updateProactiveSettings(value);
+                invalidateRequests(this, "settings");
                 this.settings = normalizeSettings(updated);
                 await this.refreshStatus();
                 return this.settings;
@@ -105,14 +121,21 @@ export const useProactiveStore = defineStore("proactive", {
         },
 
         async refreshStatus() {
-            this.status = normalizeStatus(await getProactiveStatus());
-            return this.status;
+            const isCurrent = beginLatestRequest(this, "status");
+            try {
+                const value = await getProactiveStatus();
+                if (isCurrent()) this.status = normalizeStatus(value);
+                return this.status;
+            } catch (error) { if (isCurrent()) throw error; }
         },
 
         async refreshRecords() {
-            const values = await listProactiveRecords(50);
-            this.records = Array.isArray(values) ? values : [];
-            return this.records;
+            const isCurrent = beginLatestRequest(this, "records");
+            try {
+                const values = await listProactiveRecords(50);
+                if (isCurrent()) this.records = Array.isArray(values) ? values : [];
+                return this.records;
+            } catch (error) { if (isCurrent()) throw error; }
         },
 
         async runHeartbeat() {
@@ -140,6 +163,8 @@ export const useProactiveStore = defineStore("proactive", {
 
         upsertRecord(value) {
             if (!value?.id) return;
+            // 实时状态已比正在读取的快照更新，旧列表不能把终态改回执行中。
+            invalidateRequests(this, "records");
             const next = [...this.records];
             const index = next.findIndex((item) => item.id === value.id);
             if (index >= 0) next[index] = value;

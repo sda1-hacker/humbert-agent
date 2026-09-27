@@ -52,4 +52,4 @@ sequenceDiagram
 | `attachments.go` | `appendUserInput`、`HydrateMessages`、`ReadAttachment` | 看附件入库和模型调用前恢复。 |
 | `types.go` | `Session`、`UserInput`、`Message` | 区分控制面 DTO、附件和持久化消息。 |
 
-调试时先查 `session-metadata.sqlite` 中的 Session AgentID，再查 JSONL Entry ID；附件问题继续看 `attachments/` 和 `HydrateMessages`。SQLite 元数据库必须随用户数据备份，不能像搜索缓存一样删除。不要把 Base64 写进 JSONL 或 Memory。
+调试时先查 `session-metadata.sqlite` 中的 Session AgentID，再查 JSONL Entry ID；附件问题继续看 `attachments/` 和 `HydrateMessages`。SQLite 元数据库必须随用户数据备份，不能像搜索缓存一样删除。不要把 Base64 写进 JSONL 或摘要。

@@ -148,14 +148,15 @@ func (f *BrowserFactory) run(ctx context.Context, scope humberttools.Scope, inpu
 		browserKey = scope.SessionID
 	}
 	if action == "close" {
-		f.mu.Lock()
-		session := f.sessions[browserKey]
-		delete(f.sessions, browserKey)
-		f.mu.Unlock()
-		if session != nil {
-			session.closeGracefully()
-		}
+		f.closeSession(browserKey)
 		return &BrowserOutput{Closed: true}, nil
+	}
+	// 每次操作按本轮 Scope 检查，复用的浏览器也不能绕过后来生效的禁网策略。
+	// close 只释放已有资源，即使禁网也保留清理入口。
+	if !scope.SandboxPolicy().AllowsNetwork() {
+		// 收到禁网调用后回收旧连接，避免继续复用此前有网络权限的窗口。
+		f.closeSession(browserKey)
+		return nil, errors.New("当前 Sandbox 已禁用网络，不能使用 browser")
 	}
 	if action != "open" && action != "snapshot" && action != "click" && action != "type" && action != "scroll" && action != "press" && action != "back" && action != "forward" && action != "refresh" && action != "show" && action != "screenshot" {
 		return nil, errors.New("browser action 无效")
@@ -336,6 +337,16 @@ func (f *BrowserFactory) persistScreenshot(ctx context.Context, scope humberttoo
 		return nil, err
 	}
 	return &BrowserOutput{ScreenshotAttachmentID: id, ScreenshotName: name}, nil
+}
+
+func (f *BrowserFactory) closeSession(key string) {
+	f.mu.Lock()
+	session := f.sessions[key]
+	delete(f.sessions, key)
+	f.mu.Unlock()
+	if session != nil {
+		session.closeGracefully()
+	}
 }
 
 func (f *BrowserFactory) Close() error {

@@ -94,8 +94,6 @@ func (a *Adapter) BuildTools(
 		},
 		DescriptionPolicy: &officialmcp.DescriptionPolicy{MaxChars: a.config.MaxToolDescriptionChars},
 		ResultPolicy: &officialmcp.ResultPolicy{
-			MaxChars:                 a.config.MaxToolResultChars,
-			PreserveTailChars:        a.config.PreserveToolResultTailChars,
 			IncludeStructuredContent: true,
 		},
 	})

@@ -154,7 +154,7 @@ export function fileChangesOfCalls(calls) {
             case "write_file": {
                 const rawPath =
                     readStringProperty(output, "path") ||
-                    readStringProperty(input, "path");
+                    readStringProperty(input, ["read_file", "write_file", "edit_file"].includes(name) ? "file_path" : "path");
                 let operation = "written";
                 if (output.created === true) {
                     operation = "created";
@@ -168,7 +168,7 @@ export function fileChangesOfCalls(calls) {
             case "edit_file": {
                 append(
                     readStringProperty(output, "path") ||
-                    readStringProperty(input, "path"),
+                    readStringProperty(input, ["read_file", "write_file", "edit_file"].includes(name) ? "file_path" : "path"),
                     "modified",
                 );
                 break;
@@ -226,7 +226,7 @@ export function fileChangesOfCalls(calls) {
             case "delete_file": {
                 append(
                     readStringProperty(output, "path") ||
-                    readStringProperty(input, "path"),
+                    readStringProperty(input, ["read_file", "write_file", "edit_file"].includes(name) ? "file_path" : "path"),
                     "deleted",
                 );
                 break;

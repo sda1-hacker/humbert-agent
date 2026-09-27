@@ -52,7 +52,7 @@ type preparedPatch struct {
 	target  *sandboxTarget
 	data    []byte
 	mode    fs.FileMode
-	existed bool
+	version fileVersion
 	display string
 }
 
@@ -63,23 +63,14 @@ func (f *ApplyPatchFactory) run(ctx context.Context, scope humberttools.Scope, i
 	if len(input.Changes) > 32 {
 		return nil, errors.New("apply_patch 单次最多 32 个 change")
 	}
-	prepared := make([]preparedPatch, 0, len(input.Changes))
-	closeAll := func() {
-		for i := range prepared {
-			prepared[i].target.Close()
-		}
-	}
-	committed := false
+	targets := make([]*sandboxTarget, 0, len(input.Changes))
 	defer func() {
-		if !committed {
-			closeAll()
+		for _, target := range targets {
+			_ = target.Close()
 		}
 	}()
-	seen := map[string]struct{}{}
+	seen := map[string]bool{}
 	for i, ch := range input.Changes {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
 		if strings.TrimSpace(ch.Path) == "" {
 			return nil, fmt.Errorf("change %d path 不能为空", i+1)
 		}
@@ -87,89 +78,89 @@ func (f *ApplyPatchFactory) run(ctx context.Context, scope humberttools.Scope, i
 		if err != nil {
 			return nil, fmt.Errorf("change %d 路径被 Sandbox 拒绝: %w", i+1, err)
 		}
-		if target.relative == "." {
-			target.Close()
-			return nil, fmt.Errorf("change %d 必须指定文件", i+1)
+		targets = append(targets, target)
+		key := fileLockKey(target.absolute)
+		if target.relative == "." || seen[key] {
+			return nil, fmt.Errorf("change %d 必须指定不重复的文件路径", i+1)
 		}
-		if _, ok := seen[target.absolute]; ok {
-			target.Close()
-			return nil, fmt.Errorf("同一个文件 %q 在一次 apply_patch 中只能出现一次", target.display)
+		seen[key] = true
+	}
+	unlock, err := lockFileTargets(ctx, targets...)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	prepared := make([]preparedPatch, 0, len(input.Changes))
+	for i, ch := range input.Changes {
+		target := targets[i]
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		seen[target.absolute] = struct{}{}
 		var data []byte
 		mode := fs.FileMode(0o600)
-		existed := false
+		var original []byte
 		info, statErr := target.root.Lstat(target.relative)
 		if ch.Create {
 			if ch.OldText != "" {
-				target.Close()
 				return nil, fmt.Errorf("create change %d 的 old_text 必须为空", i+1)
 			}
 			if statErr == nil {
-				target.Close()
 				return nil, fmt.Errorf("create 目标 %q 已存在", target.display)
 			}
 			if !errors.Is(statErr, fs.ErrNotExist) {
-				target.Close()
 				return nil, statErr
 			}
 			data = []byte(ch.NewText)
 		} else {
 			if statErr != nil {
-				target.Close()
 				return nil, fmt.Errorf("读取 %q 失败: %w", target.display, statErr)
 			}
 			if info.Mode()&fs.ModeSymlink != 0 || !info.Mode().IsRegular() {
-				target.Close()
 				return nil, fmt.Errorf("%q 不是普通文件", target.display)
 			}
 			if info.Size() > f.maxBytes {
-				target.Close()
 				return nil, fmt.Errorf("%q 超过大小限制", target.display)
 			}
 			file, err := target.root.Open(target.relative)
 			if err != nil {
-				target.Close()
 				return nil, err
 			}
-			original, err := io.ReadAll(io.LimitReader(file, f.maxBytes+1))
+			original, err = io.ReadAll(io.LimitReader(file, f.maxBytes+1))
 			file.Close()
 			if err != nil {
-				target.Close()
 				return nil, err
 			}
 			if int64(len(original)) > f.maxBytes {
-				target.Close()
 				return nil, fmt.Errorf("%q 超过大小限制", target.display)
 			}
 			count := strings.Count(string(original), ch.OldText)
 			if ch.OldText == "" || count != 1 {
-				target.Close()
 				return nil, fmt.Errorf("%q old_text 必须非空且恰好匹配一次，实际 %d 次", target.display, count)
 			}
 			data = []byte(strings.Replace(string(original), ch.OldText, ch.NewText, 1))
-			existed = true
 			if info.Mode().Perm() != 0 {
 				mode = info.Mode().Perm()
 			}
 		}
 		if int64(len(data)) > f.maxBytes {
-			target.Close()
 			return nil, fmt.Errorf("修改后 %q 超过大小限制", target.display)
 		}
-		prepared = append(prepared, preparedPatch{target: target, data: data, mode: mode, existed: existed, display: target.display})
+		prepared = append(prepared, preparedPatch{target: target, data: data, mode: mode, version: fileVersion{info: info, content: original}, display: target.display})
+	}
+	for _, p := range prepared {
+		if err := p.version.check(ctx, p.target.root, p.target.relative); err != nil {
+			return nil, err
+		}
 	}
 	files := make([]string, 0, len(prepared))
 	for _, p := range prepared {
 		if err := ensureRootParentDirectory(p.target.root, p.target.relative); err != nil {
 			return nil, err
 		}
-		if err := atomicWriteWorkspaceFile(ctx, p.target.root, p.target.relative, p.data, p.mode, p.existed); err != nil {
+		if err := atomicWriteWorkspaceFile(ctx, p.target.root, p.target.relative, p.data, p.mode, p.version); err != nil {
 			return nil, fmt.Errorf("写入 %q 失败: %w", p.display, err)
 		}
 		files = append(files, p.display)
 	}
-	closeAll()
-	committed = true
 	return &ApplyPatchOutput{Files: files, Changes: len(prepared)}, nil
 }

@@ -19,8 +19,8 @@ flowchart TD
 
 | 功能 | 文件 | 实现入口与要点 |
 | --- | --- | --- |
-| 文件浏览/读取/查找 | `list_files.go`、`read_file.go`、`search_files.go` | `openSandboxTarget` 后按相对路径访问，遍历和输出受限。 |
-| 文件修改 | `write_file.go`、`edit_file.go`、`apply_patch.go`、`file_ops.go` | 检查写入范围和文件大小；写入结果进入 Transcript 的工具事务。 |
+| 文件浏览/读取/查找 | `filesystem.go`、`search_files.go` | `openSandboxTarget` 后按相对路径访问，遍历和输出受限。 |
+| 文件修改 | `filesystem.go`、`atomic_fs.go`、`apply_patch.go`、`file_ops.go` | 检查写入范围和文件大小；写入结果进入 Transcript 的工具事务。 |
 | 命令与 Git | `run_command.go`、`run_skill_script.go`、`git_tools.go` | 受命令配置、工作区、Sandbox Runner、时间和输出上限约束。 |
 | 文档 | `extract_document.go` | 从附件 ID 或允许路径读取，调用 `documenttext.Extract` 得到 Markdown，再按 offset/limit 返回。 |
 | 历史和大内容 | `context_history.go`、`context_artifact.go` | `session_history` 搜索/回读旧 Entry；`context_resource` 分段读附件或归档结果。 |
@@ -38,3 +38,7 @@ flowchart TD
 以文件写入为例，`Descriptor` 应声明稳定名称、能力身份与风险；`Build` 只接收受控 Scope；`run` 校验 JSON 参数、调用 `openSandboxTarget`/`CheckPath` 后执行文件操作，并返回长度受限的结构化结果。Registry 的 Guard 提供审批，但不会替工具做文件系统层面的最终检查。对于命令或 Skill 脚本则调用 `sandbox.Runner`；对于网络工具则在真实连接前校验目标地址。
 
 旧历史和大内容回查是只读工具：`session_history` 通过 ActiveBranch 索引搜索或按 Entry ID 读取，不把整个 JSONL 放进提示词；`context_resource` 用 ID、offset、limit 读取附件或 ContextArtifact。`extract_document` 从附件或受控路径取原件，调用 `documenttext` 转 Markdown 后分段返回。这样的工具让 Agent 按需拿细节，而不必在每轮自动装入完整文档。
+
+文件读写/编辑/目录/glob/grep 统一由 `filesystem.go` 的受限 Backend 接入 Eino 原生工具；原子写辅助在 `atomic_fs.go`，目录遍历辅助在 `search_files.go`。Schema 使用原生 file_path、offset/limit、old_string/new_string。
+
+递归遍历和目录列表通过 `sandboxTarget.canReadChild` 逐项检查策略，父目录授权不会覆盖禁止后代。`file_transactions.go` 协调所有文件修改工具的跨会话锁与提交前冲突检查；多文件统一排序取锁，等待响应 Context 取消。浏览器每次调用检查网络策略，禁网调用回收旧连接，close 保留为清理入口。

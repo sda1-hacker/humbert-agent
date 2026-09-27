@@ -11,7 +11,7 @@ Agent 是顶层 Aggregate，拥有：
 - Skills、内置工具与 MCP Tool 选择；
 - Sandbox/安全覆盖；
 - Workspace 模式与路径；
-- 该 Agent 下的全部 Sessions、附件与 Session Memory。
+- 该 Agent 下的全部 Sessions与附件。
 
 局部修改优先使用 `UpdateProfile`、`SetModel`、`SetModelRoles`、`SetSkills`、
 `UpdateSecurity` 等窄命令，避免无关字段被旧快照覆盖。
@@ -52,7 +52,7 @@ agents/<agent-id>/sessions/<session-id>/
 较小的 Transcript 使用容量受限的进程内 Document LRU。超过完整文档缓存上限后，Store
 用 `session.locations.jsonl` 记录 Entry 身份与字节位置；首次建立或索引失效时会严格扫描
 完整 JSONL。正常追加增量更新位置、分支、压缩切点与消息分页索引。构建模型 Context 时只
-解码最新压缩检查点对应的原始窗口，Memory 仍可校验完整分支的 Entry 身份；旧历史按需
+解码最新压缩检查点对应的原始窗口，旧历史按需
 通过位置读取。索引以 Transcript 的文件身份、大小和修改时间校验，崩溃后可重建。
 `session.jsonl` 始终是唯一事实来源。
 
@@ -134,8 +134,8 @@ Provider 请求中变为包含名称、MIME 和 Attachment ID 的文本占位，
 Base64 膨胀及上传同一二进制。文本、源码和 JSON/YAML/XML 等文件转换为普通 text part，
 从而不依赖 OpenAI Chat Completions/Ollama Adapter 尚未实现的原生 `file_url`。PDF、DOCX、
 XLSX、PPTX 的原生文本由受限文档解析器提取；扫描版 PDF 在未配置 OCR 时明确拒绝。
-其它二进制文件在写入 Session 前拒绝。Base64 不进入 transcript、memory 或 compaction
-记录，压缩与 Memory 会保留附件名称、类型和文本提取结果。
+其它二进制文件在写入 Session 前拒绝。附件 Base64 不进入 transcript 或 compaction
+记录，摘要会保留附件名称、类型和文本提取结果。
 
 模型自身的 Vision/Files/Audio 等 Capability 在“设置 → 模型”维护。应用级图片路由保存在
 `config/models.json.multimedia.image_model_id`，只允许引用已启用且有效 Vision Capability

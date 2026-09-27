@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/eventbus"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/notifications"
@@ -19,9 +20,15 @@ import (
 
 const managerTickInterval = 10 * time.Second
 
+// ApprovalReader 只读取审批领域的真实状态，不在主动助手里复制一套审批生命周期。
+type ApprovalReader interface {
+	Get(approvalID string) (approval.Request, bool)
+}
+
 type Manager struct {
 	store         *Store
 	tasks         *tasks.Manager
+	approvals     ApprovalReader
 	events        *eventbus.Bus
 	notifications *notifications.Service
 	decision      DecisionEngine
@@ -46,18 +53,20 @@ type Manager struct {
 func NewManager(
 	store *Store,
 	taskManager *tasks.Manager,
+	approvals ApprovalReader,
 	events *eventbus.Bus,
 	notificationService *notifications.Service,
 	workspaceMonitor *WorkspaceMonitor,
 	logger *logging.Logger,
 ) (*Manager, error) {
-	if store == nil || taskManager == nil || events == nil || notificationService == nil || logger == nil {
+	if store == nil || taskManager == nil || approvals == nil || events == nil || notificationService == nil || logger == nil {
 		return nil, errors.New("主动助手 Manager 依赖不完整")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
 		store:         store,
 		tasks:         taskManager,
+		approvals:     approvals,
 		events:        events,
 		notifications: notificationService,
 		decision:      RuleDecisionEngine{},
@@ -201,7 +210,10 @@ func (m *Manager) loop() {
 			return
 		case <-m.wake:
 			m.drainPendingEvents()
+			m.finalizeCompletedAutomations(m.rootCtx)
 		case <-ticker.C:
+			// 收尾不受主动规则和免打扰时段影响；落盘失败后也能在下一轮重试。
+			m.finalizeCompletedAutomations(m.rootCtx)
 			now := time.Now().UTC()
 			m.mu.RLock()
 			due := !m.nextHeartbeatAt.IsZero() && !now.Before(m.nextHeartbeatAt)
@@ -284,8 +296,10 @@ func (m *Manager) handleTaskPayload(_ context.Context, payload any) {
 	}
 	run := *event.Run
 	if run.Trigger == tasks.TriggerAutomation {
-		if err := m.finalizeAutomationRun(run); err != nil {
-			m.logger.Warn(context.Background(), "保存主动 Agent 运行结果失败", "operation", "proactive.automation.finalize", "run_id", run.ID, "error", err)
+		if run.Status.Terminal() {
+			// Task 事件同步发布，发布方可能仍持有调度锁。这里只唤醒现有 Worker，
+			// 不能在回调里归档 Task，否则会重入同一把锁。终态以 Task Store 为准。
+			m.signalWake()
 		}
 		return
 	}
@@ -297,7 +311,23 @@ func (m *Manager) handleTaskPayload(_ context.Context, payload any) {
 
 func (m *Manager) handleRuntimePayload(_ context.Context, payload any) {
 	event, ok := payload.(agentruntime.Event)
-	if !ok || event.Type != agentruntime.EventApprovalRequested || event.Approval == nil {
+	if !ok || event.Approval == nil {
+		return
+	}
+	if event.Type == agentruntime.EventApprovalResolved || event.Type == agentruntime.EventApprovalExpired {
+		// 普通聊天和任务审批共用 ApprovalID，终结事件必须先处理，不能被任务去重分支跳过。
+		changed, err := m.store.DismissApproval(context.Background(), event.Approval.ID)
+		if err != nil {
+			m.logger.Warn(context.Background(), "清理过期审批提醒失败", "operation", "proactive.approval.dismiss", "error", err)
+			return
+		}
+		for _, record := range changed {
+			m.publishRecord(record)
+		}
+		m.publishStatus()
+		return
+	}
+	if event.Type != agentruntime.EventApprovalRequested {
 		return
 	}
 	if _, isTaskRun := m.tasks.ActiveRunForSession(context.Background(), event.SessionID); isTaskRun {
@@ -336,6 +366,10 @@ func proactiveEventFromTask(value tasks.Event) (Event, bool) {
 		RunID:      run.ID,
 		OccurredAt: time.Now().UTC(),
 	}
+	// 从聊天创建的任务，结果通知回到发起会话；执行记录仍保留独立运行会话。
+	if value.Task != nil && value.Task.Origin == "chat" && value.Task.OriginRef != "" {
+		base.SessionID = value.Task.OriginRef
+	}
 	switch value.Type {
 	case "run.waiting_approval":
 		approvalID := ""
@@ -351,6 +385,7 @@ func proactiveEventFromTask(value tasks.Event) (Event, bool) {
 		} else {
 			base.Key = "task-approval:" + run.ID
 		}
+		base.ApprovalID = approvalID
 		base.Kind, base.Title, base.Level = EventTaskWaitingApproval, taskName+"等待确认", "warning"
 		base.Summary = fmt.Sprintf("%s 正在等待你的确认。", toolName)
 	case "run.succeeded":
@@ -395,41 +430,48 @@ func (m *Manager) processEvent(ctx context.Context, event Event) {
 	if _, exists := m.store.FindByEventKey(event.Key); exists {
 		return
 	}
-	settings := m.store.Settings()
-	var latest *Record
-	if value, exists := m.store.LastHandledKind(event.Kind); exists {
-		latest = &value
-	}
-	decision := m.decision.Decide(event, settings, time.Now().UTC(), latest)
 	now := time.Now().UTC()
 	record := Record{
-		ID: uuid.NewString(), Event: event, Decision: decision,
+		ID: uuid.NewString(), Event: event,
 		Status: RecordIgnored, CreatedAt: now, UpdatedAt: now,
-	}
-	if decision.Action == ActionIgnore {
-		handled := now
-		record.HandledAt = &handled
-		if err := m.store.PutRecord(context.WithoutCancel(ctx), record); err != nil {
-			m.logger.Warn(context.Background(), "保存主动事件记录失败", "operation", "proactive.process.persist", "error", err)
-			return
-		}
-		m.publishRecord(record)
-		return
-	}
-	if InQuietHours(settings, now) {
-		record.Status = RecordDeferred
-		if err := m.store.PutRecord(context.WithoutCancel(ctx), record); err != nil {
-			m.logger.Warn(context.Background(), "保存主动事件记录失败", "operation", "proactive.process.persist", "error", err)
-			return
-		}
-		m.publishRecord(record)
-		return
 	}
 	m.executeRecord(ctx, &record)
 }
 
 func (m *Manager) executeRecord(ctx context.Context, record *Record) {
-	if record == nil {
+	if record == nil || ctx.Err() != nil {
+		return
+	}
+	// 新事件和免打扰后的延迟事件共用执行前检查。保存的 Decision 仅作历史记录，
+	// 不能作为永久授权：规则、目标 Agent、提示词和免打扰时间都可能已经改变。
+	settings := m.store.Settings()
+	var latest *Record
+	if value, exists := m.store.LastHandledKind(record.Event.Kind); exists {
+		latest = &value
+	}
+	now := time.Now().UTC()
+	decision := m.decision.Decide(record.Event, settings, now, latest)
+	if !m.reminderStillPending(record.Event, now) {
+		// 即使终结事件错过、处理失败或进程重启，也不发送已失效的“等待确认”。
+		decision = Decision{Action: ActionIgnore, Reason: "审批已结束或不存在，提醒已失效"}
+	}
+	record.Decision, record.UpdatedAt = decision, now
+	if decision.Action == ActionIgnore {
+		record.Status, record.HandledAt = RecordIgnored, &now
+		if err := m.store.PutRecord(context.WithoutCancel(ctx), *record); err != nil {
+			m.logger.Warn(context.Background(), "保存主动事件记录失败", "operation", "proactive.process.persist", "error", err)
+			return
+		}
+		m.publishRecord(*record)
+		return
+	}
+	if InQuietHours(settings, now) {
+		record.Status = RecordDeferred
+		if err := m.store.PutRecord(context.WithoutCancel(ctx), *record); err != nil {
+			m.logger.Warn(context.Background(), "保存主动事件记录失败", "operation", "proactive.process.persist", "error", err)
+			return
+		}
+		m.publishRecord(*record)
 		return
 	}
 	executor := m.executors[record.Decision.Action]
@@ -443,7 +485,7 @@ func (m *Manager) executeRecord(ctx context.Context, record *Record) {
 		m.publishRecord(*record)
 		return
 	}
-	now := time.Now().UTC()
+	now = time.Now().UTC()
 	record.Status, record.UpdatedAt = RecordExecuting, now
 	if err := m.store.PutRecord(context.WithoutCancel(ctx), *record); err != nil {
 		m.logger.Warn(context.Background(), "持久化主动动作前置状态失败", "operation", "proactive.execute.persist", "error", err)
@@ -467,11 +509,8 @@ func (m *Manager) executeRecord(ctx context.Context, record *Record) {
 	}
 	m.publishRecord(*record)
 	if record.Decision.Action == ActionRunAgent && record.AutomationRunID != "" {
-		if run, runErr := m.tasks.Run(context.WithoutCancel(ctx), record.AutomationRunID); runErr == nil && run.Status.Terminal() {
-			if err := m.finalizeAutomationRun(run); err != nil {
-				m.logger.Warn(context.Background(), "保存主动 Agent 运行结果失败", "operation", "proactive.automation.finalize", "run_id", run.ID, "error", err)
-			}
-		}
+		// 极短任务可能在 Run ID 回填前已结束；回填成功后再次唤醒，补上关联窗口。
+		m.signalWake()
 	}
 }
 
@@ -531,10 +570,38 @@ func (m *Manager) heartbeat(ctx context.Context, now time.Time) error {
 	return nil
 }
 
+// finalizeCompletedAutomations 由现有后台循环消费收尾工作。
+// 执行中的 Record 和 TaskRun 已经持久化，无需另存一份终态队列；重复唤醒可合并，
+// 应用重启仍由 reconcileRecords 恢复，通知型记录也不会被当成 Agent 运行收尾。
+func (m *Manager) finalizeCompletedAutomations(ctx context.Context) {
+	// 后台处理全部待办，不能复用前端“最近若干条”的展示上限。
+	for _, record := range m.store.Records(0) {
+		if ctx.Err() != nil {
+			return
+		}
+		if record.Status != RecordExecuting || record.Decision.Action != ActionRunAgent || record.AutomationRunID == "" {
+			continue
+		}
+		run, err := m.tasks.Run(ctx, record.AutomationRunID)
+		if err == nil && run.Status.Terminal() {
+			err = m.finalizeAutomationRun(run)
+		}
+		if err != nil {
+			m.logger.Warn(ctx, "保存主动 Agent 运行结果失败", "operation", "proactive.automation.finalize", "run_id", record.AutomationRunID, "error", err)
+		}
+	}
+}
+
+// finalizeAutomationRun 只能在后台消费或启动恢复时调用，不能进入 Task 同步事件回调。
 func (m *Manager) finalizeAutomationRun(run tasks.Run) error {
 	record, exists := m.store.FindByAutomationRunID(run.ID)
 	if !exists || !run.Status.Terminal() {
 		return nil
+	}
+	// 先完成可重试的归档，再提交终态。归档或写盘失败时记录仍是 executing，
+	// 后台/启动恢复会重试收尾；Archive 幂等，不会重新执行模型或工具。
+	if _, err := m.tasks.Archive(context.Background(), run.TaskID); err != nil {
+		return fmt.Errorf("归档主动助手内部任务失败: %w", err)
 	}
 	now := time.Now().UTC()
 	record.UpdatedAt, record.HandledAt = now, &now
@@ -551,16 +618,17 @@ func (m *Manager) finalizeAutomationRun(run tasks.Run) error {
 	if err := m.store.PutRecord(context.Background(), record); err != nil {
 		return err
 	}
-	if _, err := m.tasks.Archive(context.Background(), run.TaskID); err != nil {
-		m.logger.Warn(context.Background(), "归档主动助手内部任务失败", "operation", "proactive.automation.archive", "task_id", run.TaskID, "run_id", run.ID, "error", err)
-	}
 	m.publishRecord(record)
 	return nil
 }
 
 func (m *Manager) reconcileRecords(ctx context.Context) error {
-	for _, value := range m.store.Records(maxStoredRecords) {
+	for _, value := range m.store.Records(0) {
 		record := value
+		if record.Status == RecordDeferred && !m.reminderStillPending(record.Event, time.Now().UTC()) {
+			m.executeRecord(ctx, &record)
+			continue
+		}
 		if record.Status != RecordExecuting {
 			continue
 		}
@@ -578,7 +646,7 @@ func (m *Manager) reconcileRecords(ctx context.Context) error {
 				}
 				if run.Status.Terminal() {
 					if err := m.finalizeAutomationRun(run); err != nil {
-						return err
+						m.logger.Warn(ctx, "主动任务收尾暂未完成，后台将重试", "run_id", run.ID, "error", err)
 					}
 				}
 				continue
@@ -607,11 +675,26 @@ func (m *Manager) reconcileRecords(ctx context.Context) error {
 		}
 		if run.Status.Terminal() {
 			if err := m.finalizeAutomationRun(run); err != nil {
-				return err
+				m.logger.Warn(ctx, "主动任务收尾暂未完成，后台将重试", "run_id", run.ID, "error", err)
 			}
 		}
 	}
 	return nil
+}
+
+func isApprovalReminder(event Event) bool {
+	return event.Kind == EventApprovalPending || event.Kind == EventTaskWaitingApproval
+}
+
+func (m *Manager) reminderStillPending(event Event, now time.Time) bool {
+	if !isApprovalReminder(event) {
+		return true
+	}
+	if m.approvals == nil || strings.TrimSpace(event.ApprovalID) == "" {
+		return false
+	}
+	request, exists := m.approvals.Get(event.ApprovalID)
+	return exists && request.Status == approval.StatusPending && now.Before(request.ExpiresAt)
 }
 
 func (m *Manager) publishRecord(record Record) {

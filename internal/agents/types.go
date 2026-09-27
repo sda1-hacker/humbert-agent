@@ -12,7 +12,6 @@ import (
 // 以兼容已有 Profile 与 Composer 快速切换；其它角色为空时由 Runtime 按回退链解析。
 type ModelRoles struct {
 	UtilityModelID string `json:"utility_model_id,omitempty"`
-	MemoryModelID  string `json:"memory_model_id,omitempty"`
 }
 
 // Agent 是 Humbert Agent 的稳定 Profile。
@@ -128,7 +127,7 @@ type UpdateInput struct {
 
 	ModelID string
 
-	// nil 保留现有角色；非 nil 显式替换 Utility/Memory。
+	// nil 保留现有角色；非 nil 显式替换 Utility。
 	ModelRoles *ModelRoles
 
 	EnabledSkills []string

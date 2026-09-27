@@ -1,5 +1,6 @@
 import { defineStore } from "pinia";
 import { Events } from "@wailsio/runtime";
+import { beginLatestRequest, invalidateRequests } from "../utils/latestRequest.js";
 
 import {
     getWorkspaceOverview,
@@ -113,6 +114,8 @@ export const useWorkspaceStore = defineStore("workspace", {
 
         /** 切换工作区 Agent 时完整清空旧目录缓存，避免两个项目中同名路径串台。 */
         resetForAgent(agentID) {
+            // 即使 A → B → A 切回同一个 Agent，第一次 A 的请求也已经失效。
+            invalidateRequests(this);
             this.agentID = agentID || "";
             this.overview = null;
             this.directories = {};
@@ -139,13 +142,14 @@ export const useWorkspaceStore = defineStore("workspace", {
             if (this.agentID !== agentID) {
                 this.resetForAgent(agentID);
             }
+            const isCurrent = beginLatestRequest(this, "workspace");
             this.error = "";
             const results = await Promise.allSettled([
                 this.loadOverview(),
                 this.loadDirectory(".", true),
             ]);
             const rejected = results.find((item) => item.status === "rejected");
-            if (rejected && this.agentID === agentID) {
+            if (rejected && isCurrent()) {
                 this.error = rejected.reason?.message ?? String(rejected.reason);
             }
         },
@@ -153,13 +157,18 @@ export const useWorkspaceStore = defineStore("workspace", {
         async loadOverview() {
             if (!this.agentID) return null;
             const agentID = this.agentID;
+            const isCurrent = beginLatestRequest(this, "overview");
             this.loadingOverview = true;
             try {
                 const value = await getWorkspaceOverview(agentID);
-                if (this.agentID === agentID) this.overview = value;
+                if (!isCurrent()) return null;
+                this.overview = value;
                 return value;
+            } catch (error) {
+                if (isCurrent()) throw error;
+                return null;
             } finally {
-                if (this.agentID === agentID) this.loadingOverview = false;
+                if (isCurrent()) this.loadingOverview = false;
             }
         },
 
@@ -169,16 +178,19 @@ export const useWorkspaceStore = defineStore("workspace", {
             if (!force && this.directories[path]) {
                 return this.directories[path];
             }
+            const isCurrent = beginLatestRequest(this, `directory:${path}`);
             this.loadingDirectories = { ...this.loadingDirectories, [path]: true };
             try {
                 const value = await listWorkspaceDirectory(agentID, path);
+                if (!isCurrent()) return null;
                 const normalized = { ...value, entries: normalizeArray(value?.entries) };
-                if (this.agentID === agentID) {
-                    this.directories = { ...this.directories, [path]: normalized };
-                }
+                this.directories = { ...this.directories, [path]: normalized };
                 return normalized;
+            } catch (error) {
+                if (isCurrent()) throw error;
+                return null;
             } finally {
-                if (this.agentID === agentID) {
+                if (isCurrent()) {
                     this.loadingDirectories = { ...this.loadingDirectories, [path]: false };
                 }
             }
@@ -186,37 +198,45 @@ export const useWorkspaceStore = defineStore("workspace", {
 
         /** 展开目录时才向后端请求它的子项；收起只改变 UI 状态，不删除缓存。 */
         async toggleDirectory(path) {
-            const agentID = this.agentID;
             const expanded = this.expandedPaths.includes(path);
             if (expanded) {
                 this.expandedPaths = this.expandedPaths.filter((item) => item !== path);
                 return;
             }
-            await this.loadDirectory(path);
-            if (this.agentID !== agentID) return;
+            // 展开选择立即生效，目录加载结束不能撤销用户随后执行的收起操作。
             this.expandedPaths = [...this.expandedPaths, path];
+            await this.loadDirectory(path);
         },
 
         /** 文件点击后读取预览；目录点击只更新选中信息，不读取文件内容。 */
         async selectEntry(entry) {
-            const agentID = this.agentID;
+            invalidateRequests(this, "preview");
             this.selectedEntry = entry ?? null;
             this.selectedPath = entry?.path ?? "";
             this.preview = null;
+            this.loadingPreview = false;
+            return this.loadPreview();
+        },
+
+        /** 只刷新当前文件内容，不改变用户的选择；新选择会使旧预览请求失效。 */
+        async loadPreview() {
+            const agentID = this.agentID;
+            const entry = this.selectedEntry;
             if (!entry || entry.type !== "file" || !this.agentID) {
                 return null;
             }
+            const isCurrent = beginLatestRequest(this, "preview");
             this.loadingPreview = true;
             try {
                 const value = await previewWorkspaceFile(agentID, entry.path);
-                if (this.agentID === agentID && this.selectedPath === entry.path) {
-                    this.preview = value;
-                }
+                if (!isCurrent()) return null;
+                this.preview = value;
                 return value;
+            } catch (error) {
+                if (isCurrent()) throw error;
+                return null;
             } finally {
-                if (this.agentID === agentID && this.selectedPath === entry.path) {
-                    this.loadingPreview = false;
-                }
+                if (isCurrent()) this.loadingPreview = false;
             }
         },
 
@@ -241,23 +261,20 @@ export const useWorkspaceStore = defineStore("workspace", {
          */
         async refresh() {
             if (!this.agentID) return;
-            const agentID = this.agentID;
+            const isCurrent = beginLatestRequest(this, "workspace");
             const expanded = [...this.expandedPaths];
-            const selectedPath = this.selectedPath;
-            const selectedEntry = this.selectedEntry;
             this.error = "";
             try {
                 await Promise.all([
                     this.loadOverview(),
                     ...expanded.map((path) => this.loadDirectory(path, true)),
+                    this.loadPreview(),
                 ]);
-                if (this.agentID !== agentID) return;
-                if (selectedPath && selectedEntry?.type === "file") {
-                    await this.openPath(selectedPath);
-                }
             } catch (error) {
-                if (this.agentID === agentID) this.error = error?.message ?? String(error);
-                throw error;
+                if (isCurrent()) {
+                    this.error = error?.message ?? String(error);
+                    throw error;
+                }
             }
         },
     },

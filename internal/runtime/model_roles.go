@@ -17,7 +17,6 @@ import (
 const (
 	modelRoleChat    = "chat"
 	modelRoleUtility = "utility"
-	modelRoleMemory  = "memory"
 	modelRoleImage   = "image"
 )
 
@@ -29,7 +28,6 @@ type turnInputRequirements struct {
 type resolvedModelRoles struct {
 	chat         models.RuntimeSnapshot
 	utility      models.RuntimeSnapshot
-	memory       models.RuntimeSnapshot
 	imageModelID string
 	image        *models.RuntimeSnapshot
 }
@@ -90,18 +88,6 @@ func (r *Resolver) resolveModelRoles(
 		}
 	}
 
-	memoryModel := utility
-	if id := strings.TrimSpace(agent.ModelRoles.MemoryModelID); id != "" && id != utility.ModelConfigID {
-		if id == chat.ModelConfigID {
-			memoryModel = chat
-		} else {
-			memoryModel, err = r.models.ResolveSnapshot(ctx, id)
-			if err != nil {
-				return resolvedModelRoles{}, fmt.Errorf("解析 Memory Model 失败: %w", err)
-			}
-		}
-	}
-
 	// Files 是主聊天模型自身的输入能力。图片辅助模型只能补足 Vision，不能代替
 	// Chat Model 接管原生文件输入，因此异常的原生 file_url 仍然 fail closed。
 	if requirements.Files && !chat.Capabilities.Files {
@@ -129,8 +115,6 @@ func (r *Resolver) resolveModelRoles(
 			snapshot = chat
 		case utility.ModelConfigID:
 			snapshot = utility
-		case memoryModel.ModelConfigID:
-			snapshot = memoryModel
 		default:
 			snapshot, err = r.models.ResolveSnapshot(ctx, imageModelID)
 			if err != nil {
@@ -144,7 +128,7 @@ func (r *Resolver) resolveModelRoles(
 	}
 
 	return resolvedModelRoles{
-		chat: chat, utility: utility, memory: memoryModel, imageModelID: imageModelID, image: image,
+		chat: chat, utility: utility, imageModelID: imageModelID, image: image,
 	}, nil
 }
 

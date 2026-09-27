@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import wails from "@wailsio/runtime/plugins/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { localizeVueTemplates } from "./scripts/localize-vue.mjs";
 
@@ -15,6 +14,6 @@ export default defineConfig({
     localizeVueTemplates(),
     vue(),
     tailwindcss(),
-    wails("./bindings")
+    // 当前服务使用 Call.ByName 和动态事件，不需要生成的 typed-event bindings。
   ],
 });

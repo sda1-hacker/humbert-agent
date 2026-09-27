@@ -541,56 +541,55 @@ func (s *Service) Update(
 		}
 	}
 
-	existing.Agent.Name =
-		normalized.Name
+	// 完整表单也走同一原子写入口；未提交的可选字段来自最新 Profile。
+	updated, err := s.store.Mutate(ctx, id, func(current *Agent) error {
+		current.Name =
+			normalized.Name
 
-	existing.Agent.Avatar =
-		normalizedAvatar
+		current.Avatar =
+			normalizedAvatar
 
-	if input.SubagentEnabled != nil {
-		existing.Agent.SubagentEnabled = *input.SubagentEnabled
+		if input.SubagentEnabled != nil {
+			current.SubagentEnabled = *input.SubagentEnabled
+		}
+
+		current.Instruction =
+			normalized.Instruction
+
+		current.ModelID =
+			normalized.ModelID
+
+		if input.ModelRoles != nil {
+			current.ModelRoles = normalizedModelRoles
+		}
+
+		current.EnabledSkills = append([]string(nil), normalized.EnabledSkills...)
+
+		if input.EnabledMCPTools != nil {
+			current.EnabledMCPTools = cloneMCPSelections(normalizedMCPTools)
+		}
+		if input.EnabledBuiltinTools != nil {
+			current.EnabledBuiltinTools = cloneStringsPreserveNil(normalizedBuiltinTools)
+		}
+		if input.Sandbox != nil {
+			current.Sandbox = normalizedSandbox
+		}
+
+		current.WorkspaceMode =
+			normalized.WorkspaceMode
+
+		current.WorkspacePath =
+			normalized.WorkspacePath
+
+		current.UpdatedAt =
+			time.Now().UTC()
+
+		return nil
+	})
+	if err != nil {
+		return AgentInfo{}, err
 	}
-
-	existing.Agent.Instruction =
-		normalized.Instruction
-
-	existing.Agent.ModelID =
-		normalized.ModelID
-
-	if input.ModelRoles != nil {
-		existing.Agent.ModelRoles = normalizedModelRoles
-	}
-
-	existing.Agent.EnabledSkills = append([]string(nil), normalized.EnabledSkills...)
-
-	if input.EnabledMCPTools != nil {
-		existing.Agent.EnabledMCPTools = cloneMCPSelections(normalizedMCPTools)
-	}
-	if input.EnabledBuiltinTools != nil {
-		existing.Agent.EnabledBuiltinTools = cloneStringsPreserveNil(normalizedBuiltinTools)
-	}
-	if input.Sandbox != nil {
-		existing.Agent.Sandbox = normalizedSandbox
-	}
-
-	existing.Agent.WorkspaceMode =
-		normalized.WorkspaceMode
-
-	existing.Agent.WorkspacePath =
-		normalized.WorkspacePath
-
-	existing.Agent.UpdatedAt =
-		time.Now().UTC()
-
-	if err :=
-		s.store.Update(
-			ctx,
-			existing.Agent,
-		); err != nil {
-
-		return AgentInfo{},
-			err
-	}
+	existing.Agent = updated
 
 	s.logger.Info(
 		ctx,
@@ -621,113 +620,71 @@ func (s *Service) Update(
 	)
 }
 
-// UpdateProfile 只修改 Agent 的身份与系统指令，不触碰模型、能力、Sandbox 或 Workspace。
-func (s *Service) UpdateProfile(ctx context.Context, id, name, profileAvatar, instruction string) (AgentInfo, error) {
-	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
-	if err != nil {
+// mutateProfile 是所有局部配置命令唯一的写入入口。
+func (s *Service) mutateProfile(ctx context.Context, id string, patch func(*Agent) error) (AgentInfo, error) {
+	if _, err := s.store.Mutate(ctx, strings.TrimSpace(id), patch); err != nil {
 		return AgentInfo{}, err
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return AgentInfo{}, errors.New("Agent 名称不能为空")
-	}
-	if len([]rune(name)) > 100 {
-		return AgentInfo{}, errors.New("Agent 名称不能超过 100 个字符")
-	}
-	normalizedAvatar, err := avatar.NormalizeDataURL(profileAvatar)
-	if err != nil {
-		return AgentInfo{}, fmt.Errorf("Agent 头像无效: %w", err)
-	}
-	existing.Agent.Name = name
-	existing.Agent.Avatar = normalizedAvatar
-	existing.Agent.Instruction = strings.TrimSpace(instruction)
-	existing.Agent.UpdatedAt = time.Now().UTC()
-	if err := s.store.Update(ctx, existing.Agent); err != nil {
-		return AgentInfo{}, err
-	}
-	return s.Get(ctx, existing.Agent.ID)
+	return s.Get(ctx, strings.TrimSpace(id))
 }
 
-// SetModel 只修改 Agent 默认模型。局部命令不能覆盖其它 Profile 字段。
-func (s *Service) SetModel(ctx context.Context, id, modelID string) (AgentInfo, error) {
-	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
+// UpdateProfile 仅修改身份和指令，其他字段从锁内读取的最新 Profile 保留。
+func (s *Service) UpdateProfile(ctx context.Context, id, name, profileAvatar, instruction string) (AgentInfo, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 100 {
+		return AgentInfo{}, errors.New("Agent 名称必须为 1-100 个字符")
+	}
+	normalized, err := avatar.NormalizeDataURL(profileAvatar)
 	if err != nil {
 		return AgentInfo{}, err
 	}
+	return s.mutateProfile(ctx, id, func(a *Agent) error {
+		a.Name = name
+		a.Avatar = normalized
+		a.Instruction = strings.TrimSpace(instruction)
+		return nil
+	})
+}
+func (s *Service) SetModel(ctx context.Context, id, modelID string) (AgentInfo, error) {
 	modelID = strings.TrimSpace(modelID)
 	if err := s.ensureModelUsable(ctx, modelID); err != nil {
 		return AgentInfo{}, err
 	}
-	existing.Agent.ModelID = modelID
-	existing.Agent.UpdatedAt = time.Now().UTC()
-	if err := s.store.Update(ctx, existing.Agent); err != nil {
-		return AgentInfo{}, err
-	}
-	return s.Get(ctx, existing.Agent.ID)
+	return s.mutateProfile(ctx, id, func(a *Agent) error { a.ModelID = modelID; return nil })
 }
-
-// SetModelRoles 只修改 Utility/Memory 模型角色，不触碰 Chat Model 或其它 Profile 字段。
 func (s *Service) SetModelRoles(ctx context.Context, id string, roles ModelRoles) (AgentInfo, error) {
-	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
-	if err != nil {
-		return AgentInfo{}, err
-	}
 	normalized, err := s.normalizeAndValidateModelRoles(ctx, roles)
 	if err != nil {
 		return AgentInfo{}, err
 	}
-	existing.Agent.ModelRoles = normalized
-	existing.Agent.UpdatedAt = time.Now().UTC()
-	if err := s.store.Update(ctx, existing.Agent); err != nil {
-		return AgentInfo{}, err
-	}
-	return s.Get(ctx, existing.Agent.ID)
+	return s.mutateProfile(ctx, id, func(a *Agent) error { a.ModelRoles = normalized; return nil })
 }
-
-// SetSkills 只替换 Agent 的 Skill 引用。
-func (s *Service) SetSkills(ctx context.Context, id string, skillNames []string) (AgentInfo, error) {
-	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
+func (s *Service) SetSkills(ctx context.Context, id string, names []string) (AgentInfo, error) {
+	normalized, err := s.normalizeEnabledSkills(ctx, names)
 	if err != nil {
 		return AgentInfo{}, err
 	}
-	normalized, err := s.normalizeEnabledSkills(ctx, skillNames)
-	if err != nil {
-		return AgentInfo{}, err
-	}
-	existing.Agent.EnabledSkills = append([]string(nil), normalized...)
-	existing.Agent.UpdatedAt = time.Now().UTC()
-	if err := s.store.Update(ctx, existing.Agent); err != nil {
-		return AgentInfo{}, err
-	}
-	return s.Get(ctx, existing.Agent.ID)
+	return s.mutateProfile(ctx, id, func(a *Agent) error { a.EnabledSkills = append([]string{}, normalized...); return nil })
 }
-
-// UpdateSecurity 只替换 Agent 的内置工具选择与 Sandbox 覆盖。
-func (s *Service) UpdateSecurity(ctx context.Context, id string, builtinTools []string, policy sandbox.AgentPolicy) (AgentInfo, error) {
-	existing, err := s.store.Get(ctx, strings.TrimSpace(id))
+func (s *Service) UpdateSecurity(ctx context.Context, id string, names []string, policy sandbox.AgentPolicy) (AgentInfo, error) {
+	tools, err := normalizeBuiltinToolSelection(names)
 	if err != nil {
 		return AgentInfo{}, err
 	}
-	normalizedTools, err := normalizeBuiltinToolSelection(builtinTools)
+	normalized, err := normalizeSandboxPolicy(policy)
 	if err != nil {
 		return AgentInfo{}, err
 	}
-	normalizedPolicy, err := normalizeSandboxPolicy(policy)
-	if err != nil {
-		return AgentInfo{}, err
-	}
-	existing.Agent.EnabledBuiltinTools = cloneStringsPreserveNil(normalizedTools)
-	existing.Agent.Sandbox = normalizedPolicy
-	existing.Agent.UpdatedAt = time.Now().UTC()
-	if err := s.store.Update(ctx, existing.Agent); err != nil {
-		return AgentInfo{}, err
-	}
-	return s.Get(ctx, existing.Agent.ID)
+	return s.mutateProfile(ctx, id, func(a *Agent) error {
+		a.EnabledBuiltinTools = append([]string{}, tools...)
+		a.Sandbox = normalized
+		return nil
+	})
 }
 
 // Delete 通过持久化状态机删除完整 Agent Aggregate。
 //
-// Agent 内部目录（Profile、Session sidecar、Memory 等）属于 Humbert 自有数据；删除 Agent
+// Agent 内部目录（Profile、Session sidecar等）属于 Humbert 自有数据；删除 Agent
 // 时一并删除。Managed Workspace 同样属于 Humbert 管理范围，会同步清理。Custom Workspace
 // 是用户自己的外部目录，只解除引用，绝不会递归删除。任一步失败都会保留 deleting 标记，
 // 后续重试或应用重启可以继续完成清理。
@@ -1109,48 +1066,13 @@ func cloneStringsPreserveNil(values []string) []string {
 	return append([]string{}, values...)
 }
 
-// SetMCPToolsForAgent 显式替换一个 Agent 的 MCP Tool Selection。
-//
-// 这是未来“连接器”设置页唯一写入口；普通 Agent 基础设置 Update 在没有提交该字段时会
-// 保留当前选择，避免旧 UI 或其它领域操作意外清空 MCP 能力。
-func (s *Service) SetMCPToolsForAgent(
-	ctx context.Context,
-	agentID string,
-	values []humbertmcp.ToolSelection,
-) (AgentInfo, error) {
-	if ctx == nil {
-		return AgentInfo{}, errors.New("保存 Agent MCP Tool 配置失败: context.Context 不能为空")
-	}
-	if err := ctx.Err(); err != nil {
-		return AgentInfo{}, fmt.Errorf("保存 Agent MCP Tool 配置被取消: %w", err)
-	}
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		return AgentInfo{}, errors.New("保存 Agent MCP Tool 配置失败: AgentID 不能为空")
-	}
-
+// SetMCPToolsForAgent 原子替换 MCP 选择，不覆盖其他能力配置。
+func (s *Service) SetMCPToolsForAgent(ctx context.Context, id string, values []humbertmcp.ToolSelection) (AgentInfo, error) {
 	normalized, err := s.normalizeEnabledMCPTools(ctx, values)
 	if err != nil {
 		return AgentInfo{}, err
 	}
-	existing, err := s.store.Get(ctx, agentID)
-	if err != nil {
-		return AgentInfo{}, fmt.Errorf("读取 Agent Profile 失败: %w", err)
-	}
-	existing.Agent.EnabledMCPTools = cloneMCPSelections(normalized)
-	existing.Agent.UpdatedAt = time.Now().UTC()
-	if err := s.store.Update(ctx, existing.Agent); err != nil {
-		return AgentInfo{}, fmt.Errorf("保存 Agent MCP Tool 配置失败: %w", err)
-	}
-
-	s.logger.Info(
-		ctx,
-		"Agent MCP Tool 配置已更新",
-		"operation", "agent.mcp_tools.update",
-		"agent_id", agentID,
-		"server_selection_count", len(normalized),
-	)
-	return s.Get(ctx, agentID)
+	return s.mutateProfile(ctx, id, func(a *Agent) error { a.EnabledMCPTools = cloneMCPSelections(normalized); return nil })
 }
 
 // CountAgentsUsingMCPServer 返回引用指定 MCP Server 的 Agent 数量。
@@ -1176,143 +1098,44 @@ func (s *Service) CountAgentsUsingMCPServer(ctx context.Context, serverID string
 	return count, nil
 }
 
-// EnableSkillForAgent 把一个已经安装且有效的 Skill 加入指定 Agent Profile。
-//
-// 该方法主要服务 install_skill Tool 的“安装后从下一 Turn 启用”语义。它不会改变当前正在
-// 执行的 Runtime Snapshot：当前 Turn 的 SkillSet 已经冻结，只有下一次 ResolveTurn 才会读取
-// 更新后的 enabled_skills。这样既避免运行中能力漂移，也让用户通过对话安装 Skill 后无需再
-// 打开设置页手工勾选。
-//
-// 为避免出现重复名称，现有 EnabledSkills 与新名称一起重新经过 Skill Catalog 规范化与校验。
-func (s *Service) EnableSkillForAgent(
-	ctx context.Context,
-	agentID string,
-	skillName string,
-) (AgentInfo, error) {
-	if ctx == nil {
-		return AgentInfo{}, errors.New("启用 Agent Skill 失败: context.Context 不能为空")
-	}
-	if err := ctx.Err(); err != nil {
-		return AgentInfo{}, fmt.Errorf("启用 Agent Skill 被取消: %w", err)
-	}
-	agentID = strings.TrimSpace(agentID)
-	skillName = strings.TrimSpace(skillName)
-	if agentID == "" || skillName == "" {
-		return AgentInfo{}, errors.New("启用 Agent Skill 失败: AgentID/SkillName 不能为空")
-	}
-
-	existing, err := s.Get(ctx, agentID)
+// EnableSkillForAgent 在锁内合并选择，两个同时安装的 Skill 不会互相覆盖。
+func (s *Service) EnableSkillForAgent(ctx context.Context, id, name string) (AgentInfo, error) {
+	normalized, err := s.normalizeEnabledSkills(ctx, []string{name})
 	if err != nil {
-		return AgentInfo{}, fmt.Errorf("读取 Agent Profile 失败: %w", err)
+		return AgentInfo{}, err
 	}
-	for _, enabled := range existing.Agent.EnabledSkills {
-		if enabled == skillName {
-			return existing, nil
-		}
+	if len(normalized) != 1 {
+		return AgentInfo{}, errors.New("Skill 名称不能为空")
 	}
-
-	next := append([]string(nil), existing.Agent.EnabledSkills...)
-	next = append(next, skillName)
-	updated, err := s.SetSkills(ctx, agentID, next)
-	if err != nil {
-		return AgentInfo{}, fmt.Errorf("保存 Agent Skill 配置失败: %w", err)
-	}
-
-	s.logger.Info(
-		ctx,
-		"Agent Skill 已启用",
-		"operation", "agent.skill.enable",
-		"agent_id", agentID,
-		"skill_name", skillName,
-	)
-	return updated, nil
-}
-
-// DisableSkillForAgent 从指定 Agent Profile 中移除一个 Skill 引用。
-//
-// 与 Enable 不同，Disable 不要求目标 Skill 当前仍然存在或有效：用户可能正是在修复一个
-// 已被手工删除/破坏的 stale enabled_skills 引用。移除能力本身是单调收紧操作，因此这里
-// 直接更新 Profile，不让其它遗留坏引用阻塞本次修复；后续普通 Agent Update 仍会对完整
-// enabled_skills 做严格 Catalog 校验。
-//
-// 当前正在执行的 Runtime Snapshot 已经冻结，因此该修改仍只影响下一 Turn。
-func (s *Service) DisableSkillForAgent(
-	ctx context.Context,
-	agentID string,
-	skillName string,
-) (AgentInfo, error) {
-	if ctx == nil {
-		return AgentInfo{}, errors.New("禁用 Agent Skill 失败: context.Context 不能为空")
-	}
-	if err := ctx.Err(); err != nil {
-		return AgentInfo{}, fmt.Errorf("禁用 Agent Skill 被取消: %w", err)
-	}
-	agentID = strings.TrimSpace(agentID)
-	skillName = strings.TrimSpace(skillName)
-	if agentID == "" || skillName == "" {
-		return AgentInfo{}, errors.New("禁用 Agent Skill 失败: AgentID/SkillName 不能为空")
-	}
-
-	existing, err := s.store.Get(ctx, agentID)
-	if err != nil {
-		return AgentInfo{}, fmt.Errorf("读取 Agent Profile 失败: %w", err)
-	}
-
-	next := make([]string, 0, len(existing.Agent.EnabledSkills))
-	removed := false
-	for _, enabled := range existing.Agent.EnabledSkills {
-		if strings.TrimSpace(enabled) == skillName {
-			removed = true
-			continue
-		}
-		next = append(next, enabled)
-	}
-	if !removed {
-		return s.Get(ctx, agentID)
-	}
-
-	existing.Agent.EnabledSkills = next
-	existing.Agent.UpdatedAt = time.Now().UTC()
-	if err := s.store.Update(ctx, existing.Agent); err != nil {
-		return AgentInfo{}, fmt.Errorf("保存 Agent Skill 配置失败: %w", err)
-	}
-
-	s.logger.Info(
-		ctx,
-		"Agent Skill 已禁用",
-		"operation", "agent.skill.disable",
-		"agent_id", agentID,
-		"skill_name", skillName,
-	)
-	return s.Get(ctx, agentID)
-}
-
-// AgentsUsingSkill 返回当前引用指定 Skill 的 Agent。
-//
-// SkillService 在删除安装包前使用该方法做引用保护。它只扫描 Agent Profile，不修改任何
-// Profile；用户必须先从相关 Agent 中取消 Skill，再显式删除安装包。
-func (s *Service) AgentsUsingSkill(
-	ctx context.Context,
-	skillName string,
-) ([]AgentInfo, error) {
-	skillName = strings.TrimSpace(skillName)
-	if skillName == "" {
-		return nil, errors.New("Skill 名称不能为空")
-	}
-	values, err := s.List(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("读取 Agent Skill 引用失败: %w", err)
-	}
-	result := make([]AgentInfo, 0)
-	for _, value := range values {
-		for _, enabled := range value.Agent.EnabledSkills {
-			if enabled == skillName {
-				result = append(result, value)
-				break
+	name = normalized[0]
+	return s.mutateProfile(ctx, id, func(a *Agent) error {
+		for _, enabled := range a.EnabledSkills {
+			if enabled == name {
+				return nil
 			}
 		}
+		a.EnabledSkills = append(a.EnabledSkills, name)
+		sort.Strings(a.EnabledSkills)
+		return nil
+	})
+}
+
+// DisableSkillForAgent 不要求资源仍存在，允许移除已删除的 Skill 引用。
+func (s *Service) DisableSkillForAgent(ctx context.Context, id, name string) (AgentInfo, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return AgentInfo{}, errors.New("Skill 名称不能为空")
 	}
-	return result, nil
+	return s.mutateProfile(ctx, id, func(a *Agent) error {
+		next := make([]string, 0, len(a.EnabledSkills))
+		for _, enabled := range a.EnabledSkills {
+			if enabled != name {
+				next = append(next, enabled)
+			}
+		}
+		a.EnabledSkills = next
+		return nil
+	})
 }
 
 // ensureModelUsable 校验 Agent 默认 Model。
@@ -1322,11 +1145,9 @@ func (s *Service) AgentsUsingSkill(
 func (s *Service) normalizeAndValidateModelRoles(ctx context.Context, roles ModelRoles) (ModelRoles, error) {
 	roles = ModelRoles{
 		UtilityModelID: strings.TrimSpace(roles.UtilityModelID),
-		MemoryModelID:  strings.TrimSpace(roles.MemoryModelID),
 	}
 	for label, modelID := range map[string]string{
 		"Utility": roles.UtilityModelID,
-		"Memory":  roles.MemoryModelID,
 	} {
 		if modelID == "" {
 			continue
@@ -1411,4 +1232,28 @@ func (s *Service) rollbackCreatedAgent(
 		return err
 	}
 	return s.resumeDeletion(ctx, state)
+}
+
+func (s *Service) AgentsUsingSkill(
+	ctx context.Context,
+	skillName string,
+) ([]AgentInfo, error) {
+	skillName = strings.TrimSpace(skillName)
+	if skillName == "" {
+		return nil, errors.New("Skill 名称不能为空")
+	}
+	values, err := s.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("读取 Agent Skill 引用失败: %w", err)
+	}
+	result := make([]AgentInfo, 0)
+	for _, value := range values {
+		for _, enabled := range value.Agent.EnabledSkills {
+			if enabled == skillName {
+				result = append(result, value)
+				break
+			}
+		}
+	}
+	return result, nil
 }

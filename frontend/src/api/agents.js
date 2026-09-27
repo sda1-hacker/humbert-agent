@@ -117,7 +117,7 @@ export function setAgentModel(id, modelID) {
 }
 
 /**
- * 只更新 Utility / Memory Model Roles。
+ * 只更新 Utility Model Roles。
  */
 export function setAgentModelRoles(id, roles) {
     return Call.ByName(
@@ -125,7 +125,6 @@ export function setAgentModelRoles(id, roles) {
         id,
         {
             utilityModelID: roles?.utilityModelID ?? "",
-            memoryModelID: roles?.memoryModelID ?? "",
         },
     );
 }

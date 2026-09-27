@@ -88,9 +88,7 @@ func normalizeDocument(doc *storeDocument) error {
 	if doc.Records == nil {
 		doc.Records = []Record{}
 	}
-	if len(doc.Records) > maxStoredRecords {
-		doc.Records = append([]Record(nil), doc.Records[len(doc.Records)-maxStoredRecords:]...)
-	}
+	doc.Records = retainRecords(doc.Records)
 	if doc.Workspaces == nil {
 		doc.Workspaces = map[string]WorkspaceSnapshot{}
 	}
@@ -158,6 +156,44 @@ func (s *Store) RemovePendingEvent(ctx context.Context, key string) error {
 		return s.persistLocked(ctx, next)
 	}
 	return nil
+}
+
+// DismissApproval 在同一次落盘中移除待处理提醒并终结延迟记录。
+// 已发出的通知或已开始的动作保留原记录，不能被改写成“从未执行”。
+func (s *Store) DismissApproval(ctx context.Context, approvalID string) ([]Record, error) {
+	approvalID = strings.TrimSpace(approvalID)
+	if approvalID == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next := s.doc
+	next.PendingEvents = make([]Event, 0, len(s.doc.PendingEvents))
+	next.Records = append([]Record(nil), s.doc.Records...)
+	changed := make([]Record, 0)
+	now := time.Now().UTC()
+	for _, event := range s.doc.PendingEvents {
+		if isApprovalReminder(event) && event.ApprovalID == approvalID {
+			continue
+		}
+		next.PendingEvents = append(next.PendingEvents, event)
+	}
+	for i := range next.Records {
+		record := &next.Records[i]
+		if record.Status != RecordDeferred || !isApprovalReminder(record.Event) || record.Event.ApprovalID != approvalID {
+			continue
+		}
+		record.Status, record.UpdatedAt, record.HandledAt = RecordIgnored, now, &now
+		record.Decision = Decision{Action: ActionIgnore, Reason: "审批已结束，提醒已失效"}
+		changed = append(changed, *record)
+	}
+	if len(changed) == 0 && len(next.PendingEvents) == len(s.doc.PendingEvents) {
+		return nil, nil
+	}
+	if err := s.persistLocked(ctx, next); err != nil {
+		return nil, err
+	}
+	return changed, nil
 }
 
 func NormalizeSettings(value Settings) (Settings, error) {
@@ -268,13 +304,19 @@ func (s *Store) FindByAutomationRunID(runID string) (Record, bool) {
 func (s *Store) LastHandledKind(kind EventKind) (Record, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for index := len(s.doc.Records) - 1; index >= 0; index-- {
-		value := s.doc.Records[index]
-		if value.Event.Kind == kind && value.Status != RecordIgnored {
-			return value, true
+	// 冷却时间从实际执行开始计算，延迟记录不能把自己或同批待处理事件挡住。
+	// 延迟事件的执行顺序可能与创建顺序不同，因此按更新时间找最近一次动作。
+	var latest Record
+	var found bool
+	for _, value := range s.doc.Records {
+		if value.Event.Kind != kind || value.Status == RecordIgnored || value.Status == RecordDeferred {
+			continue
+		}
+		if !found || value.UpdatedAt.After(latest.UpdatedAt) {
+			latest, found = value, true
 		}
 	}
-	return Record{}, false
+	return latest, found
 }
 
 func (s *Store) PutRecord(ctx context.Context, value Record) error {
@@ -282,21 +324,37 @@ func (s *Store) PutRecord(ctx context.Context, value Record) error {
 	defer s.mu.Unlock()
 	next := s.doc
 	next.Records = append([]Record(nil), s.doc.Records...)
-	updated := false
 	for index := range next.Records {
 		if next.Records[index].ID == value.ID {
-			next.Records[index] = value
-			updated = true
+			// 更新也移到尾部：刚完成的长任务应作为最新历史保留，不能立即被淘汰。
+			next.Records = append(next.Records[:index], next.Records[index+1:]...)
 			break
 		}
 	}
-	if !updated {
-		next.Records = append(next.Records, value)
-	}
-	if len(next.Records) > maxStoredRecords {
-		next.Records = append([]Record(nil), next.Records[len(next.Records)-maxStoredRecords:]...)
-	}
+	next.Records = append(next.Records, value)
 	return s.persistLocked(ctx, next)
+}
+
+// 记录上限只限制已完成历史。延期动作和执行/收尾中的动作是待办，不能因历史增长丢失。
+// 倒序选择最新历史，再恢复原顺序；不修改传入切片，避免写盘失败污染内存快照。
+func retainRecords(records []Record) []Record {
+	kept := make([]Record, 0, len(records))
+	finished := 0
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		switch record.Status {
+		case RecordIgnored, RecordSucceeded, RecordFailed:
+			if finished >= maxStoredRecords {
+				continue
+			}
+			finished++
+		}
+		kept = append(kept, record)
+	}
+	for i, j := 0, len(kept)-1; i < j; i, j = i+1, j-1 {
+		kept[i], kept[j] = kept[j], kept[i]
+	}
+	return kept
 }
 
 func (s *Store) DeferredRecords() []Record {
@@ -357,6 +415,8 @@ func (s *Store) LastHeartbeat() *time.Time {
 // persistLocked 在磁盘写入成功后才提交内存状态，调用方须持有写锁。
 func (s *Store) persistLocked(ctx context.Context, next storeDocument) error {
 	next.SchemaVersion = storeSchemaVersion
+	// 所有写入共用保留规则，包括审批结束时批量终结延期记录的路径。
+	next.Records = retainRecords(next.Records)
 	if err := atomicfile.WriteJSON(ctx, s.path, 0o600, next); err != nil {
 		return err
 	}

@@ -340,7 +340,7 @@ export function toolActionLabel(
             const path =
                 readStringProperty(
                     argumentsObject,
-                    "path",
+                    "file_path",
                 );
 
             if (path) {
@@ -354,7 +354,7 @@ export function toolActionLabel(
             const path =
                 readStringProperty(
                     argumentsObject,
-                    "path",
+                    "file_path",
                 );
 
             if (path) {
@@ -368,7 +368,7 @@ export function toolActionLabel(
             const path =
                 readStringProperty(
                     argumentsObject,
-                    "path",
+                    "file_path",
                 );
 
             if (path) {
@@ -378,7 +378,7 @@ export function toolActionLabel(
             return t("编辑文件");
         }
 
-        case "glob": {
+        case "glob_files": {
             const pattern =
                 readStringProperty(
                     argumentsObject,
@@ -392,11 +392,11 @@ export function toolActionLabel(
             return t("查找文件");
         }
 
-        case "grep": {
+        case "grep_files": {
             const query =
                 readStringProperty(
                     argumentsObject,
-                    "query",
+                    "pattern",
                 );
 
             if (query) {

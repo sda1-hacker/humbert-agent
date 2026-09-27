@@ -4,16 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/sda1-hacker/humbert-agent/frontend"
-	"github.com/sda1-hacker/humbert-agent/internal/services"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/sda1-hacker/humbert-agent/frontend"
 	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/credential"
 	"github.com/sda1-hacker/humbert-agent/internal/databackup"
+	"github.com/sda1-hacker/humbert-agent/internal/instancelock"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	"github.com/sda1-hacker/humbert-agent/internal/services"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -28,42 +29,57 @@ import (
 //
 
 func main() {
-	if home, err := os.UserHomeDir(); err == nil {
-		root := filepath.Join(home, ".humbert-agent")
-		vault := credential.BackupVault{}
-		rollback, restoreErr := databackup.ApplyPendingRestore(context.Background(), root, databackup.RestoreOptions{
-			Vault: vault,
-			ImportCredentials: func(ctx context.Context, restoredRoot string, values map[string]string) error {
-				store, err := credential.NewSystem(filepath.Join(restoredRoot, "secrets"))
-				if err != nil {
-					return err
-				}
-				return store.ImportAll(ctx, values)
-			},
-		})
-		if restoreErr != nil {
-			fmt.Fprintln(os.Stderr, "Humbert 数据恢复失败:", restoreErr)
-			os.Exit(1)
-		}
-		if rollback != "" {
-			fmt.Fprintln(os.Stderr, "Humbert 数据已恢复，原数据位于:", rollback)
-		}
-		backupPath, backupErr := databackup.ApplyPendingBackup(context.Background(), root, vault, func(ctx context.Context) (map[string]string, error) {
-			store, err := credential.NewSystem(filepath.Join(root, "secrets"))
+	// os.Exit 不执行 defer；把资源生命周期放在 run 中，退出前完成关闭和解锁。
+	os.Exit(run())
+}
+
+func run() int {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "读取用户目录失败:", err)
+		return 1
+	}
+	root := filepath.Join(home, ".humbert-agent")
+	// 必须早于备份/恢复和 Bootstrap，避免第二个实例改写仍在使用的数据。
+	lock, err := instancelock.Acquire(root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	defer lock.Close()
+	vault := credential.BackupVault{}
+	rollback, restoreErr := databackup.ApplyPendingRestore(context.Background(), root, databackup.RestoreOptions{
+		Vault: vault,
+		ImportCredentials: func(ctx context.Context, restoredRoot string, values map[string]string) error {
+			store, err := credential.NewSystem(filepath.Join(restoredRoot, "secrets"))
 			if err != nil {
-				return nil, err
+				return err
 			}
-			return store.ExportAll(ctx)
-		})
-		if backupErr != nil {
-			fmt.Fprintln(os.Stderr, "Humbert 数据备份失败，将在下次启动重试:", backupErr)
-			if err := databackup.RecordBackupFailure(context.Background(), root, backupErr); err != nil {
-				fmt.Fprintln(os.Stderr, "记录备份失败原因失败:", err)
-			}
+			return store.ImportAll(ctx, values)
+		},
+	})
+	if restoreErr != nil {
+		fmt.Fprintln(os.Stderr, "Humbert 数据恢复失败:", restoreErr)
+		return 1
+	}
+	if rollback != "" {
+		fmt.Fprintln(os.Stderr, "Humbert 数据已恢复，原数据位于:", rollback)
+	}
+	backupPath, backupErr := databackup.ApplyPendingBackup(context.Background(), root, vault, func(ctx context.Context) (map[string]string, error) {
+		store, err := credential.NewSystem(filepath.Join(root, "secrets"))
+		if err != nil {
+			return nil, err
 		}
-		if backupPath != "" {
-			fmt.Fprintln(os.Stderr, "Humbert 加密备份已保存:", backupPath)
+		return store.ExportAll(ctx)
+	})
+	if backupErr != nil {
+		fmt.Fprintln(os.Stderr, "Humbert 数据备份失败，将在下次启动重试:", backupErr)
+		if err := databackup.RecordBackupFailure(context.Background(), root, backupErr); err != nil {
+			fmt.Fprintln(os.Stderr, "记录备份失败原因失败:", err)
 		}
+	}
+	if backupPath != "" {
+		fmt.Fprintln(os.Stderr, "Humbert 加密备份已保存:", backupPath)
 	}
 	bootstrapLogger :=
 		logging.NewBootstrap()
@@ -80,7 +96,7 @@ func main() {
 			err,
 		)
 
-		os.Exit(1)
+		return 1
 	}
 
 	exitCode := 0
@@ -117,9 +133,7 @@ func main() {
 
 	cancel()
 
-	if exitCode != 0 {
-		os.Exit(exitCode)
-	}
+	return exitCode
 }
 
 // runDesktop 创建并运行 Wails 桌面 Adapter。

@@ -4,14 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --test src/utils/*.test.js",
+    "test": "node --experimental-test-module-mocks --test src/utils/*.test.js",
     "dev": "vite",
     "build:dev": "vite build --minify false --mode development && node scripts/ensure-embed.mjs",
     "build": "vite build --mode production && node scripts/ensure-embed.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@wailsio/runtime": "latest",
+    "@wailsio/runtime": "3.0.0-beta.16",
     "pinia": "^4.0.3",
     "vue": "^3.2.45"
   },

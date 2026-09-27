@@ -2,14 +2,13 @@ package builtin
 
 import (
 	"errors"
-	"fmt"
 )
 
 // FileLimits 描述 Builtin File Tool 的资源限制。
 //
 // 这个结构本身不读取配置。
 //
-// 下一步 Application Wiring 时会由：
+// Application 启动时由以下链路注入：
 //
 //	Viper Config
 //	    ↓
@@ -26,12 +25,6 @@ type FileLimits struct {
 	// 超过后直接拒绝，不尝试把大型日志或数据库文件塞进 LLM Context。
 	MaxReadableFileBytes int64
 
-	// MaxReadOutputBytes 是一次 read_file 最多返回给模型的文本字节数。
-	MaxReadOutputBytes int
-
-	// DefaultReadLines 是没有指定 line_count 时的默认行数。
-	DefaultReadLines int
-
 	// MaxReadLines 是一次 read_file 最多返回的行数。
 	MaxReadLines int
 
@@ -47,31 +40,9 @@ func (c FileLimits) Validate() error {
 		)
 	}
 
-	if c.MaxReadOutputBytes <= 0 {
-		return errors.New(
-			"MaxReadOutputBytes 必须大于 0",
-		)
-	}
-
-	if c.DefaultReadLines <= 0 {
-		return errors.New(
-			"DefaultReadLines 必须大于 0",
-		)
-	}
-
 	if c.MaxReadLines <= 0 {
 		return errors.New(
 			"MaxReadLines 必须大于 0",
-		)
-	}
-
-	if c.DefaultReadLines >
-		c.MaxReadLines {
-
-		return fmt.Errorf(
-			"DefaultReadLines(%d) 不能大于 MaxReadLines(%d)",
-			c.DefaultReadLines,
-			c.MaxReadLines,
 		)
 	}
 

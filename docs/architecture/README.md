@@ -1,25 +1,32 @@
 # Humbert 架构手册
 
+本次 Eino 集成及模块合并见[实现说明](eino-integration.md)。希望了解每个功能具体如何实现、调用哪些代码，请读[项目实现详解与源码导航](implementation-walkthrough.md)（25 个主题，含函数定位、数据流、存储和测试入口）。
+
+最近的执行边界、进程锁、审批、主动助手和前端状态修复见[第五轮修复说明](code-review-fifth-fixes-2026-09-27.md)。
+
+Agent 会话选择与审批保存失败跨过截止时间的修复见[第六轮修复说明](code-review-sixth-fixes-2026-09-27.md)，包含实现入口和回归测试范围。
+
 这是一套按源码包编排的中文阅读手册。每章都放在对应目录的 `README.md`，包含职责、实现链路、Mermaid 图和关键代码入口。建议先读[代码阅读指南](code-reading-guide.md)，再沿下表逐章深入；[领域边界](domain-boundaries.md)记录持久化、并发和恢复约束。
 
 ```mermaid
 flowchart TD
+  APP[app.Bootstrap：启动时装配依赖] --> RT[runtime]
   UI[Vue / Wails] --> SV[services]
-  SV --> APP[app.Bootstrap]
-  APP --> RT[runtime]
+  SV --> RT
   RT --> CX[contextengine]
   CX --> TR[transcript / sessions]
   RT --> TL[tools / skills / mcp]
   TL --> SEC[permission / approval / sandbox]
   APP --> TASK[tasks / proactive]
-  TR --> DATA[JSONL / JSON / SQLite 派生索引]
+  TR --> DATA[JSONL 消息 / SQLite 会话元数据]
+  TR --> INDEX[可重建位置索引与搜索索引]
 ```
 
 ## 推荐学习路线
 
 1. **建立入口**：[桌面启动](../../cmd/desktop/README.md) → [依赖组装](../../internal/app/README.md) → [Wails 服务](../../internal/services/README.md) → [前端](../../frontend/src/README.md)。
 2. **走通一轮聊天**：[Agent](../../internal/agents/README.md) → [Session](../../internal/sessions/README.md) → [Runtime](../../internal/runtime/README.md) → [Transcript](../../internal/transcript/README.md)。
-3. **理解模型输入**：[Context 与压缩](../../internal/contextengine/README.md) → [Session Memory](../../internal/memory/README.md) → [个人记忆](../../internal/preferences/README.md) → [多模态](../../internal/multimodal/README.md)。
+3. **理解模型输入**：[Context 与压缩](../../internal/contextengine/README.md) → [个人记忆](../../internal/preferences/README.md) → [多模态](../../internal/multimodal/README.md)。
 4. **理解动作边界**：[工具框架](../../internal/tools/README.md) → [内置工具](../../internal/tools/builtin/README.md) → [权限](../../internal/permission/README.md) → [审批](../../internal/approval/README.md) → [沙箱](../../internal/sandbox/README.md)。
 5. **理解扩展和后台工作**：[Skills](../../internal/skills/README.md) → [MCP](../../internal/mcp/README.md) → [Tasks](../../internal/tasks/README.md) → [Proactive](../../internal/proactive/README.md)。
 
@@ -48,7 +55,6 @@ flowchart TD
 | [Transcript](../../internal/transcript/README.md) | JSONL 消息树、分页、长会话位置索引。 |
 | [Runtime](../../internal/runtime/README.md) | Turn 生命周期、Eino、取消与恢复。 |
 | [ContextEngine](../../internal/contextengine/README.md) | Token 预算、消息投影、压缩与检查点。 |
-| [Memory](../../internal/memory/README.md) | 自动会话记忆、Cursor 与分支校验。 |
 | [Preferences](../../internal/preferences/README.md) | 用户资料、确认后保存的跨会话记忆。 |
 | [Multimodal](../../internal/multimodal/README.md) | 图片回放与视觉辅助模型。 |
 | [DocumentText](../../internal/documenttext/README.md) | PDF/Office 转 Markdown。 |
@@ -58,7 +64,7 @@ flowchart TD
 
 | 章节 | 解决的问题 |
 | --- | --- |
-| [Tools](../../internal/tools/README.md) | Registry、Scope、Guard、结果预算。 |
+| [Tools](../../internal/tools/README.md) | Registry、Scope、Guard、Eino Reduction。 |
 | [Builtins](../../internal/tools/builtin/README.md) | 文件、命令、网页、文档和历史工具。 |
 | [Skills](../../internal/skills/README.md) | SKILL.md 安装、验证、冻结与按需读取。 |
 | [MCP](../../internal/mcp/README.md) | Server 配置、发现缓存、工具选择。 |
@@ -86,6 +92,6 @@ flowchart TD
 ## 读源码时的共同规则
 
 - 先找到调用入口，再顺着实际方法走；Mermaid 图标出边界，不能替代代码中的错误与取消路径。
-- `session.jsonl` 是消息事实；`agents/session-metadata.sqlite` 是会话控制面的事实来源；`memory.json`、位置索引和 `cache/` 中的 SQLite 搜索库是派生数据。实时 EventBus 也不是持久化来源。
+- `session.jsonl` 是消息事实；`agents/session-metadata.sqlite` 是会话控制面的事实来源；位置索引和 `cache/` 中的 SQLite 搜索库是派生数据。实时 EventBus 也不是持久化来源。
 - 排查一次聊天以 `SessionID`、`RequestID`、`RunID` 关联；排查任务再加 `TaskID`，排查工具再加 `ToolCallID`。
 - 修改磁盘格式、授权或并发时，同时阅读对应章节的恢复与安全边界，并运行相关包测试和 `go test ./...`。

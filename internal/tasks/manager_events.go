@@ -8,13 +8,17 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
-	"github.com/sda1-hacker/humbert-agent/internal/notifications"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 )
 
 func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 	event, ok := payload.(agentruntime.Event)
 	if !ok || strings.TrimSpace(event.SessionID) == "" {
+		return
+	}
+	// 文本 delta 不改变 TaskRun，避免每个字符都读磁盘状态。
+	switch event.Type {
+	case agentruntime.EventAssistantDelta, agentruntime.EventAssistantReasoningDelta:
 		return
 	}
 	m.mu.Lock()
@@ -29,52 +33,62 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 			m.logger.Warn(context.Background(), "任务事件持久化较慢", "operation", "tasks.event.slow_persist", "event_type", string(event.Type), "run_id", runID, "duration_ms", elapsed.Milliseconds())
 		}
 	}()
-	run, err := m.store.GetRun(context.Background(), runID)
-	if err != nil || run.Status.Terminal() {
-		return
+	preview := ""
+	if event.Type == agentruntime.EventTurnCompleted {
+		preview = m.resultPreview(event.SessionID, event.MessageID)
 	}
-
 	now := time.Now().UTC()
-	switch event.Type {
-	case agentruntime.EventTurnStarted:
-		run.Status = RunRunning
-	case agentruntime.EventToolStarted:
-		run.ToolCalls++
-	case agentruntime.EventModelStarted:
-		run.ModelCalls++
-	case agentruntime.EventModelUsage:
-		run.InputTokens += event.InputTokens
-		run.OutputTokens += event.OutputTokens
-		run.TotalTokens += event.TotalTokens
-	case agentruntime.EventApprovalRequested:
-		run.Status = RunWaitingApproval
-		if event.Approval != nil {
-			run.Approval = &ApprovalSnapshot{ID: event.Approval.ID, ToolName: event.Approval.ToolName, Risk: string(event.Approval.Risk), Presentation: event.Approval.Presentation, CreatedAt: event.Approval.CreatedAt, ExpiresAt: event.Approval.ExpiresAt}
+	changed := false
+	run, err := m.store.MutateRun(context.Background(), runID, func(run *Run) error {
+		if run.Status.Terminal() {
+			return nil
 		}
-	case agentruntime.EventApprovalResolved, agentruntime.EventApprovalExpired:
-		run.Status, run.Approval = RunRunning, nil
-	case agentruntime.EventTurnCompleted:
-		run.Status, run.ResultMessageID, run.FinishedAt, run.Approval = RunSucceeded, event.MessageID, &now, nil
-		run.ResultPreview = m.resultPreview(event.SessionID, event.MessageID)
-	case agentruntime.EventTurnFailed:
-		if run.DeadlineAt != nil && !now.Before(*run.DeadlineAt) {
-			run.Status = RunTimedOut
-		} else {
-			run.Status = RunFailed
+		switch event.Type {
+		case agentruntime.EventTurnStarted:
+			run.Status = RunRunning
+		case agentruntime.EventToolStarted:
+			run.ToolCalls++
+		case agentruntime.EventModelStarted:
+			run.ModelCalls++
+		case agentruntime.EventModelUsage:
+			run.InputTokens += event.InputTokens
+			run.OutputTokens += event.OutputTokens
+			run.TotalTokens += event.TotalTokens
+		case agentruntime.EventApprovalRequested:
+			run.Status = RunWaitingApproval
+			if event.Approval != nil {
+				run.Approval = &ApprovalSnapshot{ID: event.Approval.ID, ToolName: event.Approval.ToolName, Risk: string(event.Approval.Risk), Presentation: event.Approval.Presentation, CreatedAt: event.Approval.CreatedAt, ExpiresAt: event.Approval.ExpiresAt}
+			}
+		case agentruntime.EventApprovalResolved, agentruntime.EventApprovalExpired:
+			run.Status, run.Approval = RunRunning, nil
+		case agentruntime.EventTurnCompleted:
+			run.Status, run.ResultMessageID, run.FinishedAt, run.Approval = RunSucceeded, event.MessageID, &now, nil
+			run.ResultPreview = preview
+		case agentruntime.EventTurnFailed:
+			if run.DeadlineAt != nil && !now.Before(*run.DeadlineAt) {
+				run.Status = RunTimedOut
+			} else {
+				run.Status = RunFailed
+			}
+			run.Error, run.ResultMessageID, run.FinishedAt, run.Approval = event.Error, event.MessageID, &now, nil
+		case agentruntime.EventTurnCancelled:
+			if run.DeadlineAt != nil && !now.Before(*run.DeadlineAt) {
+				run.Status = RunTimedOut
+			} else {
+				run.Status = RunCancelled
+			}
+			run.Error, run.ResultMessageID, run.FinishedAt, run.Approval = event.Error, event.MessageID, &now, nil
+		default:
+			return nil
 		}
-		run.Error, run.ResultMessageID, run.FinishedAt, run.Approval = event.Error, event.MessageID, &now, nil
-	case agentruntime.EventTurnCancelled:
-		if run.DeadlineAt != nil && !now.Before(*run.DeadlineAt) {
-			run.Status = RunTimedOut
-		} else {
-			run.Status = RunCancelled
-		}
-		run.Error, run.ResultMessageID, run.FinishedAt, run.Approval = event.Error, event.MessageID, &now, nil
-	default:
+		changed = true
+		return nil
+	})
+	if err != nil {
+		m.logger.Error(context.Background(), "更新 TaskRun 事件状态失败", "run_id", runID, "error", err)
 		return
 	}
-	if err := m.store.UpdateRun(context.Background(), run); err != nil {
-		m.logger.Error(context.Background(), "更新 TaskRun 事件状态失败", "run_id", run.ID, "error", err)
+	if !changed {
 		return
 	}
 	var taskSnapshot *Task
@@ -83,45 +97,11 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 	}
 	m.publish(Event{Type: "run." + string(run.Status), TaskID: run.TaskID, RunID: run.ID, Task: taskSnapshot, Run: &run})
 	if run.Status.Terminal() {
-		if taskSnapshot != nil {
-			m.notifyChatTaskResult(*taskSnapshot, run)
-		}
 		m.releaseActive(run)
 		m.maybeRetry(run)
 		go m.runCycle()
 	}
 	_ = ctx
-}
-
-func (m *Manager) notifyChatTaskResult(task Task, run Run) {
-	if task.Origin != "chat" || task.OriginRef == "" || task.EffectiveExecution() != ExecutionAgent {
-		return
-	}
-	if run.Status != RunSucceeded && run.Status != RunFailed && run.Status != RunTimedOut && run.Status != RunInterrupted {
-		return
-	}
-	m.mu.Lock()
-	notifier := m.notifications
-	m.mu.Unlock()
-	if notifier == nil {
-		return
-	}
-	level, title, body := notifications.LevelSuccess, "任务已完成："+task.Name, strings.TrimSpace(run.ResultPreview)
-	if run.Status != RunSucceeded {
-		level, title, body = notifications.LevelError, "任务未完成："+task.Name, strings.TrimSpace(run.Error)
-	}
-	if body == "" {
-		body = "请打开主动任务查看运行记录。"
-	}
-	if len([]rune(body)) > 300 {
-		body = string([]rune(body)[:300]) + "…"
-	}
-	if err := notifier.Send(context.Background(), notifications.Notification{
-		Level: level, Title: title, Body: body,
-		AgentID: task.AgentID, SessionID: task.OriginRef, TaskID: task.ID, RunID: run.ID,
-	}); err != nil {
-		m.logger.Warn(context.Background(), "发送对话任务结果通知失败", "task_id", task.ID, "run_id", run.ID, "error", err)
-	}
 }
 
 func (m *Manager) resultPreview(sessionID, messageID string) string {
@@ -148,17 +128,29 @@ func (m *Manager) resultPreview(sessionID, messageID string) string {
 
 func (m *Manager) failRun(ctx context.Context, run Run, err error) {
 	now := time.Now().UTC()
-	run.Status, run.Error, run.FinishedAt, run.Approval = RunFailed, logging.SafeErrorText(err, 2048), &now, nil
-	_ = m.store.UpdateRun(context.WithoutCancel(ctx), run)
+	changed := false
+	current, updateErr := m.store.MutateRun(context.WithoutCancel(ctx), run.ID, func(current *Run) error {
+		if current.Status.Terminal() {
+			return nil
+		}
+		current.Status, current.Error, current.FinishedAt, current.Approval = RunFailed, logging.SafeErrorText(err, 2048), &now, nil
+		changed = true
+		return nil
+	})
+	if updateErr != nil {
+		m.logger.Error(context.WithoutCancel(ctx), "保存任务失败状态失败", "run_id", run.ID, "error", updateErr)
+		return
+	}
+	if !changed {
+		return
+	}
+	run = current
 	m.releaseActive(run)
 	var taskSnapshot *Task
 	if task, taskErr := m.store.GetTask(context.Background(), run.TaskID); taskErr == nil {
 		taskSnapshot = &task
 	}
 	m.publish(Event{Type: "run.failed", TaskID: run.TaskID, RunID: run.ID, Task: taskSnapshot, Run: &run})
-	if taskSnapshot != nil {
-		m.notifyChatTaskResult(*taskSnapshot, run)
-	}
 	m.maybeRetry(run)
 }
 
@@ -211,9 +203,13 @@ func (m *Manager) recoverRetries(ctx context.Context) error {
 
 func (m *Manager) releaseActive(run Run) {
 	m.mu.Lock()
+	if _, active := m.activeByRun[run.ID]; !active {
+		m.mu.Unlock()
+		return
+	}
 	delete(m.activeByRun, run.ID)
 	delete(m.cancelPending, run.ID)
-	if run.SessionID != "" {
+	if m.activeBySession[run.SessionID] == run.ID {
 		delete(m.activeBySession, run.SessionID)
 	}
 	if m.activeAgents[run.AgentID] > 0 {

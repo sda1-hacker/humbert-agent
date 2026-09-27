@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
-	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
@@ -130,7 +130,7 @@ func buildRunner(
 		&adk.ChatModelAgentConfig{
 			Name:        snapshot.AgentName,
 			Instruction: snapshot.Instruction,
-			Model:       snapshot.Model,
+			Model:       trackModel(snapshot.Model, snapshot),
 			Handlers:    append([]adk.ChatModelAgentMiddleware(nil), snapshot.AgentHandlers...),
 			ToolsConfig: adk.ToolsConfig{
 				ToolsNodeConfig: compose.ToolsNodeConfig{
@@ -221,15 +221,7 @@ func (e *Executor) consumeEvents(
 						}
 						return result, fmt.Errorf("持久化 AssistantMessage 失败: %w", persistErr)
 					}
-					if usage := message.ResponseMeta; usage != nil && usage.Usage != nil {
-						input, output := usage.Usage.PromptTokens, usage.Usage.CompletionTokens
-						total := usage.Usage.TotalTokens
-						if total <= 0 {
-							total = input + output
-						}
-						snapshot.limitState.addTokens(total)
-						reportToolLifecycleEvent(context.WithoutCancel(ctx), snapshot, Event{Type: EventModelUsage, InputTokens: input, OutputTokens: output, TotalTokens: total, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)})
-					}
+
 					if len(message.ToolCalls) == 0 {
 						result.Content = assistantText(message)
 						result.MessageID = stored.EntryID
@@ -329,7 +321,14 @@ func buildToolLifecycleMiddleware(snapshot *Snapshot) compose.InvokableToolMiddl
 				return next(ctx, input)
 			}
 			if snapshot != nil && snapshot.limitState != nil {
-				if err := snapshot.limitState.beforeToolCall(); err != nil {
+				// Eino 按执行地址识别恢复调用，包括等待兄弟工具审批而再次暂停的调用。
+				// 这些调用已在首次进入时预留预算；恢复只检查 Token 上限，不重复扣次数。
+				wasInterrupted, _, _ := einotool.GetInterruptState[any](ctx)
+				err := snapshot.limitState.checkTokens()
+				if !wasInterrupted {
+					err = snapshot.limitState.beforeToolCall()
+				}
+				if err != nil {
 					return nil, err
 				}
 			}
@@ -348,7 +347,11 @@ func buildToolLifecycleMiddleware(snapshot *Snapshot) compose.InvokableToolMiddl
 
 			// 将 ToolCall 身份放进 context。run_agent 会用它生成稳定的子运行 ID；
 			// Eino 从审批 checkpoint 恢复时仍使用同一个 CallID，因此不会重复创建子运行。
-			callCtx := humberttools.WithCallContext(ctx, input.CallID, input.Name)
+			callCtx := ctx
+			// 子 Agent 经由工具创建，沿调用上下文继承同一预算，审批恢复也复用原状态。
+			if snapshot != nil {
+				callCtx = context.WithValue(ctx, executionSnapshotContextKey{}, snapshot)
+			}
 			output, err := next(callCtx, input)
 			duration := time.Since(startedAt).Milliseconds()
 			if err != nil {

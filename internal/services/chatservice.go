@@ -152,7 +152,7 @@ func (s *ChatService) StartTurn(request StartTurnRequest) (agentruntime.StartTur
 
 // ContextStatus 返回 Composer 展示所需的 Context Usage。
 //
-// 该方法不触发模型调用或压缩，只读取当前 Session、Model、Tool Schema 与派生 Memory。
+// 该方法不触发模型调用或压缩，只读取当前 Session、Model、Tool Schema 与 Transcript。
 // 返回值中的 UsedTokens 是本地保守估算，ContextWindow 来自用户维护的 Model 配置。
 func (s *ChatService) ContextStatus(sessionID string) (contextengine.Usage, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -182,17 +182,14 @@ func (s *ChatService) ContextOverview(sessionID string) (agentruntime.ContextOve
 
 // CompactContext 执行用户主动压缩。
 //
-// updateMemory=false 对应“压缩”，只提交 CompactionEntry；true 对应“压缩并更新”，在
-// Compaction 后额外强制刷新当前 Session memory.json。运行中的 Session 会返回
-// runtime.ErrSessionBusy，避免对活动 ReAct loop 的历史进行并发改写。
+// 运行中的会话由 Runtime reservation 拒绝，摘要提交与普通聊天共享一致性边界。
 func (s *ChatService) CompactContext(
 	sessionID string,
-	updateMemory bool,
 ) (agentruntime.ManualCompactionResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.contextOperationTimeout())
 	defer cancel()
 
-	result, err := s.core.Runtime().ManualCompact(ctx, sessionID, updateMemory)
+	result, err := s.core.Runtime().ManualCompact(ctx, sessionID)
 	if err != nil {
 		return agentruntime.ManualCompactionResult{}, fmt.Errorf("手动压缩 Context 失败: %w", err)
 	}

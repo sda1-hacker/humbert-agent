@@ -117,7 +117,6 @@ const form =
 
       modelRoles: {
         utilityModelID: "",
-        memoryModelID: "",
       },
 
       enabledSkills: [],
@@ -234,7 +233,6 @@ function resetForm(agent) {
 
           modelRoles: {
             utilityModelID: "",
-            memoryModelID: "",
           },
 
           enabledSkills: [],
@@ -290,7 +288,6 @@ function resetForm(agent) {
 
         modelRoles: {
           utilityModelID: agent.modelRoles?.utilityModelID ?? "",
-          memoryModelID: agent.modelRoles?.memoryModelID ?? "",
         },
 
         enabledSkills:
@@ -538,7 +535,6 @@ async function save() {
 
       modelRoles: {
         utilityModelID: form.modelRoles.utilityModelID || "",
-        memoryModelID: form.modelRoles.memoryModelID || "",
       },
 
       enabledSkills:
@@ -656,7 +652,7 @@ async function save() {
 /**
  * 删除 Agent Aggregate。
  *
- * 后端会级联删除全部 Session、附件、Session Memory、Agent Profile，以及 Humbert 管理的
+ * 后端会级联删除全部 Session、附件、Agent Profile，以及 Humbert 管理的
  * managed workspace。Custom Workspace 属于用户外部目录，只解除引用，不会删除真实文件。
  */
 async function removeAgent() {
@@ -788,7 +784,7 @@ async function removeAgent() {
           <div class="model-role-panel">
             <div class="model-role-panel__intro">
               <strong>模型角色</strong>
-              <span>留空会自动回退：Utility → Chat，Memory → Utility → Chat；视觉辅助模型只在 Chat 无法直接处理当前图片输入时使用。</span>
+              <span>留空会自动回退：Utility → Chat；视觉辅助模型只在 Chat 无法直接处理当前图片输入时使用。</span>
             </div>
             <div class="model-role-grid">
               <a-form-item label="Utility 模型">
@@ -802,19 +798,6 @@ async function removeAgent() {
                   </a-option>
                 </a-select>
                 <template #extra>Context 压缩等辅助任务优先使用；窗口不足时 Runtime 会回退当前执行模型。</template>
-              </a-form-item>
-
-              <a-form-item label="Memory 模型">
-                <a-select v-model="form.modelRoles.memoryModelID" allow-clear allow-search
-                          placeholder="回退 Utility / Chat">
-                  <a-option
-                      v-for="model in roleModelOptions(form.modelRoles.memoryModelID)"
-                      :key="model.id" :value="model.id" :disabled="!model.enabled"
-                  >
-                    {{ model.displayName }} · {{ model.providerName }}{{ model.enabled ? "" : "（已禁用）" }}
-                  </a-option>
-                </a-select>
-                <template #extra>Session Memory 摘要与刷新使用该模型。</template>
               </a-form-item>
 
             </div>

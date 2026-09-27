@@ -1,4 +1,6 @@
 <script setup>
+import { storeToRefs } from "pinia";
+import { useMCPStore } from "../../stores/mcp.js";
 import {
   computed,
   onMounted,
@@ -26,9 +28,7 @@ import {
   disconnectMCPServer,
   exportMCPServersConfig,
   importMCPServersConfig,
-  listMCPServers,
   setMCPServerEnabled,
-  testMCPConnection,
   updateMCPServer,
 } from "../../api/mcp.js";
 
@@ -42,11 +42,12 @@ import SectionCard from "../ui/SectionCard.vue";
 import EmptyState from "../ui/EmptyState.vue";
 import StatusPill from "../ui/StatusPill.vue";
 
-const servers = ref([]);
-const loading = ref(false);
+const mcpStore = useMCPStore();
+const { servers, loading } = storeToRefs(mcpStore);
+
 const saving = ref(false);
-const testingID = ref("");
-const connectionState = reactive({});
+const testingID = computed(() => Object.keys(mcpStore.catalogLoading).find(id => mcpStore.catalogLoading[id]) || "");
+const connectionState = mcpStore.connectionState;
 const importOpen = ref(false);
 const importPayload = ref("");
 const importing = ref(false);
@@ -72,10 +73,6 @@ const form = reactive({
 const editing = computed(() => Boolean(form.id));
 const isStdio = computed(() => form.transport === "stdio");
 const isHTTP = computed(() => form.transport === "streamable_http");
-
-function normaliseServers(values) {
-  return Array.isArray(values) ? values : [];
-}
 
 function slugifyKey(value) {
   return String(value ?? "")
@@ -251,32 +248,8 @@ function validateRequest(request) {
   return "请选择有效的传输方式";
 }
 
-async function load() {
-  if (loading.value) return;
-
-  loading.value = true;
-  try {
-    servers.value = normaliseServers(await listMCPServers());
-    for (const key of Object.keys(connectionState)) delete connectionState[key];
-    for (const server of servers.value) {
-      const state = server?.connectionState || (server?.enabled === false ? "disabled" : "disconnected");
-      connectionState[server.id] = {
-        ok: state === "connected",
-        tone: mcpConnectionStateTone(state),
-        text: serverStatusText(server),
-        detail: server?.lastSuccessAt && state === "connected"
-            ? `最近成功 ${new Date(server.lastSuccessAt).toLocaleString()}`
-            : "",
-        error: server?.lastError && (state === "error" || state === "degraded")
-            ? String(server.lastError)
-            : "",
-      };
-    }
-  } catch (error) {
-    Message.error(error?.message ?? String(error));
-  } finally {
-    loading.value = false;
-  }
+async function load(options) {
+  try { await mcpStore.load(options); } catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
 async function exportConfig() {
@@ -300,7 +273,7 @@ async function importConfig() {
     const created = await importMCPServersConfig(importPayload.value);
     importOpen.value = false;
     importPayload.value = "";
-    await load();
+    await load({ force: true });
     Message.success(`已导入 ${Array.isArray(created) ? created.length : 0} 个 MCP Server；已默认停用，请重新填写认证信息后启用`);
   } catch (error) {
     Message.error(error?.message ?? String(error));
@@ -310,33 +283,9 @@ async function importConfig() {
 }
 
 async function testServer(server) {
-  if (!server?.id || testingID.value || server?.enabled === false) return;
-
-  testingID.value = server.id;
-  connectionState[server.id] = {
-    ok: false,
-    tone: "pending",
-    text: "正在连接",
-    detail: "正在执行 initialize + tools/list…",
-    error: "",
-  };
-  try {
-    const result = await testMCPConnection(server.id);
-    await load();
-    connectionState[server.id] = {
-      ok: true,
-      tone: "ok",
-      text: "已连接",
-      detail: `${result?.toolCount ?? 0} 个 Tool · ${result?.durationMS ?? 0}ms`,
-      error: "",
-    };
-    Message.success(`「${server.name}」连接成功`);
-  } catch (error) {
-    await load();
-    Message.error(error?.message ?? String(error));
-  } finally {
-    testingID.value = "";
-  }
+  if (mcpStore.catalogLoading[server?.id]) return;
+  try { await mcpStore.operate(server, "test"); Message.success(`「${server.name}」连接成功`); }
+  catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
 async function save() {
@@ -358,7 +307,7 @@ async function save() {
 
     Message.success(wasEditing ? "MCP Server 已更新" : "MCP Server 已创建");
     reset();
-    await load();
+    await load({ force: true });
     await testServer(server);
   } catch (error) {
     Message.error(error?.message ?? String(error));
@@ -383,7 +332,7 @@ async function remove(server) {
     await deleteMCPServer(server.id);
     delete connectionState[server.id];
     if (form.id === server.id) reset();
-    await load();
+    await load({ force: true });
     Message.success("MCP Server 已删除");
   } catch (error) {
     Message.error(error?.message ?? String(error));
@@ -445,7 +394,7 @@ async function setServerEnabled(server, enabled) {
   try {
     await setMCPServerEnabled(server.id, enabled);
     if (!enabled) delete connectionState[server.id];
-    await load();
+    await load({ force: true });
     Message.success(enabled ? `「${server.name}」已启用` : `「${server.name}」已停用，Agent Tool 选择已保留`);
   } catch (error) {
     Message.error(error?.message ?? String(error));
@@ -457,7 +406,7 @@ async function disconnectServer(server) {
   try {
     await disconnectMCPServer(server.id);
     delete connectionState[server.id];
-    await load();
+    await load({ force: true });
     Message.success(`「${server.name}」已断开`);
   } catch (error) {
     Message.error(error?.message ?? String(error));

@@ -21,11 +21,7 @@ const (
 	webSearchToolName = "web_search"
 
 	webSearchProviderAuto          = "auto"
-	webSearchProviderAnySearch     = "anysearch"
 	webSearchProviderAnySearchFree = "anysearch_free"
-	webSearchProviderTavily        = "tavily"
-	webSearchProviderBrave         = "brave"
-	webSearchProviderSerper        = "serper"
 	webSearchProviderBing          = "bing"
 	webSearchProviderDuckDuckGo    = "duckduckgo"
 
@@ -39,24 +35,6 @@ const (
 var searchWhitespacePattern = regexp.MustCompile(
 	`\s+`,
 )
-
-// WebSearchCredentials 保存搜索 Provider 的运行时凭据。
-//
-// 本类型只接收 Application Composition Root 已经从 CredentialStore 读取到内存的
-// 值；Builtin Tool 自身绝不读取环境变量、配置文件或 Secret 文件。
-//
-// 当前 Humbert 默认不配置这些 Key，也仍然可以使用 AnySearch anonymous free
-// tier，再回退 Bing / DuckDuckGo。后续设置页接入搜索 Provider Credential 时无需
-// 修改 Tool Schema。
-type WebSearchCredentials struct {
-	AnySearchAPIKey string
-
-	TavilyAPIKey string
-
-	BraveAPIKey string
-
-	SerperAPIKey string
-}
 
 // WebSearchInput 是 web_search 的模型输入。
 type WebSearchInput struct {
@@ -132,8 +110,6 @@ type WebSearchFactory struct {
 
 	provider string
 
-	credentials WebSearchCredentials
-
 	defaultResults int
 
 	maxResults int
@@ -158,7 +134,6 @@ func NewWebSearchFactory(
 	timeout time.Duration,
 	defaultResults int,
 	maxResults int,
-	credentials WebSearchCredentials,
 ) (*WebSearchFactory, error) {
 	provider =
 		normalizeSearchProvider(
@@ -198,7 +173,6 @@ func NewWebSearchFactory(
 			Timeout: timeout,
 		},
 		provider:       provider,
-		credentials:    credentials,
 		defaultResults: defaultResults,
 		maxResults:     maxResults,
 	}, nil
@@ -579,80 +553,9 @@ func (
 	}, nil
 }
 
-func (
-	f *WebSearchFactory,
-) autoBackends() []searchBackend {
-	backends :=
-		make(
-			[]searchBackend,
-			0,
-			8,
-		)
-
-	if key :=
-		strings.TrimSpace(
-			f.credentials.AnySearchAPIKey,
-		); key != "" {
-		backends =
-			append(
-				backends,
-				anySearchBackend{
-					apiKey: key,
-				},
-			)
-	}
-
-	if key :=
-		strings.TrimSpace(
-			f.credentials.TavilyAPIKey,
-		); key != "" {
-		backends =
-			append(
-				backends,
-				tavilyBackend{
-					apiKey: key,
-				},
-			)
-	}
-
-	if key :=
-		strings.TrimSpace(
-			f.credentials.BraveAPIKey,
-		); key != "" {
-		backends =
-			append(
-				backends,
-				braveBackend{
-					apiKey: key,
-				},
-			)
-	}
-
-	if key :=
-		strings.TrimSpace(
-			f.credentials.SerperAPIKey,
-		); key != "" {
-		backends =
-			append(
-				backends,
-				serperBackend{
-					apiKey: key,
-				},
-			)
-	}
-
-	// 无 Key 时优先走 AnySearch anonymous tier。
-	backends =
-		append(
-			backends,
-			anySearchBackend{
-				anonymous: true,
-			},
-			bingBackend{},
-			duckDuckGoBackend{},
-		)
-
-	return backends
+// autoBackends 只暴露已接通的免凭据搜索服务，避免配置出无法工作的付费入口。
+func (f *WebSearchFactory) autoBackends() []searchBackend {
+	return []searchBackend{anySearchBackend{}, bingBackend{}, duckDuckGoBackend{}}
 }
 
 func (
@@ -667,73 +570,7 @@ func (
 		provider,
 	) {
 	case webSearchProviderAnySearchFree:
-		return anySearchBackend{
-			anonymous: true,
-		}, nil
-
-	case webSearchProviderAnySearch:
-		key :=
-			strings.TrimSpace(
-				f.credentials.AnySearchAPIKey,
-			)
-
-		if key == "" {
-			return nil, errors.New(
-				"web_search anysearch Provider 缺少 API Key",
-			)
-		}
-
-		return anySearchBackend{
-			apiKey: key,
-		}, nil
-
-	case webSearchProviderTavily:
-		key :=
-			strings.TrimSpace(
-				f.credentials.TavilyAPIKey,
-			)
-
-		if key == "" {
-			return nil, errors.New(
-				"web_search tavily Provider 缺少 API Key",
-			)
-		}
-
-		return tavilyBackend{
-			apiKey: key,
-		}, nil
-
-	case webSearchProviderBrave:
-		key :=
-			strings.TrimSpace(
-				f.credentials.BraveAPIKey,
-			)
-
-		if key == "" {
-			return nil, errors.New(
-				"web_search brave Provider 缺少 API Key",
-			)
-		}
-
-		return braveBackend{
-			apiKey: key,
-		}, nil
-
-	case webSearchProviderSerper:
-		key :=
-			strings.TrimSpace(
-				f.credentials.SerperAPIKey,
-			)
-
-		if key == "" {
-			return nil, errors.New(
-				"web_search serper Provider 缺少 API Key",
-			)
-		}
-
-		return serperBackend{
-			apiKey: key,
-		}, nil
+		return anySearchBackend{}, nil
 
 	case webSearchProviderBing:
 		return bingBackend{}, nil
@@ -815,11 +652,7 @@ func isKnownSearchProvider(
 		provider,
 	) {
 	case webSearchProviderAuto,
-		webSearchProviderAnySearch,
 		webSearchProviderAnySearchFree,
-		webSearchProviderTavily,
-		webSearchProviderBrave,
-		webSearchProviderSerper,
 		webSearchProviderBing,
 		webSearchProviderDuckDuckGo:
 		return true

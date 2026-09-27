@@ -125,20 +125,24 @@ func (m *Manager) AutomationByOrigin(ctx context.Context, origin, originRef stri
 }
 
 func (m *Manager) CancelRun(ctx context.Context, runID string) (Run, error) {
-	run, err := m.store.GetRun(ctx, runID)
+	// 与调度启动在 Store 锁内竞争 queued 状态；不能持有 cycleMu 等待慢速模型初始化，
+	// 否则用户无法取消一个仍在启动中的任务。
+	cancelledQueued := false
+	run, err := m.store.MutateRun(ctx, runID, func(current *Run) error {
+		if current.Status == RunQueued {
+			now := time.Now().UTC()
+			current.Status, current.Error, current.FinishedAt = RunCancelled, "用户在运行开始前取消了任务。", &now
+			cancelledQueued = true
+		}
+		return nil
+	})
 	if err != nil {
 		return Run{}, err
 	}
 	if run.Status.Terminal() {
-		return run, nil
-	}
-	if run.Status == RunQueued {
-		now := time.Now().UTC()
-		run.Status, run.Error, run.FinishedAt = RunCancelled, "用户在运行开始前取消了任务。", &now
-		if err := m.store.UpdateRun(ctx, run); err != nil {
-			return Run{}, err
+		if cancelledQueued {
+			m.publish(Event{Type: "run.cancelled", TaskID: run.TaskID, RunID: run.ID, Run: &run})
 		}
-		m.publish(Event{Type: "run.cancelled", TaskID: run.TaskID, RunID: run.ID, Run: &run})
 		return run, nil
 	}
 	if strings.TrimSpace(run.RequestID) == "" {
@@ -231,9 +235,8 @@ func (m *Manager) enqueueDue(ctx context.Context, now time.Time) error {
 			return createErr
 		}
 		task.NextRunAt, task.UpdatedAt = next, now
-		if task.Schedule.Type == ScheduleOnce && next == nil {
-			task.Status = TaskStatusPaused
-		}
+		// NextRunAt 为空表示计划没有后续触发；Status 只表示用户是否允许执行。
+		// 一次性任务入队后不能自动暂停，否则分派和失败重试会把本次运行拦截掉。
 		if updateErr := m.store.UpdateTask(ctx, task); updateErr != nil {
 			return updateErr
 		}
@@ -263,11 +266,15 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 		// 之外的第二道防线，避免旧队列或异常数据绕过暂停状态。
 		if task.Status == TaskStatusArchived || (task.Status != TaskStatusActive && run.Trigger != TriggerManual && run.Trigger != TriggerAutomation) {
 			now := time.Now().UTC()
-			run.Status = RunCancelled
-			run.Error = "任务计划已暂停，排队中的自动运行不再启动。"
-			run.FinishedAt = &now
-			if updateErr := m.store.UpdateRun(ctx, run); updateErr != nil {
-				return updateErr
+			run, err = m.store.MutateRun(ctx, run.ID, func(current *Run) error {
+				if current.Status != RunQueued {
+					return ErrTaskBusy
+				}
+				current.Status, current.Error, current.FinishedAt = RunCancelled, "任务计划已暂停，排队中的自动运行不再启动。", &now
+				return nil
+			})
+			if err != nil {
+				return err
 			}
 			m.publish(Event{Type: "run.cancelled", TaskID: run.TaskID, RunID: run.ID, Run: &run})
 			continue
@@ -291,11 +298,6 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 			continue
 		}
 		if err := m.startRun(ctx, task, run); err != nil {
-			// startRun 可能已经把 SessionID/Deadline 写入持久层。失败收敛时重新读取，
-			// 避免用调度前的 queued 快照覆盖这些诊断信息。
-			if current, getErr := m.store.GetRun(context.WithoutCancel(ctx), run.ID); getErr == nil {
-				run = current
-			}
 			m.failRun(ctx, run, fmt.Errorf("启动 TaskRun 失败: %w", err))
 		}
 	}
@@ -310,10 +312,14 @@ func (m *Manager) startNotificationRun(ctx context.Context, task Task, run Run) 
 		return errors.New("Task 通知服务未初始化")
 	}
 	now := time.Now().UTC()
-	run.Execution = ExecutionNotification
-	run.Status = RunStarting
-	run.StartedAt = &now
-	if err := m.store.UpdateRun(ctx, run); err != nil {
+	run, err := m.store.MutateRun(ctx, run.ID, func(current *Run) error {
+		if current.Status != RunQueued {
+			return ErrTaskBusy
+		}
+		current.Execution, current.Status, current.StartedAt = ExecutionNotification, RunStarting, &now
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	if err := notifier.Send(ctx, notifications.Notification{
@@ -327,10 +333,11 @@ func (m *Manager) startNotificationRun(ctx context.Context, task Task, run Run) 
 		return err
 	}
 	finished := time.Now().UTC()
-	run.Status = RunSucceeded
-	run.ResultPreview = task.Prompt
-	run.FinishedAt = &finished
-	if err := m.store.UpdateRun(context.WithoutCancel(ctx), run); err != nil {
+	run, err = m.store.MutateRun(context.WithoutCancel(ctx), run.ID, func(current *Run) error {
+		current.Status, current.ResultPreview, current.FinishedAt = RunSucceeded, task.Prompt, &finished
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	m.publish(Event{Type: "run.succeeded", TaskID: task.ID, RunID: run.ID, Task: &task, Run: &run})
@@ -344,8 +351,15 @@ func (m *Manager) startRun(ctx context.Context, task Task, run Run) error {
 		return err
 	}
 	deadline := now.Add(time.Duration(task.Limits.MaxDurationSeconds) * time.Second)
-	run.SessionID, run.Status, run.StartedAt, run.DeadlineAt = session.ID, RunStarting, &now, &deadline
-	if err := m.store.UpdateRun(ctx, run); err != nil {
+	run, err = m.store.MutateRun(ctx, run.ID, func(current *Run) error {
+		if current.Status != RunQueued {
+			return ErrTaskBusy
+		}
+		current.SessionID, current.Status, current.StartedAt, current.DeadlineAt = session.ID, RunStarting, &now, &deadline
+		current.Execution = run.Execution
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 
@@ -382,18 +396,17 @@ func (m *Manager) startRun(ctx context.Context, task Task, run Run) error {
 		m.activeByRun[run.ID] = result.RequestID
 	}
 	m.mu.Unlock()
-	current, getErr := m.store.GetRun(ctx, run.ID)
-	if getErr != nil {
+	// 启动回填与终态事件可以交错；只在最新记录上补字段，保留已完成的结果。
+	current, updateErr := m.store.MutateRun(ctx, run.ID, func(current *Run) error {
+		current.RequestID, current.RuntimeRunID = result.RequestID, result.RunID
+		if current.Status == RunStarting {
+			current.Status = RunRunning
+		}
+		return nil
+	})
+	if updateErr != nil {
 		_ = m.runtime.CancelTurn(result.RequestID)
-		return getErr
-	}
-	current.RequestID, current.RuntimeRunID = result.RequestID, result.RunID
-	if current.Status == RunStarting {
-		current.Status = RunRunning
-	}
-	if err := m.store.UpdateRun(ctx, current); err != nil {
-		_ = m.runtime.CancelTurn(result.RequestID)
-		return err
+		return updateErr
 	}
 	if current.Status.Terminal() {
 		return nil

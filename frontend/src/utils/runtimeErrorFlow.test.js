@@ -40,3 +40,26 @@ test("成功的新 Turn 清除上一次失败提示", async () => {
   assert.equal(runtime.terminalError("session-a"), "");
   assert.equal(runtime.terminalErrorRequestID("session-a"), "");
 });
+
+test("旧请求的异步收尾不能删除新请求的工具和审批", async () => {
+  setActivePinia(createPinia());
+  const runtime = useRuntimeStore();
+  const sessions = useSessionStore();
+  let release;
+  sessions.refreshMessages = () => new Promise(resolve => { release = resolve; });
+  runtime.refreshContextUsage = async () => null;
+  await runtime.handleEvent({type: "turn.started", sessionID: "s", requestID: "old"});
+  const finishing = runtime.handleEvent({type: "turn.completed", sessionID: "s", requestID: "old"});
+  await runtime.handleEvent({type: "turn.started", sessionID: "s", requestID: "new"});
+  await runtime.handleEvent({type: "tool.started", sessionID: "s", requestID: "new", toolCallID: "t", toolName: "read_file"});
+  await runtime.handleEvent({type: "approval.requested", sessionID: "s", requestID: "new", approval: {id: "a", requestID: "new"}});
+  release();
+  await finishing;
+  assert.equal(runtime.runs.s.requestID, "new");
+  assert.equal(runtime.runs.s.tools[0].id, "t");
+  assert.equal(runtime.runs.s.approval.id, "a");
+  await runtime.handleEvent({type: "turn.failed", sessionID: "s", requestID: "old", error: "stale"});
+  assert.equal(runtime.runs.s.requestID, "new");
+  assert.equal(runtime.terminalError("s"), "");
+  runtime.disposeEvents();
+});

@@ -2,320 +2,349 @@ package contextengine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/adk/middlewares/summarization"
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
-
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 )
 
-// MidRunCompactor 在 Eino ReAct Loop 的每次 ChatModel 调用前检查当前内存 State。
-//
-// 重要边界：Assistant/ToolResult 的持久化由 Runtime Executor 消费 Eino Event 完成，
-// Middleware 与 Event Consumer 并非同一个同步写事务。因此这里发生的压缩只修改 Eino
-// state.Messages，不直接写 CompactionEntry，避免摘要先于对应 ToolResult 落盘。Turn 完成
-// 后 RuntimeService 会基于完整 Transcript 再执行一次持久化 CompactIfNeeded，使临时
-// checkpoint 最终收敛为 JSONL 中的稳定 CompactionEntry。
+// MidRunCompactor 将 Eino 摘要中间件与应用的持久化边界连接起来。
+// 回调只记录待提交摘要；只有事件消费者把原始消息全部落盘后才允许提交。
+// 手动压缩与自动压缩复用同一个 Summarize，回合结束不再发起第二次模型请求。
 type MidRunCompactor struct {
 	*adk.BaseChatModelAgentMiddleware
-
-	config ContextMiddlewareConfig
+	config           ContextMiddlewareConfig
+	native           *summarization.TypedMiddleware[*schema.Message]
+	mu               sync.Mutex
+	pending          *pendingSummary
+	commit           func(context.Context, *pendingSummary) error
+	firstInputTokens int
+	activeRequest    string
+	capturedRequest  bool
 }
 
-// ContextMiddlewareConfig 是 MidRunCompactor 的不可变运行快照。
+type pendingSummary struct {
+	Summary                   string
+	FirstKept                 *schema.Message
+	TokensBefore, TokensAfter int
+}
+
 type ContextMiddlewareConfig struct {
-	SessionID string
-
-	Instruction string
-
-	Model einomodel.BaseChatModel
-
-	CompactionContextWindow   int
-	CompactionMaxOutputTokens int
-
-	Budget Budget
-
-	ToolTokenEstimate int
-
-	ReasoningPolicy ReasoningReplayPolicy
-
-	SerializerMaxChars int
-
-	OperationTimeout time.Duration
-
-	Estimator Estimator
-
-	Logger *logging.Logger
+	SessionID                                          string
+	Instruction                                        string
+	Model                                              einomodel.BaseChatModel
+	CompactionContextWindow, CompactionMaxOutputTokens int
+	Budget                                             Budget
+	ToolTokenEstimate                                  int
+	ReasoningPolicy                                    ReasoningReplayPolicy
+	SerializerMaxChars                                 int
+	OperationTimeout                                   time.Duration
+	Estimator                                          Estimator
+	Logger                                             *logging.Logger
+	Disabled                                           bool
 }
 
-// NewMidRunCompactor 创建一个仅属于当前 Turn 的 Eino Middleware。
-func NewMidRunCompactor(config ContextMiddlewareConfig) (*MidRunCompactor, error) {
-	if strings.TrimSpace(config.SessionID) == "" {
-		return nil, errors.New("MidRunCompactor SessionID 不能为空")
+func NewMidRunCompactor(cfg ContextMiddlewareConfig) (*MidRunCompactor, error) {
+	if cfg.Model == nil || cfg.Estimator == nil || cfg.SessionID == "" {
+		return nil, errors.New("上下文摘要缺少模型、估算器或会话身份")
 	}
-	if config.Model == nil {
-		return nil, errors.New("MidRunCompactor Model 不能为空")
+	m := &MidRunCompactor{BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{}, config: cfg}
+	outputTokens := max(256, cfg.Budget.CheckpointBudgetTokens)
+	if cfg.CompactionMaxOutputTokens > 0 {
+		outputTokens = min(outputTokens, cfg.CompactionMaxOutputTokens)
 	}
-	if config.Estimator == nil {
-		return nil, errors.New("MidRunCompactor Estimator 不能为空")
-	}
-	if config.Logger == nil {
-		return nil, errors.New("MidRunCompactor Logger 不能为空")
-	}
-	return &MidRunCompactor{
-		BaseChatModelAgentMiddleware: &adk.BaseChatModelAgentMiddleware{},
-		config:                       config,
-	}, nil
-}
-
-// BeforeModelRewriteState 在 Eino 每一次模型调用前执行 Context 预算保护。
-//
-// Eino v0.9.19 已推荐使用 interface-based ChatModelAgentMiddleware Handler；该 Hook 返回的
-// state 会持久到当前 Run 后续迭代，因此比旧 BeforeChatModel closure 更适合做 ReAct loop
-// 中的 Context 重写。这里仅修改 Eino 内存 State，不直接写 Session JSONL；稳定 Compaction
-// 仍由 Turn 完成后的持久化维护阶段提交，避免 ToolResult 尚未落盘时破坏 Transcript 顺序。
-func (m *MidRunCompactor) BeforeModelRewriteState(
-	ctx context.Context,
-	state *adk.ChatModelAgentState,
-	_ *adk.ModelContext,
-) (context.Context, *adk.ChatModelAgentState, error) {
-	if err := m.beforeChatModel(ctx, state); err != nil {
-		return ctx, state, err
-	}
-	return ctx, state, nil
-}
-
-// 编译期断言保证 Eino 升级后 Handler 接口发生变化时能够尽早暴露兼容性问题。
-var _ adk.ChatModelAgentMiddleware = (*MidRunCompactor)(nil)
-
-func (m *MidRunCompactor) beforeChatModel(ctx context.Context, state *adk.ChatModelAgentState) error {
-	if ctx == nil {
-		return errors.New("MidRun Compaction context.Context 不能为空")
-	}
-	if state == nil || len(state.Messages) == 0 {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("MidRun Compaction 被取消: %w", err)
-	}
-	if m.config.OperationTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, m.config.OperationTimeout)
-		defer cancel()
-	}
-	// Eino 的同轮工具循环会把刚生成的 Assistant thinking 放回 State。
-	// 在预算与下一次请求前统一剔除不支持回放的 Provider 的 thinking。
-	if m.config.ReasoningPolicy == ReasoningReplayOmit {
-		projected := make([]*schema.Message, len(state.Messages))
-		for index, message := range state.Messages {
-			projected[index] = applyReasoningReplayPolicy(message, ReasoningReplayOmit)
-		}
-		state.Messages = projected
-	}
-
-	instructionTokens := m.config.Estimator.EstimateText(m.config.Instruction)
-	// Eino 的 State 在某些执行路径已经包含 SystemMessage。此时不再重复计算 instruction。
-	if state.Messages[0] != nil && state.Messages[0].Role == schema.System {
-		instructionTokens = 0
-	}
-	used := instructionTokens + m.config.ToolTokenEstimate + m.config.Estimator.EstimateMessages(state.Messages)
-	if used < m.config.Budget.ThresholdTokens {
-		return nil
-	}
-
-	startedAt := time.Now()
-	const maxCompactionPasses = 3
-	current := state.Messages
-	currentUsed := used
-	passes := 0
-	for currentUsed >= m.config.Budget.ThresholdTokens && passes < maxCompactionPasses {
-		compacted, err := m.compactMessages(ctx, current)
-		if err != nil {
-			if errors.Is(err, ErrNothingToCompact) {
-				return fmt.Errorf(
-					"%w: session_id=%s used_tokens=%d threshold_tokens=%d",
-					ErrContextBudgetExceeded,
-					m.config.SessionID,
-					currentUsed,
-					m.config.Budget.ThresholdTokens,
-				)
-			}
-			return fmt.Errorf("执行同 Turn 上下文压缩失败: %w", err)
-		}
-		if len(compacted) == 0 {
-			return fmt.Errorf(
-				"%w: session_id=%s used_tokens=%d threshold_tokens=%d",
-				ErrContextBudgetExceeded,
-				m.config.SessionID,
-				currentUsed,
-				m.config.Budget.ThresholdTokens,
-			)
-		}
-		nextUsed := instructionTokens + m.config.ToolTokenEstimate + m.config.Estimator.EstimateMessages(compacted)
-		// 不能用“消息条数是否减少”判断压缩有效性：一个 checkpoint 可能比若干很短消息
-		// 更长。真正需要保证的是 Token 预算单调下降，否则继续循环只会重复调用模型。
-		if nextUsed >= currentUsed {
-			return fmt.Errorf(
-				"%w: session_id=%s used_tokens=%d compacted_tokens=%d threshold_tokens=%d",
-				ErrContextBudgetExceeded,
-				m.config.SessionID,
-				currentUsed,
-				nextUsed,
-				m.config.Budget.ThresholdTokens,
-			)
-		}
-		current = compacted
-		passes++
-		currentUsed = nextUsed
-	}
-	if currentUsed >= m.config.Budget.ThresholdTokens {
-		return fmt.Errorf(
-			"%w: session_id=%s used_tokens=%d threshold_tokens=%d attempts=%d",
-			ErrContextBudgetExceeded,
-			m.config.SessionID,
-			currentUsed,
-			m.config.Budget.ThresholdTokens,
-			passes,
-		)
-	}
-	state.Messages = current
-
-	m.config.Logger.Info(
-		ctx,
-		"同 Turn Context 已执行内存压缩",
-		"operation", "context.compaction.mid_run",
-		"session_id", m.config.SessionID,
-		"tokens_before", used,
-		"tokens_after", currentUsed,
-		"compaction_passes", passes,
-		"messages_after", len(current),
-		logging.Duration(startedAt),
-	)
-	return nil
-}
-
-func (m *MidRunCompactor) compactMessages(ctx context.Context, messages []*schema.Message) ([]*schema.Message, error) {
-	prefixEnd := 0
-	for prefixEnd < len(messages) {
-		message := messages[prefixEnd]
-		if message == nil {
-			prefixEnd++
-			continue
-		}
-		if message.Role == schema.System || isInternalReferenceMessage(message) {
-			prefixEnd++
-			continue
-		}
-		break
-	}
-
-	previousCheckpoint := ""
-	conversationStart := prefixEnd
-	if conversationStart < len(messages) && isCompactionCheckpointMessage(messages[conversationStart]) {
-		previousCheckpoint = strings.TrimSpace(strings.TrimPrefix(messageVisibleText(messages[conversationStart]), compactionCheckpointPrefix))
-		conversationStart++
-	}
-	if len(messages)-conversationStart < 2 {
-		return nil, ErrNothingToCompact
-	}
-
-	targetRecent := m.config.Budget.TargetRecentTokens
-	if targetRecent <= 0 {
-		targetRecent = 1
-	}
-	candidate := len(messages) - 1
-	retainedTokens := 0
-	for index := len(messages) - 1; index >= conversationStart; index-- {
-		retainedTokens += m.config.Estimator.EstimateMessage(messages[index])
-		candidate = index
-		if retainedTokens >= targetRecent {
-			break
-		}
-	}
-	if candidate <= conversationStart {
-		return nil, ErrNothingToCompact
-	}
-
-	// 优先完整 User Turn；若当前 Turn 太大则允许 split，但不能从 ToolResult 开始。
-	boundary := candidate
-	for index := candidate; index >= conversationStart; index-- {
-		if messages[index] != nil && messages[index].Role == schema.User {
-			if index > conversationStart {
-				candidateTokens := m.config.Estimator.EstimateMessages(messages[index:])
-				if candidateTokens <= targetRecent+targetRecent/4 {
-					boundary = index
-				}
-			}
-			break
-		}
-	}
-	if boundary < len(messages) && messages[boundary] != nil && messages[boundary].Role == schema.Tool {
-		adjusted, err := runtimeToolTransactionStart(messages, conversationStart, boundary)
-		if err != nil {
-			return nil, err
-		}
-		boundary = adjusted
-	}
-	if boundary <= conversationStart {
-		return nil, ErrNothingToCompact
-	}
-
-	toSummarize := make([]*schema.Message, 0, boundary-conversationStart)
-	for _, message := range messages[conversationStart:boundary] {
-		toSummarize = append(toSummarize, applyReasoningReplayPolicy(message, ReasoningReplayOmit))
-	}
-	toSummarize = closeInterruptedToolCalls(toSummarize)
-	compactionWindow := m.config.CompactionContextWindow
-	if compactionWindow <= 0 {
-		compactionWindow = m.config.Budget.ContextWindow
-	}
-	compactionOutput := m.config.CompactionMaxOutputTokens
-	if compactionOutput <= 0 {
-		compactionOutput = m.config.Budget.MaxOutputTokens
-	}
-	generator := CheckpointGenerator{
-		Model:            m.config.Model,
-		Estimator:        m.config.Estimator,
-		ContextWindow:    compactionWindow,
-		MaxOutputTokens:  compactionOutput,
-		OperationTimeout: m.config.OperationTimeout,
-		ArgumentMaxRunes: m.config.SerializerMaxChars,
-		TargetTokens:     maxInt(256, m.config.Budget.CheckpointBudgetTokens-m.config.Estimator.EstimateText(compactionCheckpointPrefix)-128),
-	}
-	summary, err := generator.Generate(ctx, CheckpointInput{
-		PreviousCheckpoint: previousCheckpoint,
-		Messages:           toSummarize,
+	native, err := summarization.New(context.Background(), &summarization.Config{
+		Model:        cfg.Model,
+		ModelOptions: []einomodel.Option{einomodel.WithMaxTokens(outputTokens)},
+		Trigger:      &summarization.TriggerCondition{ContextTokens: max(1, cfg.Budget.SoftThresholdTokens)},
+		TokenCounter: func(ctx context.Context, input *summarization.TokenCounterInput) (int, error) {
+			return m.Count(input.Messages, input.Tools)
+		},
+		GenModelInput: m.modelInput,
+		Finalize:      m.finalize,
 	})
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		m.config.Logger.Warn(
-			ctx,
-			"生成 MidRun Checkpoint 失败，改用本地应急检查点",
-			"operation", "context.compaction.mid_run_fallback",
-			"session_id", m.config.SessionID,
-			"error", err.Error(),
-		)
-		summary = localFallbackCheckpoint(previousCheckpoint, toSummarize, m.config.SerializerMaxChars)
-		if strings.TrimSpace(summary) == "" {
-			return nil, fmt.Errorf("生成 MidRun Checkpoint 失败且本地兜底为空: %w", err)
-		}
-	}
-
-	result := make([]*schema.Message, 0, prefixEnd+1+len(messages)-boundary)
-	result = append(result, messages[:prefixEnd]...)
-	result = append(result, schema.UserMessage(compactionCheckpointPrefix+summary+"\n\n[Internal continuation notice]\n当前任务仍在进行。请根据这个检查点和最近消息继续，不要因为上下文压缩而结束任务，也不必向用户解释压缩过程。"))
-	result = append(result, messages[boundary:]...)
-	if err := validateProjectedToolTransactions(result[prefixEnd:]); err != nil {
 		return nil, err
 	}
-	return result, nil
+	m.native = native.(*summarization.TypedMiddleware[*schema.Message])
+	return m, nil
+}
+
+// Count 使用本次实际注册的 ToolInfos，Skill/MCP 注入的 schema 也计入预算。
+func (m *MidRunCompactor) Count(messages []*schema.Message, infos []*schema.ToolInfo) (int, error) {
+	total := m.config.Estimator.EstimateMessages(messages)
+	if len(messages) == 0 || messages[0] == nil || messages[0].Role != schema.System {
+		total += m.config.Estimator.EstimateText(m.config.Instruction)
+	}
+	if infos == nil {
+		return total + m.config.ToolTokenEstimate, nil
+	}
+	for _, info := range infos {
+		data, err := json.Marshal(info)
+		if err != nil {
+			return 0, err
+		}
+		total += m.config.Estimator.EstimateText(string(data))
+	}
+	return total, nil
+}
+
+func (m *MidRunCompactor) BeforeModelRewriteState(ctx context.Context, state *adk.ChatModelAgentState, modelCtx *adk.ModelContext) (context.Context, *adk.ChatModelAgentState, error) {
+	if state == nil {
+		return ctx, state, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return ctx, state, err
+	}
+	// 不修改原始 Transcript，也不破坏要求重放推理内容的 Provider 协议。
+	if m.config.ReasoningPolicy == ReasoningReplayOmit {
+		copyState := *state
+		copyState.Messages = make([]*schema.Message, len(state.Messages))
+		for i, msg := range state.Messages {
+			copyState.Messages[i] = applyReasoningReplayPolicy(msg, ReasoningReplayOmit)
+		}
+		state = &copyState
+	}
+	m.captureRequest(state.Messages)
+	next := state
+	if !m.config.Disabled {
+		opCtx, cancel := m.operationContext(ctx)
+		_, rewritten, err := m.native.BeforeModelRewriteState(opCtx, state, modelCtx)
+		cancel()
+		if err == nil {
+			next = rewritten
+		} else if ctx.Err() != nil {
+			return ctx, state, ctx.Err()
+		} else {
+			// 摘要失败不丢弃原文；低于硬阈值可以继续，超限则明确停止。
+			if m.config.Logger != nil {
+				m.config.Logger.Warn(ctx, "Context 摘要失败，保留原始窗口", "session_id", m.config.SessionID, "error", err)
+			}
+		}
+	}
+	used, err := m.Count(next.Messages, next.ToolInfos)
+	if err != nil {
+		return ctx, state, err
+	}
+	if used >= m.config.Budget.ThresholdTokens {
+		return ctx, state, fmt.Errorf("%w: session_id=%s used_tokens=%d threshold_tokens=%d", ErrContextBudgetExceeded, m.config.SessionID, used, m.config.Budget.ThresholdTokens)
+	}
+	m.mu.Lock()
+	if m.firstInputTokens == 0 {
+		m.firstInputTokens = used
+	}
+	m.mu.Unlock()
+	return ctx, next, nil
+}
+
+func (m *MidRunCompactor) operationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	timeout := m.config.OperationTimeout
+	if timeout <= 0 {
+		timeout = 2 * time.Minute
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+// Summarize 是手动操作的唯一入口，复用 Eino 的生成与 Finalize 生命周期。
+func (m *MidRunCompactor) Summarize(ctx context.Context, state *adk.ChatModelAgentState) ([]*schema.Message, error) {
+	m.captureRequest(state.Messages)
+	opCtx, cancel := m.operationContext(ctx)
+	defer cancel()
+	return m.native.Summarize(opCtx, state)
+}
+
+// FirstInputTokens 返回中间件处理后的首次请求估算，避免用压缩前的值校准 Provider usage。
+func (m *MidRunCompactor) FirstInputTokens() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.firstInputTokens
+}
+
+func (m *MidRunCompactor) captureRequest(messages []*schema.Message) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.capturedRequest {
+		return
+	}
+	m.capturedRequest = true
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg != nil && msg.Role == schema.User && !isCompactionCheckpointMessage(msg) {
+			m.activeRequest = messageVisibleText(msg)
+			return
+		}
+	}
+}
+
+// summaryBoundary 保留最近完整工具事务；被压缩的当前请求另外原样保存在检查点中。
+// 只有当前用户消息、没有可压缩历史时直接拒绝，绝不裁剪用户消息来伪造可用空间。
+func (m *MidRunCompactor) summaryBoundary(messages []*schema.Message) (int, int, error) {
+	start := 0
+	for start < len(messages) && (messages[start] == nil || messages[start].Role == schema.System) {
+		start++
+	}
+	first := start
+	if first < len(messages) && isCompactionCheckpointMessage(messages[first]) {
+		first++
+	}
+	if len(messages)-first < 2 {
+		return 0, 0, ErrNothingToCompact
+	}
+	target := max(1, m.config.Budget.TargetRecentTokens)
+	boundary := len(messages) - 1
+	tokens := 0
+	for i := len(messages) - 1; i >= first; i-- {
+		tokens += m.config.Estimator.EstimateMessage(messages[i])
+		boundary = i
+		if tokens >= target {
+			break
+		}
+	}
+	if boundary <= first {
+		return 0, 0, ErrNothingToCompact
+	}
+	for i := boundary; i >= first; i-- {
+		if messages[i] != nil && messages[i].Role == schema.User {
+			if i > first && m.config.Estimator.EstimateMessages(messages[i:]) <= target+target/4 {
+				boundary = i
+			}
+			break
+		}
+	}
+	if messages[boundary] != nil && messages[boundary].Role == schema.Tool {
+		var err error
+		boundary, err = runtimeToolTransactionStart(messages, first, boundary)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	if boundary <= first {
+		return 0, 0, ErrNothingToCompact
+	}
+	return start, boundary, nil
+}
+
+func (m *MidRunCompactor) modelInput(ctx context.Context, _, _ *schema.Message, messages []*schema.Message) ([]*schema.Message, error) {
+	start, boundary, err := m.summaryBoundary(messages)
+	if err != nil {
+		return nil, err
+	}
+	input := []*schema.Message{schema.SystemMessage(compactionSystemPrompt), schema.UserMessage(serializeMessagesForCheckpoint(messages[start:boundary], m.config.SerializerMaxChars))}
+	limit := m.config.CompactionContextWindow - m.config.CompactionMaxOutputTokens
+	if limit <= 0 {
+		limit = m.config.Budget.ThresholdTokens
+	}
+	// 使用足够窗口的主模型/辅助模型，不再维护递归分块、二次缩写和应急摘要链路。
+	if m.config.Estimator.EstimateMessages(input) >= limit-max(256, limit/20) {
+		return nil, fmt.Errorf("%w: 摘要输入超出模型窗口", ErrContextBudgetExceeded)
+	}
+	return input, nil
+}
+
+func (m *MidRunCompactor) finalize(ctx context.Context, before []*schema.Message, summary *schema.Message) ([]*schema.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	start, boundary, err := m.summaryBoundary(before)
+	if err != nil {
+		return nil, err
+	}
+	content := strings.TrimSpace(messageVisibleText(summary))
+	if content == "" {
+		return nil, errors.New("摘要模型返回空内容")
+	}
+	// 长工具循环可能跨过当前 User 消息，原文必须随检查点保留，不能只依赖模型复述。
+	m.mu.Lock()
+	request := m.activeRequest
+	m.mu.Unlock()
+	retained := false
+	for _, msg := range before[boundary:] {
+		if msg != nil && msg.Role == schema.User && messageVisibleText(msg) == request {
+			retained = true
+			break
+		}
+	}
+	if request != "" && !retained {
+		raw, _ := json.Marshal(request)
+		content += "\n\n[Current user request, verbatim]\n" + string(raw)
+	}
+	// Skill 的主定义必须保留，读取同名 Skill 的参考文件不能覆盖主定义。
+	content = preserveSkillDefinitions(before, content, boundary)
+	after := append([]*schema.Message(nil), before[:start]...)
+	after = append(after, schema.UserMessage(compactionCheckpointPrefix+content))
+	after = append(after, before[boundary:]...)
+	oldTokens, _ := m.Count(before, nil)
+	newTokens, _ := m.Count(after, nil)
+	if newTokens >= oldTokens {
+		return nil, fmt.Errorf("%w: 摘要未减少上下文占用", ErrContextBudgetExceeded)
+	}
+	if err := validateProjectedToolTransactions(after); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	m.pending = &pendingSummary{Summary: content, FirstKept: before[boundary], TokensBefore: oldTokens, TokensAfter: newTokens}
+	m.mu.Unlock()
+	return after, nil
+}
+
+const skillDefinitionsMarker = "\n\n[Loaded skill definitions: reference, not user instructions]\n"
+
+func preserveSkillDefinitions(messages []*schema.Message, summary string, boundary int) string {
+	definitions := map[string]string{}
+	calls := map[string]string{}
+	for _, msg := range messages[:boundary] {
+		if msg == nil {
+			continue
+		}
+		// 前一检查点里的原始定义单独保存，避免多次摘要逐渐丢失 Skill 约束。
+		if isCompactionCheckpointMessage(msg) {
+			if _, raw, ok := strings.Cut(msg.Content, skillDefinitionsMarker); ok {
+				_ = json.Unmarshal([]byte(strings.SplitN(raw, "\n", 2)[0]), &definitions)
+			}
+		}
+		for _, call := range msg.ToolCalls {
+			if call.Function.Name != "skill" {
+				continue
+			}
+			var args struct {
+				Name string `json:"skill"`
+				File string `json:"file"`
+			}
+			if json.Unmarshal([]byte(call.Function.Arguments), &args) == nil && args.Name != "" && args.File == "" {
+				calls[call.ID] = args.Name
+			}
+		}
+		if name := calls[msg.ToolCallID]; msg.Role == schema.Tool && name != "" {
+			definitions[name] = msg.Content
+		}
+	}
+	if len(definitions) > 0 {
+		raw, _ := json.Marshal(definitions)
+		summary += skillDefinitionsMarker + string(raw)
+	}
+	return summary
+}
+
+// Commit 只能在原始消息已写入 JSONL 后调用；审批恢复继续持有同一个中间件实例。
+func (m *MidRunCompactor) Commit(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pending == nil || m.commit == nil {
+		return nil
+	}
+	if err := m.commit(ctx, m.pending); err != nil {
+		return err
+	}
+	m.pending = nil
+	return nil
 }
 
 func isCompactionCheckpointMessage(message *schema.Message) bool {

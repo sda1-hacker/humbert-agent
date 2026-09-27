@@ -9,7 +9,7 @@ func TestBuildPresentationHidesWriteBody(t *testing.T) {
 	secretBody := "very-sensitive-file-body"
 	presentation, err := BuildPresentation(Request{
 		AgentID: "a", SessionID: "s", ToolName: "write_file", Risk: RiskWrite,
-		Arguments: `{"path":"notes.txt","overwrite":true,"content":"` + secretBody + `"}`,
+		Arguments: `{"file_path":"notes.txt","overwrite":true,"content":"` + secretBody + `"}`,
 		Identity: CapabilityIdentity{
 			Version: CapabilityIdentityVersion, Kind: CapabilityBuiltin, Tool: "write_file", Risk: RiskWrite,
 			SandboxFingerprint: "sbx1:test",

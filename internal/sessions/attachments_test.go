@@ -100,7 +100,7 @@ func TestDocumentAttachmentIsStoredWithoutEagerExtraction(t *testing.T) {
 	if part.Extra["extracted_text"] != "" || part.Extra["document_on_demand"] != true {
 		t.Fatalf("document metadata = %#v", part.Extra)
 	}
-	messages, err := service.BuildContext(ctx, session.ID, 10)
+	messages, err := service.HydrateMessages(ctx, session.ID, []*schema.Message{stored.Message})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestAttachmentSidecarPersistsMetadataAndHydratesRuntime(t *testing.T) {
 		t.Fatalf("sidecar missing: %v", err)
 	}
 
-	messages, err := service.BuildContext(ctx, session.ID, 10)
+	messages, err := service.HydrateMessages(ctx, session.ID, []*schema.Message{stored.Message})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,7 @@ import {
 import {
     useSessionStore,
 } from "./sessions.js";
+import { beginLatestRequest, invalidateRequests } from "../utils/latestRequest.js";
 
 const taskEventName = "humbert:task:event";
 
@@ -85,9 +86,11 @@ export const useTaskStore = defineStore("tasks", {
         },
 
         async load() {
+            const isCurrent = beginLatestRequest(this, "tasks");
             this.loading = true;
             try {
                 const values = await listTasks();
+                if (!isCurrent()) return this.items;
                 this.items = Array.isArray(values) ? values : [];
                 this.refreshError = "";
                 if (
@@ -100,19 +103,24 @@ export const useTaskStore = defineStore("tasks", {
                     this.selectedID = this.items[0].id;
                 }
                 return this.items;
+            } catch (error) {
+                if (isCurrent()) throw error;
+                return this.items;
             } finally {
-                this.loading = false;
+                if (isCurrent()) this.loading = false;
             }
         },
 
         async refresh() {
-            const selectedID = this.selectedID;
-            await this.load();
-            if (selectedID && this.items.some((item) => item.id === selectedID)) {
-                this.selectedID = selectedID;
-            }
-            if (this.selectedID) {
-                await this.loadRuns(this.selectedID);
+            const isCurrent = beginLatestRequest(this, "refresh");
+            try {
+                await this.load();
+                // 等待列表期间用户可能切换任务，继续加载当前选择，不恢复旧选择。
+                if (isCurrent() && this.selectedID) {
+                    await this.loadRuns(this.selectedID);
+                }
+            } catch (error) {
+                if (isCurrent()) throw error;
             }
         },
 
@@ -127,6 +135,7 @@ export const useTaskStore = defineStore("tasks", {
             if (!taskID) {
                 return [];
             }
+            const isCurrent = beginLatestRequest(this, `runs:${taskID}`);
             this.loadingRuns = {
                 ...this.loadingRuns,
                 [taskID]: true,
@@ -134,17 +143,26 @@ export const useTaskStore = defineStore("tasks", {
             try {
                 const values = await listTaskRuns(taskID);
                 const runs = Array.isArray(values) ? values : [];
+                if (!isCurrent()) return this.runsByTask[taskID] ?? [];
                 this.runsByTask = {
                     ...this.runsByTask,
                     [taskID]: runs,
                 };
                 return runs;
+            } catch (error) {
+                if (isCurrent()) throw error;
+                return this.runsByTask[taskID] ?? [];
             } finally {
-                this.loadingRuns = {
-                    ...this.loadingRuns,
-                    [taskID]: false,
-                };
+                if (isCurrent()) {
+                    this.loadingRuns = { ...this.loadingRuns, [taskID]: false };
+                }
             }
+        },
+
+        invalidateRuns(taskID) {
+            // 删除、清空成功后，仍在途的旧查询不能把已移除的记录放回页面。
+            invalidateRequests(this, `runs:${taskID}`);
+            this.loadingRuns = { ...this.loadingRuns, [taskID]: false };
         },
 
         async create(request) {
@@ -166,6 +184,8 @@ export const useTaskStore = defineStore("tasks", {
 
         async setStatus(id, status) {
             const value = await setTaskStatus(id, status);
+            invalidateRequests(this, "tasks");
+            this.loading = false;
             const index = this.items.findIndex((item) => item.id === id);
             if (index >= 0) {
                 this.items[index] = value;
@@ -177,6 +197,7 @@ export const useTaskStore = defineStore("tasks", {
 
         async archive(id) {
             await archiveTask(id);
+            this.invalidateRuns(id);
             const nextRuns = { ...this.runsByTask };
             delete nextRuns[id];
             this.runsByTask = nextRuns;
@@ -185,26 +206,33 @@ export const useTaskStore = defineStore("tasks", {
 
         async remove(id) {
             const deletedSessionIDs = await deleteTask(id);
-            await useSessionStore().forgetSessions(deletedSessionIDs);
+            this.invalidateRuns(id);
             const nextRuns = { ...this.runsByTask };
             delete nextRuns[id];
             this.runsByTask = nextRuns;
+            await useSessionStore().forgetSessions(deletedSessionIDs);
             await this.load();
         },
 
         async removeRun(taskID, runID) {
             const deletedSessionIDs = await deleteTaskRun(runID);
+            this.invalidateRuns(taskID);
+            this.runsByTask = {
+                ...this.runsByTask,
+                [taskID]: (this.runsByTask[taskID] ?? []).filter((run) => run.id !== runID),
+            };
             await useSessionStore().forgetSessions(deletedSessionIDs);
             await this.loadRuns(taskID);
         },
 
         async clearRuns(taskID) {
             const deletedSessionIDs = await clearTaskRuns(taskID);
-            await useSessionStore().forgetSessions(deletedSessionIDs);
+            this.invalidateRuns(taskID);
             this.runsByTask = {
                 ...this.runsByTask,
                 [taskID]: [],
             };
+            await useSessionStore().forgetSessions(deletedSessionIDs);
         },
 
         async runNow(id) {

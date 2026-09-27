@@ -56,6 +56,11 @@ func scanWorkspace(ctx context.Context, agentID, root string) (WorkspaceSnapshot
 	count := 0
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			if path == root {
+				return walkErr
+			}
+			// 读取失败与达到数量上限一样，都不能被当成完整的目录快照。
+			truncated = true
 			return nil
 		}
 		if err := ctx.Err(); err != nil {
@@ -66,6 +71,7 @@ func scanWorkspace(ctx context.Context, agentID, root string) (WorkspaceSnapshot
 		}
 		relative, err := filepath.Rel(root, path)
 		if err != nil {
+			truncated = true
 			return nil
 		}
 		relative = filepath.ToSlash(relative)
@@ -79,10 +85,11 @@ func scanWorkspace(ctx context.Context, agentID, root string) (WorkspaceSnapshot
 		}
 		if count >= maxWorkspaceFingerprintFiles {
 			truncated = true
-			return nil
+			return fs.SkipAll
 		}
 		info, err := entry.Info()
 		if err != nil {
+			truncated = true
 			return nil
 		}
 		files[relative] = WorkspaceFileStamp{Size: info.Size(), ModUnix: info.ModTime().UTC().UnixNano(), Mode: uint32(info.Mode())}
@@ -98,6 +105,8 @@ func scanWorkspace(ctx context.Context, agentID, root string) (WorkspaceSnapshot
 	}
 	sort.Strings(keys)
 	hash := sha256.New()
+	// 扫描完整性改变时也要更新指纹，避免部分快照与完整快照被视为同一个结果。
+	_, _ = fmt.Fprintf(hash, "truncated=%t\n", truncated)
 	for _, key := range keys {
 		stamp := files[key]
 		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%d\x00%d\n", key, stamp.Size, stamp.ModUnix, stamp.Mode)
@@ -119,7 +128,10 @@ func workspaceChangeSummary(previous, current WorkspaceSnapshot) string {
 	for path, now := range current.Files {
 		before, exists := previous.Files[path]
 		if !exists {
-			added++
+			// 旧快照不完整时，这个路径也可能只是之前没有扫描到。
+			if !previous.Truncated {
+				added++
+			}
 			continue
 		}
 		if before != now {
@@ -127,9 +139,13 @@ func workspaceChangeSummary(previous, current WorkspaceSnapshot) string {
 		}
 	}
 	for path := range previous.Files {
-		if _, exists := current.Files[path]; !exists {
+		// 只有完整的新快照才能证明文件已删除；截断导致的缺项不算删除。
+		if _, exists := current.Files[path]; !exists && !current.Truncated {
 			removed++
 		}
+	}
+	if previous.Truncated || current.Truncated {
+		return fmt.Sprintf("工作区扫描不完整：已确认新增 %d，修改 %d，删除 %d；未扫描部分的变化无法判断。", added, modified, removed)
 	}
 	return fmt.Sprintf("工作区发生变化：新增 %d，修改 %d，删除 %d。", added, modified, removed)
 }

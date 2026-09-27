@@ -15,8 +15,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/middlewares/skill"
-	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -105,7 +105,14 @@ func (m *Manager) ResolveRuntimeSnapshot(
 		return RuntimeSnapshot{}, fmt.Errorf("创建 Eino Skill Middleware 失败: %w", err)
 	}
 	snapshot.middleware = middleware
-	snapshot.toolDefinition = &skillToolDefinition{description: snapshot.ToolDescription}
+	_, agentCtx, err := middleware.BeforeAgent(ctx, &adk.ChatModelAgentContext{})
+	if err != nil {
+		return RuntimeSnapshot{}, err
+	}
+	if len(agentCtx.Tools) != 1 {
+		return RuntimeSnapshot{}, errors.New("Eino Skill 工具注册数量异常")
+	}
+	snapshot.toolDefinition = agentCtx.Tools[0]
 	m.logger.Debug(
 		ctx,
 		"已冻结 Agent Skill Snapshot",
@@ -439,32 +446,6 @@ func normalizeSelection(names []string) ([]string, error) {
 	sort.Strings(result)
 	return result, nil
 }
-
-// skillToolDefinition 只实现 BaseTool.Info，用于 ContextEngine 估算 Eino Skill Middleware
-// 实际注入的 schema 占用。执行仍由 Eino middleware 内部 skill tool 完成。
-type skillToolDefinition struct {
-	description string
-}
-
-func (d *skillToolDefinition) Info(context.Context) (*schema.ToolInfo, error) {
-	return &schema.ToolInfo{
-		Name: SkillToolName,
-		Desc: d.description,
-		ParamsOneOf: schema.NewParamsOneOfByParams(map[string]*schema.ParameterInfo{
-			"skill": {
-				Type:     schema.String,
-				Desc:     "要加载的 Skill 名称。",
-				Required: true,
-			},
-			"file": {
-				Type: schema.String,
-				Desc: "可选。Skill 包内的相对文本资源路径，例如 references/api.md。",
-			},
-		}),
-	}, nil
-}
-
-var _ einotool.BaseTool = (*skillToolDefinition)(nil)
 
 // RuntimeIdentities 返回一组 Skill 在当前磁盘状态下的 Identity 与和 RuntimeSnapshot 相同的 Revision。
 // 依赖 Skill 内容的 Builtin Tool 可以用它验证自己与 Eino Skill Middleware 来自同一 Turn Snapshot，

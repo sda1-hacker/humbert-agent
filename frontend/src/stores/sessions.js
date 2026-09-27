@@ -1,3 +1,4 @@
+import { beginLatestRequest, invalidateRequests } from "../utils/latestRequest.js";
 import {
     defineStore,
 } from "pinia";
@@ -106,21 +107,24 @@ if (typeof window !== "undefined") {
     );
 }
 
-/**
- * loadForAgentSequence 用于防止快速切换 Agent 时出现旧请求覆盖新状态。
- *
- * 例如：
- *
- * Agent A
- *    ↓ 请求尚未返回
- * Agent B
- *    ↓ 请求先返回
- * Agent A
- *    ↓ 旧请求最后才返回
- *
- * 如果不做序列保护，A 的 Session List 有可能覆盖 B。
- */
-let loadForAgentSequence = 0;
+// Promise 不属于可渲染状态；按 Store 实例保存，避免侧栏预加载挤掉主聊天区的请求。
+const sessionLoads = new WeakMap();
+
+function invalidateSessionLists(store, agentIDs) {
+    const ids = agentIDs ?? new Set([
+        store.agentID, ...Object.keys(store.itemsByAgent), ...Object.keys(store.loadingAgents),
+    ]);
+    // 元数据变更同时使列表请求和等待该列表的选中流程失效，避免删除后再次自动选中。
+    for (const id of ids) {
+        invalidateRequests(store, `sessions:${id}`);
+        sessionLoads.get(store)?.delete(id);
+        delete store.loadingAgents[id];
+        if (store.agentID === id) {
+            store.agentLoadSequence++;
+            store.loading = false;
+        }
+    }
+}
 
 // 自动标题只需要在首条用户消息落盘后刷新一次 Sidebar Metadata。
 // 该刷新属于辅助 UI，不允许失败后把已经成功的消息同步伪装成发送失败。
@@ -149,6 +153,7 @@ export const useSessionStore =
                  * 当前聊天区所属 Agent。
                  */
                 agentID: "",
+                agentLoadSequence: 0,
 
                 /**
                  * 当前 Agent 的 Session List。
@@ -191,6 +196,9 @@ export const useSessionStore =
                 messages: [],
 
                 messageHasMore: false,
+
+                // 同一视图的刷新、搜索定位和分页共用版本，旧 IPC 结果不能覆盖新视图。
+                messageLoadSequence: 0,
 
                 messageBeforeID: "",
 
@@ -373,6 +381,15 @@ export const useSessionStore =
                         return [];
                     }
 
+                    let loads = sessionLoads.get(this);
+                    if (!loads) {
+                        loads = new Map();
+                        sessionLoads.set(this, loads);
+                    }
+                    // 普通读取优先等待正在进行的刷新；force 仍用于保存后的新快照。
+                    const pending = loads.get(agentID);
+                    if (!force && pending) return pending;
+
                     if (
                         !force &&
                         this.loadedAgents[
@@ -386,35 +403,32 @@ export const useSessionStore =
                         );
                     }
 
+                    const isCurrent = beginLatestRequest(this, `sessions:${agentID}`);
                     this.loadingAgents[
                         agentID
                         ] =
                         true;
 
+                    const request = (async () => {
+                        try {
+                            const result = await listSessions(agentID);
+                            const sessions = Array.isArray(result) ? result : [];
+                            if (!isCurrent()) return null;
+                            this.cacheAgentSessions(agentID, sessions);
+                            return sessions;
+                        } catch (error) {
+                            if (isCurrent()) throw error;
+                            return null;
+                        } finally {
+                            if (isCurrent()) delete this.loadingAgents[agentID];
+                        }
+                    })();
+                    loads.set(agentID, request);
                     try {
-                        const result =
-                            await listSessions(
-                                agentID,
-                            );
-
-                        const sessions =
-                            Array.isArray(
-                                result,
-                            )
-                                ? result
-                                : [];
-
-                        this.cacheAgentSessions(
-                            agentID,
-                            sessions,
-                        );
-
-                        return sessions;
+                        return await request;
                     } finally {
-                        delete this
-                            .loadingAgents[
-                            agentID
-                            ];
+                        // 旧请求结束不能删除后来强制刷新的 Promise。
+                        if (loads.get(agentID) === request) loads.delete(agentID);
                     }
                 },
 
@@ -439,8 +453,13 @@ export const useSessionStore =
                     agentID,
                 ) {
                     const sequence =
-                        ++loadForAgentSequence;
+                        ++this.agentLoadSequence;
 
+                    if (this.agentID !== agentID) {
+                        // 切换开始就解除旧会话选择，IPC 失败或尚未返回时也不能向旧 Agent 发消息。
+                        this.selectedID = "";
+                        this.items = this.itemsByAgent[agentID] ?? [];
+                    }
                     this.agentID =
                         agentID;
 
@@ -449,6 +468,7 @@ export const useSessionStore =
                     this.resetMessagePage();
 
                     if (!agentID) {
+                        this.loading = false;
                         this.items = [];
 
                         this.selectedID =
@@ -460,24 +480,24 @@ export const useSessionStore =
                     this.loading = true;
 
                     try {
-                        const sessions =
-                            await this
-                                .loadAgentSessions(
-                                    agentID,
-                                    {
-                                        force:
-                                            true,
-                                    },
-                                );
+                        // Sidebar 和 AppShell 可能同时切换同一 Agent，复用正在读取的快照。
+                        // 没有进行中的请求时才主动刷新，避免再次打开 Agent 只看到旧缓存。
+                        let sessions = await (sessionLoads.get(this)?.get(agentID)
+                            ?? this.loadAgentSessions(agentID, { force: true }));
+
+                        // 强制刷新可以替换读取，但不能取消仍有效的 Agent 选择。
+                        // 追随最新请求/缓存；删除、重命名等变更会推进选择序列，禁止重新选中旧会话。
+                        while (!sessions && sequence === this.agentLoadSequence && this.agentID === agentID) {
+                            sessions = await this.loadAgentSessions(agentID);
+                        }
 
                         /**
                          * 如果请求期间用户已经切换到了另外一个 Agent，
-                         * 当前结果只允许留在 Cache，
-                         * 不允许覆盖主聊天区。
+                         * 列表只在自身请求仍有效时写入 Cache；主聊天区还需校验选择序列。
                          */
                         if (
-                            sequence !==
-                            loadForAgentSequence ||
+                            !sessions || sequence !==
+                            this.agentLoadSequence ||
                             this.agentID !==
                             agentID
                         ) {
@@ -512,7 +532,7 @@ export const useSessionStore =
                     } finally {
                         if (
                             sequence ===
-                            loadForAgentSequence
+                            this.agentLoadSequence
                         ) {
                             this.loading =
                                 false;
@@ -566,6 +586,7 @@ export const useSessionStore =
                             "",
                         );
 
+                    invalidateSessionLists(this, [agentID]);
                     const sessions =
                         await this
                             .loadAgentSessions(
@@ -576,6 +597,7 @@ export const useSessionStore =
                                 },
                             );
 
+                    if (!sessions) return result;
                     this.agentID =
                         agentID;
 
@@ -629,6 +651,9 @@ export const useSessionStore =
                     sessionID =
                         this.selectedID,
                 ) {
+                    if (sessionID && sessionID !== this.selectedID) return;
+                    const sequence = ++this.messageLoadSequence;
+                    this.loadingOlderMessages = false;
                     if (!sessionID) {
                         this.messages = [];
 
@@ -645,13 +670,17 @@ export const useSessionStore =
                     /**
                      * IPC 返回期间用户可能切换 Session。
                      *
-                     * 只有仍然处于目标 Session 时，
+                     * 只有仍然处于目标 Session 且请求版本最新时，
                      * 才允许覆盖主 Message List。
                      */
                     if (
+                        sequence === this.messageLoadSequence &&
                         sessionID ===
                         this.selectedID
                     ) {
+                        // 新窗口落地也淘汰期间发出的旧窗口分页，即使分页游标恰好相同。
+                        this.messageLoadSequence++;
+                        this.loadingOlderMessages = false;
                         this.messages =
                             Array.isArray(
                                 result?.messages,
@@ -724,6 +753,7 @@ export const useSessionStore =
 
                     const beforeID =
                         this.messageBeforeID;
+                    const sequence = this.messageLoadSequence;
                     this.loadingOlderMessages =
                         true;
                     try {
@@ -734,6 +764,7 @@ export const useSessionStore =
                                 80,
                             );
                         if (
+                            sequence !== this.messageLoadSequence ||
                             sessionID !==
                             this.selectedID ||
                             beforeID !==
@@ -776,6 +807,7 @@ export const useSessionStore =
                         return unique.length;
                     } finally {
                         if (
+                            sequence === this.messageLoadSequence &&
                             sessionID ===
                             this.selectedID
                         ) {
@@ -788,8 +820,12 @@ export const useSessionStore =
                 async loadSearchWindow(entryID) {
                     const sessionID = this.selectedID;
                     if (!sessionID || !entryID) return false;
+                    const sequence = ++this.messageLoadSequence;
+                    this.loadingOlderMessages = false;
                     const result = await getMessageWindow(sessionID, entryID);
-                    if (sessionID !== this.selectedID || this.jumpTargetID !== entryID) return false;
+                    if (sequence !== this.messageLoadSequence || sessionID !== this.selectedID || this.jumpTargetID !== entryID) return false;
+                    this.messageLoadSequence++;
+                    this.loadingOlderMessages = false;
                     this.messages = Array.isArray(result?.messages) ? result.messages : [];
                     this.messageHasMore = Boolean(result?.hasMore);
                     this.messageBeforeID = result?.nextBeforeID ?? "";
@@ -798,6 +834,7 @@ export const useSessionStore =
                 },
 
                 resetMessagePage() {
+                    this.messageLoadSequence++;
                     this.messageHasMore = false;
                     this.messageBeforeID = "";
                     this.loadingOlderMessages = false;
@@ -890,6 +927,7 @@ export const useSessionStore =
                             normalized,
                         );
 
+                    invalidateSessionLists(this, result.agentID ? [result.agentID] : undefined);
                     this.items =
                         this.items.map(
                             (session) =>
@@ -935,6 +973,7 @@ export const useSessionStore =
 
                 async setArchived(id, archived) {
                     const result = await setSessionArchived(id, archived);
+                    invalidateSessionLists(this, result.agentID ? [result.agentID] : undefined);
                     this.items = this.items.map((session) => session.id === id ? result : session);
                     for (const agentID of Object.keys(this.itemsByAgent)) {
                         this.itemsByAgent[agentID] = this.itemsByAgent[agentID].map((session) => session.id === id ? result : session);
@@ -943,6 +982,7 @@ export const useSessionStore =
                         const next = this.items.find((session) => !session.archived && session.id !== id);
                         this.selectedID = next?.id || "";
                         this.messages = [];
+                        this.resetMessagePage();
                         if (next) await this.refreshMessages(next.id);
                     }
                     return result;
@@ -966,6 +1006,8 @@ export const useSessionStore =
                         return;
                     }
 
+                    // Task 删除可能传来尚未缓存的 Session ID，保守淘汰所有在途目录。
+                    invalidateSessionLists(this);
                     const wasSelected =
                         forgotten.has(
                             this.selectedID,
@@ -1050,6 +1092,7 @@ export const useSessionStore =
                         return;
                     }
 
+                    invalidateSessionLists(this, [agentID]);
                     const forgottenSessions =
                         this.itemsByAgent[
                             agentID

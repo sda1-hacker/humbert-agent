@@ -301,9 +301,6 @@ func (r *Registry) Resolve(
 		}
 		for _, name := range scope.EnabledBuiltinTools {
 			if _, ok := known[name]; !ok {
-				if IsRemovedBuiltinTool(name) {
-					continue
-				}
 				return ResolvedTools{}, fmt.Errorf("%w: Agent 选择了不存在的 Builtin Tool %q", ErrToolNotFound, name)
 			}
 			selected[name] = struct{}{}
@@ -355,7 +352,6 @@ func (r *Registry) Resolve(
 			descriptor,
 			scope,
 			instance,
-			r.resultArchiver,
 		)
 		if err != nil {
 			return ResolvedTools{},
@@ -377,15 +373,4 @@ func (r *Registry) Resolve(
 		ToolNames:   resolvedNames,
 		Revision:    revision,
 	}, nil
-}
-
-// IsRemovedBuiltinTool 让开发阶段已经落盘的旧 Agent Profile 可以被新版本读取。
-// 返回 true 的工具没有 Factory、不会进入 Runtime，也不能再被模型调用。
-func IsRemovedBuiltinTool(name string) bool {
-	switch name {
-	case "delegate_task", "delegation_status", "cancel_delegation":
-		return true
-	default:
-		return false
-	}
 }

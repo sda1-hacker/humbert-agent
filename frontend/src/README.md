@@ -27,3 +27,5 @@ flowchart LR
 | `utils/toolProtocol.js`、`utils/toolTrace.js`、`utils/toolEffects.js` | 将持久化工具事务投影成界面展示。 |
 
 调试 UI 与磁盘不一致时，先确认 `api` 返回与 Wails 事件，再确认 Session API 返回的完整消息；不要直接从当前组件 DOM 推断后端事实。
+
+运行态集中到 `stores/runtime.js` 的 `runs[sessionID]`，用请求身份与事件修订防止旧异步结果清理新运行。MCP 两个页面共用 `stores/mcp.js`，合并目录请求并在配置更新后使工具缓存失效。

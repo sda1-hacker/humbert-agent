@@ -41,9 +41,9 @@ test("模型未返回思考和过程正文时不伪造思考消息", () => {
 
 test("只把成功的工作区相对文件变化标记为可预览", () => {
   const calls = [
-    { name: "write_file", status: "completed", arguments: JSON.stringify({ path: "notes.txt" }), result: JSON.stringify({ created: true }) },
-    { name: "write_file", status: "failed", arguments: JSON.stringify({ path: "failed.txt" }) },
-    { name: "write_file", status: "completed", arguments: JSON.stringify({ path: "../secret.txt" }) },
+    { name: "write_file", status: "completed", arguments: JSON.stringify({ file_path: "notes.txt" }), result: JSON.stringify({ created: true }) },
+    { name: "write_file", status: "failed", arguments: JSON.stringify({ file_path: "failed.txt" }) },
+    { name: "write_file", status: "completed", arguments: JSON.stringify({ file_path: "../secret.txt" }) },
   ];
   const changes = fileChangesOfCalls(calls);
   assert.equal(changes.length, 2);

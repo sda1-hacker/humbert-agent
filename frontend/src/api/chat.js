@@ -65,17 +65,14 @@ export function getContextOverview(sessionID) {
 /**
  * 主动压缩当前 Session Context。
  *
- * updateMemory=false 对应“压缩”；true 对应“压缩并更新”，由后端在同一受控操作中额外
- * 强制刷新当前 Session memory.json。运行中的 Session 会被后端拒绝，前端不尝试绕过。
+ * 与自动压缩共用 Eino Summarization；运行中的会话由后端拒绝。
  */
 export function compactContext(
     sessionID,
-    updateMemory,
 ) {
     return Call.ByName(
         `${chatServiceName}.CompactContext`,
         sessionID,
-        Boolean(updateMemory),
     );
 }
 

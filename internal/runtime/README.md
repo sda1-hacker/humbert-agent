@@ -34,7 +34,7 @@ flowchart LR
 | 文件 | 关键函数 |
 | --- | --- |
 | `service.go` | `StartTurn`、`registerInterruptedRun`、`ResolveApproval`、`completeTurn`、`cleanupRun`。 |
-| `resolver.go` | `resolveContextBase`、`ResolveTurn`、`compactUntilSafe`、`MaintainAfterTurn`。 |
+| `resolver.go` | `resolveContextBase`、`ResolveTurn`、`MaintainAfterTurn`。 |
 | `executor.go` | `buildRunner`、`consumeEvents`、`persistAssistantMessage`、`persistCompletedTool`。 |
 | `types.go` | `Snapshot`、`ExecutionLimits`、`Event`、`RuntimeManifest`。 |
 | `prompt.go` | `buildRuntimeInstruction`，跟踪最终系统指令。 |
@@ -55,3 +55,7 @@ ResolveApproval: permission decision → Resume(checkpoint) → 同样三种出�
 `Snapshot` 的模型、工具、消息与安全配置在 `ResolveTurn` 结束后不应就地修改；只允许运行计数等受控状态随着调用变化。`Executor.consumeEvents` 可能收到多个消息片段，只有合成完整的 Assistant Step 后才调用 `persistAssistantMessage`。ToolCall 与 ToolResult 使用稳定 ID 对齐；失败时要检查是否已有部分终态消息写入，不能在重试时盲目再追加用户输入。
 
 `Service.Close` 取消活动运行并等待 worker，审批等待者也要收敛。Task 的运行上限属于 `ExecutionLimits`，普通聊天没有任务上限。任何在 Service 外直接调用 `Executor` 的新入口都可能绕过 Session reservation 和快照冻结，应优先通过 Runtime Service 扩展。
+
+中间件固定顺序为 Skill → Reduction → Summarization/硬预算。`MaintainAfterTurn` 仅校准实际 usage 并提交待定摘要，不发起第二次摘要模型调用。详见 [Context](../contextengine/README.md)。
+
+模型/工具次数与上下文窗口大小是两类限制。`model_accounting.go` 在真实模型调用入口统一统计主模型、摘要、视觉辅助和子 Agent；`limits.go` 原子预留次数，达到已报告 Token 阈值后停止后续调用。工具上下文携带共享预算，浏览器截图分析也通过 `TrackAuxiliaryModel` 接入。流式 Usage 按累计差值记账，Executor 不再重复计数。
