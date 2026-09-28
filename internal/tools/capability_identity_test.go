@@ -1,6 +1,8 @@
 package tools
 
 import (
+	"encoding/json"
+	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,5 +41,21 @@ func TestCommandIdentityBindsArgsDirectoryAndTimeout(t *testing.T) {
 		if got := build(changed); got == base {
 			t.Fatalf("changed invocation retained fingerprint: %s", changed)
 		}
+	}
+}
+
+func TestCommandIdentityAcceptsAbsoluteExecutable(t *testing.T) {
+	root, rootErr := sandbox.CanonicalRoot(t.TempDir())
+	if rootErr != nil {
+		t.Fatal(rootErr)
+	}
+	executable, err := commandenv.Resolve("go", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]any{"command": executable, "args": []string{"vet", "./..."}, "working_directory": root})
+	identity, err := buildCapabilityIdentity(Descriptor{Name: "run_command", Risk: RiskExec}, Scope{Workspace: workspace.Workspace{RootDir: root}}, string(args))
+	if err != nil || identity.Executable != executable || identity.Command != "go" {
+		t.Fatalf("完整路径身份失败: %+v %v", identity, err)
 	}
 }

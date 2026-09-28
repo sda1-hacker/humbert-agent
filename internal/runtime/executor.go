@@ -25,6 +25,8 @@ import (
 // 不能直接写 Session JSONL。
 type DeltaEmitter func(eventType EventType, delta string)
 
+const defaultAgentMaxIterations = 200
+
 // Executor 执行不可变 Runtime Snapshot。
 type Executor struct{}
 
@@ -125,13 +127,18 @@ func buildRunner(
 	snapshot *Snapshot,
 	checkpointStore adk.CheckPointStore,
 ) (*adk.Runner, error) {
+	iterations := snapshot.MaxIterations
+	if iterations <= 0 {
+		iterations = defaultAgentMaxIterations
+	}
 	agent, err := adk.NewChatModelAgent(
 		ctx,
 		&adk.ChatModelAgentConfig{
-			Name:        snapshot.AgentName,
-			Instruction: snapshot.Instruction,
-			Model:       trackModel(snapshot.Model, snapshot),
-			Handlers:    append([]adk.ChatModelAgentMiddleware(nil), snapshot.AgentHandlers...),
+			MaxIterations: iterations,
+			Name:          snapshot.AgentName,
+			Instruction:   snapshot.Instruction,
+			Model:         trackModel(snapshot.Model, snapshot),
+			Handlers:      append([]adk.ChatModelAgentMiddleware(nil), snapshot.AgentHandlers...),
 			ToolsConfig: adk.ToolsConfig{
 				ToolsNodeConfig: compose.ToolsNodeConfig{
 					Tools:               snapshot.Tools,

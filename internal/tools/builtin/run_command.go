@@ -6,9 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +15,7 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 
+	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
@@ -29,7 +28,7 @@ const (
 	// 1-2 秒的超时很容易把一次完全正常的短命令误判为失败。
 	minimumCommandTimeout = 5 * time.Second
 
-	runCommandToolDescription = `在只读 Agent Workspace 中执行本地程序。不会启动 Shell；command 填程序名，args 逐项填写参数。命令及其子进程不能修改或删除工作区文件；临时文件请写入 TMPDIR。网页操作和网页截图使用 browser。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
+	runCommandToolDescription = `在当前 Sandbox 授权范围内执行本地程序。command 可填程序名或路径，args 逐项填写；不会隐式启动 Shell。命令可修改获准的目录；删除、未知脚本等由审批策略判断。临时文件请写入 TMPDIR。网页操作和网页截图使用 browser。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
 )
 
 // CommandLimits 描述 run_command 的资源边界。
@@ -83,14 +82,14 @@ func (l CommandLimits) Validate() error {
 
 // RunCommandInput 是 run_command 的模型输入。
 type RunCommandInput struct {
-	// Command 只能是程序名称，不能是路径，也不能是一整段 Shell 命令。
-	Command string `json:"command" jsonschema:"description=Executable name, for example find, git, go or python3. Do not include a path or shell syntax."`
+	// Command 支持程序名或路径；参数单独传入，不解析 Shell 命令字符串。
+	Command string `json:"command" jsonschema:"description=Executable name or path, for example go or /opt/homebrew/bin/go. No shell syntax."`
 
 	// Args 会逐项作为 argv 传递，不经过 Shell 解析。
 	Args []string `json:"args,omitempty" jsonschema:"description=Argument vector passed directly to the executable. Do not combine multiple arguments into a shell command string."`
 
-	// WorkingDirectory 是 Workspace 内的相对目录，默认 "."。
-	WorkingDirectory string `json:"working_directory,omitempty" jsonschema:"description=Relative working directory inside the current workspace. Defaults to workspace root."`
+	// WorkingDirectory 支持沙盒允许的绝对目录或工作区相对目录，默认 "."。
+	WorkingDirectory string `json:"working_directory,omitempty" jsonschema:"description=Absolute or workspace-relative working directory allowed by the active sandbox. Defaults to workspace root."`
 
 	// TimeoutSeconds 允许模型缩短或适度延长单次命令时间，但不能突破配置硬上限。
 	TimeoutSeconds int `json:"timeout_seconds,omitempty" jsonschema:"description=Optional timeout in seconds. The configured maximum is always enforced."`
@@ -268,10 +267,6 @@ func (f *RunCommandFactory) run(
 		)
 	}
 
-	if err := rejectDestructiveCommand(command, input.Args); err != nil {
-		return nil, err
-	}
-
 	if err :=
 		validateCommandArguments(
 			input.Args,
@@ -299,44 +294,10 @@ func (f *RunCommandFactory) run(
 		)
 	}
 
-	executable, err :=
-		exec.LookPath(
-			command,
-		)
-
+	executable, err := commandenv.Resolve(command, workingDirectory)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"run_command 找不到程序 %q: %w",
-			command,
-			err,
-		)
+		return nil, fmt.Errorf("run_command: %w", err)
 	}
-
-	if !filepath.IsAbs(
-		executable,
-	) {
-		absolute,
-			absErr :=
-			filepath.Abs(
-				executable,
-			)
-
-		if absErr != nil {
-			return nil, fmt.Errorf(
-				"run_command 解析程序路径失败: %w",
-				absErr,
-			)
-		}
-
-		executable =
-			absolute
-	}
-
-	resolvedExecutable, resolveErr := filepath.EvalSymlinks(executable)
-	if resolveErr != nil {
-		return nil, fmt.Errorf("run_command 解析程序真实路径失败: %w", resolveErr)
-	}
-	executable = resolvedExecutable
 
 	timeout :=
 		f.limits.
@@ -361,13 +322,12 @@ func (f *RunCommandFactory) run(
 		runCtx,
 		scope.SandboxPolicy(),
 		sandbox.ProcessSpec{
-			Executable:        executable,
-			Args:              append([]string(nil), input.Args...),
-			Dir:               workingDirectory,
-			Env:               cloneStringSlice(f.environment),
-			Stdout:            capture,
-			Stderr:            capture,
-			ReadOnlyWorkspace: true,
+			Executable: executable,
+			Args:       append([]string(nil), input.Args...),
+			Dir:        workingDirectory,
+			Env:        cloneStringSlice(f.environment),
+			Stdout:     capture,
+			Stderr:     capture,
 		},
 	)
 	if ctx.Err() != nil {
@@ -436,62 +396,8 @@ func cloneStringSlice(
 	return cloned
 }
 
-func normalizeCommandName(
-	command string,
-) string {
-	command =
-		strings.TrimSpace(
-			command,
-		)
-
-	if runtime.GOOS ==
-		"windows" {
-		command =
-			strings.ToLower(
-				command,
-			)
-	}
-
-	return command
-}
-
-func validateCommandName(
-	command string,
-) error {
-	if command == "" {
-		return errors.New(
-			"程序名称不能为空",
-		)
-	}
-
-	if len(command) > 128 {
-		return errors.New(
-			"程序名称过长",
-		)
-	}
-
-	if strings.ContainsRune(
-		command,
-		'\x00',
-	) {
-		return errors.New(
-			"程序名称不能包含 NUL",
-		)
-	}
-
-	if filepath.Base(command) !=
-		command ||
-		strings.ContainsAny(
-			command,
-			`/\`,
-		) {
-		return errors.New(
-			"只能提供程序名称，不能提供路径",
-		)
-	}
-
-	return nil
-}
+func normalizeCommandName(command string) string { return strings.TrimSpace(command) }
+func validateCommandName(command string) error   { return commandenv.Validate(command) }
 
 func validateCommandArguments(
 	args []string,
@@ -534,35 +440,6 @@ func validateCommandArguments(
 		}
 	}
 
-	return nil
-}
-
-// rejectDestructiveCommand gives a clear error for common deletion requests.
-// It is a usability check, not the security boundary: arbitrary interpreters
-// and child processes are contained by ReadOnlyWorkspace in the OS sandbox.
-func rejectDestructiveCommand(command string, args []string) error {
-	switch strings.ToLower(command) {
-	case "rm", "rmdir", "unlink", "shred":
-		return fmt.Errorf("run_command 拒绝删除命令 %q；工作区文件只能通过受控文件工具修改", command)
-	case "find":
-		for _, arg := range args {
-			switch strings.ToLower(arg) {
-			case "-delete", "-exec", "-execdir", "-ok", "-okdir":
-				return fmt.Errorf("run_command 拒绝 find %s；工作区文件只能通过受控文件工具修改", arg)
-			}
-		}
-	case "git":
-		for _, arg := range args {
-			if strings.HasPrefix(arg, "-") {
-				continue
-			}
-			switch strings.ToLower(arg) {
-			case "clean", "rm":
-				return fmt.Errorf("run_command 拒绝 git %s；工作区文件只能通过受控文件工具修改", arg)
-			}
-			break
-		}
-	}
 	return nil
 }
 

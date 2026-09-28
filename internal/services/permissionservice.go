@@ -14,6 +14,33 @@ import (
 
 const permissionServiceTimeout = 10 * time.Second
 
+// Mode 是聊天输入区的轻量入口，不需要加载全部历史授权规则。
+func (s *PermissionService) Mode() (string, error) {
+	if err := s.validate(); err != nil {
+		return "", err
+	}
+	return s.core.Permissions().Config().Mode, nil
+}
+
+// SetMode 只变更审批模式，保留等待时间；与设置页复用同一持久化和运行时更新入口。
+func (s *PermissionService) SetMode(mode string) (string, error) {
+	if err := s.validate(); err != nil {
+		return "", err
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	switch mode {
+	case config.PermissionModeFull, config.PermissionModeRisk, config.PermissionModeAlways:
+	default:
+		return "", fmt.Errorf("不支持的审批模式 %q", mode)
+	}
+	cfg := s.core.Permissions().Config()
+	if err := s.UpdateSettings(UpdatePermissionSettingsRequest{Mode: mode, Enabled: cfg.Enabled,
+		ReadAction: cfg.ReadAction, WriteAction: cfg.WriteAction, ExecAction: cfg.ExecAction, ApprovalTimeoutMS: cfg.ApprovalTimeoutMS}); err != nil {
+		return "", err
+	}
+	return s.core.Permissions().Config().Mode, nil
+}
+
 // PermissionRuleDTO 是设置页可以安全展示的一条 Permission Rule。
 //
 // DTO 不包含原始 Tool Arguments，只暴露 CapabilityIdentity 中可安全展示的身份摘要。
@@ -57,7 +84,8 @@ type PermissionRuleDTO struct {
 // 应用重启后自然消失。默认策略来自 PermissionEngine 当前运行配置，与通过 Viper 写回的
 // config.yaml 保持一致。
 type PermissionStateDTO struct {
-	Enabled bool `json:"enabled"`
+	Mode    string `json:"mode"`
+	Enabled bool   `json:"enabled"`
 
 	ReadAction  string `json:"readAction"`
 	WriteAction string `json:"writeAction"`
@@ -74,7 +102,8 @@ type PermissionStateDTO struct {
 // Action 使用 allow/ask/deny；ApprovalTimeoutMS 使用毫秒。后端会再次规范化和校验，前端
 // 表单约束不能被视作安全边界。
 type UpdatePermissionSettingsRequest struct {
-	Enabled bool `json:"enabled"`
+	Mode    string `json:"mode"`
+	Enabled bool   `json:"enabled"`
 
 	ReadAction  string `json:"readAction"`
 	WriteAction string `json:"writeAction"`
@@ -138,6 +167,7 @@ func (s *PermissionService) State(sessionID string) (PermissionStateDTO, error) 
 
 	cfg := s.core.Permissions().Config()
 	return PermissionStateDTO{
+		Mode:              cfg.Mode,
 		Enabled:           cfg.Enabled,
 		ReadAction:        cfg.ReadAction,
 		WriteAction:       cfg.WriteAction,
@@ -152,13 +182,14 @@ func (s *PermissionService) State(sessionID string) (PermissionStateDTO, error) 
 // 进程立即采用新配置。
 //
 // 已经 Pending 的 Approval 保留创建时的 ExpiresAt；新超时只作用于后续审批。已有长期或
-// Session Rule 也不被默认策略修改覆盖，因为它们本来就比默认 Risk Policy 优先。
+// Session Rule 不会被删除；always 模式忽略历史 Allow，显式 Deny 始终优先。
 func (s *PermissionService) UpdateSettings(request UpdatePermissionSettingsRequest) error {
 	if err := s.validate(); err != nil {
 		return err
 	}
 
 	cfg := config.PermissionConfig{
+		Mode:              request.Mode,
 		Enabled:           request.Enabled,
 		ReadAction:        request.ReadAction,
 		WriteAction:       request.WriteAction,
@@ -186,6 +217,7 @@ func (s *PermissionService) UpdateSettings(request UpdatePermissionSettingsReque
 		ctx,
 		"Permission 默认策略已更新",
 		"operation", "permission.settings.update",
+		"mode", cfg.Mode,
 		"enabled", cfg.Enabled,
 		"read_action", cfg.ReadAction,
 		"write_action", cfg.WriteAction,

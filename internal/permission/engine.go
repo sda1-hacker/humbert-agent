@@ -56,10 +56,10 @@ func NewEngine(cfg config.PermissionConfig, store *Store, logger *logging.Logger
 	}, nil
 }
 
-// Evaluate 按“显式拒绝优先 → Session Allow → Agent Allow → 默认 Risk Policy”的顺序计算结论。
+// Evaluate 按“显式拒绝 → 审批模式 → Session Allow → Agent Allow → 常规操作识别”计算结论。
 //
 // 显式 Deny 无论来自 Session 还是 Agent Scope 都优先于 Allow，避免一个较宽的长期授权覆盖
-// 用户后来创建的拒绝规则。底层 Workspace Path Guard、Command Allowlist 等安全边界在真实
+// 用户后来创建的拒绝规则。底层 Workspace PathGuard、进程隔离等安全边界在真实
 // Tool 内仍然继续执行，Permission Allow 永远不能绕过这些约束。
 func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error) {
 	if ctx == nil {
@@ -101,6 +101,14 @@ func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error
 		}, nil
 	}
 
+	// 每次询问必须先于历史 Allow；显式 Deny 仍然优先。完全操作不再为普通工具弹窗。
+	if cfg.Mode == config.PermissionModeAlways {
+		return Decision{Action: ActionAsk, Reason: "请求审批模式：每次操作都需确认", ApprovalID: uuid.NewString(), Identity: request.Identity.Normalize(), Presentation: presentation}, nil
+	}
+	if cfg.Mode == config.PermissionModeFull {
+		return Decision{Action: ActionAllow, Reason: "完全操作模式", Identity: request.Identity.Normalize(), Presentation: presentation}, nil
+	}
+
 	// install_skill 和 schedule_task 的 Rule 身份尚未绑定本次参数，仍只允许单次批准。
 	// run_command 的旧规则没有 InvocationFingerprint，会在 ruleMatches 中失效。
 	if request.ToolName != "install_skill" && request.ToolName != "schedule_task" {
@@ -126,6 +134,17 @@ func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error
 
 	action := e.defaultActionWithConfig(cfg, request.Risk)
 	reason := "使用 Capability 默认风险策略"
+	if cfg.Mode == config.PermissionModeRisk {
+		action = ActionAsk
+		reason = "该操作需要风险确认"
+		if routineOperation(request) {
+			action = ActionAllow
+			reason = "工作区内常规操作"
+			if request.Risk == RiskRead && request.Identity.Kind == CapabilityBuiltin {
+				reason = "内置只读工具自动执行，目录权限仍由沙盒校验"
+			}
+		}
+	}
 	if request.ToolName == "install_skill" {
 		// Permission 系统启用时，远程 Skill 安装必须逐次确认，不能因为 write 默认策略
 		// 被配置为 allow 就静默下载安装网络内容。显式 Deny 已在上方优先处理。

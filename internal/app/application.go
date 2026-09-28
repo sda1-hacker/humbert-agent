@@ -225,6 +225,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Permission Engine 失败: %w", err)
 	}
+	sandboxManager.SetFullAccessProvider(func() bool { return permissionEngine.Config().Mode == config.PermissionModeFull })
 	approvalManager, err := approval.NewManager(
 		time.Duration(cfg.Security.Permissions.ApprovalTimeoutMS)*time.Millisecond,
 		permissionEngine,
@@ -409,6 +410,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		contextEngine,
 		preferenceStore,
 		runtimeReporter,
+		cfg.Runtime.MaxIterations,
 	)
 	if err := runtimeResolver.Validate(); err != nil {
 		return nil, fmt.Errorf("RuntimeResolver 配置无效: %w", err)

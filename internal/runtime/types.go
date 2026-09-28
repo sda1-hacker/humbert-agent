@@ -251,6 +251,7 @@ type ContextOverview struct {
 
 // Snapshot 是一次 User Turn 的不可变 Runtime Snapshot。
 type Snapshot struct {
+	MaxIterations int
 	// Manifest 是本 Turn 已冻结的统一能力身份。执行所需的 Model/Tools 仍保存在下方专用字段；
 	// Manifest 只负责审计、事件和 UI 检查，避免这些消费者各自重新拼装。
 	Manifest RuntimeManifest

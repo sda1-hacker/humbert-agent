@@ -9,8 +9,19 @@ import (
 	"github.com/spf13/viper"
 )
 
+const (
+	PermissionModeFull   = "full"
+	PermissionModeRisk   = "risk"
+	PermissionModeAlways = "always"
+)
+
 // NormalizePermissionConfig 返回规范化后的 Permission 配置副本。
 func NormalizePermissionConfig(cfg PermissionConfig) PermissionConfig {
+	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
+	if cfg.Mode != "" {
+		cfg.Enabled = true
+		cfg.ReadAction, cfg.WriteAction, cfg.ExecAction = "allow", "ask", "ask"
+	}
 	cfg.ReadAction = strings.ToLower(strings.TrimSpace(cfg.ReadAction))
 	cfg.WriteAction = strings.ToLower(strings.TrimSpace(cfg.WriteAction))
 	cfg.ExecAction = strings.ToLower(strings.TrimSpace(cfg.ExecAction))
@@ -20,6 +31,11 @@ func NormalizePermissionConfig(cfg PermissionConfig) PermissionConfig {
 // ValidatePermissionConfig 校验 Permission + Approval 的应用级设置。
 func ValidatePermissionConfig(cfg PermissionConfig) error {
 	cfg = NormalizePermissionConfig(cfg)
+	switch cfg.Mode {
+	case "", PermissionModeFull, PermissionModeRisk, PermissionModeAlways:
+	default:
+		return fmt.Errorf("不支持的审批模式 %q", cfg.Mode)
+	}
 	for name, action := range map[string]string{
 		"read_action":  cfg.ReadAction,
 		"write_action": cfg.WriteAction,
@@ -44,6 +60,7 @@ func SavePermissionConfig(ctx context.Context, configFile string, cfg Permission
 		return fmt.Errorf("保存 Permission 配置失败: %w", err)
 	}
 	return saveConfigMutation(ctx, configFile, "保存 Permission 配置", func(v *viper.Viper) {
+		v.Set("security.permissions.mode", cfg.Mode)
 		v.Set("security.permissions.enabled", cfg.Enabled)
 		v.Set("security.permissions.read_action", cfg.ReadAction)
 		v.Set("security.permissions.write_action", cfg.WriteAction)

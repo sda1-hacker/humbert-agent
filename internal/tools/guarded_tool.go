@@ -129,14 +129,16 @@ func (t *guardedInvokableTool) InvokableRun(
 		return "", fmt.Errorf("Tool %q Capability Identity 构建失败: %w", t.descriptor.Name, err)
 	}
 	request := permission.Request{
-		RequestID: t.scope.RequestID,
-		RunID:     t.scope.RunID,
-		SessionID: t.scope.SessionID,
-		AgentID:   t.scope.AgentID,
-		ToolName:  t.descriptor.Name,
-		Risk:      t.descriptor.Risk,
-		Arguments: argumentsInJSON,
-		Identity:  identity,
+		RequestID:     t.scope.RequestID,
+		RunID:         t.scope.RunID,
+		SessionID:     t.scope.SessionID,
+		AgentID:       t.scope.AgentID,
+		ToolName:      t.descriptor.Name,
+		Risk:          t.descriptor.Risk,
+		Arguments:     argumentsInJSON,
+		WorkspaceRoot: t.scope.SandboxPolicy().WorkspaceRoot,
+		NativeSandbox: t.scope.SandboxPolicy().Profile != "full_access" && t.scope.SandboxPolicy().Capability.Available && t.scope.SandboxPolicy().Capability.Filesystem && t.scope.SandboxPolicy().NativeMode != "off",
+		Identity:      identity,
 	}
 	if origin := t.descriptor.MCPOrigin; origin != nil {
 		request.MCPServerName = origin.ServerName

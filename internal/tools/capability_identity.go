@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
-	"path/filepath"
-	"runtime"
 	"strings"
 
+	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
@@ -53,17 +51,6 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command Capability Identity 失败: %w", err)
 		}
-		command := normalizeCapabilityCommand(input.Command)
-		if err := validateCapabilityCommand(command); err != nil {
-			return permission.CapabilityIdentity{}, fmt.Errorf("run_command Capability Identity 无效: %w", err)
-		}
-		executable, err := resolveCapabilityExecutable(command)
-		if err != nil {
-			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command 可执行文件身份失败: %w", err)
-		}
-		identity.Kind = permission.CapabilityCommand
-		identity.Command = command
-		identity.Executable = executable
 		workingDirectory := strings.TrimSpace(input.WorkingDirectory)
 		if workingDirectory == "" {
 			workingDirectory = "."
@@ -72,6 +59,13 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		if err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command 工作目录身份失败: %w", err)
 		}
+		executable, err := commandenv.Resolve(input.Command, decision.CanonicalPath)
+		if err != nil {
+			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command 可执行文件身份失败: %w", err)
+		}
+		identity.Kind = permission.CapabilityCommand
+		identity.Command = commandenv.Name(input.Command)
+		identity.Executable = executable
 		invocation, err := json.Marshal(struct {
 			Args             []string `json:"args"`
 			WorkingDirectory string   `json:"working_directory"`
@@ -102,14 +96,14 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		if skillIdentity == "" {
 			return permission.CapabilityIdentity{}, fmt.Errorf("Skill %q 不在当前 Turn 的冻结身份中", skillName)
 		}
-		command := normalizeCapabilityCommand(scope.SkillScriptCommands[skillName][script])
+		command := commandenv.Name(scope.SkillScriptCommands[skillName][script])
 		if command == "" {
 			return permission.CapabilityIdentity{}, fmt.Errorf("Skill %q 脚本 %q 没有冻结的运行时命令身份", skillName, script)
 		}
-		if err := validateCapabilityCommand(command); err != nil {
+		if err := commandenv.Validate(command); err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("Skill %q 脚本运行时命令无效: %w", skillName, err)
 		}
-		executable, err := resolveCapabilityExecutable(command)
+		executable, err := commandenv.Resolve(command, policy.WorkspaceRoot)
 		if err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("解析 Skill %q 脚本解释器身份失败: %w", skillName, err)
 		}
@@ -126,46 +120,4 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		return permission.CapabilityIdentity{}, err
 	}
 	return identity, nil
-}
-
-func normalizeCapabilityCommand(value string) string {
-	value = strings.TrimSpace(value)
-	if runtime.GOOS == "windows" {
-		value = strings.ToLower(value)
-	}
-	return value
-}
-
-func validateCapabilityCommand(command string) error {
-	if command == "" {
-		return errors.New("程序名称不能为空")
-	}
-	if strings.ContainsRune(command, '\x00') {
-		return errors.New("程序名称不能包含 NUL")
-	}
-	if filepath.Base(command) != command || strings.ContainsAny(command, `/\\`) {
-		return errors.New("只能提供程序名称，不能提供路径")
-	}
-	return nil
-}
-
-func resolveCapabilityExecutable(command string) (string, error) {
-	executable, err := exec.LookPath(command)
-	if err != nil {
-		return "", err
-	}
-	if !filepath.IsAbs(executable) {
-		executable, err = filepath.Abs(executable)
-		if err != nil {
-			return "", err
-		}
-	}
-	if resolved, resolveErr := filepath.EvalSymlinks(executable); resolveErr == nil {
-		executable = resolved
-	}
-	executable = filepath.Clean(executable)
-	if runtime.GOOS == "windows" {
-		executable = strings.ToLower(executable)
-	}
-	return executable, nil
 }

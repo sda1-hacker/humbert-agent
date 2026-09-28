@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createPinia, setActivePinia } from 'pinia';
 import { computed, ref, reactive } from 'vue';
+import { useMenuTooltip } from './menuTooltip.js';
 
 const requests = [];
 const messageReads = [];
@@ -144,7 +145,7 @@ test('发送入口拒绝 Agent 与会话不一致，切换完成后发送到新�
         .split('<script setup>')[1].split('</script>')[0]
         .replace(/\bimport[\s\S]*?from\s+["'][^"']+["'];?/g, '');
     const bindings = {
-        computed, ref, watch: () => {},
+        computed, ref, useMenuTooltip, watch: () => {},
         Message: { warning: error => { throw new Error(error); }, error: error => { throw new Error(error); } },
         useSessionStore: () => store, useAgentStore: () => agentStore, useModelStore: () => ({}),
         useRuntimeStore: () => ({ isSessionRunning: () => false, send: async (...args) => sends.push(args) }),

@@ -8,6 +8,8 @@ logging:
   format: json
 
 runtime:
+  # 一轮 Agent 的模型迭代上限；长代码审查不再使用 Eino 默认的 20 次。
+  max_iterations: 200
   context:
     # 达到模型 Context Budget 阈值后自动压缩。手动压缩不受该开关影响。
     auto_compaction: true
@@ -69,12 +71,14 @@ security:
   # run_command 不会执行 shell command string，
   # 而是使用 executable + argv 直接启动程序。
   #
-  # 任意本地程序受操作确认与原生只读沙箱约束；无原生文件隔离时拒绝运行。
+  # 任意本地程序受审批模式、目录范围和原生沙箱约束。
   shell_enabled: true
 
-  # Permission + Approval 默认策略。read 通常自动允许；写文件和本地程序执行默认需要
-  # 用户确认。配置只决定没有用户规则命中时的默认动作，不保存批准结果。
+  # Permission + Approval 策略。mode 是用户界面的三档选择；
+  # 下面的细粒度动作只在 mode 为空时用于自定义策略，不保存批准结果。
   permissions:
+    # full：完全操作；risk：常规操作自动执行，其余审批；always：每次工具操作都审批。
+    mode: risk
     enabled: true
     read_action: allow
     write_action: ask

@@ -178,7 +178,7 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 	child, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
 		Name:        childInfo.Agent.Name,
 		Description: "专业子 Agent：" + strings.TrimSpace(childInfo.Agent.Instruction),
-		Instruction: instruction, Model: trackModel(modelSnapshot.Instance, eventSnapshot), Handlers: handlers, MaxIterations: 12,
+		Instruction: instruction, Model: trackModel(modelSnapshot.Instance, eventSnapshot), Handlers: handlers, MaxIterations: r.maxIterations,
 		ToolsConfig: adk.ToolsConfig{ToolsNodeConfig: compose.ToolsNodeConfig{
 			Tools: childTools, ExecuteSequentially: true,
 			ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: buildToolLifecycleMiddleware(eventSnapshot)}},
@@ -253,6 +253,7 @@ type Resolver struct {
 	personalMemory *preferences.Store
 
 	eventReporter EventReporter
+	maxIterations int
 }
 
 // NewResolver 创建 Runtime Resolver。
@@ -268,7 +269,12 @@ func NewResolver(
 	contextEngine *contextengine.Engine,
 	personalMemory *preferences.Store,
 	eventReporter EventReporter,
+	iterations ...int,
 ) *Resolver {
+	maxIterations := defaultAgentMaxIterations
+	if len(iterations) > 0 && iterations[0] > 0 {
+		maxIterations = iterations[0]
+	}
 	return &Resolver{
 		agents:         agentService,
 		sessions:       sessionService,
@@ -281,6 +287,7 @@ func NewResolver(
 		contextEngine:  contextEngine,
 		personalMemory: personalMemory,
 		eventReporter:  eventReporter,
+		maxIterations:  maxIterations,
 	}
 }
 
@@ -394,6 +401,7 @@ func (r *Resolver) ResolveTurn(
 	}
 
 	return &Snapshot{
+		MaxIterations:     r.maxIterations,
 		Manifest:          manifest,
 		RequestID:         requestID,
 		RunID:             runID,

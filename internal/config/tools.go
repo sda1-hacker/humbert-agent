@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 )
 
 const (
@@ -604,8 +606,10 @@ func SafeCommandEnvironment() []string {
 			continue
 		}
 
-		value, ok :=
-			os.LookupEnv(key)
+		value, ok := os.LookupEnv(key)
+		if key == "PATH" {
+			value, ok = commandenv.Path(), true
+		}
 
 		if !ok ||
 			strings.ContainsRune(

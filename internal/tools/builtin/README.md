@@ -29,7 +29,9 @@ flowchart TD
 
 `browser_tool.go` 启动独立配置的可见 Chrome 窗口，用户与 Agent 共用一页；每个 Agent 的配置保存在 cache/browser-profiles，Cookie 跨应用重启保留，其他 Agent 无法复用。CDP 负责交互，截图以原始 PNG 保存到当前会话的 attachments 并显示在聊天中，返回附件 ID。`copy_file` 可将当前会话附件复制到 Sandbox 允许的目标路径，因此保存或重命名截图无需在 browser 工具中处理。检测到网站验证页时只返回 `needs_human_verification`，交由用户在窗口中手动完成，工具不会自动操作验证控件。它没有桌面级操作能力。`webfetch_tool.go` 的网页正文是外部不可信内容；`htmlmarkdown.go` 只是格式转换。`run_command.go` 不应通过拼接字符串绕开 Sandbox Runner。`sandbox_fs.go` 是多个文件工具共享的路径入口；新增文件操作应优先复用它。
 
-`glob_files` 递归查找文件名，`list_files` 列目录。`run_command` 可执行 PATH 中的程序，拒绝明显的删除参数；强制只读的原生沙箱保护工作区，即使程序通过解释器或子进程写入也是如此。每次调用有独立临时目录。会话或 Agent 长期允许绑定完整 argv、工作目录与超时的指纹，参数变化后重新审批；权限 Allow 仍不能突破沙箱。
+`glob_files` 递归查找文件名，`list_files` 列目录。`run_command` 支持程序名、绝对路径和相对工作目录的程序路径；`commandenv` 统一处理审批身份与执行路径，并补足桌面启动时缺少的 Homebrew、Go 等 PATH。命令按当前 Sandbox 目录权限执行，允许工作区内构建与编辑；每次调用有独立临时目录。风险审批模式自动允许原生隔离下可识别的常规检查（如 `go vet/test/build`），删除和未知脚本等请求确认。会话或 Agent 长期允许绑定完整 argv、工作目录与超时的指纹。请求审批模式忽略历史 Allow；完全操作模式不再询问，并在下一轮采用全目录文件权限。权限 Allow 本身仍不能突破当前轮的冻结沙箱。
+
+风险审批下，内置 `glob_files`、`grep_files`、`list_files`、`read_file` 查询工作区外的已授权目录也不会弹窗；查询不会自行扩大权限，实际路径仍经 `PathGuard` 校验。`filesystem_approval_test.go` 从真实 Registry/Permission Guard 走到 Eino 文件工具，同时覆盖外部目录正常查询与受保护目录拒绝。
 
 调试一个工具：先从 `app/tools.go` 找注册名，再看本文件 Factory 的 `Descriptor`/`Build`/`run`，最后查 `GuardInvokableTool` 与 `runtime.Executor` 的 Tool Started/Completed 事件和对应 JSONL ToolResult。
 

@@ -50,6 +50,10 @@ type Request struct {
 
 	Arguments string
 
+	// WorkspaceRoot 由 Tool Guard 注入，用于判断操作是否越出当前项目。
+	WorkspaceRoot string
+	NativeSandbox bool
+
 	Identity CapabilityIdentity
 
 	// 以下字段只用于 MCP Approval 展示，不参与规则匹配；真正匹配使用 Identity。

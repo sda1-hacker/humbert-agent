@@ -61,6 +61,23 @@ export function DeleteSessionRule(sessionID, ruleID) {
 }
 
 /**
+ * Mode 是聊天输入区的轻量入口，不需要加载全部历史授权规则。
+ * @returns {$CancellablePromise<string>}
+ */
+export function Mode() {
+    return $Call.ByID(2360092060);
+}
+
+/**
+ * SetMode 只变更审批模式，保留等待时间；与设置页复用同一持久化和运行时更新入口。
+ * @param {string} mode
+ * @returns {$CancellablePromise<string>}
+ */
+export function SetMode(mode) {
+    return $Call.ByID(2402789678, mode);
+}
+
+/**
  * State 返回当前默认 Policy、持久化 Agent Rule 以及指定 Session 的临时 Rule。
  * 
  * sessionID 可以为空，此时 SessionRules 返回空列表。这样设置页即使没有打开会话，也仍然
@@ -79,7 +96,7 @@ export function State(sessionID) {
  * 进程立即采用新配置。
  * 
  * 已经 Pending 的 Approval 保留创建时的 ExpiresAt；新超时只作用于后续审批。已有长期或
- * Session Rule 也不被默认策略修改覆盖，因为它们本来就比默认 Risk Policy 优先。
+ * Session Rule 不会被删除；always 模式忽略历史 Allow，显式 Deny 始终优先。
  * @param {$models.UpdatePermissionSettingsRequest} request
  * @returns {$CancellablePromise<void>}
  */

@@ -6,9 +6,10 @@ import {
 } from "vue";
 
 import { Message } from "../../utils/uiMessage.js";
+import { useMenuTooltip } from "../../utils/menuTooltip.js";
 
 import {
-  IconSend,
+  IconPlus,
   IconStop,
 } from "@arco-design/web-vue/es/icon";
 
@@ -30,6 +31,15 @@ import {
 
 import ImagePreviewDialog
   from "../ui/ImagePreviewDialog.vue";
+import ApprovalModeSelect from "./ApprovalModeSelect.vue";
+
+const {
+  tooltipVisible: contextTooltipVisible,
+  onTooltipVisibleChange: onContextTooltipVisibleChange,
+  dismissTooltip: dismissContextTooltip,
+  onMenuVisibleChange: onContextMenuVisibleChange,
+  onTriggerLeave: onContextTriggerLeave,
+} = useMenuTooltip();
 
 const fileInput =
     ref(null);
@@ -830,256 +840,263 @@ watch(
               title="添加图片或文件"
               @click="openAttachmentPicker"
           >
-            ＋ 附件
+            <IconPlus aria-hidden="true"/>
+            <span>附件</span>
           </button>
 
           <!--
             Context 环形进度只展示 ContextEngine 的估算值，不自己重新计算 Token。
             手动操作与自动压缩使用同一个摘要入口。
           -->
-          <a-dropdown
-              trigger="click"
-              position="top"
-              :disabled="
-              !sessionStore.selectedID ||
-              running ||
-              contextCompacting
-            "
+          <span
+              class="composer-context-control"
+              @pointerdown.capture="dismissContextTooltip"
+              @mouseleave="onContextTriggerLeave"
           >
-            <a-tooltip position="top">
-              <button
-                  type="button"
-                  class="context-ring-button"
-                  :class="{
-                  'context-ring-button--warning':
-                    contextUsage?.needsCompaction,
-                  'context-ring-button--loading':
-                    contextLoading || contextCompacting,
-                }"
-                  :disabled="!sessionStore.selectedID"
-                  aria-label="查看 Context 使用情况与压缩选项"
+            <a-dropdown
+                trigger="click"
+                position="top"
+                @popup-visible-change="onContextMenuVisibleChange"
+                :disabled="
+                !sessionStore.selectedID ||
+                running ||
+                contextCompacting
+              "
+            >
+              <a-tooltip
+                  position="top"
+                  :popup-visible="contextTooltipVisible"
+                  @popup-visible-change="onContextTooltipVisibleChange"
               >
-                <svg
-                    class="context-ring"
-                    viewBox="0 0 20 20"
-                    aria-hidden="true"
+                <button
+                    type="button"
+                    class="context-ring-button"
+                    :class="{
+                    'context-ring-button--warning':
+                      contextUsage?.needsCompaction,
+                    'context-ring-button--loading':
+                      contextLoading || contextCompacting,
+                  }"
+                    :disabled="!sessionStore.selectedID"
+                    aria-label="查看 Context 使用情况与压缩选项"
                 >
-                  <circle
-                      class="context-ring__track"
-                      cx="10"
-                      cy="10"
-                      r="8"
-                  />
+                  <svg
+                      class="context-ring"
+                      viewBox="0 0 20 20"
+                      aria-hidden="true"
+                  >
+                    <circle
+                        class="context-ring__track"
+                        cx="10"
+                        cy="10"
+                        r="8"
+                    />
 
-                  <circle
-                      class="context-ring__value"
-                      cx="10"
-                      cy="10"
-                      r="8"
-                      :style="{
-                      strokeDashoffset:
-                        contextRingOffset,
-                    }"
-                  />
-                </svg>
-              </button>
+                    <circle
+                        class="context-ring__value"
+                        cx="10"
+                        cy="10"
+                        r="8"
+                        :style="{
+                        strokeDashoffset:
+                          contextRingOffset,
+                      }"
+                    />
+                  </svg>
+                </button>
+
+                <template #content>
+                  <div class="context-tooltip">
+                    <template v-if="contextUsage">
+                      <div class="context-tooltip__summary">
+                        <div>
+                          上下文
+                          {{ formatTokens(contextUsage.contextWindow) }}
+                        </div>
+
+                        <div>
+                          已用
+                          {{ formatTokens(contextUsage.usedTokens) }}
+                          ({{ Math.round(contextPercent) }}%)
+                        </div>
+                      </div>
+
+                      <div class="context-tooltip__divider"/>
+
+                      <div class="context-tooltip__breakdown">
+                        <div class="context-tooltip__row">
+                          <span>系统 / Agent</span>
+                          <span>{{ formatTokens(contextUsage.systemTokens) }}</span>
+                        </div>
+
+                        <div class="context-tooltip__row">
+                          <span>工具定义</span>
+                          <span>{{ formatTokens(contextUsage.toolTokens) }}</span>
+                        </div>
+
+                        <div class="context-tooltip__row">
+                          <span>对话消息</span>
+                          <span>{{ formatTokens(contextUsage.messageTokens) }}</span>
+                        </div>
+
+                        <div class="context-tooltip__row">
+                          <span>压缩摘要</span>
+                          <span>{{ formatTokens(contextUsage.checkpointTokens) }}</span>
+                        </div>
+                      </div>
+
+                      <template v-if="contextAssembly">
+                        <div class="context-tooltip__divider"/>
+
+                        <div class="context-tooltip__breakdown context-tooltip__runtime">
+                          <div class="context-tooltip__row">
+                            <span>模型消息</span>
+                            <span class="context-tooltip__value">{{
+                                contextAssembly.visibleMessageCount
+                              }} 条 · 近期 {{ contextAssembly.recentMessageCount }} 条</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>消息角色</span>
+                            <span class="context-tooltip__value">User {{ contextAssembly.userMessageCount }} · Assistant {{
+                                contextAssembly.assistantMessageCount
+                              }} · Tool {{ contextAssembly.toolResultCount }}</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>Tool 事务</span>
+                            <span class="context-tooltip__value">调用 {{
+                                contextAssembly.toolCallCount
+                              }} · 结果 {{ contextAssembly.toolResultCount }}</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>注入状态</span>
+                            <span class="context-tooltip__value">Checkpoint {{
+                                contextAssembly.checkpointInjected ? "是" : "否"
+                              }}</span>
+                          </div>
+                        </div>
+                      </template>
+
+                      <template v-if="contextManifest">
+                        <div class="context-tooltip__divider"/>
+
+                        <div class="context-tooltip__breakdown context-tooltip__runtime">
+                          <div
+                              v-if="activeRunState"
+                              class="context-tooltip__row"
+                          >
+                            <span>当前 Turn</span>
+                            <span class="context-tooltip__value">{{ formatRunPhase(activeRunState.phase) }}</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>模型</span>
+                            <span class="context-tooltip__value">{{
+                                formatRuntimeModel(contextManifest)
+                              }} · {{ formatRuntimeModelRole(contextManifest) }}</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>模型能力</span>
+                            <span class="context-tooltip__value">{{
+                                formatModelCapabilities(contextManifest.modelCapabilities)
+                              }}</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>Agent 能力</span>
+                            <span class="context-tooltip__value">{{ formatCapabilitySummary(contextManifest) }}</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>模型角色</span>
+                            <span class="context-tooltip__value"
+                                  :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · 图片 ${contextManifest.modelRoles?.imageModelID || '--'}`">Chat / Utility{{
+                                contextManifest.modelRoles?.imageModelID ? ' / 图片' : ''
+                              }}</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>Sandbox</span>
+                            <span class="context-tooltip__value">{{ formatSandbox(contextManifest) }}</span>
+                          </div>
+
+                          <div
+                              v-if="contextManifest.skillNames?.length"
+                              class="context-tooltip__row"
+                          >
+                            <span>Skills</span>
+                            <span
+                                class="context-tooltip__value"
+                                :title="formatNameList(contextManifest.skillNames)"
+                            >{{ formatNameList(contextManifest.skillNames) }}</span>
+                          </div>
+
+                          <div
+                              v-if="contextManifest.mcpServers?.length"
+                              class="context-tooltip__row"
+                          >
+                            <span>MCP</span>
+                            <span
+                                class="context-tooltip__value"
+                                :title="formatMCPServers(contextManifest)"
+                            >{{ formatMCPServers(contextManifest) }}</span>
+                          </div>
+
+                          <div
+                              v-if="contextManifest.mcpUnavailable?.length"
+                              class="context-tooltip__row"
+                          >
+                            <span>MCP 降级</span>
+                            <span
+                                class="context-tooltip__value"
+                                :title="formatUnavailableMCP(contextManifest)"
+                            >{{ contextManifest.mcpUnavailable.length }} 个 Server 不可用</span>
+                          </div>
+
+                          <div class="context-tooltip__row">
+                            <span>Workspace</span>
+                            <span
+                                class="context-tooltip__value"
+                                :title="contextManifest.workspace?.rootDir || ''"
+                            >{{ formatWorkspace(contextManifest) }}</span>
+                          </div>
+                        </div>
+                      </template>
+
+                      <div class="context-tooltip__divider"/>
+
+                      <div class="context-tooltip__meta">
+                        自动压缩阈值
+                        {{ formatTokens(contextUsage.thresholdTokens) }}
+                      </div>
+                    </template>
+
+                    <template v-else-if="contextError">
+                      <div>Context 使用情况暂不可用</div>
+                    </template>
+
+                    <template v-else>
+                      <div>正在计算 Context 使用情况…</div>
+                    </template>
+                  </div>
+                </template>
+              </a-tooltip>
 
               <template #content>
-                <div class="context-tooltip">
-                  <template v-if="contextUsage">
-                    <div class="context-tooltip__summary">
-                      <div>
-                        上下文
-                        {{ formatTokens(contextUsage.contextWindow) }}
-                      </div>
-
-                      <div>
-                        已用
-                        {{ formatTokens(contextUsage.usedTokens) }}
-                        ({{ Math.round(contextPercent) }}%)
-                      </div>
-                    </div>
-
-                    <div class="context-tooltip__divider"/>
-
-                    <div class="context-tooltip__breakdown">
-                      <div class="context-tooltip__row">
-                        <span>系统 / Agent</span>
-                        <span>{{ formatTokens(contextUsage.systemTokens) }}</span>
-                      </div>
-
-                      <div class="context-tooltip__row">
-                        <span>工具定义</span>
-                        <span>{{ formatTokens(contextUsage.toolTokens) }}</span>
-                      </div>
-
-                      <div class="context-tooltip__row">
-                        <span>对话消息</span>
-                        <span>{{ formatTokens(contextUsage.messageTokens) }}</span>
-                      </div>
-
-                      <div class="context-tooltip__row">
-                        <span>压缩摘要</span>
-                        <span>{{ formatTokens(contextUsage.checkpointTokens) }}</span>
-                      </div>
-                    </div>
-
-                    <template v-if="contextAssembly">
-                      <div class="context-tooltip__divider"/>
-
-                      <div class="context-tooltip__breakdown context-tooltip__runtime">
-                        <div class="context-tooltip__row">
-                          <span>模型消息</span>
-                          <span class="context-tooltip__value">{{
-                              contextAssembly.visibleMessageCount
-                            }} 条 · 近期 {{ contextAssembly.recentMessageCount }} 条</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>消息角色</span>
-                          <span class="context-tooltip__value">User {{ contextAssembly.userMessageCount }} · Assistant {{
-                              contextAssembly.assistantMessageCount
-                            }} · Tool {{ contextAssembly.toolResultCount }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>Tool 事务</span>
-                          <span class="context-tooltip__value">调用 {{
-                              contextAssembly.toolCallCount
-                            }} · 结果 {{ contextAssembly.toolResultCount }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>注入状态</span>
-                          <span class="context-tooltip__value">Checkpoint {{
-                              contextAssembly.checkpointInjected ? "是" : "否"
-                            }}</span>
-                        </div>
-                      </div>
-                    </template>
-
-                    <template v-if="contextManifest">
-                      <div class="context-tooltip__divider"/>
-
-                      <div class="context-tooltip__breakdown context-tooltip__runtime">
-                        <div
-                            v-if="activeRunState"
-                            class="context-tooltip__row"
-                        >
-                          <span>当前 Turn</span>
-                          <span class="context-tooltip__value">{{ formatRunPhase(activeRunState.phase) }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>模型</span>
-                          <span class="context-tooltip__value">{{
-                              formatRuntimeModel(contextManifest)
-                            }} · {{ formatRuntimeModelRole(contextManifest) }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>模型能力</span>
-                          <span class="context-tooltip__value">{{
-                              formatModelCapabilities(contextManifest.modelCapabilities)
-                            }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>Agent 能力</span>
-                          <span class="context-tooltip__value">{{ formatCapabilitySummary(contextManifest) }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>模型角色</span>
-                          <span class="context-tooltip__value"
-                                :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · 图片 ${contextManifest.modelRoles?.imageModelID || '--'}`">Chat / Utility{{
-                              contextManifest.modelRoles?.imageModelID ? ' / 图片' : ''
-                            }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>Sandbox</span>
-                          <span class="context-tooltip__value">{{ formatSandbox(contextManifest) }}</span>
-                        </div>
-
-                        <div
-                            v-if="contextManifest.skillNames?.length"
-                            class="context-tooltip__row"
-                        >
-                          <span>Skills</span>
-                          <span
-                              class="context-tooltip__value"
-                              :title="formatNameList(contextManifest.skillNames)"
-                          >{{ formatNameList(contextManifest.skillNames) }}</span>
-                        </div>
-
-                        <div
-                            v-if="contextManifest.mcpServers?.length"
-                            class="context-tooltip__row"
-                        >
-                          <span>MCP</span>
-                          <span
-                              class="context-tooltip__value"
-                              :title="formatMCPServers(contextManifest)"
-                          >{{ formatMCPServers(contextManifest) }}</span>
-                        </div>
-
-                        <div
-                            v-if="contextManifest.mcpUnavailable?.length"
-                            class="context-tooltip__row"
-                        >
-                          <span>MCP 降级</span>
-                          <span
-                              class="context-tooltip__value"
-                              :title="formatUnavailableMCP(contextManifest)"
-                          >{{ contextManifest.mcpUnavailable.length }} 个 Server 不可用</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>Workspace</span>
-                          <span
-                              class="context-tooltip__value"
-                              :title="contextManifest.workspace?.rootDir || ''"
-                          >{{ formatWorkspace(contextManifest) }}</span>
-                        </div>
-                      </div>
-                    </template>
-
-                    <div class="context-tooltip__divider"/>
-
-                    <div class="context-tooltip__meta">
-                      自动压缩阈值
-                      {{ formatTokens(contextUsage.thresholdTokens) }}
-                    </div>
-                  </template>
-
-                  <template v-else-if="contextError">
-                    <div>Context 使用情况暂不可用</div>
-                  </template>
-
-                  <template v-else>
-                    <div>正在计算 Context 使用情况…</div>
-                  </template>
-                </div>
+                <a-doption
+                    :disabled="running || contextCompacting"
+                    @click="runCompaction()"
+                >
+                  压缩
+                </a-doption>
               </template>
-            </a-tooltip>
-
-            <template #content>
-              <a-doption
-                  :disabled="running || contextCompacting"
-                  @click="runCompaction()"
-              >
-                压缩
-              </a-doption>
-            </template>
-          </a-dropdown>
-
-          <span
-              class="composer-hint"
-          >
-            Enter 发送 ·
-            Shift+Enter 换行
+            </a-dropdown>
           </span>
+
+          <ApprovalModeSelect :disabled="running || sending" />
         </div>
 
         <div
@@ -1104,6 +1121,7 @@ watch(
             "
               allow-search
               placeholder="选择模型"
+              aria-label="选择模型"
               size="small"
               class="composer-model"
               @change="
@@ -1126,28 +1144,24 @@ watch(
             </a-option>
           </a-select>
 
+          <!-- 发送与停止共用同一按钮，运行时切换动作并保留可访问的说明。 -->
           <a-button
-              v-if="running"
-              status="danger"
-              shape="circle"
-              @click="stop"
-          >
-            <template #icon>
-              <IconStop/>
-            </template>
-          </a-button>
-
-          <a-button
-              v-else
               type="primary"
-              shape="circle"
-              :loading="sending"
-              :disabled="!canSend"
-              @click="send"
+              class="composer-send-button"
+              :status="running ? 'danger' : undefined"
+              :loading="sending && !running"
+              :disabled="!running && !canSend"
+              :aria-label="running ? $t('停止生成') : $t('发送消息')"
+              :title="running ? $t('停止生成') : $t('发送消息')"
+              @click="running ? stop() : send()"
           >
             <template #icon>
-              <IconSend/>
+              <IconStop v-if="running"/>
+              <svg v-else class="composer-send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M19 5v7a3 3 0 0 1-3 3H5m0 0 5-5m-5 5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
             </template>
+            {{ running ? $t('停止') : $t('发送') }}
           </a-button>
         </div>
       </div>
@@ -1161,28 +1175,33 @@ watch(
 
   width: 100%;
 
-  padding: 12px 32px 20px;
-
-  border-top: 1px solid var(--h-border);
+  padding: 14px 28px 24px;
 
   background: var(--h-bg);
 }
 
 .composer-inner {
+  /* 按聊天面板的实际宽度响应布局，右侧文件面板展开时也能正确换行。 */
+  container-type: inline-size;
   width: 100%;
   max-width: 840px;
 
   margin: 0 auto;
 
-  padding: 10px;
+  padding: 14px 14px 10px;
 
   border: 1px solid var(--h-border-strong);
 
-  border-radius: 8px;
+  border-radius: 16px;
 
   background: var(--h-surface);
+  font-family: var(--h-ui);
+  transition: border-color 160ms ease;
 }
 
+.composer-inner:focus-within {
+  border-color: var(--h-accent-border);
+}
 
 .composer-file-input {
   display: none;
@@ -1191,8 +1210,8 @@ watch(
 .composer-attachments {
   display: flex;
   flex-wrap: wrap;
-  gap: 7px;
-  margin-bottom: 8px;
+  gap: 8px;
+  margin: 0 2px 12px;
 }
 
 .composer-attachment {
@@ -1200,9 +1219,9 @@ watch(
   max-width: 260px;
   align-items: center;
   gap: 7px;
-  padding: 6px 8px;
+  padding: 7px 9px;
   border: 1px solid var(--h-border);
-  border-radius: 6px;
+  border-radius: 10px;
   background: var(--h-bg);
 }
 
@@ -1258,8 +1277,25 @@ watch(
 }
 
 .composer-attach-button {
-  padding: 2px 4px;
-  font-size: 11px;
+  display: inline-flex;
+  height: 32px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.composer-attach-button .arco-icon {
+  font-size: 15px;
+}
+
+.composer-attach-button:hover:not(:disabled) {
+  background: var(--h-surface-hover);
 }
 
 .composer-attach-button:disabled {
@@ -1273,34 +1309,37 @@ watch(
   align-items: center;
   justify-content: space-between;
 
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
 
-  margin-top: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--h-border);
 }
 
 .composer-context-area {
   display: flex;
 
   min-width: 0;
+  flex: 0 0 auto;
 
   align-items: center;
 
-  gap: 9px;
+  gap: 4px;
 }
 
-.composer-hint {
-  color: var(--h-text-muted);
-
-  font-size: 10px;
+.composer-context-control {
+  display: inline-flex;
+  flex: 0 0 auto;
 }
 
 .context-ring-button {
   display: inline-flex;
 
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
 
-  flex: 0 0 26px;
+  flex: 0 0 32px;
 
   align-items: center;
   justify-content: center;
@@ -1309,7 +1348,7 @@ watch(
 
   border: 0;
 
-  border-radius: 999px;
+  border-radius: 8px;
 
   background: transparent;
 
@@ -1334,6 +1373,12 @@ watch(
   opacity: 0.45;
 }
 
+.composer-attach-button:focus-visible,
+.context-ring-button:focus-visible {
+  outline: 2px solid var(--h-accent-border);
+  outline-offset: 2px;
+}
+
 .context-ring-button--warning {
   color: var(--h-warning, var(--h-text));
 }
@@ -1347,8 +1392,8 @@ watch(
 }
 
 .context-ring {
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
 
   transform: rotate(-90deg);
 }
@@ -1446,14 +1491,76 @@ watch(
   display: flex;
 
   min-width: 0;
+  flex: 0 1 auto;
+  margin-left: auto;
 
   align-items: center;
 
-  gap: 8px;
+  gap: 10px;
 }
 
-.composer-model {
-  width: 210px;
+:deep(.composer-model) {
+  width: 218px;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 218px;
+  font-size: 12px;
+}
+
+/* 输入区的辅助选项使用轻量样式，边框与主动作留给整个输入框及发送按钮。 */
+:deep(.composer-model.arco-select-view-single) {
+  min-height: 32px;
+  padding: 0 9px;
+  border-color: transparent !important;
+  border-radius: 8px;
+  background: transparent !important;
+  font-family: var(--h-ui);
+}
+
+:deep(.composer-model.arco-select-view-single:hover),
+:deep(.composer-model.arco-select-view-focus) {
+  border-color: transparent !important;
+  background: var(--h-surface-hover) !important;
+}
+
+:deep(.composer-model .arco-select-view-value) {
+  color: var(--h-text-secondary) !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:deep(.composer-model .arco-select-view-input) {
+  text-overflow: ellipsis;
+}
+
+:deep(.composer-model .arco-select-view-suffix) {
+  color: var(--h-text-muted);
+}
+
+.composer-send-button {
+  min-width: 82px;
+  height: 34px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-family: var(--h-ui);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.composer-send-icon {
+  display: block;
+  width: 19px;
+  height: 19px;
+}
+
+/* 禁用状态保留主动作的墨蓝色相，以淡蓝背景表现不可点击。 */
+.composer-send-button.arco-btn-disabled {
+  border-color: transparent !important;
+  background: var(--h-accent-soft) !important;
+  color: var(--h-accent-border) !important;
+  opacity: 1;
 }
 
 /*
@@ -1473,7 +1580,8 @@ watch(
 :deep(
   .composer-textarea textarea
 ) {
-  padding: 5px 6px;
+  min-height: 64px;
+  padding: 2px 3px 8px;
 
   resize: none;
 
@@ -1482,8 +1590,9 @@ watch(
   color: var(--h-text);
 
   font-size: 14px;
-
-  line-height: 1.65;
+  font-family: var(--h-ui);
+  letter-spacing: normal;
+  line-height: 1.7;
 }
 
 :deep(
@@ -1507,21 +1616,36 @@ watch(
 max-width: 800px
 ) {
   .composer {
-    padding-right: 20px;
-
-    padding-left: 20px;
+    padding: 12px 16px 18px;
   }
+}
 
-  .composer-hint {
-    display: none;
-  }
-
-  .composer-model {
-    width: 170px;
+@container (max-width: 560px) {
+  .composer-toolbar {
+    row-gap: 8px;
   }
 
   .composer-actions {
-    margin-left: auto;
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+
+  :deep(.composer-model) {
+    width: 0;
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .composer-inner,
+  .composer-attach-button,
+  .context-ring-button,
+  .context-ring__value {
+    transition: none;
+  }
+
+  .context-ring-button--loading .context-ring {
+    animation: none;
   }
 }
 </style>

@@ -57,13 +57,13 @@ const strictMode = computed(() => form.defaultProfile === "workspace_only");
 const localProgramIsolationNote = computed(() => {
   if (!form.shellEnabled) return "";
   if (form.defaultNativeMode === "off") {
-    return "关闭原生隔离时，run_command 和 Skill 脚本无法保证工作区只读，因此会拒绝执行。";
+    return "关闭原生隔离后，本地命令不会自动放行；Skill 脚本仍要求原生文件隔离。";
   }
   if (status.value?.platform === "windows" && !status.value?.filesystem) {
-    return "Windows 当前无法为任意本地命令保证工作区只读，因此 run_command 会拒绝执行。";
+    return "当前系统缺少原生文件隔离，受限目录模式下本地程序会拒绝启动；可明确选择完全操作模式。";
   }
   if (!status.value?.available || !status.value?.filesystem) {
-    return "当前系统无法建立可靠的本地程序文件隔离，run_command 和 Skill 脚本会拒绝执行。";
+    return "当前系统缺少原生文件隔离，受限目录模式下本地程序会拒绝启动；可明确选择完全操作模式。";
   }
   return "";
 });

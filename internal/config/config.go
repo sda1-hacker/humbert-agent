@@ -140,7 +140,9 @@ type LoggingConfig struct {
 
 // RuntimeConfig 保存 Agent Runtime 的基础限制。
 type RuntimeConfig struct {
-	Context ContextConfig `mapstructure:"context"`
+	// 显式设置 Eino 上限，避免长任务被其默认 20 次迭代截断。
+	MaxIterations int           `mapstructure:"max_iterations"`
+	Context       ContextConfig `mapstructure:"context"`
 
 	// Skills 描述本地 Skill Package 的文件安全上限。动态的已安装 Skill 与 Agent 启用关系
 	// 不属于应用配置，分别保存在 skills/ 目录和 Agent Profile 中。
@@ -234,7 +236,7 @@ type MCPConfig struct {
 
 // SecurityConfig 保存本地 Tool 的基础安全策略。
 //
-// Shell 默认关闭。启用后，本地命令仍受逐次授权和原生只读沙箱约束。
+// Shell 默认关闭。启用后，本地命令仍受审批模式与实际 Sandbox 目录范围约束。
 // 后续 Permission/Approval 模块仍应在本配置之上增加运行时授权，而不是把这里
 // 当成最终安全边界。
 type SecurityConfig struct {
@@ -266,10 +268,12 @@ type SandboxConfig struct {
 // 授权结果。用户选择“Agent 始终允许”产生的规则单独写入 config/permissions.json，
 // Session 授权只存在内存中，避免临时权限跨应用重启继续生效。
 //
-// Action 只允许 allow / deny / ask。生产默认值为：read=allow、write=ask、exec=ask。
-// 这样常规读取不会频繁打断 Agent，而修改文件和执行本地程序都需要明确授权。
+// 产品默认使用 risk 模式，内置只读查询和工作区内常规操作自动执行，其余请求确认。
+// Action 字段只在未指定 Mode 的细粒度调用中使用。
 type PermissionConfig struct {
-	Enabled bool `mapstructure:"enabled"`
+	// Mode 是产品级审批策略：full/risk/always；空值仅用于旧调用方的细粒度策略。
+	Mode    string `mapstructure:"mode"`
+	Enabled bool   `mapstructure:"enabled"`
 
 	ReadAction  string `mapstructure:"read_action"`
 	WriteAction string `mapstructure:"write_action"`
@@ -562,6 +566,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("app.name", defaultAppName)
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "json")
+	v.SetDefault("runtime.max_iterations", 200)
 	v.SetDefault("runtime.context.auto_compaction", true)
 	v.SetDefault("runtime.context.small_window_threshold", defaultContextSmallWindowThreshold)
 	v.SetDefault("runtime.context.min_reserve_tokens", defaultContextMinReserveTokens)
@@ -585,6 +590,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("runtime.mcp.max_tool_description_chars", defaultMCPMaxToolDescriptionChars)
 	v.SetDefault("runtime.mcp.catalog_ttl_ms", defaultMCPCatalogTTLMS)
 	v.SetDefault("security.max_file_bytes", defaultMaxFileBytes)
+	v.SetDefault("security.permissions.mode", "risk")
 	v.SetDefault("security.permissions.enabled", true)
 	v.SetDefault("security.permissions.read_action", "allow")
 	v.SetDefault("security.permissions.write_action", "ask")
@@ -624,6 +630,9 @@ func validate(cfg *Config) error {
 		return fmt.Errorf("不支持的 logging.format: %q", cfg.Logging.Format)
 	}
 
+	if cfg.Runtime.MaxIterations < 1 || cfg.Runtime.MaxIterations > 1000 {
+		return errors.New("runtime.max_iterations 必须位于 1-1000 之间")
+	}
 	contextConfig := cfg.Runtime.Context
 	if contextConfig.SmallWindowThreshold < 4096 {
 		return errors.New("runtime.context.small_window_threshold 不能小于 4096")

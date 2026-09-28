@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
+	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 	"path/filepath"
 	"strings"
 	"time"
@@ -131,7 +131,7 @@ func (f *gitReadFactory) run(ctx context.Context, scope humberttools.Scope, path
 		return nil, fmt.Errorf("Git 工作目录被 Sandbox 拒绝: %w", err)
 	}
 	dir := decision.CanonicalPath
-	gitPath, err := exec.LookPath("git")
+	gitPath, err := commandenv.Resolve("git", scope.Workspace.RootDir)
 	if err != nil {
 		return nil, errors.New("系统未安装 git 或 git 不在 PATH")
 	}

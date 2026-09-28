@@ -20,6 +20,7 @@ func TestRuntimeUserVisibleErrorRecognizesProviderFailures(t *testing.T) {
 		{name: "balance", source: "status code: 402, insufficient balance", want: "余额或调用额度不足"},
 		{name: "rate limit", source: "status code: 429, rate limit exceeded", want: "请求过于频繁"},
 		{name: "access denied", source: "status code: 403, forbidden", want: "拒绝了本次请求"},
+		{name: "iteration limit", source: "Eino Agent 执行失败: [NodeRunError] run node[ChatModel] pre processor fail: exceeds max iterations", want: "迭代次数上限"},
 		{name: "generic", source: "provider returned a private error payload", want: "生成过程中发生错误"},
 	}
 	for _, test := range tests {

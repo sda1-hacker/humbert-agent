@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cloudwego/eino/adk"
 	"github.com/google/uuid"
 
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
@@ -1063,6 +1064,12 @@ func runtimeUserVisibleError(err error) string {
 	}
 
 	lower := strings.ToLower(err.Error())
+	if errors.Is(err, adk.ErrExceedMaxIterations) || strings.Contains(lower, "exceeds max iterations") {
+		return "本次任务已达到 Agent 迭代次数上限，已完成的操作和对话记录仍然保留。可以发送“继续”接着处理；如经常触发，可调高 runtime.max_iterations。"
+	}
+	if errors.Is(err, ErrExecutionLimitExceeded) {
+		return "本次任务已达到配置的模型、工具或 Token 使用上限，已完成的操作仍然保留。请调整任务预算后继续。"
+	}
 
 	if strings.Contains(lower, "free quota exhausted") ||
 		strings.Contains(lower, "free tier quota") {

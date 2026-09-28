@@ -2417,6 +2417,13 @@ export class PermissionStateDTO {
      * @param {Partial<PermissionStateDTO>} [$$source = {}] - The source object to create the PermissionStateDTO.
      */
     constructor($$source = {}) {
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
         if (!("enabled" in $$source)) {
             /**
              * @member
@@ -2476,14 +2483,14 @@ export class PermissionStateDTO {
      * @returns {PermissionStateDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType32;
         const $$createField6_0 = $$createType32;
+        const $$createField7_0 = $$createType32;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("persistentRules" in $$parsedSource) {
-            $$parsedSource["persistentRules"] = $$createField5_0($$parsedSource["persistentRules"]);
+            $$parsedSource["persistentRules"] = $$createField6_0($$parsedSource["persistentRules"]);
         }
         if ("sessionRules" in $$parsedSource) {
-            $$parsedSource["sessionRules"] = $$createField6_0($$parsedSource["sessionRules"]);
+            $$parsedSource["sessionRules"] = $$createField7_0($$parsedSource["sessionRules"]);
         }
         return new PermissionStateDTO(/** @type {Partial<PermissionStateDTO>} */($$parsedSource));
     }
@@ -5436,6 +5443,13 @@ export class UpdatePermissionSettingsRequest {
      * @param {Partial<UpdatePermissionSettingsRequest>} [$$source = {}] - The source object to create the UpdatePermissionSettingsRequest.
      */
     constructor($$source = {}) {
+        if (!("mode" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["mode"] = "";
+        }
         if (!("enabled" in $$source)) {
             /**
              * @member

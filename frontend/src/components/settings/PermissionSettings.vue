@@ -21,6 +21,7 @@ import {
 import {
   useSessionStore,
 } from "../../stores/sessions.js";
+import { usePermissionStore } from "../../stores/permissions.js";
 import SectionCard from "../ui/SectionCard.vue";
 import EmptyState from "../ui/EmptyState.vue";
 import StatusPill from "../ui/StatusPill.vue";
@@ -28,6 +29,7 @@ import { formatDate, t } from "../../i18n/index.js";
 
 const sessionStore =
     useSessionStore();
+const permissionStore = usePermissionStore();
 
 const loading = ref(false);
 const saving = ref(false);
@@ -37,28 +39,13 @@ const clearingSession = ref(false);
 const state = ref(null);
 
 const form = reactive({
+  mode: "risk",
   enabled: true,
   readAction: "allow",
   writeAction: "ask",
   execAction: "ask",
   approvalTimeoutMinutes: 30,
 });
-
-const actionDefinitions = [
-  {
-    label: "允许",
-    value: "allow",
-  },
-  {
-    label: "询问",
-    value: "ask",
-  },
-  {
-    label: "拒绝",
-    value: "deny",
-  },
-];
-const actionOptions = computed(() => actionDefinitions.map((option) => ({ ...option, label: t(option.label) })));
 
 const currentSessionID =
     computed(() =>
@@ -92,26 +79,13 @@ const persistentAllowCount =
     );
 
 
-const dangerousConfirmationEnabled =
-    computed({
-      get: () =>
-          Boolean(form.enabled) &&
-          form.writeAction === "ask" &&
-          form.execAction === "ask",
-      set: (enabled) => {
-        form.enabled = true;
-        form.readAction = "allow";
-        form.writeAction = enabled ? "ask" : "allow";
-        form.execAction = enabled ? "ask" : "allow";
-      },
-    });
-
 const hasUnsavedChanges =
     computed(() => {
       if (!state.value) {
         return false;
       }
       return (
+          form.mode !== state.value.mode ||
           Boolean(form.enabled) !==
           Boolean(state.value.enabled) ||
           form.readAction !==
@@ -192,6 +166,8 @@ function applyState(nextState) {
   if (!state.value) {
     return;
   }
+  form.mode = state.value.mode || "risk";
+  permissionStore.acceptMode(form.mode);
   form.enabled =
       Boolean(state.value.enabled);
   form.readAction =
@@ -259,6 +235,7 @@ async function saveSettings() {
   saving.value = true;
   try {
     await updatePermissionSettings({
+      mode: form.mode,
       enabled: Boolean(form.enabled),
       readAction: form.readAction,
       writeAction: form.writeAction,
@@ -266,6 +243,8 @@ async function saveSettings() {
       approvalTimeoutMS:
           Math.round(minutes * 60000),
     });
+    // 即使后续规则列表刷新失败，聊天区也要显示后端已保存的模式。
+    permissionStore.acceptMode(form.mode);
     Message.success(
         "操作确认设置已保存",
     );
@@ -452,7 +431,7 @@ onMounted(() => {
   <div class="permission-settings">
     <SectionCard
         title="操作确认"
-        description="建议保持开启。Humbert 在修改文件、删除内容或运行本地程序等高风险操作前会向你确认。"
+        description="选择自动执行与人工确认的方式。模式影响所有 Agent；目录范围从下一轮任务生效，显式拒绝规则始终保留。"
     >
       <template #actions>
         <div class="settings-card__header-actions">
@@ -469,63 +448,21 @@ onMounted(() => {
       </template>
 
       <a-spin :loading="loading">
-        <div class="simple-confirmation-row">
-          <div>
-            <div class="policy-row__title">危险操作前询问</div>
-            <div class="policy-row__description">
-              开启后，读取普通资料不会频繁打扰你；修改文件和运行本地程序等操作会先请求确认。
+        <div class="policy-form">
+          <div class="policy-row">
+            <div>
+              <div class="policy-row__title">审批模式</div>
+              <div class="policy-row__description">
+                风险审批自动执行内置只读查询、工作区内常规修改和已识别的受限命令；删除、未知脚本、安装及其他越界操作需要确认。
+                完全操作无需审批，并允许读写工作区外目录。请求审批每次都询问，历史允许规则不跳过确认。
+              </div>
             </div>
+            <a-select v-model="form.mode" class="policy-control" :options="[
+              { value: 'risk', label: t('风险审批') },
+              { value: 'full', label: t('完全操作') },
+              { value: 'always', label: t('请求审批') },
+            ]" />
           </div>
-          <a-switch v-model="dangerousConfirmationEnabled" />
-        </div>
-
-        <details class="permission-advanced">
-          <summary>高级确认规则</summary>
-          <div class="policy-form">
-            <div class="policy-row">
-              <div>
-                <div class="policy-row__title">启用操作确认系统</div>
-                <div class="policy-row__description">关闭后默认不会弹出操作确认；本地命令仍只能只读访问工作区。</div>
-              </div>
-              <a-switch v-model="form.enabled"/>
-            </div>
-
-            <div class="policy-row">
-              <div>
-                <div class="policy-row__title">读取操作</div>
-                <div class="policy-row__description">读取文件、列目录和网络读取等只读操作的默认处理方式。</div>
-              </div>
-              <a-select
-                  v-model="form.readAction"
-                  :options="actionOptions"
-                  class="policy-control"
-              />
-            </div>
-
-            <div class="policy-row">
-              <div>
-                <div class="policy-row__title">修改文件</div>
-                <div class="policy-row__description">写入、编辑等会修改用户数据的操作。</div>
-              </div>
-              <a-select
-                  v-model="form.writeAction"
-                  :options="actionOptions"
-                  class="policy-control"
-              />
-            </div>
-
-            <div class="policy-row">
-              <div>
-                <div class="policy-row__title">运行本地程序</div>
-                <div class="policy-row__description">运行本地命令等高风险操作；原生沙盒仍会阻止命令修改或删除工作区文件。</div>
-              </div>
-              <a-select
-                  v-model="form.execAction"
-                  :options="actionOptions"
-                  class="policy-control"
-              />
-            </div>
-
             <div class="policy-row">
               <div>
                 <div class="policy-row__title">确认等待时间</div>
@@ -543,7 +480,6 @@ onMounted(() => {
               </div>
             </div>
           </div>
-        </details>
       </a-spin>
     </SectionCard>
 

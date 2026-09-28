@@ -14,12 +14,13 @@ import (
 
 // Manager 负责把全局默认值、Agent 配置与当前 Workspace 冻结成 EffectivePolicy。
 type Manager struct {
-	mu             sync.RWMutex
-	config         Config
-	homeDir        string
-	protectedRules []PathRule
-	capability     Capability
-	runner         *Runner
+	mu                 sync.RWMutex
+	config             Config
+	homeDir            string
+	protectedRules     []PathRule
+	capability         Capability
+	runner             *Runner
+	fullAccessProvider func() bool
 }
 
 func NewManager(config Config, homeDir string) (*Manager, error) {
@@ -68,6 +69,14 @@ func (m *Manager) UpdateConfig(config Config) error {
 
 func (m *Manager) Runner() *Runner { return m.runner }
 
+// SetFullAccessProvider 由应用装配审批模式来源，避免两份“完全操作”状态不同步。
+// 已启动 Turn 的 Policy 仍保持冻结；模式切换从下一次 Turn 生效。
+func (m *Manager) SetFullAccessProvider(provider func() bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.fullAccessProvider = provider
+}
+
 func (m *Manager) Resolve(ctx context.Context, workspaceRoot string, requested AgentPolicy) (EffectivePolicy, error) {
 	if ctx == nil {
 		return EffectivePolicy{}, errors.New("Sandbox Resolve Context 不能为空")
@@ -85,6 +94,12 @@ func (m *Manager) Resolve(ctx context.Context, workspaceRoot string, requested A
 	}
 	config := m.Config()
 	profile := NormalizeProfile(requested.Profile, config.DefaultProfile)
+	m.mu.RLock()
+	provider := m.fullAccessProvider
+	m.mu.RUnlock()
+	if provider != nil && provider() {
+		profile = ProfileFullAccess
+	}
 	network := NormalizeNetworkMode(requested.NetworkMode, config.DefaultNetworkMode)
 	native := NormalizeNativeMode(requested.NativeMode, config.DefaultNativeMode)
 

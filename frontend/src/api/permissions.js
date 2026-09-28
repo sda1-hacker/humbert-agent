@@ -5,6 +5,14 @@ import {
 const permissionServiceName =
     "github.com/sda1-hacker/humbert-agent/internal/services.PermissionService";
 
+export function getPermissionMode() {
+    return Call.ByName(`${permissionServiceName}.Mode`);
+}
+
+export function setPermissionMode(mode) {
+    return Call.ByName(`${permissionServiceName}.SetMode`, mode);
+}
+
 /**
  * 读取 Permission 默认策略、长期 Agent Rule 与当前 Session 临时 Rule。
  *

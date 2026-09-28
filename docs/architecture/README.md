@@ -1,5 +1,7 @@
 # Humbert 架构手册
 
+桌面程序路径、PATH、三种审批模式及 Agent 迭代上限的修复见[实际使用问题修复说明](usage-fixes-2026-09-28.md)。
+
 本次 Eino 集成及模块合并见[实现说明](eino-integration.md)。希望了解每个功能具体如何实现、调用哪些代码，请读[项目实现详解与源码导航](implementation-walkthrough.md)（25 个主题，含函数定位、数据流、存储和测试入口）。
 
 最近的执行边界、进程锁、审批、主动助手和前端状态修复见[第五轮修复说明](code-review-fifth-fixes-2026-09-27.md)。

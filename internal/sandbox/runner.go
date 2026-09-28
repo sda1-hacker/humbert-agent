@@ -21,8 +21,8 @@ type ProcessSpec struct {
 	Stdin      io.Reader
 	Stdout     io.Writer
 	Stderr     io.Writer
-	// ReadOnlyWorkspace forces OS-level read-only access to the workspace.
-	// This is required for arbitrary local commands, including interpreters.
+	// ReadOnlyWorkspace 为 Git 查询和 Skill 脚本派生只读策略；
+	// run_command 则使用用户当前模式对应的实际目录权限。
 	ReadOnlyWorkspace bool
 }
 

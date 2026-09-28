@@ -48,6 +48,37 @@ func TestResolveBuildsWorkspaceFullRule(t *testing.T) {
 	}
 }
 
+func TestFullAccessModeAppliesToNextPolicyAndCanBeRevoked(t *testing.T) {
+	manager := newTestManager(t, t.TempDir())
+	root, outside := t.TempDir(), t.TempDir()
+	full := false
+	manager.SetFullAccessProvider(func() bool { return full })
+	before, err := manager.Resolve(context.Background(), root, AgentPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	full = true
+	unrestricted, err := manager.Resolve(context.Background(), root, AgentPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(outside, "new.txt")
+	if _, err := unrestricted.CheckPath(target, OpCreate); err != nil {
+		t.Fatalf("完全操作仍限制外部项目: %v", err)
+	}
+	if _, err := before.CheckPath(target, OpCreate); err == nil {
+		t.Fatal("旧 Turn 的冻结范围被扩大")
+	}
+	full = false
+	after, err := manager.Resolve(context.Background(), root, AgentPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := after.CheckPath(target, OpCreate); err == nil {
+		t.Fatal("撤销完全操作后新任务仍可越界写入")
+	}
+}
+
 func TestResolveAdditionalWritePathUsesReadWriteAccess(t *testing.T) {
 	appHome := t.TempDir()
 	workspace := t.TempDir()
