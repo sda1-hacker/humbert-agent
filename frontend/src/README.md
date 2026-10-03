@@ -1,31 +1,11 @@
-# 前端：Vue、Pinia 与 Wails 桥接
+# Vue 前端结构
 
-[架构手册](../../docs/architecture/README.md) · [Services](../../internal/services/README.md)
+[架构目录](../../docs/architecture/README.md) · [Services](../../internal/services/README.md)
 
-`main.js` 初始化应用；`layouts/AppShell.vue` 组织导航、聊天和右侧文件面板。`api/*.js` 封装 Wails `Call.ByName`；`stores/*.js` 管界面选择、数据加载与实时状态；`components/chat/`、`components/workspace/` 展示会话、审批、工具轨迹和工作区。后端 `services` 暴露稳定 DTO，前端不能自行重建权限与持久化规则。
+`layouts/AppShell.vue` 持有应用初始化、运行事件订阅和窗口布局。`features/workspaces.js` 声明任务、技能、连接器页面，侧栏与页面宿主共用定义；`features/settings.js` 声明设置分组、搜索词、组件及事件转发。组件按需加载，新增普通页面无需增加 AppShell 或 SettingsView 的模板分支。
 
-```mermaid
-flowchart LR
-  C[ComposerBar.vue] --> R[stores/runtime.js]
-  R --> A[api/chat.js]
-  A --> W[Wails ChatService]
-  W --> E[humbert:runtime:event]
-  E --> R
-  R --> M[MessageList / LiveAssistantTurn]
-  R --> S[stores/sessions.js 重读完整消息]
-```
+`components/` 实现页面和展示；`stores/` 保存各领域的共享 UI 状态；`api/` 保留现有 Wails 调用协议。Store 的业务状态不复制到页面注册表。
 
-发送消息时，`ChatService.StartTurn` 返回启动收据，不等待模型回复。`stores/runtime.js` 订阅 Wails 事件并按 Session/Request 关联 delta、审批和终态；终态从 Session API 重读完整消息，避免把事件流当数据库。`stores/sessions.js` 管会话列表和分页；`stores/agents.js` 管当前 Agent；`stores/workspace.js` 跟随 Agent 更新文件树与预览。
+`stores/runtime.js` 是活动会话运行态的唯一所有者。`runtime/projections.js` 只归一化 DTO 和计算输入签名，不订阅事件、不调用 IPC。模块能力摘要按后端 Manifest 展示，前端不重新推导启用工具。消息事实仍来自后端 Transcript。
 
-| 目录 | 阅读入口 |
-| --- | --- |
-| `api/` | 后端服务名称、参数和错误映射。 |
-| `stores/runtime.js` | 异步 Turn、事件竞态、取消与审批。 |
-| `stores/sessions.js` | 会话加载、消息页和搜索跳转。 |
-| `components/chat/` | 输入、Markdown、附件、工具轨迹与审批卡。 |
-| `components/workspace/` | 文件目录树与内容预览。 |
-| `utils/toolProtocol.js`、`utils/toolTrace.js`、`utils/toolEffects.js` | 将持久化工具事务投影成界面展示。 |
-
-调试 UI 与磁盘不一致时，先确认 `api` 返回与 Wails 事件，再确认 Session API 返回的完整消息；不要直接从当前组件 DOM 推断后端事实。
-
-运行态集中到 `stores/runtime.js` 的 `runs[sessionID]`，用请求身份与事件修订防止旧异步结果清理新运行。MCP 两个页面共用 `stores/mcp.js`，合并目录请求并在配置更新后使工具缓存失效。
+更新异步状态时继续使用请求编号，旧响应不能覆盖新选择、审批或运行。测试入口为 `npm test`；生产资源由 `npm run build` 生成。

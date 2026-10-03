@@ -2,8 +2,9 @@ import test, { beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createPinia, setActivePinia } from 'pinia';
-import { computed, ref, reactive } from 'vue';
+import { computed, ref, reactive, nextTick } from 'vue';
 import { useMenuTooltip } from './menuTooltip.js';
+import { parseSkillCommand, matchingEnabledSkills, insertSkillReference } from './skillCommand.js';
 
 const requests = [];
 const messageReads = [];
@@ -26,12 +27,13 @@ function initialStore() {
     store.selectedID = 'session-a';
     return store;
 }
-function assertSelectedB(store) {
+function assertAgentBPage(store) {
     assert.equal(store.agentID, 'b');
-    assert.equal(store.selectedID, 'session-b');
-    assert.equal(store.selectedSession.agentID, 'b');
-    assert.deepEqual(messageReads, ['session-b']);
-    assert.equal(store.messages[0].id, 'message-session-b');
+    assert.equal(store.selectedID, '');
+    assert.equal(store.selectedSession, null);
+    assert.deepEqual(messageReads, []);
+    assert.deepEqual(store.messages, []);
+    assert.equal(store.sessionsForAgent('b')[0].id, 'session-b');
     assert.equal(store.loading, false);
 }
 beforeEach(() => {
@@ -49,7 +51,7 @@ test('主视图切换与侧栏预加载共享读取，等待期间立即解除�
     assert.equal(requests.length, 1);
     requests[0].resolve(sessions('b'));
     await Promise.all([foreground, background]);
-    assertSelectedB(store);
+    assertAgentBPage(store);
 });
 
 test('侧栏先加载时，主视图也复用同一次读取', async () => {
@@ -59,7 +61,7 @@ test('侧栏先加载时，主视图也复用同一次读取', async () => {
     assert.equal(requests.length, 1);
     requests[0].resolve(sessions('b'));
     await Promise.all([foreground, background]);
-    assertSelectedB(store);
+    assertAgentBPage(store);
 });
 
 for (const order of ['old-first', 'new-first']) {
@@ -80,7 +82,7 @@ for (const order of ['old-first', 'new-first']) {
             requests[0].resolve([{ id: 'stale-b' }]);
         }
         await Promise.all([foreground, refresh]);
-        assertSelectedB(store);
+        assertAgentBPage(store);
     });
 }
 
@@ -112,7 +114,7 @@ test('共享请求失败不恢复旧会话，下次切换可以重新读取', as
     const retry = store.loadForAgent('b');
     requests[1].resolve(sessions('b'));
     await retry;
-    assertSelectedB(store);
+    assertAgentBPage(store);
 });
 
 test('快速切换 Agent 和删除 Agent 均使旧选择流程失效，不自动重发读取', async () => {
@@ -123,8 +125,9 @@ test('快速切换 Agent 和删除 Agent 均使旧选择流程失效，不自动
     await current;
     requests[0].resolve(sessions('b'));
     await old;
-    assert.equal(store.selectedID, 'session-c');
-    assert.deepEqual(messageReads, ['session-c']);
+    assert.equal(store.agentID, 'c');
+    assert.equal(store.selectedID, '');
+    assert.deepEqual(messageReads, []);
 
     const deleted = store.loadForAgent('b');
     store.forgetAgent('b');
@@ -145,7 +148,9 @@ test('发送入口拒绝 Agent 与会话不一致，切换完成后发送到新�
         .split('<script setup>')[1].split('</script>')[0]
         .replace(/\bimport[\s\S]*?from\s+["'][^"']+["'];?/g, '');
     const bindings = {
-        computed, ref, useMenuTooltip, watch: () => {},
+        computed, ref, nextTick, useMenuTooltip, watch: () => {},
+        useSkillStore: () => ({ items: [] }), t: key => key,
+        parseSkillCommand, matchingEnabledSkills, insertSkillReference,
         Message: { warning: error => { throw new Error(error); }, error: error => { throw new Error(error); } },
         useSessionStore: () => store, useAgentStore: () => agentStore, useModelStore: () => ({}),
         useRuntimeStore: () => ({ isSessionRunning: () => false, send: async (...args) => sends.push(args) }),
@@ -161,6 +166,7 @@ test('发送入口拒绝 Agent 与会话不一致，切换完成后发送到新�
     const switching = store.loadForAgent('b');
     requests[0].resolve(sessions('b'));
     await switching;
+    await store.select('session-b');
     composer.draft.value = '给 B 的消息';
     await composer.send();
     assert.deepEqual(sends, [['session-b', '给 B 的消息', []]]);

@@ -23,6 +23,7 @@ import MarkdownRenderer from "./MarkdownRenderer.vue";
 import MessageAttachments from "./MessageAttachments.vue";
 import MessageActions from "./MessageActions.vue";
 import IdentityAvatar from "../ui/IdentityAvatar.vue";
+import UserMessageContent from "./UserMessageContent.vue";
 
 const props =
     defineProps({
@@ -142,7 +143,7 @@ const assistantName =
           message-bubble--user
         "
       >
-        <div class="message-content message-content--user">{{ message.content }}</div>
+        <UserMessageContent class="message-content message-content--user" :content="message.content"/>
       </div>
 
       <MessageAttachments
@@ -290,7 +291,7 @@ const assistantName =
 .message-author {
   margin-bottom: 7px;
 
-  font-size: 11px;
+  font: 12px/1.3 var(--h-ui);
 
   line-height: 1;
 
@@ -321,9 +322,9 @@ const assistantName =
 
   border-radius: 8px;
 
-  font-size: 14px;
+  font-size: 15px;
 
-  line-height: 1.75;
+  line-height: 1.7;
 
   overflow-wrap: anywhere;
 
@@ -344,8 +345,7 @@ const assistantName =
 .message-bubble--user {
   border: 0;
 
-  background:
-      var(--h-accent-soft);
+  background: var(--h-surface-active);
 
   color:
       var(--h-text);
@@ -371,7 +371,7 @@ const assistantName =
   color:
       var(--h-warning);
 
-  font-size: 10px;
+  font-size: 12px;
 }
 
 /*

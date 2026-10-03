@@ -40,7 +40,7 @@ function quoteContent() {
   const quote = selected && props.content.includes(selected) ? selected : props.content;
   const existing = sessionStore.draftForSession(props.sessionID);
   sessionStore.setDraft(props.sessionID, `${existing ? existing + '\n\n' : ''}> ${quote.replaceAll('\n', '\n> ')}\n\n`);
-  document.querySelector('.composer-textarea textarea')?.focus();
+  document.querySelector('.composer-textarea [contenteditable="true"]')?.focus();
 }
 
 function proposeMemory() {
@@ -104,7 +104,7 @@ function reuseContent() {
   requestAnimationFrame(() => {
     document
         .querySelector(
-            ".composer-textarea textarea",
+            '.composer-textarea [contenteditable="true"]',
         )
         ?.focus();
   });
@@ -165,7 +165,7 @@ function reuseContent() {
   color: var(--h-text-secondary);
   cursor: pointer;
   font: inherit;
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.4;
 }
 

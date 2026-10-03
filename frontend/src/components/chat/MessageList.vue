@@ -80,8 +80,6 @@ async function jumpToSearchResult() {
   sessionStore.jumpTargetID = '';
 }
 
-watch(() => sessionStore.jumpTargetID, () => { void jumpToSearchResult(); });
-
 async function returnToLatest() {
   try {
     await sessionStore.refreshMessages();
@@ -115,6 +113,9 @@ const runtimeStore =
 
 const sessionStore =
     useSessionStore();
+
+// watch 注册时就会求值 getter，必须放在 Store 初始化之后，搜索跳转才能建立有效订阅。
+watch(() => sessionStore.jumpTargetID, () => { void jumpToSearchResult(); });
 
 const conversationBlocks =
     computed(() =>
@@ -490,7 +491,7 @@ onUnmounted(() => {
           </div>
 
           <p class="message-empty-description">
-            写下目标或添加材料，{{ currentAgentName }} 会从当前上下文开始工作。
+            {{ $t('写下目标或添加材料，{name} 会从当前上下文开始工作。', { name: currentAgentName }) }}
           </p>
         </div>
 
@@ -741,14 +742,14 @@ onUnmounted(() => {
 
 .message-container {
   width: 100%;
-  max-width: 860px;
+  max-width: 792px;
 
   min-width: 0;
   min-height: 100%;
 
   margin: 0 auto;
 
-  padding: 42px 34px 0;
+  padding: 32px 36px 0;
 }
 
 .message-container > * {
@@ -766,9 +767,9 @@ onUnmounted(() => {
 .message-empty {
   display: flex;
 
-  min-height: 360px;
+  min-height: min(280px, 40vh);
 
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
 
   flex-direction: column;
@@ -779,7 +780,7 @@ onUnmounted(() => {
 
   font-family: var(--h-ui);
 
-  font-size: 10px;
+  font-size: 12px;
 
   font-weight: 500;
 
@@ -791,7 +792,7 @@ onUnmounted(() => {
 
   color: var(--h-text);
 
-  font-size: 26px;
+  font-size: clamp(26px, 3vw, 36px);
 
   font-weight: 500;
 }
@@ -803,11 +804,11 @@ onUnmounted(() => {
 
   color: var(--h-text-muted);
 
-  font-size: 12px;
+  font-size: 15px;
 
   line-height: 1.7;
 
-  text-align: center;
+  text-align: left;
 }
 
 .message-bottom-space {

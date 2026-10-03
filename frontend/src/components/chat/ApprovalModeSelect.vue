@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue';
-import { IconSafe } from '@arco-design/web-vue/es/icon';
+import { IconDown, IconLoading, IconSafe } from '@arco-design/web-vue/es/icon';
 import { usePermissionStore } from '../../stores/permissions.js';
 import { t } from '../../i18n/index.js';
 import { Message } from '../../utils/uiMessage.js';
@@ -15,6 +15,7 @@ const options = computed(() => [
   { value: 'full', label: t('完全操作') },
   { value: 'always', label: t('请求审批') },
 ]);
+const currentLabel = computed(() => options.value.find(option => option.value === permissions.mode)?.label || t('审批模式'));
 
 onMounted(async () => {
   try { await permissions.load(); }
@@ -34,13 +35,17 @@ async function changeMode(next) {
       :popup-visible="tooltipVisible" @popup-visible-change="onTooltipVisibleChange"
       content="风险审批：常规操作自动执行，其余确认。完全操作：无需审批，可读写工作区外目录。请求审批：每次工具操作都询问。模式影响所有 Agent，目录范围从下一轮任务生效。"
     >
-      <a-select
-        :model-value="permissions.mode" :options="options" :disabled="disabled || loading || permissions.busy"
-        :loading="loading || permissions.busy" size="small" placeholder="审批模式" aria-label="审批模式"
-        class="approval-mode-select" @change="changeMode" @popup-visible-change="onMenuVisibleChange"
-      >
-        <template #prefix><IconSafe aria-hidden="true"/></template>
-      </a-select>
+      <a-dropdown trigger="click" position="top" :disabled="disabled || loading || permissions.busy" @select="changeMode" @popup-visible-change="onMenuVisibleChange">
+        <button type="button" class="approval-mode-select" :disabled="disabled || loading || permissions.busy" :aria-label="t('审批模式')" aria-haspopup="menu">
+          <IconLoading v-if="loading || permissions.busy" aria-hidden="true"/>
+          <IconSafe v-else aria-hidden="true"/>
+          <span>{{ currentLabel }}</span>
+          <IconDown class="approval-mode-arrow" aria-hidden="true"/>
+        </button>
+        <template #content>
+          <a-doption v-for="option in options" :key="option.value" :value="option.value" :class="{ 'approval-mode-option--selected': option.value === permissions.mode }">{{ option.label }}</a-doption>
+        </template>
+      </a-dropdown>
     </a-tooltip>
   </span>
 </template>
@@ -52,36 +57,50 @@ async function changeMode(next) {
   flex: 0 0 auto;
 }
 
-/* Tooltip 会克隆触发元素，使用真实容器限定深层样式，避免 scope 属性丢失。 */
-:deep(.approval-mode-select) {
-  width: 132px;
+.approval-mode-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: auto;
   min-height: 32px;
   flex: 0 0 auto;
-  padding: 0 8px;
-  border-color: transparent !important;
+  padding: 0 6px;
+  border: 0;
   border-radius: 8px;
-  background: transparent !important;
-  font-family: var(--h-ui);
-  font-size: 12px;
+  background: transparent;
+  color: var(--h-text-secondary);
+  font: 13px/1.4 var(--h-ui);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-:deep(.approval-mode-select:hover),
-:deep(.approval-mode-select.arco-select-view-focus) {
-  border-color: transparent !important;
-  background: var(--h-surface-hover) !important;
+.approval-mode-select:hover:not(:disabled) {
+  background: var(--h-surface-hover);
 }
 
-:deep(.approval-mode-select:focus-within) {
+.approval-mode-select:focus-visible {
   outline: 2px solid var(--h-accent-border);
   outline-offset: 1px;
 }
 
-:deep(.arco-select-view-prefix),
-:deep(.arco-select-view-suffix) {
+.approval-mode-select .arco-icon {
+  flex: 0 0 auto;
   color: var(--h-text-muted);
+  font-size: 14px;
 }
 
-:deep(.arco-select-view-value) {
-  color: var(--h-text-secondary) !important;
+.approval-mode-select .approval-mode-arrow {
+  margin-left: 2px;
+  font-size: 11px;
+}
+
+.approval-mode-select:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.approval-mode-option--selected {
+  color: var(--h-accent);
+  font-weight: 500;
 }
 </style>

@@ -112,6 +112,55 @@ export class ActiveRunStatus {
 }
 
 /**
+ * CapabilitySummary 是公共能力面板的稳定投影，不含模块配置、秘密或可执行对象。
+ */
+export class CapabilitySummary {
+    /**
+     * Creates a new CapabilitySummary instance.
+     * @param {Partial<CapabilitySummary>} [$$source = {}] - The source object to create the CapabilitySummary.
+     */
+    constructor($$source = {}) {
+        if (!("id" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["id"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["revision"] = undefined;
+        }
+        if (!("toolNames" in $$source)) {
+            /**
+             * @member
+             * @type {string[]}
+             */
+            this["toolNames"] = [];
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new CapabilitySummary instance from a string or object.
+     * @param {any} [$$source = {}]
+     * @returns {CapabilitySummary}
+     */
+    static createFrom($$source = {}) {
+        const $$createField2_0 = $$createType3;
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("toolNames" in $$parsedSource) {
+            $$parsedSource["toolNames"] = $$createField2_0($$parsedSource["toolNames"]);
+        }
+        return new CapabilitySummary(/** @type {Partial<CapabilitySummary>} */($$parsedSource));
+    }
+}
+
+/**
  * ContextOverview 把 Context Usage、Context Assembly、下一 Turn Runtime Manifest 与当前活动
  * Turn 状态放在一个只读快照中。UI 因此不需要跨多个 Store 自行推导 Runtime 生命周期。
  */
@@ -159,10 +208,10 @@ export class ContextOverview {
      * @returns {ContextOverview}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType3;
-        const $$createField1_0 = $$createType4;
+        const $$createField0_0 = $$createType4;
+        const $$createField1_0 = $$createType5;
         const $$createField2_0 = $$createType2;
-        const $$createField3_0 = $$createType6;
+        const $$createField3_0 = $$createType7;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("usage" in $$parsedSource) {
             $$parsedSource["usage"] = $$createField0_0($$parsedSource["usage"]);
@@ -435,11 +484,11 @@ export class Event {
      * @returns {Event}
      */
     static createFrom($$source = {}) {
-        const $$createField9_0 = $$createType7;
-        const $$createField14_0 = $$createType7;
+        const $$createField9_0 = $$createType3;
+        const $$createField14_0 = $$createType3;
         const $$createField16_0 = $$createType9;
         const $$createField17_0 = $$createType11;
-        const $$createField18_0 = $$createType7;
+        const $$createField18_0 = $$createType3;
         const $$createField19_0 = $$createType12;
         const $$createField30_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
@@ -533,7 +582,7 @@ export class ManualCompactionResult {
      */
     static createFrom($$source = {}) {
         const $$createField0_0 = $$createType13;
-        const $$createField1_0 = $$createType3;
+        const $$createField1_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("compaction" in $$parsedSource) {
             $$parsedSource["compaction"] = $$createField0_0($$parsedSource["compaction"]);
@@ -615,6 +664,14 @@ export class RuntimeManifest {
      * @param {Partial<RuntimeManifest>} [$$source = {}] - The source object to create the RuntimeManifest.
      */
     constructor($$source = {}) {
+        if (/** @type {any} */(false)) {
+            /**
+             * Extensions 描述已显式选择的模块能力，新增功能不再增加模块专属字段。
+             * @member
+             * @type {CapabilitySummary[] | undefined}
+             */
+            this["extensions"] = undefined;
+        }
         if (!("agentID" in $$source)) {
             /**
              * @member
@@ -767,50 +824,54 @@ export class RuntimeManifest {
      * @returns {RuntimeManifest}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType14;
-        const $$createField7_0 = $$createType15;
-        const $$createField9_0 = $$createType7;
-        const $$createField11_0 = $$createType7;
-        const $$createField13_0 = $$createType9;
-        const $$createField14_0 = $$createType17;
-        const $$createField15_0 = $$createType11;
-        const $$createField16_0 = $$createType7;
-        const $$createField17_0 = $$createType7;
-        const $$createField18_0 = $$createType18;
-        const $$createField19_0 = $$createType19;
+        const $$createField0_0 = $$createType15;
+        const $$createField7_0 = $$createType16;
+        const $$createField8_0 = $$createType17;
+        const $$createField10_0 = $$createType3;
+        const $$createField12_0 = $$createType3;
+        const $$createField14_0 = $$createType9;
+        const $$createField15_0 = $$createType19;
+        const $$createField16_0 = $$createType11;
+        const $$createField17_0 = $$createType3;
+        const $$createField18_0 = $$createType3;
+        const $$createField19_0 = $$createType20;
+        const $$createField20_0 = $$createType21;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("extensions" in $$parsedSource) {
+            $$parsedSource["extensions"] = $$createField0_0($$parsedSource["extensions"]);
+        }
         if ("modelCapabilities" in $$parsedSource) {
-            $$parsedSource["modelCapabilities"] = $$createField6_0($$parsedSource["modelCapabilities"]);
+            $$parsedSource["modelCapabilities"] = $$createField7_0($$parsedSource["modelCapabilities"]);
         }
         if ("modelRoles" in $$parsedSource) {
-            $$parsedSource["modelRoles"] = $$createField7_0($$parsedSource["modelRoles"]);
+            $$parsedSource["modelRoles"] = $$createField8_0($$parsedSource["modelRoles"]);
         }
         if ("builtinToolNames" in $$parsedSource) {
-            $$parsedSource["builtinToolNames"] = $$createField9_0($$parsedSource["builtinToolNames"]);
+            $$parsedSource["builtinToolNames"] = $$createField10_0($$parsedSource["builtinToolNames"]);
         }
         if ("skillNames" in $$parsedSource) {
-            $$parsedSource["skillNames"] = $$createField11_0($$parsedSource["skillNames"]);
+            $$parsedSource["skillNames"] = $$createField12_0($$parsedSource["skillNames"]);
         }
         if ("mcpServers" in $$parsedSource) {
-            $$parsedSource["mcpServers"] = $$createField13_0($$parsedSource["mcpServers"]);
+            $$parsedSource["mcpServers"] = $$createField14_0($$parsedSource["mcpServers"]);
         }
         if ("mcpUnavailable" in $$parsedSource) {
-            $$parsedSource["mcpUnavailable"] = $$createField14_0($$parsedSource["mcpUnavailable"]);
+            $$parsedSource["mcpUnavailable"] = $$createField15_0($$parsedSource["mcpUnavailable"]);
         }
         if ("mcpTools" in $$parsedSource) {
-            $$parsedSource["mcpTools"] = $$createField15_0($$parsedSource["mcpTools"]);
+            $$parsedSource["mcpTools"] = $$createField16_0($$parsedSource["mcpTools"]);
         }
         if ("mcpToolNames" in $$parsedSource) {
-            $$parsedSource["mcpToolNames"] = $$createField16_0($$parsedSource["mcpToolNames"]);
+            $$parsedSource["mcpToolNames"] = $$createField17_0($$parsedSource["mcpToolNames"]);
         }
         if ("exposedToolNames" in $$parsedSource) {
-            $$parsedSource["exposedToolNames"] = $$createField17_0($$parsedSource["exposedToolNames"]);
+            $$parsedSource["exposedToolNames"] = $$createField18_0($$parsedSource["exposedToolNames"]);
         }
         if ("workspace" in $$parsedSource) {
-            $$parsedSource["workspace"] = $$createField18_0($$parsedSource["workspace"]);
+            $$parsedSource["workspace"] = $$createField19_0($$parsedSource["workspace"]);
         }
         if ("sandbox" in $$parsedSource) {
-            $$parsedSource["sandbox"] = $$createField19_0($$parsedSource["sandbox"]);
+            $$parsedSource["sandbox"] = $$createField20_0($$parsedSource["sandbox"]);
         }
         return new RuntimeManifest(/** @type {Partial<RuntimeManifest>} */($$parsedSource));
     }
@@ -1052,8 +1113,8 @@ export class StartTurnResult {
      * @returns {StartTurnResult}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType3;
-        const $$createField6_0 = $$createType4;
+        const $$createField5_0 = $$createType4;
+        const $$createField6_0 = $$createType5;
         const $$createField7_0 = $$createType2;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("contextUsage" in $$parsedSource) {
@@ -1073,20 +1134,22 @@ export class StartTurnResult {
 const $$createType0 = approval$0.Request.createFrom;
 const $$createType1 = $Create.Nullable($$createType0);
 const $$createType2 = RuntimeManifest.createFrom;
-const $$createType3 = contextengine$0.Usage.createFrom;
-const $$createType4 = contextengine$0.Assembly.createFrom;
-const $$createType5 = ActiveRunStatus.createFrom;
-const $$createType6 = $Create.Nullable($$createType5);
-const $$createType7 = $Create.Array($Create.Any);
+const $$createType3 = $Create.Array($Create.Any);
+const $$createType4 = contextengine$0.Usage.createFrom;
+const $$createType5 = contextengine$0.Assembly.createFrom;
+const $$createType6 = ActiveRunStatus.createFrom;
+const $$createType7 = $Create.Nullable($$createType6);
 const $$createType8 = mcp$0.RuntimeServerSnapshot.createFrom;
 const $$createType9 = $Create.Array($$createType8);
 const $$createType10 = mcp$0.RuntimeToolSnapshot.createFrom;
 const $$createType11 = $Create.Array($$createType10);
 const $$createType12 = $Create.Nullable($$createType2);
 const $$createType13 = contextengine$0.CompactResult.createFrom;
-const $$createType14 = models$0.Capabilities.createFrom;
-const $$createType15 = RuntimeModelRolesManifest.createFrom;
-const $$createType16 = mcp$0.RuntimeServerFailure.createFrom;
-const $$createType17 = $Create.Array($$createType16);
-const $$createType18 = RuntimeWorkspaceManifest.createFrom;
-const $$createType19 = RuntimeSandboxManifest.createFrom;
+const $$createType14 = CapabilitySummary.createFrom;
+const $$createType15 = $Create.Array($$createType14);
+const $$createType16 = models$0.Capabilities.createFrom;
+const $$createType17 = RuntimeModelRolesManifest.createFrom;
+const $$createType18 = mcp$0.RuntimeServerFailure.createFrom;
+const $$createType19 = $Create.Array($$createType18);
+const $$createType20 = RuntimeWorkspaceManifest.createFrom;
+const $$createType21 = RuntimeSandboxManifest.createFrom;

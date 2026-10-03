@@ -171,7 +171,7 @@ const incomplete =
 
   color: var(--h-accent);
 
-  font-size: 11px;
+  font: 12px/1.3 var(--h-ui);
 
   font-weight: 450;
 
@@ -183,10 +183,8 @@ const incomplete =
 }
 
 .assistant-answer {
-  max-width: min(
-      74%,
-      650px
-  );
+  max-width: 720px;
+  width: 100%;
 
   min-width: 0;
 
@@ -200,9 +198,9 @@ const incomplete =
 
   color: var(--h-text);
 
-  font-size: 14px;
+  font-size: 15px;
 
-  line-height: 1.75;
+  line-height: 1.7;
 
   overflow-wrap: anywhere;
 
@@ -215,7 +213,7 @@ const incomplete =
 
   color: var(--h-warning);
 
-  font-size: 10px;
+  font-size: 12px;
 }
 
 @media (
@@ -223,7 +221,7 @@ max-width: 900px
 ) {
   .assistant-answer {
     width: auto;
-    max-width: 84%;
+    max-width: 100%;
   }
 }
 </style>

@@ -1,187 +1,30 @@
 <script setup>
-import {
-  computed,
-  onErrorCaptured,
-  ref,
-  watch,
-} from "vue";
-
-import {
-  IconSearch,
-} from "@arco-design/web-vue/es/icon";
-
-import ModelCatalog from "./models/ModelCatalog.vue";
-import MultimediaSettings from "./models/MultimediaSettings.vue";
-import ProviderSettings from "./models/ProviderSettings.vue";
-import PermissionSettings from "./PermissionSettings.vue";
-import SandboxSettings from "./SandboxSettings.vue";
-import SkillPackageSettings from "./SkillPackageSettings.vue";
-import MCPSettings from "./MCPSettings.vue";
+import { computed, defineAsyncComponent, onErrorCaptured, ref, watch } from "vue";
+import { IconSearch } from "@arco-design/web-vue/es/icon";
 import AppPageHeader from "../ui/AppPageHeader.vue";
-import UserProfileSettings from "./UserProfileSettings.vue";
-import DataSettings from "./DataSettings.vue";
-import ArchivedSessionsSettings from "./ArchivedSessionsSettings.vue";
-import LanguageSettings from "./LanguageSettings.vue";
+import { settingsFeatures, settingsGroups } from "../../features/settings.js";
 import { t } from "../../i18n/index.js";
 
-const props = defineProps({
-  initialKey: {
-    type: String,
-    default: "models",
-  },
-});
+const props = defineProps({ initialKey: { type: String, default: "models" } });
+const emit = defineEmits(["close", "open-skills", "open-session"]);
 
-const emit = defineEmits([
-  "close",
-  "open-skills",
-  "open-session",
-]);
-
-const rawNavigationGroups = [
-  {
-    key: "general",
-    title: "通用",
-    items: [{
-      key: "language",
-      title: "语言",
-      description: "选择界面与 Agent 默认回答使用的语言。",
-      keywords: ["语言", "language", "locale", "日本語", "한국어"],
-      glyph: "L",
-    }],
-  },
-  {
-    key: "personal",
-    title: "个人",
-    items: [
-      {
-        key: "profile",
-        title: "个人资料",
-        description: "设置你在聊天中显示的名称和头像。",
-        keywords: ["个人", "用户", "名称", "头像", "profile", "avatar"],
-        glyph: "U",
-      },
-      {
-        key: "data",
-        title: "数据与备份",
-        description: "导出并校验个人数据备份。",
-        keywords: ["数据", "备份", "恢复", "backup", "restore"],
-        glyph: "D",
-      },
-      {
-        key: "archived",
-        title: "归档会话",
-        description: "查看、解除归档或删除已归档的对话。",
-        keywords: ["归档", "会话", "对话", "恢复", "删除", "archive", "session"],
-        glyph: "H",
-      },
-    ],
-  },
-  {
-    key: "ai",
-    title: "AI 与模型",
-    items: [
-      {
-        key: "models",
-        title: "模型",
-        description: "管理可供 Agent 使用的模型、启用状态与请求参数。",
-        keywords: ["模型", "model", "llm", "ai"],
-        glyph: "M",
-      },
-      {
-        key: "providers",
-        title: "供应商",
-        description: "配置 OpenAI、兼容服务与 Ollama 等模型供应商。",
-        keywords: ["供应商", "provider", "openai", "ollama", "api"],
-        glyph: "P",
-      },
-      {
-        key: "multimedia",
-        title: "多媒体",
-        description: "配置视觉辅助模型，并查看当前真正支持的附件类型。",
-        keywords: ["多媒体", "图片", "vision", "image", "附件", "pdf", "audio"],
-        glyph: "V",
-      },
-    ],
-  },
-  {
-    key: "capabilities",
-    title: "Agent 能力",
-    items: [
-      {
-        key: "skills",
-        title: "技能",
-        description: "管理本地 Skill Package 的安装与维护；Agent 的启用与停用在左侧「技能」工作区配置。",
-        keywords: ["skill", "skills", "技能", "工作流", "prompt"],
-        glyph: "S",
-      },
-      {
-        key: "connectors",
-        title: "连接器",
-        description: "管理 stdio / Streamable HTTP MCP Server 与安全凭据。具体 Tool 的启用与停用在左侧「连接器」工作区按 Agent 配置。",
-        keywords: ["mcp", "connector", "连接器", "tool", "stdio", "http", "credential", "token"],
-        glyph: "C",
-      },
-    ],
-  },
-  {
-    key: "security",
-    title: "安全",
-    items: [
-      {
-        key: "sandbox",
-        title: "安全",
-        description: "控制 Humbert 的文件保护与联网范围。普通情况下保持安全沙盒开启即可。",
-        keywords: ["安全", "沙盒", "隔离", "sandbox", "seatbelt", "bubblewrap", "windows"],
-        glyph: "G",
-      },
-      {
-        key: "permissions",
-        title: "操作确认",
-        description: "设置高风险操作是否需要确认，并管理已经记住的临时或长期授权。",
-        keywords: ["确认", "授权", "权限", "审批", "permission", "approval"],
-        glyph: "A",
-      },
-    ],
-  },
-];
-
-const navigationGroups = computed(() => rawNavigationGroups.map((group) => ({
-  ...group,
-  title: t(group.title),
-  items: group.items.map((item) => ({
-    ...item,
-    title: t(item.title),
-    description: t(item.description),
-  })),
+// 文案在 computed 中翻译，切换语言时无需重新注册页面或重新创建组件。
+const navigationGroups = computed(() => settingsGroups.map((group) => ({
+  ...group, title: t(group.title),
+  items: group.items.map((item) => ({ ...item, title: t(item.title), description: t(item.description) })),
 })));
 const allItems = computed(() => navigationGroups.value.flatMap((group) => group.items));
-
-function validKey(value) {
-  return allItems.value.some((item) => item.key === value)
-      ? value
-      : "models";
-}
+function validKey(value) { return allItems.value.some((item) => item.key === value) ? value : "models"; }
 
 const activeKey = ref(validKey(props.initialKey));
 const query = ref("");
 const childRenderError = ref("");
+watch(() => props.initialKey, (value) => { activeKey.value = validKey(value); });
+watch(activeKey, () => { childRenderError.value = ""; });
 
-watch(
-    () => props.initialKey,
-    (value) => {
-      activeKey.value = validKey(value);
-    },
-);
-
-watch(activeKey, () => {
-  childRenderError.value = "";
-});
-
+// 沿用技能/连接器的局部错误恢复，是否支持恢复由页面定义声明。
 onErrorCaptured((error, _instance, info) => {
-  if (activeKey.value !== "skills" && activeKey.value !== "connectors") {
-    return true;
-  }
-
+  if (!settingsFeatures.get(activeKey.value)?.recoverableError) return true;
   childRenderError.value = `${error?.message ?? String(error)}${info ? `（${info}）` : ""}`;
   console.error(`[Settings/${activeKey.value}] 渲染失败`, error, info);
   return false;
@@ -190,26 +33,22 @@ onErrorCaptured((error, _instance, info) => {
 const filteredGroups = computed(() => {
   const keyword = query.value.trim().toLowerCase();
   if (!keyword) return navigationGroups.value;
-
-  return navigationGroups.value
-      .map((group) => ({
-        ...group,
-        items: group.items.filter((item) => [
-          item.title,
-          item.description,
-          ...item.keywords,
-        ].join(" ").toLowerCase().includes(keyword)),
-      }))
-      .filter((group) => group.items.length > 0);
+  return navigationGroups.value.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => [item.title, item.description, ...item.keywords].join(" ").toLowerCase().includes(keyword)),
+  })).filter((group) => group.items.length > 0);
 });
+const activeItem = computed(() => allItems.value.find((item) => item.key === activeKey.value) ?? allItems.value[0]);
 
-const activeItem = computed(() => (
-    allItems.value.find((item) => item.key === activeKey.value) ?? allItems.value[0]
+// 组件引用在装配时固定，切换页面只选择定义，不重新创建异步组件。
+const components = new Map(settingsFeatures.items.map((item) => [item.key, defineAsyncComponent(item.load)]));
+const activeComponent = computed(() => components.get(activeKey.value));
+// 特殊页面事件在定义中映射，宿主只转发，不依赖技能或归档模块的内部行为。
+const activeListeners = computed(() => Object.fromEntries(
+  Object.entries(settingsFeatures.get(activeKey.value)?.forwardEvents || {}).map(([event, forwarded]) =>
+    [event, (...args) => emit(forwarded, ...args)]),
 ));
-
-function selectItem(key) {
-  activeKey.value = validKey(key);
-}
+function selectItem(key) { activeKey.value = validKey(key); }
 </script>
 
 <template>
@@ -275,33 +114,15 @@ function selectItem(key) {
           />
 
           <section class="settings-content__body">
-            <LanguageSettings v-if="activeKey === 'language'"/>
-            <UserProfileSettings v-else-if="activeKey === 'profile'"/>
-            <DataSettings v-else-if="activeKey === 'data'"/>
-            <ArchivedSessionsSettings v-else-if="activeKey === 'archived'" @open-session="emit('open-session', $event)"/>
-            <ModelCatalog v-else-if="activeKey === 'models'"/>
-            <ProviderSettings v-else-if="activeKey === 'providers'"/>
-            <MultimediaSettings v-else-if="activeKey === 'multimedia'"/>
-            <PermissionSettings v-else-if="activeKey === 'permissions'"/>
-            <SandboxSettings v-else-if="activeKey === 'sandbox'"/>
-
-            <div
-                v-else-if="activeKey === 'skills' || activeKey === 'connectors'"
-                class="settings-child-host"
-            >
+            <div v-if="activeItem.recoverableError" class="settings-child-host">
               <div v-if="childRenderError" class="settings-child-error">
-                <strong>{{ $t(activeKey === 'skills' ? '技能页面渲染失败' : '连接器页面渲染失败') }}</strong>
+                <strong>{{ $t(activeItem.recoverableError) }}</strong>
                 <span>{{ childRenderError }}</span>
                 <button type="button" @click="childRenderError = ''">重新显示</button>
               </div>
-
-              <SkillPackageSettings
-                  v-else-if="activeKey === 'skills'"
-                  @open-detail="emit('open-skills', $event)"
-              />
-
-              <MCPSettings v-else/>
+              <component :is="activeComponent" v-else v-on="activeListeners" />
             </div>
+            <component :is="activeComponent" v-else v-on="activeListeners" />
           </section>
         </div>
       </div>

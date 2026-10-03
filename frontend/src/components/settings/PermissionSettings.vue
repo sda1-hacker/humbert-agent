@@ -141,6 +141,7 @@ function formatCreatedAt(value) {
 }
 
 function ruleTarget(rule) {
+	if (rule?.moduleID) return `${rule.moduleID} · ${rule.toolName}`;
   if (rule?.command) {
     return `运行本地程序 · ${rule.command}`;
   }

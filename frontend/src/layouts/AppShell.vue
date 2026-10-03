@@ -1,133 +1,65 @@
 <script setup>
-import {
-  computed,
-  defineAsyncComponent,
-  onMounted,
-  onUnmounted,
-  ref,
-  watch,
-} from "vue";
+import { workspaceFeatures } from "../features/workspaces.js";
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from "vue";
 
 import { Message } from "../utils/uiMessage.js";
 
-import WindowChrome
-  from "../components/window/WindowChrome.vue";
+import WindowChrome from "../components/window/WindowChrome.vue";
 
-import ConversationSidebar
-  from "../components/sidebar/ConversationSidebar.vue";
+import ConversationSidebar from "../components/sidebar/ConversationSidebar.vue";
 
-import SidebarResizer
-  from "../components/sidebar/SidebarResizer.vue";
+import SidebarResizer from "../components/sidebar/SidebarResizer.vue";
 
-import ChatView
-  from "../components/chat/ChatView.vue";
+import ChatView from "../components/chat/ChatView.vue";
 
 // 设置、Skills 与 Connectors 都是低频一级页面。按需加载可避免它们的表单、详情组件
 // 和领域 API 全部进入聊天首屏主包，同时不改变任何 Pinia/Runtime 生命周期。
-const SettingsView =
-    defineAsyncComponent(
-        () => import(
-            "../components/settings/SettingsView.vue"
-            ),
-    );
+const SettingsView = defineAsyncComponent(() => import("../components/settings/SettingsView.vue"));
 
-const FirstRunGuide = defineAsyncComponent(
-    () => import("../components/onboarding/FirstRunGuide.vue"),
-);
+const FirstRunGuide = defineAsyncComponent(() => import("../components/onboarding/FirstRunGuide.vue"));
 
-const SkillWorkspaceView =
-    defineAsyncComponent(
-        () => import(
-            "../components/skills/SkillWorkspaceView.vue"
-            ),
-    );
+// 页面定义共用同一个导航注册表；新增工作区不再修改模板中的分支链。
+const workspaceComponents = new Map(workspaceFeatures.items.map((feature) => [feature.key, defineAsyncComponent(feature.load)]));
 
-const MCPWorkspaceView =
-    defineAsyncComponent(
-        () => import(
-            "../components/mcp/MCPWorkspaceView.vue"
-            ),
-    );
+const ContextPanel = defineAsyncComponent(() => import("../components/workspace/ContextPanel.vue"));
 
-const TasksWorkspaceView =
-    defineAsyncComponent(
-        () => import(
-            "../components/tasks/TasksWorkspaceView.vue"
-            ),
-    );
+import { useAgentStore } from "../stores/agents.js";
 
-const ContextPanel = defineAsyncComponent(
-    () => import("../components/workspace/ContextPanel.vue"),
-);
+import { useLayoutStore } from "../stores/layout.js";
 
-import {
-  useAgentStore,
-} from "../stores/agents.js";
+import { useModelStore } from "../stores/models.js";
+import { usePreferenceStore } from "../stores/preferences.js";
 
-import {
-  useLayoutStore,
-} from "../stores/layout.js";
+import { useRuntimeStore } from "../stores/runtime.js";
 
-import {
-  useModelStore,
-} from "../stores/models.js";
+import { useSessionStore } from "../stores/sessions.js";
 
-import {
-  useRuntimeStore,
-} from "../stores/runtime.js";
+import { useTaskStore } from "../stores/tasks.js";
 
-import {
-  useSessionStore,
-} from "../stores/sessions.js";
+import { useProactiveStore } from "../stores/proactive.js";
 
-import {
-  useTaskStore,
-} from "../stores/tasks.js";
-
-import {
-  usePreferenceStore,
-} from "../stores/preferences.js";
-
-import {
-  useProactiveStore,
-} from "../stores/proactive.js";
-
-import {
-  useWorkspaceStore,
-} from "../stores/workspace.js";
+import { useWorkspaceStore } from "../stores/workspace.js";
 import { useContextPanelStore } from "../stores/contextPanel.js";
 
-const layoutStore =
-    useLayoutStore();
+const layoutStore = useLayoutStore();
 
-const modelStore =
-    useModelStore();
+const modelStore = useModelStore();
+const preferenceStore = usePreferenceStore();
 
-const agentStore =
-    useAgentStore();
+const agentStore = useAgentStore();
 
-const sessionStore =
-    useSessionStore();
+const sessionStore = useSessionStore();
 
-const runtimeStore =
-    useRuntimeStore();
+const runtimeStore = useRuntimeStore();
 
-const taskStore =
-    useTaskStore();
+const taskStore = useTaskStore();
 
-const preferenceStore =
-    usePreferenceStore();
-
-const proactiveStore =
-    useProactiveStore();
+const proactiveStore = useProactiveStore();
 
 const bootstrapReady = ref(false);
 const bootstrapError = ref("");
 const needsFirstRun = computed(() =>
-  bootstrapReady.value && !agentStore.items.some((agent) =>
-    modelStore.enabledModels.some((model) => model.id === agent.modelID),
-  ),
-);
+bootstrapReady.value && !agentStore.items.some((agent) => modelStore.enabledModels.some((model) => model.id === agent.modelID)));
 
 const dismissedTaskNotificationID = ref("");
 const taskNotification = computed(() => {
@@ -135,10 +67,13 @@ const taskNotification = computed(() => {
   return value?.taskID && value.id !== dismissedTaskNotificationID.value ? value : null;
 });
 
-const workspaceStore =
-    useWorkspaceStore();
+const workspaceStore = useWorkspaceStore();
+// Store 已拥有自己的订阅实现；这里只列出需要随桌面页面挂载/卸载的四个实例。
+const eventStores = [runtimeStore, taskStore, proactiveStore, workspaceStore];
+let startedEventStores = [];
 const contextPanel = useContextPanelStore();
 const viewportWidth = ref(typeof window === "undefined" ? 1320 : window.innerWidth);
+const compactLayout = computed(() => viewportWidth.value < 700);
 
 function updateViewportWidth() {
   viewportWidth.value = window.innerWidth;
@@ -160,11 +95,9 @@ function updateViewportWidth() {
  * 4. RuntimeStore 仍然由 AppShell 持有，因此即便用户在 Agent
  *    正在运行时进入设置页，后台 Runtime Event 也不会丢失。
  */
-const settingsVisible =
-    ref(false);
+const settingsVisible = ref(false);
 
-const settingsInitialKey =
-    ref("models");
+const settingsInitialKey = ref("models");
 
 /**
  * 主工作区视图。
@@ -177,14 +110,11 @@ const settingsInitialKey =
  * Settings 仍然是覆盖整个业务区域的一级页面；关闭 Settings 后回到
  * 用户打开设置前所在的主工作区。
  */
-const mainView =
-    ref("chat");
+const mainView = ref("chat");
 
-const skillsInitialSkillName =
-    ref("");
+const skillsInitialSkillName = ref("");
 
-const skillsViewRevision =
-    ref(0);
+const skillsViewRevision = ref(0);
 
 /**
  * 主聊天业务区域有左侧会话导航和右侧工作区。
@@ -199,14 +129,15 @@ const skillsViewRevision =
  * 设置打开后会替换整个业务区域，获得完整可用宽度。
  */
 const mainGridStyle =
-    computed(() => ({
-      gridTemplateColumns: [
-        ...(layoutStore.sidebarOpen ? [`${layoutStore.sidebarWidth}px`, "5px"] : []),
-        "minmax(0, 1fr)",
-        ...(mainView.value === "chat" && contextPanel.open
-          ? ["5px", `${contextPanel.width}px`] : []),
-      ].join(" "),
-    }));
+computed(() => ({
+  // 窄窗口每次只展示一个区域；用 v-show 保留聊天草稿和组件状态。
+  gridTemplateColumns: compactLayout.value ? "minmax(0, 1fr)" : [
+    ...(layoutStore.sidebarOpen ? [`${layoutStore.sidebarWidth}px`, "5px"] : []),
+    "minmax(0, 1fr)",
+    ...(mainView.value === "chat" && contextPanel.open
+    ? ["5px", `${contextPanel.width}px`] : []),
+  ].join(" "),
+}));
 
 const contextVisible = computed(() => mainView.value === "chat" && contextPanel.open);
 let resizingContext = false;
@@ -270,78 +201,67 @@ function showWorkspacePanel() {
 }
 
 /**
- * 当前 Agent 切换时自动加载该 Agent 的 Session。
+ * 当前 Agent 切换时进入该 Agent 的起始页，只加载会话目录。
  *
  * 该监听属于 Application 生命周期，因此即使当前显示 SettingsView，
  * Store 的数据一致性仍然能够保持。
  */
 watch(
-    () => agentStore.selectedID,
+() => agentStore.selectedID,
 
-    async (
-        current,
-        previous,
-    ) => {
-      if (
-          current === previous
-      ) {
-        return;
-      }
+async (
+current,
+previous) => {
+  if (current === previous || sessionStore.agentID === current) {
+    return;
+  }
 
-      try {
-        await sessionStore
-            .loadForAgent(current);
-      } catch (error) {
-        Message.error(
-            error?.message ??
-            String(error),
-        );
-      }
-    },
-);
+  try {
+    await sessionStore.loadForAgent(current);
+  } catch (error) {
+    Message.error(error?.message ?? String(error));
+  }
+});
 
 watch(
-    () => proactiveStore.notificationSequence,
-    () => {
-      const notification = proactiveStore.notification;
-      if (!notification) return;
+() => proactiveStore.notificationSequence,
+() => {
+  const notification = proactiveStore.notification;
+  if (!notification) return;
 
-      const message = notification.body
-          ? `${notification.title}：${notification.body}`
-          : notification.title;
+  const message = notification.body
+  ? `${notification.title}：${notification.body}`
+  : notification.title;
 
-      switch (notification.level) {
-        case "success":
-          Message.success(message);
-          break;
-        case "warning":
-          Message.warning(message);
-          break;
-        case "error":
-          Message.error(message);
-          break;
-        default:
-          Message.info(message);
-          break;
-      }
+  switch (notification.level) {
+    case "success":
+    Message.success(message);
+    break;
+    case "warning":
+    Message.warning(message);
+    break;
+    case "error":
+    Message.error(message);
+    break;
+    default:
+    Message.info(message);
+    break;
+  }
 
-      if (
-          typeof document !== "undefined" &&
-          document.hidden &&
-          "Notification" in globalThis &&
-          globalThis.Notification.permission === "granted"
-      ) {
-        try {
-          const desktopNotification = new globalThis.Notification(notification.title, {
-            body: notification.body || "",
-          });
-          if (notification.taskID) desktopNotification.onclick = () => { void openTask(notification.taskID); };
-        } catch (error) {
-          console.warn("[Proactive] 系统通知发送失败，已使用应用内通知", error);
-        }
-      }
-    },
-);
+  if (
+  typeof document !== "undefined" &&
+  document.hidden &&
+  "Notification" in globalThis &&
+  globalThis.Notification.permission === "granted"
+  ) {
+    try {
+      const desktopNotification = new globalThis.Notification(notification.title, { body: notification.body || "" });
+      if (notification.taskID) desktopNotification.onclick = () => { void openTask(notification.taskID); };
+    } catch (error) {
+      console.warn("[Proactive] 系统通知发送失败，已使用应用内通知", error);
+    }
+  }
+});
 
 /**
  * 打开独立设置页面。
@@ -349,10 +269,7 @@ watch(
  * 这里只改变前端 View State，不修改任何业务状态。
  */
 function openSettings(initialKey = "models") {
-  settingsInitialKey.value =
-      typeof initialKey === "string"
-          ? initialKey
-          : "models";
+  settingsInitialKey.value = typeof initialKey === "string" ? initialKey : "models";
   settingsVisible.value = true;
 }
 
@@ -369,22 +286,30 @@ function openConnectorSettings() {
 function openSkills(skillName = "") {
   settingsVisible.value = false;
   mainView.value = "skills";
-  skillsInitialSkillName.value =
-      typeof skillName === "string"
-          ? skillName
-          : "";
+  skillsInitialSkillName.value = typeof skillName === "string" ? skillName : "";
   skillsViewRevision.value += 1;
+  if (compactLayout.value) layoutStore.setSidebarOpen(false);
 }
 
-function openConnectors() {
+function openWorkspace(key) {
+  if (!workspaceFeatures.get(key)) return;
+  if (key === "skills") { openSkills(); return; }
   settingsVisible.value = false;
-  mainView.value = "connectors";
+  mainView.value = key;
+  if (compactLayout.value) layoutStore.setSidebarOpen(false);
 }
 
-function openTasks() {
-  settingsVisible.value = false;
-  mainView.value = "tasks";
-}
+function openTasks() { openWorkspace("tasks"); }
+
+// Skills 的详情参数与刷新语义沿用原实现；其他页面无需知道这些专属状态。
+const workspaceProps = computed(() => mainView.value === "skills" ? { initialSkillName: skillsInitialSkillName.value } : {});
+const workspaceListeners = computed(() => {
+  const feature = workspaceFeatures.get(mainView.value);
+  return {
+    "open-session": openTaskSession,
+    ...Object.fromEntries(Object.entries(feature?.settingsEvents || {}).map(([event, key]) => [event, () => openSettings(key)])),
+  };
+});
 
 async function openTask(taskID) {
   if (!taskID) return;
@@ -418,16 +343,19 @@ async function openWorkspaceFile(payload) {
     showWorkspacePanel();
     await workspaceStore.openPath(path);
   } catch (error) {
-    Message.error(
-        error?.message ?? String(error),
-    );
+    Message.error(error?.message ?? String(error));
   }
 }
 
 function openChat() {
   settingsVisible.value = false;
   mainView.value = "chat";
+  if (compactLayout.value) { layoutStore.setSidebarOpen(false); contextPanel.setOpen(false); }
 }
+
+watch(compactLayout, (compact) => {
+  if (compact) { layoutStore.setSidebarOpen(false); contextPanel.setOpen(false); }
+}, { immediate: true });
 
 /**
  * 关闭设置页面并回到打开设置前的主工作区。
@@ -447,32 +375,53 @@ async function openTaskSession(payload) {
   }
   try {
     agentStore.select(agentID);
-    await sessionStore.loadForAgent(agentID);
+    const loading = sessionStore.loadForAgent(agentID);
+    const sequence = sessionStore.agentLoadSequence;
+    await loading;
+    if (agentStore.selectedID !== agentID || sessionStore.agentLoadSequence !== sequence) return;
     await sessionStore.select(sessionID);
+    if (agentStore.selectedID !== agentID || sessionStore.selectedID !== sessionID) return;
     openChat();
   } catch (error) {
     Message.error(error?.message ?? String(error));
   }
 }
 
+// 启动失败时逆序释放已尝试的 Store，重试不会留下重复订阅。
+function startEvents() {
+  if (startedEventStores.length) return;
+  try {
+    for (const store of eventStores) { startedEventStores.push(store); store.initialiseEvents(); }
+  } catch (error) {
+    try { stopEvents(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], "事件初始化失败"); }
+    throw error;
+  }
+}
+
+function stopEvents() {
+  const stores = startedEventStores;
+  startedEventStores = [];
+  const errors = [];
+  for (const store of stores.reverse()) {
+    try { store.disposeEvents(); } catch (error) { errors.push(error); }
+  }
+  if (errors.length) throw new AggregateError(errors, "事件清理失败");
+}
+
 async function bootstrap() {
   bootstrapError.value = "";
   try {
-    await Promise.all([
-      modelStore.load(),
-      agentStore.load(),
-      preferenceStore.load().catch((error) => {
-        console.warn("[Preferences] 用户资料加载失败，继续使用缓存语言", error);
-      }),
-    ]);
+    startEvents();
+    await Promise.all([modelStore.load(), agentStore.load(), preferenceStore.load().catch((error) => {
+      console.warn("[Preferences] 用户资料加载失败，继续使用缓存语言", error);
+    })]);
     bootstrapReady.value = true;
-    await Promise.all([
-      taskStore.load(),
-      proactiveStore.load().catch((error) => {
-        console.warn("[Proactive] 主动助手状态加载失败", error);
-      }),
-    ]);
-    await sessionStore.loadForAgent(agentStore.selectedID);
+    await Promise.all([taskStore.load(), proactiveStore.load().catch((error) => {
+      console.warn("[Proactive] 主动助手状态加载失败", error);
+    })]);
+    if (sessionStore.agentID !== agentStore.selectedID) {
+      await sessionStore.loadForAgent(agentStore.selectedID);
+    }
   } catch (error) {
     if (!bootstrapReady.value) bootstrapError.value = error?.message ?? String(error);
     Message.error(error?.message ?? String(error));
@@ -481,20 +430,12 @@ async function bootstrap() {
 
 onMounted(() => {
   updateViewportWidth();
-  runtimeStore.initialiseEvents();
-  taskStore.initialiseEvents();
-  proactiveStore.initialiseEvents();
-  workspaceStore.initialiseEvents();
   window.addEventListener("resize", updateViewportWidth);
   void bootstrap();
 });
 
 onUnmounted(() => {
-  runtimeStore.disposeEvents();
-  taskStore.disposeEvents();
-  proactiveStore.disposeEvents();
-  workspaceStore.disposeEvents();
-  window.removeEventListener("resize", updateViewportWidth);
+  try { stopEvents(); } finally { window.removeEventListener("resize", updateViewportWidth); }
 });
 </script>
 
@@ -551,38 +492,25 @@ onUnmounted(() => {
           v-if="layoutStore.sidebarOpen"
           :active-view="mainView"
           @open-chat="openChat"
-          @open-skills="openSkills"
-          @open-connectors="openConnectors"
-          @open-tasks="openTasks"
+          @navigate="openWorkspace"
           @open-settings="openSettings"
       />
 
-      <SidebarResizer v-if="layoutStore.sidebarOpen" />
+      <SidebarResizer v-if="layoutStore.sidebarOpen && !compactLayout" />
 
-      <MCPWorkspaceView
-          v-if="mainView === 'connectors'"
-          @manage-servers="openConnectorSettings"
-      />
-
-      <TasksWorkspaceView
-          v-else-if="mainView === 'tasks'"
-          @open-session="openTaskSession"
-      />
-
-      <SkillWorkspaceView
-          v-else-if="mainView === 'skills'"
-          :key="skillsViewRevision"
-          :initial-skill-name="skillsInitialSkillName"
-          @manage-packages="openSettings('skills')"
-      />
+      <component v-if="workspaceComponents.has(mainView)" :is="workspaceComponents.get(mainView)"
+          v-show="!compactLayout || (!layoutStore.sidebarOpen && !contextVisible)"
+          :key="mainView === 'skills' ? `skills:${skillsViewRevision}` : mainView" v-bind="workspaceProps" v-on="workspaceListeners" />
 
       <ChatView
           v-else
+          v-show="!compactLayout || (!layoutStore.sidebarOpen && !contextVisible)"
           @open-workspace-file="openWorkspaceFile"
           @open-task="openTask"
       />
       <template v-if="contextVisible">
         <div
+            v-if="!compactLayout"
             class="app-shell__context-resizer"
             role="separator"
             tabindex="0"

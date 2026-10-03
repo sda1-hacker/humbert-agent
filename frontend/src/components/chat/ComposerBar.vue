@@ -1,6 +1,7 @@
 <script setup>
 import {
   computed,
+  nextTick,
   ref,
   watch,
 } from "vue";
@@ -9,6 +10,7 @@ import { Message } from "../../utils/uiMessage.js";
 import { useMenuTooltip } from "../../utils/menuTooltip.js";
 
 import {
+  IconArrowUp,
   IconPlus,
   IconStop,
 } from "@arco-design/web-vue/es/icon";
@@ -32,6 +34,12 @@ import {
 import ImagePreviewDialog
   from "../ui/ImagePreviewDialog.vue";
 import ApprovalModeSelect from "./ApprovalModeSelect.vue";
+import SkillComposerInput from "./SkillComposerInput.vue";
+import SkillReference from "./SkillReference.vue";
+import { useSkillStore } from "../../stores/skills.js";
+import { t } from "../../i18n/index.js";
+import { parseSkillCommand, matchingEnabledSkills, insertSkillReference } from "../../utils/skillCommand.js";
+
 
 const {
   tooltipVisible: contextTooltipVisible,
@@ -245,6 +253,66 @@ const canSend =
         !running.value &&
         !sending.value
     ));
+
+const skillStore = useSkillStore();
+const composerInput = ref(null);
+const skillCommand = ref(null);
+const skillIndex = ref(0);
+const skillMenuOpen = computed(() => Boolean(skillCommand.value));
+const skillMatches = computed(() => matchingEnabledSkills(skillStore.items, agentStore.selectedAgent?.enabledSkills, skillCommand.value?.query));
+
+function textareaElement() { return composerInput.value?.input; }
+
+// 输入组件先保存 canonical 草稿，再读取包含原子标签的逻辑光标。
+// 中文组词期间不打开菜单，只有确认组词后才解析命令与光标位置。
+function syncSkillCommand(event) {
+  const input = textareaElement();
+  if (!input || event?.isComposing || sessionStore.loading || sessionStore.agentID !== agentStore.selectedID) return;
+  const command = input.selectionStart === input.selectionEnd ? parseSkillCommand(input.value, input.selectionStart) : null;
+  const opening = command && !skillCommand.value;
+  skillCommand.value = command;
+  skillIndex.value = 0;
+  if (opening && !skillStore.loading) void skillStore.load().catch(() => {}); // 错误在菜单内展示并提供重试。
+}
+
+async function chooseSkill(skill) {
+  const input = textareaElement();
+  const command = input && parseSkillCommand(draft.value, input.selectionStart);
+  // 菜单打开后 Agent 的配置可能改变，提交选择时再次检查当前范围，不能自动启用技能。
+  if (!command || !skillMatches.value.some(item => item.name === skill.name)) return;
+  const inserted = insertSkillReference(draft.value, command, skill.name);
+  draft.value = inserted.text;
+  skillCommand.value = null;
+  await nextTick();
+  input.focus();
+  input.setSelectionRange(inserted.cursor, inserted.cursor);
+}
+
+function handleComposerKey(event) {
+  if (event.isComposing || event.keyCode === 229) return;
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey || event.altKey)) return;
+  if (event.key === "Tab" && event.shiftKey) return;
+  if (skillMenuOpen.value && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) {
+    if (event.key === "Escape") { event.preventDefault(); skillCommand.value = null; return; }
+    if (event.key === "Enter" && event.shiftKey) return;
+    if (event.key === "Tab" && (!skillMatches.value.length || skillStore.loading || skillStore.loadError)) return;
+    event.preventDefault();
+    const count = skillMatches.value.length;
+    if (!count || skillStore.loading || skillStore.loadError) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      skillIndex.value = (skillIndex.value + (event.key === "ArrowDown" ? 1 : -1) + count) % count;
+      void nextTick(() => document.getElementById(`composer-skill-${skillIndex.value}`)?.scrollIntoView({ block: "nearest" }));
+    } else void chooseSkill(skillMatches.value[skillIndex.value]);
+    return;
+  }
+  if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) handleEnter(event);
+}
+
+watch(skillMatches, () => { skillIndex.value = 0; });
+watch(() => [sessionStore.selectedID, agentStore.selectedID], () => {
+  skillCommand.value = null;
+  if (agentStore.selectedAgent && !skillStore.loaded && !skillStore.loading) void skillStore.load().catch(() => {});
+}, { immediate: true });
 
 /**
  * 把 Token 数转换为 Composer 中短而稳定的显示文本。
@@ -620,6 +688,11 @@ async function send() {
               sessionID,
           )
           .trim();
+  // /skill 是输入入口，不把尚未完成选择的命令当成普通任务发送给模型。
+  if (parseSkillCommand(content)) {
+    syncSkillCommand();
+    return;
+  }
   const pendingAttachments = attachments.value.map((item) => ({...item}));
   const capabilityError = attachmentCapabilityError(pendingAttachments);
   if (capabilityError) {
@@ -764,8 +837,30 @@ watch(
 
     因此不会再覆盖或者被 MessageList 推出屏幕。
   -->
-  <footer class="composer">
+  <footer class="composer" @focusout="event => !event.currentTarget.contains(event.relatedTarget) && (skillCommand = null)">
     <div class="composer-inner">
+      <!-- 菜单只显示当前 Agent 已启用的元数据；正文和资源仍在后端按需加载。 -->
+      <section v-if="skillMenuOpen" class="skill-menu" :aria-label="t('选择技能')">
+        <header class="skill-menu__header">
+          <span>{{ $t('当前 Agent 的技能') }}</span><span class="skill-menu__count">{{ skillMatches.length }}</span>
+          <button type="button" class="skill-menu__close" :aria-label="t('关闭技能菜单')" @click="skillCommand = null">×</button>
+        </header>
+        <div v-if="skillStore.loading" class="skill-menu__status" role="status">{{ $t('正在加载…') }}</div>
+        <div v-else-if="skillStore.loadError" class="skill-menu__status" role="alert">
+          <p>{{ $t('无法读取技能，请重试。') }}</p>
+          <button type="button" class="skill-menu__retry" @click="skillStore.load().catch(() => {})">{{ $t('重试') }}</button>
+        </div>
+        <div v-else-if="!skillMatches.length" class="skill-menu__status" role="status">
+          {{ skillCommand.query ? $t('没有匹配的技能') : $t('当前 Agent 没有可用技能，请先在技能页面启用。') }}
+        </div>
+        <div v-else id="composer-skills" class="skill-menu__list" role="listbox" :aria-label="t('选择技能')">
+          <button v-for="(skill, index) in skillMatches" :id="`composer-skill-${index}`" :key="skill.name" type="button" role="option" :aria-selected="index === skillIndex" class="skill-menu__item" :class="{ 'skill-menu__item--active': index === skillIndex }" @mousedown.prevent @click="chooseSkill(skill)">
+            <span class="skill-menu__identity"><SkillReference :skill="skill" :focusable="false"/></span>
+            <span class="skill-menu__description">{{ skill.description }}</span>
+          </button>
+        </div>
+        <footer class="skill-menu__hint">{{ $t('↑↓ 选择 · Enter / Tab 使用 · Esc 关闭') }}</footer>
+      </section>
       <input
           ref="fileInput"
           type="file"
@@ -804,23 +899,23 @@ watch(
         </div>
       </div>
 
-      <a-textarea
+      <SkillComposerInput
+          :key="sessionStore.selectedID"
+          ref="composerInput"
           v-model="draft"
-          :auto-size="{
-          minRows: 2,
-          maxRows: 6,
-        }"
+          :skills="skillStore.items"
           :disabled="
           !sessionStore.selectedID
         "
-          :placeholder="
-          sessionStore.selectedID
-            ? `给 ${selectedAgentName} 发送消息…`
-            : '请先创建一个对话'
-        "
-          class="composer-textarea"
+          :placeholder="sessionStore.selectedID ? t('给 {name} 发送消息…', { name: selectedAgentName }) : t('请先创建一个对话')"
+          :input-attrs="{ 'aria-label': t('消息输入'), 'aria-autocomplete': 'list', 'aria-expanded': skillMenuOpen, 'aria-controls': skillMenuOpen ? 'composer-skills' : undefined, 'aria-activedescendant': skillMenuOpen && !skillStore.loading && !skillStore.loadError && skillMatches.length ? `composer-skill-${skillIndex}` : undefined }"
+          @input="(_value, event) => syncSkillCommand(event)"
           @paste="pasteAttachments"
-          @keydown.enter.exact="handleEnter"
+          @keydown="handleComposerKey"
+          @keyup="event => ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) && syncSkillCommand(event)"
+          @click="syncSkillCommand"
+          @focus="syncSkillCommand"
+          @compositionend="syncSkillCommand"
       />
 
       <ImagePreviewDialog
@@ -837,11 +932,11 @@ watch(
               type="button"
               class="composer-attach-button"
               :disabled="!sessionStore.selectedID || running || sending || attachments.length >= MAX_ATTACHMENTS"
-              title="添加图片或文件"
+              :title="t('添加图片或文件')"
+              :aria-label="t('添加图片或文件')"
               @click="openAttachmentPicker"
           >
             <IconPlus aria-hidden="true"/>
-            <span>附件</span>
           </button>
 
           <!--
@@ -1056,6 +1151,11 @@ watch(
                             >{{ contextManifest.mcpUnavailable.length }} 个 Server 不可用</span>
                           </div>
 
+                          <div v-for="module in contextManifest.extensions || []" :key="module.id" class="context-tooltip__row">
+                            <span>{{ module.id }}</span>
+                            <span class="context-tooltip__value" :title="formatNameList(module.toolNames)">{{ formatNameList(module.toolNames) }}</span>
+                          </div>
+
                           <div class="context-tooltip__row">
                             <span>Workspace</span>
                             <span
@@ -1097,6 +1197,7 @@ watch(
           </span>
 
           <ApprovalModeSelect :disabled="running || sending" />
+          <span class="composer-hint">{{ $t('输入 /skill 选择技能 · Shift+Enter 换行') }}</span>
         </div>
 
         <div
@@ -1148,6 +1249,7 @@ watch(
           <a-button
               type="primary"
               class="composer-send-button"
+              :class="{ 'composer-send-button--stop': running }"
               :status="running ? 'danger' : undefined"
               :loading="sending && !running"
               :disabled="!running && !canSend"
@@ -1157,11 +1259,8 @@ watch(
           >
             <template #icon>
               <IconStop v-if="running"/>
-              <svg v-else class="composer-send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M19 5v7a3 3 0 0 1-3 3H5m0 0 5-5m-5 5 5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+              <IconArrowUp v-else class="composer-send-icon" aria-hidden="true"/>
             </template>
-            {{ running ? $t('停止') : $t('发送') }}
           </a-button>
         </div>
       </div>
@@ -1175,33 +1274,74 @@ watch(
 
   width: 100%;
 
-  padding: 14px 28px 24px;
+  padding: 8px 28px 16px;
 
   background: var(--h-bg);
 }
 
 .composer-inner {
+  position: relative;
   /* 按聊天面板的实际宽度响应布局，右侧文件面板展开时也能正确换行。 */
   container-type: inline-size;
   width: 100%;
-  max-width: 840px;
+  max-width: 792px;
 
   margin: 0 auto;
 
-  padding: 14px 14px 10px;
+  padding: 14px 12px 10px;
 
-  border: 1px solid var(--h-border-strong);
+  border: 1px solid var(--h-border);
 
-  border-radius: 16px;
+  border-radius: var(--h-radius-lg);
 
   background: var(--h-surface);
   font-family: var(--h-ui);
-  transition: border-color 160ms ease;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.composer-inner:hover {
+  border-color: var(--h-border-strong);
 }
 
 .composer-inner:focus-within {
   border-color: var(--h-accent-border);
 }
+
+/* 技能菜单随输入区宽度布局，不增加页面侧栏；列表单独滚动，保留输入和发送位置。 */
+.skill-menu {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  z-index: 20;
+  inset: auto 0 calc(100% + 8px);
+  overflow: hidden;
+  /* 为最多六行草稿、换行的工具栏和窗口顶栏留出空间，长目录在菜单内滚动。 */
+  max-height: min(320px, calc(100dvh - 380px));
+  border: 1px solid var(--h-border-strong);
+  border-radius: var(--h-radius-md);
+  background: var(--h-surface);
+  color: var(--h-text);
+  font: 13px/1.5 var(--h-ui);
+  text-align: left;
+}
+.skill-menu__header { display: flex; flex-shrink: 0; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--h-border); font-weight: 500; }
+.skill-menu__count { color: var(--h-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.skill-menu__close { margin-left: auto; width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--h-text-muted); font-size: 20px; cursor: pointer; }
+.skill-menu__close:hover { background: var(--h-surface-hover); }
+.skill-menu__list { min-height: 0; max-height: min(280px, 34vh); overflow-y: auto; padding: 4px; }
+.skill-menu__item { display: flex; width: 100%; flex-direction: column; gap: 4px; padding: 10px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.skill-menu__item:hover { background: var(--h-surface-hover); }
+.skill-menu__item--active { background: var(--h-accent-soft); }
+.skill-menu__identity { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; overflow-wrap: anywhere; }
+.skill-menu__identity strong { font-weight: 500; }
+.skill-menu__identity code { color: var(--h-text-muted); font: 12px var(--h-mono); }
+.skill-menu__description { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; color: var(--h-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.skill-menu__status { overflow-y: auto; padding: 20px 14px; color: var(--h-text-secondary); }
+.skill-menu__status p { margin: 0 0 8px; }
+.skill-menu__retry { border: 0; background: transparent; color: var(--h-accent); font: inherit; cursor: pointer; }
+.skill-menu__hint { flex-shrink: 0; padding: 8px 14px; border-top: 1px solid var(--h-border); color: var(--h-text-muted); font-size: 12px; }
+.skill-menu button:focus-visible { outline: 2px solid var(--h-accent); outline-offset: -2px; }
+.composer-hint { min-width: 0; margin-left: 8px; color: var(--h-text-muted); font: 11px/1.5 var(--h-ui); overflow-wrap: anywhere; }
 
 .composer-file-input {
   display: none;
@@ -1221,7 +1361,7 @@ watch(
   gap: 7px;
   padding: 7px 9px;
   border: 1px solid var(--h-border);
-  border-radius: 10px;
+  border-radius: var(--h-radius-md);
   background: var(--h-bg);
 }
 
@@ -1253,14 +1393,14 @@ watch(
 .composer-attachment__name {
   overflow: hidden;
   color: var(--h-text);
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .composer-attachment__size {
   color: var(--h-text-secondary);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .composer-attachment__remove,
@@ -1278,11 +1418,12 @@ watch(
 
 .composer-attach-button {
   display: inline-flex;
+  width: 32px;
   height: 32px;
   flex: 0 0 auto;
   align-items: center;
-  gap: 5px;
-  padding: 0 9px;
+  justify-content: center;
+  padding: 0;
   border-radius: 8px;
   font-family: inherit;
   font-size: 12px;
@@ -1291,7 +1432,7 @@ watch(
 }
 
 .composer-attach-button .arco-icon {
-  font-size: 15px;
+  font-size: 18px;
 }
 
 .composer-attach-button:hover:not(:disabled) {
@@ -1310,22 +1451,23 @@ watch(
   justify-content: space-between;
 
   flex-wrap: wrap;
-  gap: 8px 16px;
+  gap: 8px 12px;
 
   margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--h-border);
+  padding-top: 0;
+  border-top: 0;
 }
 
 .composer-context-area {
   display: flex;
 
   min-width: 0;
-  flex: 0 0 auto;
+  flex: 1 1 0;
 
   align-items: center;
 
-  gap: 4px;
+  gap: 2px;
+  flex-wrap: wrap;
 }
 
 .composer-context-control {
@@ -1496,15 +1638,15 @@ watch(
 
   align-items: center;
 
-  gap: 10px;
+  gap: 8px;
 }
 
 :deep(.composer-model) {
-  width: 218px;
+  width: 200px;
   min-width: 0;
   max-width: 100%;
-  flex: 0 1 218px;
-  font-size: 12px;
+  flex: 0 1 200px;
+  font-size: 13px;
 }
 
 /* 输入区的辅助选项使用轻量样式，边框与主动作留给整个输入框及发送按钮。 */
@@ -1539,10 +1681,11 @@ watch(
 }
 
 .composer-send-button {
-  min-width: 82px;
-  height: 34px;
-  flex: 0 0 auto;
-  padding: 0 12px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  padding: 0;
   border-radius: 8px;
   font-family: var(--h-ui);
   font-size: 13px;
@@ -1555,51 +1698,16 @@ watch(
   height: 19px;
 }
 
-/* 禁用状态保留主动作的墨蓝色相，以淡蓝背景表现不可点击。 */
+/* 空草稿使用暖灰，不让禁用的发送动作抢过输入内容。 */
 .composer-send-button.arco-btn-disabled {
   border-color: transparent !important;
-  background: var(--h-accent-soft) !important;
-  color: var(--h-accent-border) !important;
+  background: var(--h-surface-active) !important;
+  color: var(--h-text-muted) !important;
   opacity: 1;
 }
 
-/*
- * Composer 外层本身已经提供 Border，
- * Textarea 不应该出现第二层输入框边界。
- */
-:deep(
-  .composer-textarea.arco-textarea-wrapper
-) {
-  border: 0 !important;
-
-  background: transparent !important;
-
-  box-shadow: none !important;
-}
-
-:deep(
-  .composer-textarea textarea
-) {
-  min-height: 64px;
-  padding: 2px 3px 8px;
-
-  resize: none;
-
-  background: transparent;
-
-  color: var(--h-text);
-
-  font-size: 14px;
-  font-family: var(--h-ui);
-  letter-spacing: normal;
-  line-height: 1.7;
-}
-
-:deep(
-  .composer-textarea
-    textarea::placeholder
-) {
-  color: var(--h-text-muted);
+.composer-send-button--stop .arco-icon {
+  font-size: 16px;
 }
 
 @keyframes context-ring-spin {
@@ -1616,7 +1724,7 @@ watch(
 max-width: 800px
 ) {
   .composer {
-    padding: 12px 16px 18px;
+    padding: 8px 16px 14px;
   }
 }
 
@@ -1628,6 +1736,14 @@ max-width: 800px
   .composer-actions {
     flex: 1 1 100%;
     margin-left: 0;
+  }
+
+  .composer-context-area {
+    flex: 1 1 100%;
+  }
+
+  .composer-hint {
+    flex: 1 1 150px;
   }
 
   :deep(.composer-model) {

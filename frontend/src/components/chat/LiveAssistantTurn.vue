@@ -168,7 +168,7 @@ const answering =
 
   color: var(--h-accent);
 
-  font-size: 11px;
+  font: 12px/1.3 var(--h-ui);
 
   line-height: 1.3;
 
@@ -178,10 +178,7 @@ const answering =
 }
 
 .live-answer {
-  width: min(
-      74%,
-      650px
-  );
+  width: min(100%, 720px);
 
   max-width: 100%;
 
@@ -199,9 +196,9 @@ const answering =
 
   color: var(--h-text);
 
-  font-size: 14px;
+  font-size: 15px;
 
-  line-height: 1.75;
+  line-height: 1.7;
 
   overflow-wrap: anywhere;
 
@@ -241,7 +238,7 @@ const answering =
 max-width: 900px
 ) {
   .live-answer {
-    width: 84%;
+    width: 100%;
   }
 }
 

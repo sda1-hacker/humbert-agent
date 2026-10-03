@@ -1,99 +1,47 @@
-# Humbert 架构手册
+# Humbert 架构与扩展入口
 
-桌面程序路径、PATH、三种审批模式及 Agent 迭代上限的修复见[实际使用问题修复说明](usage-fixes-2026-09-28.md)。
+当前结构按“桌面入口 → 应用用例 → 领域模块”组织，运行时统一装配能力。`internal/rag` 本次未审阅、未修改，暂不纳入这里的架构说明。
 
-本次 Eino 集成及模块合并见[实现说明](eino-integration.md)。希望了解每个功能具体如何实现、调用哪些代码，请读[项目实现详解与源码导航](implementation-walkthrough.md)（25 个主题，含函数定位、数据流、存储和测试入口）。
+## 阅读入口
 
-最近的执行边界、进程锁、审批、主动助手和前端状态修复见[第五轮修复说明](code-review-fifth-fixes-2026-09-27.md)。
-
-Agent 会话选择与审批保存失败跨过截止时间的修复见[第六轮修复说明](code-review-sixth-fixes-2026-09-27.md)，包含实现入口和回归测试范围。
-
-这是一套按源码包编排的中文阅读手册。每章都放在对应目录的 `README.md`，包含职责、实现链路、Mermaid 图和关键代码入口。建议先读[代码阅读指南](code-reading-guide.md)，再沿下表逐章深入；[领域边界](domain-boundaries.md)记录持久化、并发和恢复约束。
+| 要了解的内容 | 入口 |
+| --- | --- |
+| 项目启动、依赖注入和资源所有权 | [App](../../internal/app/README.md) |
+| 桌面 DTO、事件桥和服务注册 | [Services](../../internal/services/README.md) |
+| 跨模块删除、凭据更新、视觉模型选择 | [Usecases](../../internal/usecases/README.md) |
+| Turn、能力快照、Eino 执行和审批恢复 | [Runtime](../../internal/runtime/README.md) |
+| Vue 页面注册和实时状态 | [前端](../../frontend/src/README.md) |
+| 数据和权限边界 | [领域边界](domain-boundaries.md) |
+| 一轮聊天的阅读路径 | [代码阅读导引](code-reading-guide.md) |
+| 已复用的框架组件 | [Eino 集成](eino-integration.md) |
 
 ```mermaid
 flowchart TD
-  APP[app.Bootstrap：启动时装配依赖] --> RT[runtime]
-  UI[Vue / Wails] --> SV[services]
-  SV --> RT
-  RT --> CX[contextengine]
-  CX --> TR[transcript / sessions]
-  RT --> TL[tools / skills / mcp]
-  TL --> SEC[permission / approval / sandbox]
-  APP --> TASK[tasks / proactive]
-  TR --> DATA[JSONL 消息 / SQLite 会话元数据]
-  TR --> INDEX[可重建位置索引与搜索索引]
+  Desktop[Wails / Vue] --> API[services：DTO 与事件桥]
+  API --> Usecases[usecases：跨模块协调]
+  API --> Domains[领域服务]
+  Usecases --> Domains
+  Domains --> Runtime[runtime：快照与运行生命周期]
+  Providers[Builtin / Skills / MCP / component.Provider] --> Runtime
+  Runtime --> Eino[Eino Agent / Runner / Middleware]
+  App[app：依赖装配与资源清单] --> API
+  App --> Usecases
+  App --> Domains
+  App --> Providers
 ```
 
-## 推荐学习路线
+## 接入一个新功能
 
-1. **建立入口**：[桌面启动](../../cmd/desktop/README.md) → [依赖组装](../../internal/app/README.md) → [Wails 服务](../../internal/services/README.md) → [前端](../../frontend/src/README.md)。
-2. **走通一轮聊天**：[Agent](../../internal/agents/README.md) → [Session](../../internal/sessions/README.md) → [Runtime](../../internal/runtime/README.md) → [Transcript](../../internal/transcript/README.md)。
-3. **理解模型输入**：[Context 与压缩](../../internal/contextengine/README.md) → [个人记忆](../../internal/preferences/README.md) → [多模态](../../internal/multimodal/README.md)。
-4. **理解动作边界**：[工具框架](../../internal/tools/README.md) → [内置工具](../../internal/tools/builtin/README.md) → [权限](../../internal/permission/README.md) → [审批](../../internal/approval/README.md) → [沙箱](../../internal/sandbox/README.md)。
-5. **理解扩展和后台工作**：[Skills](../../internal/skills/README.md) → [MCP](../../internal/mcp/README.md) → [Tasks](../../internal/tasks/README.md) → [Proactive](../../internal/proactive/README.md)。
+1. 在独立包内维护配置、Agent 绑定、SDK 连接和业务。普通业务函数不依赖 Wails，也不获取整个 `Application`。
+2. 需要模型调用的能力实现 `component.Provider`。工具直接使用 Eino `InvokableTool`，优先用 `utils.InferTool` 等现成适配。
+3. `Selection` 读取模块自己的显式绑定；没有选择就不提供任何工具。`Describe` 只构造本地 Schema；`Resolve` 返回捕获本轮配置的工具。
+4. 通过 `app.WithModules(installer)` 装配。只有后台工作需要 `Start/Stop`，只有长期资源需要 `Close`。新模块不需要增加 `Application` getter 或修改 `Shutdown`。
+5. 需要桌面 API 时，在桌面装配点把模块自己的 Wails Service 传给 `services.All(core, additional...)`。需要页面时，在 `frontend/src/features/` 的对应清单加入页面定义。
 
-## 模块目录
+可编译的最小示例见 [textstats.go](../../examples/modules/textstats.go)。已有 Builtin、Skills、MCP 保留各自配置与选择语义，无需为了统一外观重新实现它们。
 
-### 应用入口与桌面层
+能力提供者只在启动时注册，不支持运行中热卸载。模块 `Stop` 停止新工作，`Close` 才释放正在被 Turn 使用的连接。工具名称使用 `<providerID>_` 前缀；宿主仍检查所有来源之间的名称冲突。`Revision` 必须随实现、Schema 或行为配置变化，不得包含秘密正文。
 
-| 章节 | 解决的问题 |
-| --- | --- |
-| [桌面入口](../../cmd/desktop/README.md) | 启动前备份/恢复、Wails 创建、关闭。 |
-| [离线数据 CLI](../../cmd/data/README.md) | 备份、校验、恢复命令。 |
-| [前端](../../frontend/src/README.md) | Vue、Pinia、API、实时事件与文件面板。 |
-| [App](../../internal/app/README.md) | 依赖装配、工具注册、生命周期。 |
-| [Services](../../internal/services/README.md) | Wails DTO 与事件桥。 |
-| [Config](../../internal/config/README.md) | YAML、环境变量与数据路径。 |
-| [Logging](../../internal/logging/README.md) | 结构化日志与脱敏。 |
-| [EventBus](../../internal/eventbus/README.md) | 进程内同步事件。 |
+## 维护原则
 
-### 对话、上下文与数据
-
-| 章节 | 解决的问题 |
-| --- | --- |
-| [Agents](../../internal/agents/README.md) | Agent Profile、引用校验、删除恢复。 |
-| [Models](../../internal/models/README.md) | Provider、模型角色、能力与凭据引用。 |
-| [Sessions](../../internal/sessions/README.md) | 会话元数据、附件和消息 API。 |
-| [Transcript](../../internal/transcript/README.md) | JSONL 消息树、分页、长会话位置索引。 |
-| [Runtime](../../internal/runtime/README.md) | Turn 生命周期、Eino、取消与恢复。 |
-| [ContextEngine](../../internal/contextengine/README.md) | Token 预算、消息投影、压缩与检查点。 |
-| [Preferences](../../internal/preferences/README.md) | 用户资料、确认后保存的跨会话记忆。 |
-| [Multimodal](../../internal/multimodal/README.md) | 图片回放与视觉辅助模型。 |
-| [DocumentText](../../internal/documenttext/README.md) | PDF/Office 转 Markdown。 |
-| [ContextArtifact](../../internal/contextartifact/README.md) | 大工具结果的 sidecar 和回查。 |
-
-### 工具、扩展与安全
-
-| 章节 | 解决的问题 |
-| --- | --- |
-| [Tools](../../internal/tools/README.md) | Registry、Scope、Guard、Eino Reduction。 |
-| [Builtins](../../internal/tools/builtin/README.md) | 文件、命令、网页、文档和历史工具。 |
-| [Skills](../../internal/skills/README.md) | SKILL.md 安装、验证、冻结与按需读取。 |
-| [MCP](../../internal/mcp/README.md) | Server 配置、发现缓存、工具选择。 |
-| [MCP Eino Adapter](../../internal/mcp/einoadapter/README.md) | stdio/HTTP 连接、会话池、传输安全。 |
-| [Collaboration](../../internal/collaboration/README.md) | `run_agent` 父子 Agent 工具链。 |
-| [Permission](../../internal/permission/README.md) | 能力身份、风险与授权规则。 |
-| [Approval](../../internal/approval/README.md) | 人类审批、Eino interrupt/checkpoint。 |
-| [Sandbox](../../internal/sandbox/README.md) | 文件路径、网络与进程隔离。 |
-| [Workspace](../../internal/workspace/README.md) | Managed/Custom 工作区、受控文件访问。 |
-| [WorkspaceView](../../internal/workspaceview/README.md) | 右侧文件树和预览的只读适配。 |
-
-### 后台功能与基础设施
-
-| 章节 | 解决的问题 |
-| --- | --- |
-| [Tasks](../../internal/tasks/README.md) | 日程、Run 状态、重试与普通 Runtime 复用。 |
-| [Proactive](../../internal/proactive/README.md) | 主动事件 Inbox、决策和执行。 |
-| [Notifications](../../internal/notifications/README.md) | 通知协议、Provider 和事件投影。 |
-| [SearchIndex](../../internal/searchindex/README.md) | SQLite WAL、FTS5 会话/文档索引。 |
-| [DataBackup](../../internal/databackup/README.md) | 加密备份、校验、离线恢复。 |
-| [Credential](../../internal/credential/README.md) | 系统凭据库、密钥迁移与备份导入导出。 |
-| [AtomicFile](../../internal/atomicfile/README.md) | 小 JSON 文档的原子提交与严格读取。 |
-| [Avatar](../../internal/avatar/README.md) | 头像格式与 Data URL 安全校验。 |
-
-## 读源码时的共同规则
-
-- 先找到调用入口，再顺着实际方法走；Mermaid 图标出边界，不能替代代码中的错误与取消路径。
-- `session.jsonl` 是消息事实；`agents/session-metadata.sqlite` 是会话控制面的事实来源；位置索引和 `cache/` 中的 SQLite 搜索库是派生数据。实时 EventBus 也不是持久化来源。
-- 排查一次聊天以 `SessionID`、`RequestID`、`RunID` 关联；排查任务再加 `TaskID`，排查工具再加 `ToolCallID`。
-- 修改磁盘格式、授权或并发时，同时阅读对应章节的恢复与安全边界，并运行相关包测试和 `go test ./...`。
+数据只有一个所有者；跨模块规则放在小型用例中；接口由消费方的真实需求决定。Eino 负责执行和中间件，应用负责产品的状态、授权和持久化，不增加另一套 Agent 循环或通用依赖容器。

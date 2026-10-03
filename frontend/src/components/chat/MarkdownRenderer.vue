@@ -48,14 +48,14 @@ async function copyCode(text, index) {
 .markdown-body { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .md-paragraph { margin: 0 0 .75em; white-space: pre-wrap; }
 .md-paragraph:last-child { margin-bottom: 0; }
-.md-heading { margin: .85em 0 .45em; line-height: 1.35; }
+.md-heading { margin: .85em 0 .45em; font-weight: 500; line-height: 1.35; }
 h1.md-heading { font-size: 1.45em; } h2.md-heading { font-size: 1.3em; } h3.md-heading { font-size: 1.17em; }
 .md-list { margin: .45em 0 .8em; padding-left: 1.6em; }
 .md-list li + li { margin-top: .22em; }
 .md-quote { margin: .7em 0; padding: .2em .85em; border-left: 3px solid var(--h-border-strong); color: var(--h-text-muted); }
 .md-quote p { margin: .35em 0; }
 .md-code-block { margin: .75em 0; overflow: hidden; border: 1px solid var(--h-border); border-radius: 8px; background: var(--h-bg); }
-.md-code-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--h-border); color: var(--h-text-muted); font-size: 11px; }
+.md-code-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--h-border); color: var(--h-text-muted); font: 12px/1.5 var(--h-ui); }
 .md-code-toolbar button { border: 0; background: transparent; color: var(--h-accent); cursor: pointer; font: inherit; }
 .md-code-block pre { margin: 0; padding: 12px; overflow-x: auto; white-space: pre; font-size: 12px; line-height: 1.55; }
 .md-table-wrap { margin: .75em 0; overflow-x: auto; }

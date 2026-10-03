@@ -1,77 +1,42 @@
 <script setup>
-import {
-  computed,
-  onUnmounted,
-  ref,
-  watch,
-} from "vue";
+import { workspaceFeatures } from "../../features/workspaces.js";
+import { t } from "../../i18n/index.js";
+import { computed, onUnmounted, ref, watch } from "vue";
 
 import { Message } from "../../utils/uiMessage.js";
 
-import {
-  confirmAction,
-} from "../../utils/confirm.js";
+import { confirmAction } from "../../utils/confirm.js";
 
-import {
-  IconDelete,
-  IconEdit,
-  IconFolder,
-  IconPlus,
-  IconSearch,
-  IconSettings,
-} from "@arco-design/web-vue/es/icon";
+import { IconDelete, IconEdit, IconFolder, IconMore, IconPlus, IconSearch, IconSettings } from "@arco-design/web-vue/es/icon";
 
-import {
-  useAgentStore,
-} from "../../stores/agents.js";
+import { useAgentStore } from "../../stores/agents.js";
 
-import {
-  useRuntimeStore,
-} from "../../stores/runtime.js";
+import { useRuntimeStore } from "../../stores/runtime.js";
 
-import {
-  useSessionStore,
-} from "../../stores/sessions.js";
+import { useSessionStore } from "../../stores/sessions.js";
 import { searchSessionMessages } from "../../api/sessions.js";
 import { pollIndexedSearch } from "../../utils/searchPolling.js";
 
-import AgentModal
-  from "./AgentModal.vue";
+import AgentModal from "./AgentModal.vue";
 
-import RenameSessionModal
-  from "./RenameSessionModal.vue";
+import RenameSessionModal from "./RenameSessionModal.vue";
 
-const expandedStorageKey =
-    "humbert.sidebar.expanded-agents.v1";
+const expandedStorageKey = "humbert.sidebar.expanded-agents.v1";
 
-const props =
-    defineProps({
-      activeView: {
-        type: String,
-        default: "chat",
-      },
-    });
+const props = defineProps({ activeView: { type: String, default: "chat" } });
 
-const emit =
-    defineEmits([
-      "open-chat",
-      "open-settings",
-      "open-skills",
-      "open-connectors",
-      "open-tasks",
-    ]);
+const emit = defineEmits([ "open-chat", "open-settings", "navigate", ]);
 
-const agentStore =
-    useAgentStore();
+const agentStore = useAgentStore();
 
-const sessionStore =
-    useSessionStore();
+const sessionStore = useSessionStore();
+let navigationSequence = 0;
 
 const contentResults = ref([]);
 const contentSearching = ref(false);
 const showArchived = ref(false);
 const archivedCount = computed(() => agentStore.items.reduce((count, agent) =>
-  count + sessionStore.sessionsForAgent(agent.id).filter((session) => session.archived).length, 0));
+count + sessionStore.sessionsForAgent(agent.id).filter((session) => session.archived).length, 0));
 
 watch(() => sessionStore.selectedSession?.archived, (archived) => {
   if (archived) showArchived.value = true;
@@ -88,10 +53,9 @@ watch(() => sessionStore.search, (value) => {
   searchTimer = setTimeout(async () => {
     try {
       await pollIndexedSearch(
-          () => searchSessionMessages(query),
-          () => sequence === searchSequence,
-          (results) => { contentResults.value = results; },
-      );
+      () => searchSessionMessages(query),
+      () => sequence === searchSequence,
+      (results) => { contentResults.value = results; });
     } catch (error) {
       if (sequence === searchSequence) Message.error(error?.message ?? String(error));
     } finally {
@@ -106,10 +70,12 @@ onUnmounted(() => {
 });
 
 async function openSearchResult(result) {
+  const sequence = ++navigationSequence;
   const agent = agentStore.items.find((item) => item.id === result.agentID);
   if (!agent) return;
   try {
     await sessionStore.loadAgentSessions(agent.id, {force: true});
+    if (sequence !== navigationSequence) return;
     const session = sessionStore.sessionsForAgent(agent.id).find((item) => item.id === result.sessionID);
     if (!session) return;
     if (!(await selectSession(agent, session))) return;
@@ -123,68 +89,46 @@ async function archiveSession(session) {
   catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
-const runtimeStore =
-    useRuntimeStore();
+const runtimeStore = useRuntimeStore();
 
-const renameVisible =
-    ref(false);
+const renameVisible = ref(false);
 
-const renameTarget =
-    ref(null);
+const renameTarget = ref(null);
 
-const agentModalVisible =
-    ref(false);
+const agentModalVisible = ref(false);
 
-const agentTarget =
-    ref(null);
+const agentTarget = ref(null);
 
 /**
  * Agent 展开状态属于纯 UI State。
  *
  * 存 localStorage，不进入后端配置。
  */
-const expandedAgentIDs =
-    ref(
-        readExpandedAgents(),
-    );
+const expandedAgentIDs = ref(readExpandedAgents());
 
 /**
  * 从 localStorage 恢复 Agent 展开状态。
  */
 function readExpandedAgents() {
-  if (
-      typeof window ===
-      "undefined"
-  ) {
+  if (typeof window === "undefined") {
     return new Set();
   }
 
   try {
-    const raw =
-        window.localStorage
-            .getItem(
-                expandedStorageKey,
-            );
+    const raw = window.localStorage.getItem(expandedStorageKey);
 
     if (!raw) {
       return new Set();
     }
 
-    const parsed =
-        JSON.parse(raw);
+    const parsed = JSON.parse(raw);
 
     if (!Array.isArray(parsed)) {
       return new Set();
     }
 
     return new Set(
-        parsed.filter(
-            (value) =>
-                typeof value ===
-                "string" &&
-                value,
-        ),
-    );
+    parsed.filter((value) => typeof value === "string" && value));
   } catch {
     return new Set();
   }
@@ -194,23 +138,12 @@ function readExpandedAgents() {
  * 保存 Agent 展开状态。
  */
 function persistExpandedAgents() {
-  if (
-      typeof window ===
-      "undefined"
-  ) {
+  if (typeof window === "undefined") {
     return;
   }
 
   try {
-    window.localStorage.setItem(
-        expandedStorageKey,
-        JSON.stringify(
-            Array.from(
-                expandedAgentIDs
-                    .value,
-            ),
-        ),
-    );
+    window.localStorage.setItem(expandedStorageKey, JSON.stringify(Array.from(expandedAgentIDs.value)));
   } catch {
     /**
      * localStorage 只影响 UI 偏好。
@@ -220,13 +153,9 @@ function persistExpandedAgents() {
   }
 }
 
-function isAgentExpanded(
-    agentID,
-) {
+function isAgentExpanded(agentID) {
   return (
-      expandedAgentIDs
-          .value
-          .has(agentID)
+  expandedAgentIDs.value.has(agentID)
   );
 }
 
@@ -235,145 +164,75 @@ function isAgentExpanded(
  *
  * Agent 展开后需要确保对应 Session Metadata 已加载。
  */
-async function expandAgent(
-    agentID,
-) {
-  const next =
-      new Set(
-          expandedAgentIDs.value,
-      );
+async function expandAgent(agentID) {
+  const next = new Set(expandedAgentIDs.value);
 
   next.add(agentID);
 
-  expandedAgentIDs.value =
-      next;
+  expandedAgentIDs.value = next;
 
   persistExpandedAgents();
 
   try {
-    await sessionStore
-        .loadAgentSessions(
-            agentID,
-        );
+    await sessionStore.loadAgentSessions(agentID);
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
   }
 }
 
-function collapseAgent(
-    agentID,
-) {
-  const next =
-      new Set(
-          expandedAgentIDs.value,
-      );
+function collapseAgent(agentID) {
+  const next = new Set(expandedAgentIDs.value);
 
   next.delete(agentID);
 
-  expandedAgentIDs.value =
-      next;
+  expandedAgentIDs.value = next;
 
   persistExpandedAgents();
 }
 
-async function toggleAgent(
-    agent,
-) {
-  if (
-      isAgentExpanded(
-          agent.id,
-      )
-  ) {
-    collapseAgent(
-        agent.id,
-    );
+async function toggleAgent(agent) {
+  if (isAgentExpanded(agent.id)) {
+    collapseAgent(agent.id);
 
     return;
   }
 
-  await expandAgent(
-      agent.id,
-  );
+  await expandAgent(agent.id);
 }
 
 /**
  * 选择 Agent。
  *
- * 选择后同步加载该 Agent 的 Session。
+ * 立即进入空白起始页，后台加载该 Agent 的会话目录。
  */
-async function selectAgent(
-    agent,
-) {
+async function selectAgent(agent) {
   try {
-    await expandAgent(
-        agent.id,
-    );
-
-    if (
-        agentStore.selectedID ===
-        agent.id &&
-        sessionStore.agentID ===
-        agent.id
-    ) {
-      emit("open-chat");
-      return;
-    }
-
-    agentStore.select(
-        agent.id,
-    );
-
-    /**
-     * AppShell 原有 watch 仍然可以继续存在。
-     *
-     * Sidebar 主动 loadForAgent 是为了确保用户点击 Agent 后
-     * 当前视图立即具有确定状态。
-     *
-     * 重复读取只是 Session Metadata 查询，不会产生副作用。
-     */
-    await sessionStore
-        .loadForAgent(
-            agent.id,
-        );
-
+    navigationSequence++;
+    agentStore.select(agent.id);
+    const loading = sessionStore.loadForAgent(agent.id);
     emit("open-chat");
+    void expandAgent(agent.id);
+    await loading;
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
   }
 }
 
 /**
  * 为指定 Agent 创建 Conversation。
  */
-async function createConversation(
-    agent,
-) {
+async function createConversation(agent) {
+  const sequence = ++navigationSequence;
   try {
-    agentStore.select(
-        agent.id,
-    );
-
-    await expandAgent(
-        agent.id,
-    );
-
-    await sessionStore
-        .createForAgent(
-            agent.id,
-        );
-
+    agentStore.select(agent.id);
+    const loading = sessionStore.loadForAgent(agent.id);
     emit("open-chat");
+    void expandAgent(agent.id);
+    await loading;
+    if (sequence !== navigationSequence || agentStore.selectedID !== agent.id) return;
+    await sessionStore.createForAgent(agent.id);
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
   }
 }
 
@@ -383,97 +242,62 @@ async function createConversation(
  * 如果目标 Session 属于另一个 Agent，
  * 先切换 Agent，再加载对应 Session。
  */
-async function selectSession(
-    agent,
-    session,
-) {
+async function selectSession(agent, session) {
+  const sequence = ++navigationSequence;
   try {
-    if (
-        agentStore.selectedID !==
-        agent.id ||
-        sessionStore.agentID !==
-        agent.id
-    ) {
-      agentStore.select(
-          agent.id,
-      );
-
-      await sessionStore
-          .loadForAgent(
-              agent.id,
-          );
+    if (agentStore.selectedID !== agent.id || sessionStore.agentID !== agent.id) {
+      agentStore.select(agent.id);
+      const loading = sessionStore.loadForAgent(agent.id);
+      const agentSequence = sessionStore.agentLoadSequence;
+      await loading;
+      if (agentSequence !== sessionStore.agentLoadSequence) return false;
     }
-
-    await sessionStore.select(
-        session.id,
-    );
-
+    if (sequence !== navigationSequence || agentStore.selectedID !== agent.id) return false;
+    await sessionStore.select(session.id);
+    if (sequence !== navigationSequence || sessionStore.selectedID !== session.id) return false;
     emit("open-chat");
     return true;
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
     return false;
   }
 }
 
-function openRenameSession(
-    session,
-) {
-  renameTarget.value =
-      session;
+function openRenameSession(session) {
+  renameTarget.value = session;
 
-  renameVisible.value =
-      true;
+  renameVisible.value = true;
 }
 
 /**
  * 删除 Session。
  */
-async function removeSession(
-    session,
-) {
-  if (
-      runtimeStore
-          .isSessionRunning(
-              session.id,
-          )
-  ) {
-    Message.warning(
-        "当前对话仍在生成回复，请先停止",
-    );
+async function removeSession(session) {
+  if (runtimeStore.isSessionRunning(session.id)) {
+    Message.warning("当前对话仍在生成回复，请先停止");
 
     return;
   }
 
   const confirmed =
-      await confirmAction({
-        title:
-            "删除对话",
+  await confirmAction({
+    title: "删除对话",
 
-        message:
-            `确定删除「${session.title}」以及其中的全部消息吗？如果它属于任务，对应的运行历史也会一并删除；连续任务下次运行时会创建新的对话。`,
+    message:
+    `确定删除「${session.title}」以及其中的全部消息吗？如果它属于任务，对应的运行历史也会一并删除；连续任务下次运行时会创建新的对话。`,
 
-        confirmText:
-            "删除",
-        danger: true,
-      });
+    confirmText: "删除",
+    danger: true,
+  });
 
   if (!confirmed) {
     return;
   }
 
   try {
-    await sessionStore.remove(
-        session.id,
-    );
+    await sessionStore.remove(session.id);
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
   }
 }
 
@@ -481,69 +305,39 @@ async function removeSession(
  * 打开创建 Agent Modal。
  */
 function openCreateAgent() {
-  agentTarget.value =
-      null;
+  agentTarget.value = null;
 
-  agentModalVisible.value =
-      true;
+  agentModalVisible.value = true;
 }
 
 /**
  * 编辑已有 Agent。
  */
-function openEditAgent(
-    agent,
-) {
-  agentTarget.value =
-      agent;
+function openEditAgent(agent) {
+  agentTarget.value = agent;
 
-  agentModalVisible.value =
-      true;
+  agentModalVisible.value = true;
 }
 
-async function handleAgentCreated(
-    agent,
-) {
+async function handleAgentCreated(agent) {
   if (!agent?.id) {
     return;
   }
 
-  await expandAgent(
-      agent.id,
-  );
-
-  /**
-   * AgentStore.create 已经把新 Agent 设为 selected。
-   */
-  await sessionStore
-      .loadForAgent(
-          agent.id,
-      );
-
-  emit("open-chat");
+  await selectAgent(agent);
 }
 
-function handleAgentDeleted(
-    agentID,
-) {
-  sessionStore.forgetAgent(
-      agentID,
-  );
+function handleAgentDeleted(agentID) {
+  navigationSequence++;
+  sessionStore.forgetAgent(agentID);
 
-  collapseAgent(
-      agentID,
-  );
+  collapseAgent(agentID);
 }
 
 /**
  * 当前搜索关键字。
  */
-const searchKeyword =
-    computed(() =>
-        sessionStore.search
-            .trim()
-            .toLowerCase(),
-    );
+const searchKeyword = computed(() => sessionStore.search.trim().toLowerCase());
 
 /**
  * 返回 Agent 下需要显示的 Session。
@@ -551,36 +345,21 @@ const searchKeyword =
  * Agent Name 自身命中搜索时显示它的全部 Session；
  * 否则只显示标题命中的 Session。
  */
-function sessionsForAgent(
-    agent,
-) {
-  const sessions =
-      sessionStore
-          .sessionsForAgent(
-              agent.id,
-          ).filter((session) => showArchived.value || !session.archived);
+function sessionsForAgent(agent) {
+  const sessions = sessionStore.sessionsForAgent(agent.id)
+      .filter((session) => showArchived.value || !session.archived);
 
-  const keyword =
-      searchKeyword.value;
+  const keyword = searchKeyword.value;
 
   if (!keyword) {
     return sessions;
   }
 
-  if (
-      agent.name
-          .toLowerCase()
-          .includes(keyword)
-  ) {
+  if (agent.name.toLowerCase().includes(keyword)) {
     return sessions;
   }
 
-  return sessions.filter(
-      (session) =>
-          session.title
-              .toLowerCase()
-              .includes(keyword),
-  );
+  return sessions.filter((session) => session.title.toLowerCase().includes(keyword));
 }
 
 /**
@@ -590,53 +369,32 @@ function sessionsForAgent(
  *   Session Title
  */
 const visibleAgents =
-    computed(() => {
-      const keyword =
-          searchKeyword.value;
+computed(() => {
+  const keyword = searchKeyword.value;
+  const agents = agentStore.items;
 
-      if (!keyword) {
-        return agentStore.items;
-      }
+  if (!keyword) {
+    return agents;
+  }
 
-      return agentStore.items.filter(
-          (agent) => {
-            if (
-                agent.name
-                    .toLowerCase()
-                    .includes(
-                        keyword,
-                    )
-            ) {
-              return true;
-            }
+  return agents.filter(
+  (agent) => {
+    if (agent.name.toLowerCase().includes(keyword)) {
+      return true;
+    }
 
-            return (
-                sessionsForAgent(
-                    agent,
-                ).length > 0
-            );
-          },
-      );
-    });
+    return (
+    sessionsForAgent(agent).length > 0
+    );
+  });
+});
 
 /**
  * Agent 是否有正在运行中的 Turn。
  */
-function agentIsRunning(
-    agent,
-) {
+function agentIsRunning(agent) {
   return (
-      sessionStore
-          .sessionsForAgent(
-              agent.id,
-          )
-          .some(
-              (session) =>
-                  runtimeStore
-                      .isSessionRunning(
-                          session.id,
-                      ),
-          )
+  sessionStore.sessionsForAgent(agent.id).some((session) => runtimeStore.isSessionRunning(session.id))
   );
 }
 
@@ -646,16 +404,10 @@ function agentIsRunning(
  *
  * 不修改真实 expanded state。
  */
-function shouldShowAgentSessions(
-    agent,
-) {
+function shouldShowAgentSessions(agent) {
   return (
-      Boolean(
-          searchKeyword.value,
-      ) ||
-      isAgentExpanded(
-          agent.id,
-      )
+  Boolean(searchKeyword.value) ||
+  isAgentExpanded(agent.id)
   );
 }
 
@@ -667,53 +419,32 @@ function shouldShowAgentSessions(
  * Sidebar 也不会一次性加载完整聊天内容。
  */
 watch(
-    () =>
-        agentStore.items
-            .map(
-                (agent) =>
-                    agent.id,
-            )
-            .join("|"),
+() =>
+agentStore.items.map((agent) => agent.id).join("|"),
 
-    async () => {
-      const failures = [];
+async () => {
+  const failures = [];
 
-      for (
-          const agent of
-          agentStore.items
-          ) {
-        if (
-            sessionStore
-                .isAgentSessionsLoaded(
-                    agent.id,
-                )
-        ) {
-          continue;
-        }
+  for (const agent of agentStore.items) {
+    if (sessionStore.isAgentSessionsLoaded(agent.id)) {
+      continue;
+    }
 
-        try {
-          await sessionStore
-              .loadAgentSessions(
-                  agent.id,
-              );
-        } catch (error) {
-          failures.push(error);
-        }
-      }
+    try {
+      await sessionStore.loadAgentSessions(agent.id);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
 
-      if (
-          failures.length > 0
-      ) {
-        Message.error(
-            "部分 Agent 的对话列表加载失败",
-        );
-      }
-    },
+  if (failures.length > 0) {
+    Message.error("部分 Agent 的对话列表加载失败");
+  }
+},
 
-    {
-      immediate: true,
-    },
-);
+{
+  immediate: true,
+});
 
 /**
  * 当前 Agent 始终自动展开。
@@ -721,23 +452,20 @@ watch(
  * 用户仍然可以之后手动折叠。
  */
 watch(
-    () =>
-        agentStore.selectedID,
+() =>
+agentStore.selectedID,
 
-    (agentID) => {
-      if (!agentID) {
-        return;
-      }
+(agentID) => {
+  if (!agentID) {
+    return;
+  }
 
-      void expandAgent(
-          agentID,
-      );
-    },
+  void expandAgent(agentID);
+},
 
-    {
-      immediate: true,
-    },
-);
+{
+  immediate: true,
+});
 </script>
 
 <template>
@@ -746,7 +474,7 @@ watch(
     <header class="sidebar-header">
       <div class="sidebar-brand">
         <span class="sidebar-title">工作台</span>
-        <span class="sidebar-kicker">AGENTS &amp; SESSIONS</span>
+        <span class="sidebar-kicker">HUMBERT</span>
       </div>
 
       <a-tooltip
@@ -770,71 +498,10 @@ watch(
         class="sidebar-primary-nav"
         aria-label="主导航"
     >
-      <button
-          type="button"
-          class="sidebar-primary-entry"
-          :class="{
-            'sidebar-primary-entry--active': props.activeView === 'tasks',
-          }"
-          @click="emit('open-tasks')"
-      >
-        <svg
-            class="sidebar-primary-entry__icon"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-        >
-          <path d="M7 3v3M17 3v3M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm-2 5h18M8 12h3M8 16h7"/>
-        </svg>
-
-        <span class="sidebar-primary-entry__text">
-          <strong>任务</strong>
-          <small>主动运行与定时计划</small>
-        </span>
-      </button>
-
-      <button
-          type="button"
-          class="sidebar-primary-entry"
-          :class="{
-            'sidebar-primary-entry--active': props.activeView === 'skills',
-          }"
-          @click="emit('open-skills')"
-      >
-        <svg
-            class="sidebar-primary-entry__icon"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-        >
-          <path d="M14.7 6.3a4 4 0 0 0-5 5L4 17v3h3l5.7-5.7a4 4 0 0 0 5-5l-2.4 2.4-3-3 2.4-2.4Z"/>
-        </svg>
-
-        <span class="sidebar-primary-entry__text">
-          <strong>技能</strong>
-          <small>为 Agent 配置 Skills</small>
-        </span>
-      </button>
-
-
-      <button
-          type="button"
-          class="sidebar-primary-entry"
-          :class="{
-            'sidebar-primary-entry--active': props.activeView === 'connectors',
-          }"
-          @click="emit('open-connectors')"
-      >
-        <svg
-            class="sidebar-primary-entry__icon"
-            viewBox="0 0 24 24"
-            aria-hidden="true"
-        >
-          <path d="M8 12h8M12 8v8M7 4h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3Z"/>
-        </svg>
-
-        <span class="sidebar-primary-entry__text">
-          <strong>连接器</strong>
-          <small>MCP 与外部工具</small>
-        </span>
+      <button v-for="feature in workspaceFeatures.items" :key="feature.key" type="button" class="sidebar-primary-entry"
+          :class="{ 'sidebar-primary-entry--active': props.activeView === feature.key }" @click="emit('navigate', feature.key)">
+        <svg class="sidebar-primary-entry__icon" viewBox="0 0 24 24" aria-hidden="true"><path :d="feature.iconPath" /></svg>
+        <span class="sidebar-primary-entry__text"><strong>{{ t(feature.title) }}</strong><small>{{ t(feature.description) }}</small></span>
       </button>
     </nav>
 
@@ -866,7 +533,7 @@ watch(
     </div>
     <button type="button" class="sidebar-archive-toggle" :aria-expanded="showArchived" @click="showArchived = !showArchived">
       <span>已归档会话<span v-if="archivedCount">（{{ archivedCount }}）</span></span>
-      <span>{{ showArchived ? '收起' : '显示' }}</span>
+      <span>{{ $t(showArchived ? '收起' : '显示') }}</span>
     </button>
 
     <!-- Agent -> Session Tree -->
@@ -1162,48 +829,21 @@ watch(
               ></span>
             </button>
 
-            <div
-                class="
-                session-actions
-              "
-            >
-              <a-button
-                  type="text"
-                  size="mini"
-                  @click.stop="
-                  openRenameSession(
-                    session,
-                  )
-                "
-              >
-                <template #icon>
-                  <IconEdit/>
+            <div class="session-actions">
+              <a-dropdown trigger="click" position="br">
+                <a-button type="text" size="mini" :aria-label="t('对话操作')" :title="t('对话操作')" @click.stop>
+                  <template #icon><IconMore/></template>
+                </a-button>
+                <template #content>
+                  <a-doption @click="openRenameSession(session)">
+                    <template #icon><IconEdit/></template>{{ t('重命名对话') }}
+                  </a-doption>
+                  <a-doption @click="archiveSession(session)">{{ t(session.archived ? '恢复会话' : '归档会话') }}</a-doption>
+                  <a-doption class="session-delete-option" @click="removeSession(session)">
+                    <template #icon><IconDelete/></template>{{ t('删除对话') }}
+                  </a-doption>
                 </template>
-              </a-button>
-
-              <a-button
-                  type="text"
-                  size="mini"
-                  :title="session.archived ? '恢复会话' : '归档会话'"
-                  @click.stop="archiveSession(session)"
-              >
-                {{ session.archived ? '恢复' : '归档' }}
-              </a-button>
-
-              <a-button
-                  type="text"
-                  size="mini"
-                  status="danger"
-                  @click.stop="
-                  removeSession(
-                    session,
-                  )
-                "
-              >
-                <template #icon>
-                  <IconDelete/>
-                </template>
-              </a-button>
+              </a-dropdown>
             </div>
           </div>
         </div>
@@ -1270,6 +910,7 @@ watch(
   overflow: hidden;
 
   background: var(--h-sidebar);
+  font-family: var(--h-ui);
 }
 
 /*
@@ -1305,7 +946,7 @@ watch(
 .sidebar-title {
   color: var(--h-text);
 
-  font-size: 16px;
+  font: 500 18px/1.2 var(--h-ui);
 
   font-weight: 500;
 }
@@ -1315,7 +956,7 @@ watch(
 
   font-family: var(--h-ui);
 
-  font-size: 8px;
+  font-size: 12px;
 
   letter-spacing: 0.11em;
 }
@@ -1340,7 +981,7 @@ watch(
 .sidebar-content-result { display: flex; width: 100%; flex-direction: column; gap: 3px; padding: 7px; border: 0; border-radius: 6px; background: transparent; color: var(--h-text-secondary); text-align: left; cursor: pointer; }
 .sidebar-content-result:hover { background: var(--h-bg-hover); }
 .sidebar-content-result strong { color: var(--h-text); font-size: 12px; }
-.sidebar-content-result span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 11px; }
+.sidebar-content-result span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12px; }
 .sidebar-archive-toggle { display: flex; justify-content: space-between; width: calc(100% - 24px); margin: 0 12px 8px; padding: 7px 9px; border: 0; border-radius: 7px; background: transparent; color: var(--h-text-muted); cursor: pointer; text-align: left; font-size: 12px; }
 .sidebar-archive-toggle:hover { background: var(--h-surface-hover); color: var(--h-text); }
 
@@ -1359,8 +1000,7 @@ watch(
   padding: 5px 10px 5px 12px;
   cursor: pointer;
   border: 0;
-  border-left: 2px solid transparent;
-  border-radius: 0 6px 6px 0;
+  border-radius: var(--h-radius-sm);
   background: transparent;
   color: var(--h-text-secondary);
   font: inherit;
@@ -1372,8 +1012,7 @@ watch(
 }
 
 .sidebar-primary-entry--active {
-  border-left-color: var(--h-accent);
-  background: transparent;
+  background: var(--h-surface-active);
   color: var(--h-text);
 }
 
@@ -1401,7 +1040,7 @@ watch(
 
 .sidebar-primary-entry__text strong {
   color: inherit;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -1576,7 +1215,7 @@ watch(
 
   color: var(--h-text-muted);
 
-  font-size: 9px;
+  font-size: 12px;
 
   text-overflow: ellipsis;
 
@@ -1612,6 +1251,8 @@ watch(
 }
 
 .agent-row:hover
+.agent-actions,
+.agent-row:focus-within
 .agent-actions,
 .agent-row--active
 .agent-actions {
@@ -1665,7 +1306,7 @@ watch(
 
   color: var(--h-text-muted);
 
-  font-size: 10px;
+  font-size: 12px;
 
   text-align: left;
 }
@@ -1733,7 +1374,7 @@ watch(
 
   overflow: hidden;
 
-  font-size: 11px;
+  font-size: 12px;
 
   text-overflow: ellipsis;
 
@@ -1752,7 +1393,7 @@ watch(
 }
 
 .session-actions {
-  display: none;
+  display: flex;
 
   flex: 0 0 auto;
 
@@ -1761,17 +1402,14 @@ watch(
   padding-right: 2px;
 }
 
-.session-row:hover
-.session-actions {
-  display: flex;
-}
+.session-delete-option { color: var(--h-danger); }
 
 .session-placeholder {
   padding: 8px 10px;
 
   color: var(--h-text-muted);
 
-  font-size: 10px;
+  font-size: 12px;
 }
 
 /*
@@ -1785,7 +1423,7 @@ watch(
 
   color: var(--h-text-muted);
 
-  font-size: 11px;
+  font-size: 12px;
 
   line-height: 1.7;
 
@@ -1834,7 +1472,7 @@ watch(
 
   color: var(--h-text-secondary);
 
-  font-size: 11px;
+  font-size: 12px;
 
   text-align: left;
 }

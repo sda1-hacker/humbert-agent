@@ -432,39 +432,21 @@ export const useSessionStore =
                     }
                 },
 
-                /**
-                 * 切换当前 Agent。
-                 *
-                 * 这个 API 保持原来的行为：
-                 *
-                 *   Agent 切换
-                 *       ↓
-                 *   加载该 Agent Sessions
-                 *       ↓
-                 *   如果旧 selectedID 不属于它
-                 *       ↓
-                 *   默认选择第一条 Session
-                 *       ↓
-                 *   加载 Message History
-                 *
-                 * 同时增加请求序列保护，防止快速切换导致数据串台。
-                 */
+                // Agent 入口只读取侧栏目录，始终进入空白页；消息由显式选中会话加载。
                 async loadForAgent(
                     agentID,
                 ) {
                     const sequence =
                         ++this.agentLoadSequence;
 
-                    if (this.agentID !== agentID) {
-                        // 切换开始就解除旧会话选择，IPC 失败或尚未返回时也不能向旧 Agent 发消息。
-                        this.selectedID = "";
-                        this.items = this.itemsByAgent[agentID] ?? [];
-                    }
+                    // 包括再次点击当前 Agent，立即解除旧会话选择并淘汰在途消息。
+                    this.selectedID = "";
+                    this.items = this.itemsByAgent[agentID] ?? [];
                     this.agentID =
                         agentID;
 
                     this.messages = [];
-
+                    this.jumpTargetID = "";
                     this.resetMessagePage();
 
                     if (!agentID) {
@@ -504,31 +486,7 @@ export const useSessionStore =
                             return;
                         }
 
-                        this.items =
-                            sessions;
-
-                        const selectedExists =
-                            sessions.some(
-                                (session) =>
-                                    session.id ===
-                                    this.selectedID,
-                            );
-
-                        if (!selectedExists) {
-                            this.selectedID =
-                                sessions[0]
-                                    ?.id ??
-                                "";
-                        }
-
-                        if (
-                            this.selectedID
-                        ) {
-                            await this
-                                .refreshMessages(
-                                    this.selectedID,
-                                );
-                        }
+                        this.items = sessions;
                     } finally {
                         if (
                             sequence ===
@@ -568,8 +526,7 @@ export const useSessionStore =
                  *
                  * 使用这个方法。
                  *
-                 * 创建成功后该 Agent 会成为当前 Agent，
-                 * 新 Session 会成为当前 Session。
+                 * 创建成功且用户仍停留在该 Agent 时选中新 Session。
                  */
                 async createForAgent(
                     agentID,
@@ -580,13 +537,16 @@ export const useSessionStore =
                         );
                     }
 
+                    const selectionSequence = this.agentLoadSequence;
                     const result =
                         await createSession(
                             agentID,
                             "",
                         );
 
+                    const shouldSelect = this.agentID === agentID && this.agentLoadSequence === selectionSequence;
                     invalidateSessionLists(this, [agentID]);
+                    const createSequence = this.agentLoadSequence;
                     const sessions =
                         await this
                             .loadAgentSessions(
@@ -597,7 +557,7 @@ export const useSessionStore =
                                 },
                             );
 
-                    if (!sessions) return result;
+                    if (!sessions || !shouldSelect || this.agentID !== agentID || this.agentLoadSequence !== createSequence) return result;
                     this.agentID =
                         agentID;
 
@@ -633,6 +593,9 @@ export const useSessionStore =
                         return;
                     }
 
+                    // 用户明确选择优先于等待目录的 Agent 入口。
+                    this.agentLoadSequence++;
+                    this.loading = false;
                     this.selectedID =
                         id;
 

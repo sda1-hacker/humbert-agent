@@ -4,6 +4,7 @@
 
 export {
     ActiveRunStatus,
+    CapabilitySummary,
     ContextOverview,
     Event,
     EventType,

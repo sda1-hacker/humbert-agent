@@ -15,7 +15,7 @@
 | 记忆 | 用户明确保存的跨会话个人偏好 | 自动 Session Memory、增量 cursor、额外模型角色与刷新流程 |
 | Agent 配置 | Store.Mutate 锁内读改写；局部命令只更新目标字段 | 先读旧 Profile 再整体写回造成的覆盖 |
 | 模型注册 | ResolveSnapshot 统一入口 | 未使用的另一条 Resolve 路径 |
-| 搜索索引 | SearchIndex 负责构建和 Controller 生命周期 | 两个 Wails Service 各自持有线程、锁、刷新状态和索引扫描逻辑 |
+| 搜索索引 | SearchIndex 负责构建和 Controller 生命周期 | 搜索生命周期由 Core 的 searchindex.Service 管理，Wails 只提供查询 DTO |
 | 前端运行态 | 每个会话一个 runs 对象 | 七套平行 Map；旧请求收尾覆盖新请求的清理逻辑 |
 | MCP 前端 | 两个页面共用 Pinia 目录、连接状态、工具缓存 | 重复查询与失效逻辑；过期配置的发现结果回写 |
 | 任务通知 | Tasks 发布事件，Proactive 统一去重、静默时段、通知 | Tasks 与 Proactive 各发一次结果通知 |
@@ -88,3 +88,7 @@ GOCACHE=/tmp/humbert-go-cache go build -tags production -trimpath -buildvcs=fals
 - macOS arm64 production 构建完成：`bin/humbert-agent.app`，本地 ad-hoc 签名及 `codesign --verify --deep --strict` 校验通过。
 - 未运行真实云端模型的收费调用，也未进行 Developer ID 分发签名、公证或其它操作系统验收。
 - 按 Git 行数差异统计，含新文件、排除已有未跟踪示例，生产源码净减少约 5,700 行（含注释）；删除旧实现专属测试并补充对应新链路的回归测试。
+
+## 统一装配入口
+
+主 Agent 与子 Agent 使用 `runtime/capabilities.go` 解析能力，使用 `runtime/eino_builder.go` 构造 ChatModelAgent 和中间件。新增模块通过 `component.Provider` 提供原生 Eino 工具；`examples/modules/textstats.go` 用 InferTool 自动生成 Schema 与 JSON 编解码。模块注册只处理产品的选择、生命周期和来源身份，没有实现新的 Agent 循环、工具协议或通用插件容器。

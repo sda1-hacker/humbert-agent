@@ -18,7 +18,7 @@
 
     --h-surface-active: #e8e6dc;
 
-    --h-border: #e2e0d6;
+    --h-border: #e5e3d8;
 
     --h-border-strong: #cbc8bc;
 
@@ -64,11 +64,12 @@
 
     --h-radius-lg: 8px;
 
-    --h-serif: "TsangerJinKai02", "Songti SC", "STSong", "Noto Serif CJK SC", Georgia, serif;
+    --h-serif: "TsangerJinKai02", "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", "STSong", Georgia, serif;
 
-    --h-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+    /* 动态界面统一使用系统无衬线字体，衬线只留给品牌和展示标题。 */
+    --h-ui: "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif;
 
-    --h-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --h-mono: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "PingFang SC", "Microsoft YaHei", monospace;
 
     /*
      * Arco Design 使用 RGB Triplet 形式的 Palette Token。
@@ -123,6 +124,11 @@
     --success-10: 45, 51, 40;
 }
 
+/* 沿用系统已有字库，不让本地应用为显示界面依赖远程字体服务。 */
+:root:lang(en) { --h-serif: Charter, "Bitstream Charter", Georgia, "Palatino Linotype", serif; }
+:root:lang(ja) { --h-serif: "YuMincho", "Yu Mincho", "Hiragino Mincho ProN", "Noto Serif CJK JP", serif; }
+:root:lang(ko) { --h-serif: "Source Han Serif KR", "Noto Serif CJK KR", "AppleMyungjo", serif; }
+
 html,
 body,
 #app {
@@ -140,11 +146,15 @@ body {
 
     color: var(--h-text);
 
-    font-family: var(--h-serif);
+    font-family: var(--h-ui);
+
+    font-size: 14px;
+
+    line-height: 1.5;
 
     font-weight: 400;
 
-    letter-spacing: 0.012em;
+    letter-spacing: normal;
 
     font-synthesis: none;
 
@@ -179,6 +189,25 @@ input,
 textarea,
 select {
     font: inherit;
+}
+
+/* 导航和页面框架按应用控件交互；只允许正文、文件内容和输入区选字。 */
+#app {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+#app :is(input, textarea, [contenteditable="true"], .message-content, .markdown-body,
+    .activity-step__reasoning, .activity-step__detail pre, .workspace-preview__text, .message-turn-error p) {
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+#app button,
+.arco-dropdown,
+.arco-tooltip-content {
+    -webkit-user-select: none;
+    user-select: none;
 }
 
 a {

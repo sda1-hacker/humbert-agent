@@ -2380,6 +2380,20 @@ export class PermissionRuleDTO {
              * @member
              * @type {string | undefined}
              */
+            this["moduleID"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["moduleRevision"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
             this["sandboxFingerprint"] = undefined;
         }
         if (!("createdAt" in $$source)) {
