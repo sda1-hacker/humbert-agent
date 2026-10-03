@@ -27,15 +27,35 @@ type Event struct {
 	OccurredAt string `json:"occurredAt"`
 }
 
+// AgentCatalog 只查询任务所属 Agent，不开放 Agent 配置写入或其他控制面操作。
+type AgentCatalog interface {
+	Get(context.Context, string) (agents.AgentInfo, error)
+}
+
+// SessionRepository 是任务实际使用的会话能力；存储布局继续由会话组件拥有。
+type SessionRepository interface {
+	Create(context.Context, sessions.CreateSessionInput) (sessions.Session, error)
+	Get(context.Context, string) (sessions.Session, error)
+	Messages(context.Context, string, int) ([]sessions.Message, error)
+}
+
+// TurnRuntime 允许任务接入可替换的执行组件；取消和删除仍走宿主的占用检查。
+// Task 不再依赖 Runtime.Service 的内部状态，也不另写 Eino 执行循环。
+type TurnRuntime interface {
+	StartTurn(context.Context, agentruntime.StartTurnInput) (agentruntime.StartTurnResult, error)
+	CancelTurn(string) error
+	DeleteSession(context.Context, string) error
+}
+
 type Manager struct {
 	store    *Store
-	agents   *agents.Service
-	sessions *sessions.Service
-	runtime  *agentruntime.Service
+	agents   AgentCatalog
+	sessions SessionRepository
+	runtime  TurnRuntime
 	events   *eventbus.Bus
 	logger   *logging.Logger
 
-	notifications *notifications.Service
+	notifications notifications.Sender
 
 	rootCtx     context.Context
 	cancel      context.CancelFunc
@@ -55,7 +75,7 @@ type Manager struct {
 	tickInterval  time.Duration
 }
 
-func NewManager(store *Store, agentService *agents.Service, sessionService *sessions.Service, runtimeService *agentruntime.Service, events *eventbus.Bus, logger *logging.Logger) (*Manager, error) {
+func NewManager(store *Store, agentService AgentCatalog, sessionService SessionRepository, runtimeService TurnRuntime, events *eventbus.Bus, logger *logging.Logger) (*Manager, error) {
 	if store == nil || agentService == nil || sessionService == nil || runtimeService == nil || events == nil || logger == nil {
 		return nil, errors.New("Task Manager 依赖不完整")
 	}
@@ -186,7 +206,7 @@ func (m *Manager) ActiveRunForSession(ctx context.Context, sessionID string) (Ru
 }
 
 // SetNotificationService 在 Start 前注入通知服务，供通知型任务使用。
-func (m *Manager) SetNotificationService(service *notifications.Service) {
+func (m *Manager) SetNotificationService(service notifications.Sender) {
 	m.mu.Lock()
 	m.notifications = service
 	m.mu.Unlock()

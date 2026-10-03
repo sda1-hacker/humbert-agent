@@ -42,16 +42,24 @@ const (
 // 两者职责不同，不应该混成同一个结构。
 type Descriptor struct {
 	Name string
-
 	Risk RiskLevel
 
 	// MCPOrigin 仅在 Tool 来自 MCP Server 时提供。它不会暴露给模型；Guard 会把
 	// ServerID/Fingerprint 传给 PermissionEngine，用于 Approval 展示和长期 Rule 绑定。
 	MCPOrigin *MCPOrigin
 
+	// ModuleOrigin 由宿主装配器注入，绑定模块及冻结版本。
+	ModuleOrigin *ModuleOrigin
+
 	// Internal 表示 Humbert 为运行时可靠性提供的内部只读能力（例如历史检索）。
 	// Internal Tool 不受 Agent 的 enabled_builtin_tools 选择影响，也不在普通能力设置中展示。
 	Internal bool
+}
+
+// ModuleOrigin 是模块工具的稳定来源；不是 SDK 配置或凭据。
+type ModuleOrigin struct {
+	ID       string
+	Revision string
 }
 
 // MCPOrigin 描述一个 MCP Tool 的稳定来源身份。
@@ -67,23 +75,14 @@ type MCPOrigin struct {
 
 // Validate 校验 Tool Descriptor。
 func (d Descriptor) Validate() error {
-	name :=
-		strings.TrimSpace(
-			d.Name,
-		)
+	name := strings.TrimSpace(d.Name)
 
 	if name == "" {
-		return fmt.Errorf(
-			"%w: Tool Name 不能为空",
-			ErrInvalidTool,
-		)
+		return fmt.Errorf("%w: Tool Name 不能为空", ErrInvalidTool)
 	}
 
 	if len(name) > 64 {
-		return fmt.Errorf(
-			"%w: Tool Name 长度不能超过 64",
-			ErrInvalidTool,
-		)
+		return fmt.Errorf("%w: Tool Name 长度不能超过 64", ErrInvalidTool)
 	}
 
 	// Tool 名称采用稳定 snake_case。
@@ -99,44 +98,31 @@ func (d Descriptor) Validate() error {
 	// MCP Namespace 后续会使用单独的注册校验规则扩展。
 	for index, char := range name {
 
-		valid :=
-			(char >= 'a' &&
-				char <= 'z') ||
-				(char >= '0' &&
-					char <= '9') ||
-				char == '_'
+		valid := (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_'
 
 		if !valid {
-			return fmt.Errorf(
-				"%w: Tool Name %q 包含非法字符 %q",
-				ErrInvalidTool,
-				name,
-				char,
-			)
+			return fmt.Errorf("%w: Tool Name %q 包含非法字符 %q", ErrInvalidTool, name, char)
 		}
 
 		if index == 0 &&
 			char >= '0' &&
 			char <= '9' {
 
-			return fmt.Errorf(
-				"%w: Tool Name 不能以数字开头",
-				ErrInvalidTool,
-			)
+			return fmt.Errorf("%w: Tool Name 不能以数字开头", ErrInvalidTool)
 		}
 	}
 
 	switch d.Risk {
 	case RiskRead, RiskWrite, RiskExec:
 	default:
-		return fmt.Errorf(
-			"%w: Tool %q RiskLevel %q 不合法",
-			ErrInvalidTool,
-			name,
-			d.Risk,
-		)
+		return fmt.Errorf("%w: Tool %q RiskLevel %q 不合法", ErrInvalidTool, name, d.Risk)
 	}
 
+	if d.ModuleOrigin != nil {
+		if d.MCPOrigin != nil || strings.TrimSpace(d.ModuleOrigin.ID) == "" || strings.TrimSpace(d.ModuleOrigin.Revision) == "" {
+			return fmt.Errorf("%w: 模块工具缺少稳定来源或具有冲突来源", ErrInvalidTool)
+		}
+	}
 	if d.MCPOrigin != nil {
 		origin := d.MCPOrigin
 		if strings.TrimSpace(origin.ServerID) == "" ||
@@ -157,13 +143,9 @@ func (d Descriptor) Validate() error {
 // 出来的 Tool 也不会改变工作目录。
 type Scope struct {
 	RequestID string
-
-	RunID string
-
+	RunID     string
 	SessionID string
-
-	AgentID string
-
+	AgentID   string
 	Workspace workspace.Workspace
 
 	// Sandbox 是本 Turn 冻结的强制安全边界。真实 Runtime 由 Sandbox Manager 注入；
@@ -210,31 +192,21 @@ func (s Scope) SandboxPolicy() sandbox.EffectivePolicy {
 
 // Validate 校验 Runtime Tool Scope。
 func (s Scope) Validate() error {
-	if strings.TrimSpace(
-		s.AgentID,
-	) == "" {
+	if strings.TrimSpace(s.AgentID) == "" {
 
-		return errors.New(
-			"Tool Scope AgentID 不能为空",
-		)
+		return errors.New("Tool Scope AgentID 不能为空")
 	}
 
-	if strings.TrimSpace(
-		s.Workspace.RootDir,
-	) == "" {
+	if strings.TrimSpace(s.Workspace.RootDir) == "" {
 
-		return errors.New(
-			"Tool Scope Workspace RootDir 不能为空",
-		)
+		return errors.New("Tool Scope Workspace RootDir 不能为空")
 	}
 
 	if s.Workspace.AgentID != "" &&
 		s.Workspace.AgentID !=
 			s.AgentID {
 
-		return errors.New(
-			"Tool Scope AgentID 与 Workspace AgentID 不一致",
-		)
+		return errors.New("Tool Scope AgentID 与 Workspace AgentID 不一致")
 	}
 
 	return nil
@@ -253,13 +225,7 @@ type Factory interface {
 	Descriptor() Descriptor
 
 	// Build 为当前 Runtime Snapshot 创建可执行 Tool。
-	Build(
-		ctx context.Context,
-		scope Scope,
-	) (
-		einotool.InvokableTool,
-		error,
-	)
+	Build(ctx context.Context, scope Scope) (einotool.InvokableTool, error)
 }
 
 // ResultArchiver 是 Tool 层与 Session Context Artifact 存储的最小边界。

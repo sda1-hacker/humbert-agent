@@ -7,11 +7,10 @@ import (
 	"sync"
 	"time"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"github.com/sda1-hacker/humbert-agent/internal/notifications"
 	"github.com/sda1-hacker/humbert-agent/internal/proactive"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 const (
@@ -54,20 +53,19 @@ type ProactiveStatusDTO struct {
 }
 
 type ProactiveService struct {
-	core *coreapp.Application
-
+	deps          ProactiveDependencies
 	mu            sync.Mutex
 	unsubscribers []func()
 }
 
-func NewProactiveService(core *coreapp.Application) *ProactiveService {
-	return &ProactiveService{core: core}
+func NewProactiveService(deps ProactiveDependencies) *ProactiveService {
+	return &ProactiveService{deps: deps}
 }
 
 func (s *ProactiveService) ServiceName() string { return "ProactiveService" }
 
 func (s *ProactiveService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	unsubProactive, err := s.core.Events().Subscribe(proactive.TopicEvent, func(_ context.Context, payload any) {
+	unsubProactive, err := s.deps.Events.Subscribe(proactive.TopicEvent, func(_ context.Context, payload any) {
 		value, ok := payload.(proactive.PublicEvent)
 		if !ok {
 			return
@@ -79,7 +77,7 @@ func (s *ProactiveService) ServiceStartup(ctx context.Context, options applicati
 	if err != nil {
 		return err
 	}
-	unsubNotifications, err := s.core.Events().Subscribe(notifications.TopicEvent, func(_ context.Context, payload any) {
+	unsubNotifications, err := s.deps.Events.Subscribe(notifications.TopicEvent, func(_ context.Context, payload any) {
 		value, ok := payload.(notifications.Notification)
 		if !ok {
 			return
@@ -114,10 +112,10 @@ func (s *ProactiveService) ServiceShutdown() error {
 }
 
 func (s *ProactiveService) GetSettings() (ProactiveSettingsDTO, error) {
-	if s.core.Proactive() == nil {
+	if s.deps.Proactive == nil {
 		return ProactiveSettingsDTO{}, fmt.Errorf("主动助手未初始化")
 	}
-	return proactiveSettingsDTO(s.core.Proactive().Settings()), nil
+	return proactiveSettingsDTO(s.deps.Proactive.Settings()), nil
 }
 
 func (s *ProactiveService) UpdateSettings(value ProactiveSettingsDTO) (ProactiveSettingsDTO, error) {
@@ -128,11 +126,11 @@ func (s *ProactiveService) UpdateSettings(value ProactiveSettingsDTO) (Proactive
 		if rule.Action != proactive.ActionRunAgent || strings.TrimSpace(rule.AgentID) == "" {
 			continue
 		}
-		if _, err := s.core.Agents().Get(ctx, rule.AgentID); err != nil {
+		if _, err := s.deps.Agents.Get(ctx, rule.AgentID); err != nil {
 			return ProactiveSettingsDTO{}, fmt.Errorf("事件 %s 配置的处理 Agent 不存在或不可用: %w", kind, err)
 		}
 	}
-	updated, err := s.core.Proactive().UpdateSettings(ctx, settings)
+	updated, err := s.deps.Proactive.UpdateSettings(ctx, settings)
 	if err != nil {
 		return ProactiveSettingsDTO{}, fmt.Errorf("保存主动助手设置失败: %w", err)
 	}
@@ -140,10 +138,10 @@ func (s *ProactiveService) UpdateSettings(value ProactiveSettingsDTO) (Proactive
 }
 
 func (s *ProactiveService) Status() (ProactiveStatusDTO, error) {
-	if s.core.Proactive() == nil {
+	if s.deps.Proactive == nil {
 		return ProactiveStatusDTO{}, fmt.Errorf("主动助手未初始化")
 	}
-	return proactiveStatusDTO(s.core.Proactive().Status()), nil
+	return proactiveStatusDTO(s.deps.Proactive.Status()), nil
 }
 
 func (s *ProactiveService) Notifications(limit int) ([]notifications.Notification, error) {
@@ -153,7 +151,7 @@ func (s *ProactiveService) Notifications(limit int) ([]notifications.Notificatio
 	if limit > 100 {
 		limit = 100
 	}
-	return s.core.Notifications().Recent(limit), nil
+	return s.deps.Notifications.Recent(limit), nil
 }
 
 func (s *ProactiveService) Records(limit int) ([]proactive.Record, error) {
@@ -163,13 +161,13 @@ func (s *ProactiveService) Records(limit int) ([]proactive.Record, error) {
 	if limit > 200 {
 		limit = 200
 	}
-	return s.core.Proactive().Records(limit), nil
+	return s.deps.Proactive.Records(limit), nil
 }
 
 func (s *ProactiveService) RunHeartbeat() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := s.core.Proactive().RunHeartbeat(ctx); err != nil {
+	if err := s.deps.Proactive.RunHeartbeat(ctx); err != nil {
 		return fmt.Errorf("立即巡检失败: %w", err)
 	}
 	return nil

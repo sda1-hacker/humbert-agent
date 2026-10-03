@@ -5,29 +5,12 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
-	"unicode/utf8"
 )
-
-func normalizeWritableFilePath(input string) (string, error) {
-	path, err := workspace.NormalizeRelativePath(input)
-	if err != nil {
-		return "", err
-	}
-
-	if path == "." {
-		return "", errors.New(
-			"必须指定文件路径，不能写入 Workspace 根目录本身",
-		)
-	}
-
-	return path, nil
-}
 
 func ensureRootParentDirectory(root *os.Root, path string) error {
 	parent := filepath.Dir(path)
@@ -304,9 +287,4 @@ func syncRootParent(root *os.Root, path string) error {
 	}
 
 	return nil
-}
-
-func utf8Text(value string) bool {
-	// Go string 本身可以包含任意字节，因此仍需要显式校验 UTF-8。
-	return utf8.ValidString(value)
 }

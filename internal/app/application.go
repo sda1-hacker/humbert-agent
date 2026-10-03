@@ -12,6 +12,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
+	"github.com/sda1-hacker/humbert-agent/internal/component"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/contextartifact"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
@@ -27,12 +28,14 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/proactive"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
+	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	"github.com/sda1-hacker/humbert-agent/internal/tasks"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	builtin "github.com/sda1-hacker/humbert-agent/internal/tools/builtin"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
+	"github.com/sda1-hacker/humbert-agent/internal/usecases"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 )
@@ -41,34 +44,22 @@ const Version = "0.1.0"
 
 // Status 表示 Humbert Core 当前健康状态。
 //
-// StorageReady 表示文件级配置和 Agent Profile 可以正常读取。SQLite 已完全移出
-// Runtime，因此状态对象不再暴露 DatabaseFile / DatabaseReady。
+// StorageReady 表示配置、Agent Profile 与会话元数据可以正常读取。
+// 会话索引使用 SQLite，消息事实使用 JSONL；状态对象不暴露存储实现细节。
 type Status struct {
-	Name string
-
-	Version string
-
-	Ready bool
-
-	DataDir string
-
-	ConfigFile string
-
-	ConfigDir string
-
-	AgentsDir string
-
-	StorageReady bool
-
+	Name          string
+	Version       string
+	Ready         bool
+	DataDir       string
+	ConfigFile    string
+	ConfigDir     string
+	AgentsDir     string
+	StorageReady  bool
 	ModelRevision uint64
-
-	ToolRevision uint64
-
-	MCPRevision uint64
-
-	StartedAt time.Time
-
-	Uptime time.Duration
+	ToolRevision  uint64
+	MCPRevision   uint64
+	StartedAt     time.Time
+	Uptime        time.Duration
 }
 
 // Application 是 Humbert Core Composition Root。
@@ -79,63 +70,43 @@ type Status struct {
 //   - 管理应用生命周期；
 //   - 按正确顺序关闭资源。
 //
-// 业务逻辑不应该进入 Application。文件 Store 本身不拥有后台 goroutine，因此
-// Shutdown 只需要先停止 Runtime，再关闭 Workspace/EventBus/Logger。
+// 业务协调放在 usecases，能力装配放在 runtime。Shutdown 先停止生产者，
+// 再等待 Runtime，最后逆序关闭模块连接、索引、存储及基础资源。
 type Application struct {
-	config *config.Config
-
-	logger *logging.Logger
-
-	credentials *credential.Store
-
-	events *eventbus.Bus
-
-	workspaces *workspace.Manager
-
+	mcpConfiguration *usecases.MCPConfiguration
+	config           *config.Config
+	logger           *logging.Logger
+	credentials      *credential.Store
+	events           *eventbus.Bus
+	workspaces       *workspace.Manager
 	// workspaceView 是桌面工作区页面的只读查询层。
 	// 它不拥有新的文件生命周期，只投影 Agent 当前 Workspace 与 Session 工具事务。
 	workspaceView *workspaceview.Service
-
-	sandbox *sandbox.Manager
-
-	permissions *permission.Engine
-
-	preferences *preferences.Store
-
-	approvals *approval.Manager
-
-	tools *humberttools.Registry
-
-	skills *skills.Manager
-
-	mcp *humbertmcp.Manager
-
-	models *models.Registry
-
-	agents *agents.Service
-
-	sessions     *sessions.Service
-	sessionStore *sessions.Store
-
+	sandbox       *sandbox.Manager
+	permissions   *permission.Engine
+	preferences   *preferences.Store
+	approvals     *approval.Manager
+	tools         *humberttools.Registry
+	skills        *skills.Manager
+	mcp           *humbertmcp.Manager
+	models        *models.Registry
+	agents        *agents.Service
+	sessions      *sessions.Service
+	sessionStore  *sessions.Store
 	contextEngine *contextengine.Engine
-
-	runtime *agentruntime.Service
-
-	tasks *tasks.Manager
-
+	runtime       *agentruntime.Service
+	tasks         *tasks.Manager
 	collaboration *collaboration.Manager
-
 	notifications *notifications.Service
-
-	proactive *proactive.Manager
-
-	startedAt time.Time
-
-	ready atomic.Bool
-
-	shutdownOnce sync.Once
-
-	shutdownErr error
+	proactive     *proactive.Manager
+	search        *searchindex.Service
+	lifecycle     *usecases.AgentLifecycle
+	maintenance   *usecases.SkillMaintenance
+	startedAt     time.Time
+	ready         atomic.Bool
+	shutdownOnce  sync.Once
+	shutdownErr   error
+	resources     *lifecycle
 }
 
 // Bootstrap 初始化 Humbert Core。
@@ -147,66 +118,64 @@ type Application struct {
 //	TranscriptStore(JSONL)
 //	    ├── Model Store(config/*.json)
 //	    ├── Agent Store(agents/*/config.json)
-//	    ├── Session Store(agents/*/sessions/*/{config.json,session.jsonl})
+//	    ├── Session Store(session-metadata.sqlite + agents/*/sessions/*/session.jsonl)
 //
-// 每个 Session 的 config.json 只保存控制面配置；session.jsonl v3 是 Message / Thinking /
+// Session 元数据由 SQLite 保存；session.jsonl v3 是 Message / Thinking /
 // ToolCall / ToolResult 的唯一持久化事实来源。
 // Runtime Event 只服务实时 UI，运行审计进入统一结构化日志，不再创建 runstore/runtrace。
 // 不同 Session 的消息写入由 TranscriptStore 的 per-file Mutex 独立串行化。
-func Bootstrap(ctx context.Context) (*Application, error) {
+func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, error) {
+	opts := bootstrapOptions{}
+	for _, option := range options {
+		if option != nil {
+			option(&opts)
+		}
+	}
 	if ctx == nil {
 		return nil, errors.New("context.Context 不能为空")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("应用启动被取消: %w", err)
 	}
-
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("加载应用配置失败: %w", err)
 	}
-
 	logger, err := logging.New(cfg.Logging, cfg.Paths.LogFile)
 	if err != nil {
 		return nil, fmt.Errorf("初始化统一日志失败: %w", err)
 	}
-	loggerOwned := true
+	resources := &lifecycle{}
+	owned := true
 	defer func() {
-		if loggerOwned {
-			_ = logger.Close()
+		if owned {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := resources.close(cleanupCtx); err != nil {
+				// Logger 已在清单最后关闭，回滚错误交给 Bootstrap Logger 输出。
+				logging.NewBootstrap().Error(context.Background(), "启动失败后的资源清理失败", "error", err)
+			}
 		}
 	}()
-
-	logger.Info(
-		ctx,
-		"Humbert Core 正在启动",
-		"operation", "application.bootstrap",
-		"version", Version,
-		"data_dir", cfg.Paths.HomeDir,
-	)
-
+	resources.add(closeResources, "Logger", func(ctx context.Context) error {
+		logger.Info(ctx, "Humbert Core 资源释放结束", "operation", "application.shutdown")
+		return logger.Close()
+	})
+	logger.Info(ctx, "Humbert Core 正在启动", "operation", "application.bootstrap", "version", Version, "data_dir", cfg.Paths.HomeDir)
 	credentials, err := credential.NewSystem(cfg.Paths.SecretsDir)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 CredentialStore 失败: %w", err)
 	}
-
 	transcriptStore, err := transcript.NewStore(cfg.Paths.AgentsDir)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 TranscriptStore 失败: %w", err)
 	}
-
 	managedWorkspaceRoot := filepath.Join(cfg.Paths.HomeDir, "workspaces")
 	workspaceManager, err := workspace.NewManager(ctx, managedWorkspaceRoot, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Workspace Manager 失败: %w", err)
 	}
-	workspaceOwned := true
-	defer func() {
-		if workspaceOwned {
-			_ = workspaceManager.Close()
-		}
-	}()
-
+	resources.add(closeResources, "Workspace", func(context.Context) error { return workspaceManager.Close() })
 	sandboxManager, err := sandbox.NewManager(sandbox.Config{
 		DefaultProfile:     sandbox.Profile(cfg.Security.Sandbox.DefaultProfile),
 		DefaultNetworkMode: sandbox.NetworkMode(cfg.Security.Sandbox.DefaultNetworkMode),
@@ -216,7 +185,6 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Sandbox Manager 失败: %w", err)
 	}
-
 	permissionStore, err := permission.NewStore(ctx, cfg.Paths.PermissionsFile)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Permission Store 失败: %w", err)
@@ -226,11 +194,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		return nil, fmt.Errorf("初始化 Permission Engine 失败: %w", err)
 	}
 	sandboxManager.SetFullAccessProvider(func() bool { return permissionEngine.Config().Mode == config.PermissionModeFull })
-	approvalManager, err := approval.NewManager(
-		time.Duration(cfg.Security.Permissions.ApprovalTimeoutMS)*time.Millisecond,
-		permissionEngine,
-		logger,
-	)
+	approvalManager, err := approval.NewManager(time.Duration(cfg.Security.Permissions.ApprovalTimeoutMS)*time.Millisecond, permissionEngine, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Approval Manager 失败: %w", err)
 	}
@@ -238,12 +202,10 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Preferences Store 失败: %w", err)
 	}
-
 	skillManager, err := skills.NewManager(ctx, cfg.Paths.SkillsDir, cfg.Runtime.Skills, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Skill Manager 失败: %w", err)
 	}
-
 	mcpStore, err := humbertmcp.NewStore(ctx, cfg.Paths.MCPServersFile)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 MCP Store 失败: %w", err)
@@ -252,12 +214,8 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 MCP Manager 失败: %w", err)
 	}
-
-	modelStore, err := models.NewStore(
-		ctx,
-		cfg.Paths.ProvidersFile,
-		cfg.Paths.ModelsFile,
-	)
+	resources.add(closeResources, "MCP", func(context.Context) error { return mcpManager.Close() })
+	modelStore, err := models.NewStore(ctx, cfg.Paths.ProvidersFile, cfg.Paths.ModelsFile)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Model Store 失败: %w", err)
 	}
@@ -265,157 +223,79 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Agent Store 失败: %w", err)
 	}
-
-	modelRegistry := models.NewRegistry(
-		modelStore,
-		credentials,
-		logger,
-		models.WithModelReferenceChecker(agentStore),
-	)
-
-	agentService := agents.NewService(
-		agentStore,
-		modelRegistry,
-		logger,
-		agents.WithWorkspaceManager(workspaceManager),
-		agents.WithSkillCatalog(skillManager),
-		agents.WithMCPCatalog(mcpManager),
-	)
+	modelRegistry := models.NewRegistry(modelStore, credentials, logger, models.WithModelReferenceChecker(agentStore))
+	agentService := agents.NewService(agentStore, modelRegistry, logger, agents.WithWorkspaceManager(workspaceManager), agents.WithSkillCatalog(skillManager), agents.WithMCPCatalog(mcpManager))
 	if err := agentService.RecoverDeletions(ctx); err != nil {
-		logger.Warn(
-			ctx,
-			"部分 Agent 删除恢复失败，将在下次启动或用户重试时继续",
-			"operation", "agent.delete.recover",
-			"error", err,
-		)
+		logger.Warn(ctx, "部分 Agent 删除恢复失败，将在下次启动或用户重试时继续", "operation", "agent.delete.recover", "error", err)
 	}
 	mcpManager.SetReferenceChecker(agentService)
-
 	mcpRuntimeBackend, err := einoadapter.NewBackend(cfg.Runtime.MCP, permissionEngine, credentials, sandboxManager, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 MCP Runtime Backend 失败: %w", err)
 	}
 	mcpManager.SetRuntimeBackend(mcpRuntimeBackend)
-
 	sessionStore, err := sessions.NewStore(ctx, transcriptStore)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Session Store 失败: %w", err)
 	}
-	sessionStoreOwned := true
-	defer func() {
-		if sessionStoreOwned {
-			_ = sessionStore.Close()
-		}
-	}()
+	resources.add(closeResources, "Session Store", func(context.Context) error { return sessionStore.Close() })
 	for _, issue := range sessionStore.Issues() {
-		logger.Warn(
-			ctx,
-			"Session 数据损坏，已隔离且不影响应用启动",
-			"operation", "session.recovery.isolate",
-			"agent_id", issue.AgentID,
-			"session_id", issue.SessionID,
-			"error", issue.Error,
-		)
+		logger.Warn(ctx, "Session 数据损坏，已隔离且不影响应用启动", "operation", "session.recovery.isolate", "agent_id", issue.AgentID, "session_id", issue.SessionID, "error", issue.Error)
 	}
-	sessionService := sessions.NewService(
-		sessionStore,
-		agentService,
-		workspaceManager,
-		logger,
-	)
-
+	sessionService := sessions.NewService(sessionStore, agentService, workspaceManager, logger)
 	// 工作区页面与 Agent Runtime 共用同一个 WorkspaceManager。
 	// UI 只浏览当前文件系统，不再扫描 Session 推导产物，因此这里不依赖 SessionService。
 	workspaceViewService, err := workspaceview.NewService(agentService, workspaceManager)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Workspace View Service 失败: %w", err)
 	}
-
+	searchService := searchindex.NewService(cfg.Paths.CacheDir, agentService, sessionService, workspaceManager)
+	resources.add(closeResources, "Search", func(context.Context) error { return searchService.Close() })
 	contextArtifactStore, err := contextartifact.NewStore(sessionService)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Context Artifact Store 失败: %w", err)
 	}
-
 	// ToolRegistry 在 SessionService 之后创建，使内部 history/context_artifact Tool 能读取
 	// 当前 Session 的受控完整记录与大结果 sidecar。普通 Builtin 仍保持原有注册语义。
-	toolRegistry, err := buildToolRegistry(
-		ctx,
-		cfg.Paths.ConfigFile,
-		workspaceManager,
-		sandboxManager,
-		permissionEngine,
-		skillManager,
-		agentService,
-		modelRegistry,
-		func(callCtx context.Context, agentID string, skillName string) error {
-			_, enableErr := agentService.EnableSkillForAgent(callCtx, agentID, skillName)
-			return enableErr
+	toolDeps := toolDependencies{
+		Workspaces: workspaceManager, Sandbox: sandboxManager, Skills: skillManager,
+		EnableSkill: func(callCtx context.Context, agentID, skillName string) error {
+			_, err := agentService.EnableSkillForAgent(callCtx, agentID, skillName)
+			return err
 		},
-		sessionService,
-		contextArtifactStore,
-		logger,
-	)
+		History: sessionService, Artifacts: contextArtifactStore,
+		// Profile 位于 Cache，不把站点登录信息放进业务数据备份。
+		BrowserProfileRoot: filepath.Join(filepath.Dir(cfg.Paths.ConfigFile), "cache", "browser-profiles"),
+		BrowserVision:      usecases.NewVisionInspector(agentService, modelRegistry).Inspect,
+	}
+	toolRegistry, err := buildToolRegistry(ctx, cfg.Paths.ConfigFile, toolDeps, permissionEngine, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 ToolRegistry 失败: %w", err)
 	}
-
+	resources.add(closeResources, "Tools", func(context.Context) error { return toolRegistry.Close() })
 	// 上下文摘要是唯一自动派生记忆；个人记忆由用户明确保存。
 	tokenEstimator := contextengine.NewApproxEstimator()
-	contextEngine, err := contextengine.NewEngine(
-		cfg.Runtime.Context,
-		sessionService,
-		tokenEstimator,
-		logger,
-	)
+	contextEngine, err := contextengine.NewEngine(cfg.Runtime.Context, sessionService, tokenEstimator, logger)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 ContextEngine 失败: %w", err)
 	}
-
 	events := eventbus.New()
-	eventsOwned := true
-	defer func() {
-		if eventsOwned {
-			events.Close()
-		}
-	}()
-
+	resources.add(closeResources, "EventBus", func(context.Context) error { events.Close(); return nil })
 	runtimeReporter := newRuntimeEventReporter(
 		func(eventCtx context.Context, event agentruntime.Event) {
 			if eventCtx == nil {
 				eventCtx = context.Background()
 			}
 			if err := events.Publish(eventCtx, agentruntime.TopicEvent, event); err != nil {
-				logger.Warn(
-					context.Background(),
-					"发布 Runtime Event 失败",
-					"operation", "runtime.event.publish",
-					"request_id", event.RequestID,
-					"session_id", event.SessionID,
-					"run_id", event.RunID,
-					"error", err,
-				)
+				logger.Warn(context.Background(), "发布 Runtime Event 失败", "operation", "runtime.event.publish", "request_id", event.RequestID, "session_id", event.SessionID, "run_id", event.RunID, "error", err)
 			}
 		},
 	)
-
-	runtimeResolver := agentruntime.NewResolver(
-		agentService,
-		sessionService,
-		modelRegistry,
-		workspaceManager,
-		sandboxManager,
-		toolRegistry,
-		skillManager,
-		mcpManager,
-		contextEngine,
-		preferenceStore,
-		runtimeReporter,
-		cfg.Runtime.MaxIterations,
-	)
+	runtimeResolver := agentruntime.NewResolver(agentService, sessionService, modelRegistry, workspaceManager, sandboxManager, toolRegistry,
+		skillManager, mcpManager, contextEngine, preferenceStore, runtimeReporter, cfg.Runtime.MaxIterations)
 	if err := runtimeResolver.Validate(); err != nil {
 		return nil, fmt.Errorf("RuntimeResolver 配置无效: %w", err)
 	}
-
 	runtimeExecutor := agentruntime.NewExecutor()
 	collaborationStore, err := collaboration.NewStore(sessionService)
 	if err != nil {
@@ -428,16 +308,9 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err := registerCollaborationTools(toolRegistry, collaborationManager); err != nil {
 		return nil, err
 	}
-	runtimeService := agentruntime.NewService(
-		runtimeResolver,
-		runtimeExecutor,
-		sessionService,
-		events,
-		logger,
-		approvalManager,
-	)
+	runtimeService := agentruntime.NewService(runtimeResolver, runtimeExecutor, sessionService, events, logger, approvalManager)
+	resources.add(finishRuns, "Runtime", runtimeService.Close)
 	runtimeService.AddRunLifecycleObserver(collaborationManager)
-
 	taskStore, err := tasks.NewStore(ctx, cfg.Paths.AgentsDir)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Task Store 失败: %w", err)
@@ -449,6 +322,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Task Manager 失败: %w", err)
 	}
+	resources.add(stopWork, "Tasks", taskManager.Close)
 	scheduleTaskFactory, err := builtin.NewScheduleTaskFactory(taskManager)
 	if err != nil {
 		return nil, err
@@ -458,34 +332,38 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 	}
 	notificationService := notifications.New(notifications.NewEventProvider(events))
 	taskManager.SetNotificationService(notificationService)
+	proactiveStore, err := proactive.NewStore(ctx, filepath.Join(cfg.Paths.ConfigDir, "proactive.json"))
+	if err != nil {
+		return nil, fmt.Errorf("初始化主动助手状态存储失败: %w", err)
+	}
+	proactiveManager, err := proactive.NewManager(proactiveStore, taskManager, approvalManager, events, notificationService,
+		proactive.NewWorkspaceMonitor(agentService, workspaceManager), logger)
+	if err != nil {
+		return nil, fmt.Errorf("初始化主动助手 Manager 失败: %w", err)
+	}
+	resources.add(stopWork, "Proactive", proactiveManager.Close)
+	modules := &moduleManager{}
+	resources.add(closeResources, "Modules", modules.close)
+	resources.add(stopWork, "Modules", modules.stop)
+	if err := modules.install(ctx, component.Host{DataDir: cfg.Paths.HomeDir, Logger: logger, Credentials: credentials, Events: events, Sandbox: sandboxManager}, runtimeResolver, opts.modules); err != nil {
+		return nil, err
+	}
+	if err := modules.start(ctx); err != nil {
+		return nil, err
+	}
 	if err := taskManager.Start(ctx); err != nil {
 		return nil, fmt.Errorf("启动 Task Scheduler 失败: %w", err)
 	}
-
-	proactiveStore, err := proactive.NewStore(ctx, filepath.Join(cfg.Paths.ConfigDir, "proactive.json"))
-	if err != nil {
-		_ = taskManager.Close(context.Background())
-		return nil, fmt.Errorf("初始化主动助手状态存储失败: %w", err)
-	}
-	proactiveManager, err := proactive.NewManager(
-		proactiveStore,
-		taskManager,
-		approvalManager,
-		events,
-		notificationService,
-		proactive.NewWorkspaceMonitor(agentService, workspaceManager),
-		logger,
-	)
-	if err != nil {
-		_ = taskManager.Close(context.Background())
-		return nil, fmt.Errorf("初始化主动助手 Manager 失败: %w", err)
-	}
 	if err := proactiveManager.Start(ctx); err != nil {
-		_ = taskManager.Close(context.Background())
 		return nil, fmt.Errorf("启动主动助手失败: %w", err)
 	}
-
+	lifecycle := usecases.NewAgentLifecycle(agentService, sessionService, runtimeService, taskManager, permissionEngine)
+	maintenance := usecases.NewSkillMaintenance(agentService, skillManager)
+	mcpConfiguration := usecases.NewMCPConfiguration(mcpManager, credentials, logger)
 	application := &Application{
+		resources:        resources,
+		mcpConfiguration: mcpConfiguration,
+		search:           searchService, lifecycle: lifecycle, maintenance: maintenance,
 		config:        cfg,
 		logger:        logger,
 		credentials:   credentials,
@@ -512,12 +390,7 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		startedAt:     time.Now().UTC(),
 	}
 	application.ready.Store(true)
-
-	loggerOwned = false
-	workspaceOwned = false
-	eventsOwned = false
-	sessionStoreOwned = false
-
+	owned = false
 	logger.Info(
 		ctx,
 		"Humbert Core 初始化完成",
@@ -531,9 +404,17 @@ func Bootstrap(ctx context.Context) (*Application, error) {
 		"tool_revision", toolRegistry.Revision(),
 		"mcp_revision", mcpManager.Revision(),
 	)
-
 	return application, nil
 }
+
+// Search 返回核心拥有的搜索服务，其生命周期独立于 Wails 窗口。
+func (a *Application) Search() *searchindex.Service { return a.search }
+
+// Lifecycle 返回所有入口共用的 Agent/会话删除用例。
+func (a *Application) Lifecycle() *usecases.AgentLifecycle { return a.lifecycle }
+
+// Maintenance 返回保留 Agent 引用约束的 Skill 维护用例。
+func (a *Application) Maintenance() *usecases.SkillMaintenance { return a.maintenance }
 
 // Config 返回应用配置。
 func (a *Application) Config() *config.Config {
@@ -661,11 +542,9 @@ func (a *Application) Status(ctx context.Context) (Status, error) {
 		StartedAt:     a.startedAt,
 		Uptime:        time.Since(a.startedAt),
 	}
-
 	if !status.Ready {
 		return status, nil
 	}
-
 	if _, err := a.models.ListProviders(ctx); err != nil {
 		return status, fmt.Errorf("Provider 文件存储健康检查失败: %w", err)
 	}
@@ -684,84 +563,20 @@ func (a *Application) Status(ctx context.Context) (Status, error) {
 	if _, err := a.tasks.List(ctx); err != nil {
 		return status, fmt.Errorf("Task 文件存储健康检查失败: %w", err)
 	}
-
 	status.StorageReady = true
 	return status, nil
 }
 
 // Shutdown 按逆依赖顺序关闭 Humbert Core。
+// Shutdown 与启动失败共用同一资源清单，模块无需向这里追加专属关闭分支。
 func (a *Application) Shutdown(ctx context.Context) error {
 	a.shutdownOnce.Do(func() {
-		started := time.Now()
 		a.ready.Store(false)
-
-		a.logger.Info(
-			ctx,
-			"Humbert Core 开始关闭",
-			"operation", "application.shutdown",
-		)
-
-		var shutdownErrors []error
-
-		// 主动助手必须先停止产生通知/内部 Agent Run，再关闭 Task Scheduler。
-		if a.proactive != nil {
-			if err := a.proactive.Close(ctx); err != nil {
-				shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭主动助手失败: %w", err))
-			}
-		}
-
-		// Task Scheduler 必须先停止产生新 Run，再关闭 Runtime。
-		if err := a.tasks.Close(ctx); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 Task Manager 失败: %w", err))
-		}
-
-		// Runtime 随后关闭。只有所有受控 Agent Turn 都退出后，才能安全关闭
-		// 会话元数据库、Workspace watcher 和 EventBus。
-		if err := a.runtime.Close(ctx); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 RuntimeService 失败: %w", err))
-			a.logger.Error(
-				context.Background(),
-				"关闭 RuntimeService 失败",
-				"operation", "application.shutdown",
-				"error", err,
-			)
-		}
-
-		if err := a.mcp.Close(); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 MCP Runtime Backend 失败: %w", err))
-			a.logger.Error(
-				context.Background(),
-				"关闭 MCP Runtime Backend 失败",
-				"operation", "application.shutdown",
-				"error", err,
-			)
-		}
-		if err := a.tools.Close(); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭内置工具失败: %w", err))
-		}
-		if err := a.sessionStore.Close(); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭会话元数据库失败: %w", err))
-		}
-
-		if err := a.workspaces.Close(); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 WorkspaceManager 失败: %w", err))
-		}
-
-		a.events.Close()
-
-		a.logger.Info(
-			context.Background(),
-			"Humbert Core 已关闭",
-			"operation", "application.shutdown",
-			"duration_ms", time.Since(started).Milliseconds(),
-		)
-
-		if err := a.logger.Close(); err != nil {
-			shutdownErrors = append(shutdownErrors, fmt.Errorf("关闭 Logger 失败: %w", err))
-		}
-
-		a.shutdownErr = errors.Join(shutdownErrors...)
+		a.logger.Info(ctx, "Humbert Core 开始关闭", "operation", "application.shutdown")
+		a.shutdownErr = a.resources.close(ctx)
 	})
-
 	return a.shutdownErr
 }
+
+// MCPConfiguration 返回不依赖桌面的配置与凭据协调用例。
+func (a *Application) MCPConfiguration() *usecases.MCPConfiguration { return a.mcpConfiguration }

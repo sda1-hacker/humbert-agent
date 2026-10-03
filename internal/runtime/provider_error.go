@@ -74,14 +74,3 @@ func isProviderContentBlockedText(value string) bool {
 
 	return false
 }
-
-// providerErrorForUser 返回适合直接展示给终端用户的错误文本。
-//
-// Provider 原始错误仍然进入结构化日志，便于开发排查；UI 不直接显示冗长 SDK 包装、
-// NodeRunError 路径或第三方网关内部文案。
-func providerErrorForUser(err error) string {
-	if errors.Is(err, ErrProviderContentBlocked) {
-		return providerContentBlockedUserMessage
-	}
-	return ""
-}

@@ -56,55 +56,39 @@ const (
 
 // Event 是 Runtime -> Desktop Adapter 的统一实时协议。
 type Event struct {
-	Type EventType `json:"type"`
-
-	RequestID string `json:"requestID"`
-
-	RunID string `json:"runID"`
-
-	SessionID string `json:"sessionID"`
-
-	AgentID string `json:"agentID"`
-
-	ModelID string `json:"modelID"`
-
-	ModelRole string `json:"modelRole,omitempty"`
-
-	ModelRevision uint64 `json:"modelRevision"`
-
-	ToolRevision         uint64   `json:"toolRevision"`
-	BuiltinToolNames     []string `json:"builtinToolNames,omitempty"`
-	SandboxProfile       string   `json:"sandboxProfile,omitempty"`
-	SandboxNetworkMode   string   `json:"sandboxNetworkMode,omitempty"`
-	SandboxNativeBackend string   `json:"sandboxNativeBackend,omitempty"`
-
-	SkillRevision string                             `json:"skillRevision,omitempty"`
-	SkillNames    []string                           `json:"skillNames,omitempty"`
-	MCPRevision   uint64                             `json:"mcpRevision,omitempty"`
-	MCPServers    []humbertmcp.RuntimeServerSnapshot `json:"mcpServers,omitempty"`
-	MCPTools      []humbertmcp.RuntimeToolSnapshot   `json:"mcpTools,omitempty"`
-	MCPToolNames  []string                           `json:"mcpToolNames,omitempty"`
+	Type                 EventType                          `json:"type"`
+	RequestID            string                             `json:"requestID"`
+	RunID                string                             `json:"runID"`
+	SessionID            string                             `json:"sessionID"`
+	AgentID              string                             `json:"agentID"`
+	ModelID              string                             `json:"modelID"`
+	ModelRole            string                             `json:"modelRole,omitempty"`
+	ModelRevision        uint64                             `json:"modelRevision"`
+	ToolRevision         uint64                             `json:"toolRevision"`
+	BuiltinToolNames     []string                           `json:"builtinToolNames,omitempty"`
+	SandboxProfile       string                             `json:"sandboxProfile,omitempty"`
+	SandboxNetworkMode   string                             `json:"sandboxNetworkMode,omitempty"`
+	SandboxNativeBackend string                             `json:"sandboxNativeBackend,omitempty"`
+	SkillRevision        string                             `json:"skillRevision,omitempty"`
+	SkillNames           []string                           `json:"skillNames,omitempty"`
+	MCPRevision          uint64                             `json:"mcpRevision,omitempty"`
+	MCPServers           []humbertmcp.RuntimeServerSnapshot `json:"mcpServers,omitempty"`
+	MCPTools             []humbertmcp.RuntimeToolSnapshot   `json:"mcpTools,omitempty"`
+	MCPToolNames         []string                           `json:"mcpToolNames,omitempty"`
 
 	// Runtime 只在 turn.started 中提供，表示该 Turn 已经冻结的统一 Runtime Manifest。
 	// 上面的扁平字段继续保留兼容现有前端/日志消费者。
-	Runtime *RuntimeManifest `json:"runtime,omitempty"`
-
-	Delta string `json:"delta,omitempty"`
-
-	MessageID string `json:"messageID,omitempty"`
-
-	ToolCallID string `json:"toolCallID,omitempty"`
-
-	ToolName string `json:"toolName,omitempty"`
-
-	ToolArguments string `json:"toolArguments,omitempty"`
-
-	DurationMS   int64 `json:"durationMS,omitempty"`
-	InputTokens  int   `json:"inputTokens,omitempty"`
-	OutputTokens int   `json:"outputTokens,omitempty"`
-	TotalTokens  int   `json:"totalTokens,omitempty"`
-
-	Error string `json:"error,omitempty"`
+	Runtime       *RuntimeManifest `json:"runtime,omitempty"`
+	Delta         string           `json:"delta,omitempty"`
+	MessageID     string           `json:"messageID,omitempty"`
+	ToolCallID    string           `json:"toolCallID,omitempty"`
+	ToolName      string           `json:"toolName,omitempty"`
+	ToolArguments string           `json:"toolArguments,omitempty"`
+	DurationMS    int64            `json:"durationMS,omitempty"`
+	InputTokens   int              `json:"inputTokens,omitempty"`
+	OutputTokens  int              `json:"outputTokens,omitempty"`
+	TotalTokens   int              `json:"totalTokens,omitempty"`
+	Error         string           `json:"error,omitempty"`
 
 	// Approval 只在 approval.* Runtime Event 中存在。Request 本身不包含 raw Tool
 	// Arguments，只包含 Permission 层已经脱敏的 Presentation。
@@ -112,8 +96,7 @@ type Event struct {
 
 	// ApprovalDecision 只在 approval.resolved 中存在，用于前端把卡片切换到终态。
 	ApprovalDecision approval.Decision `json:"approvalDecision,omitempty"`
-
-	OccurredAt string `json:"occurredAt,omitempty"`
+	OccurredAt       string            `json:"occurredAt,omitempty"`
 }
 
 // EventReporter 是 Executor 与 Wails/EventBus 之间的边界。
@@ -125,19 +108,9 @@ type EventReporter interface {
 //
 // 接口直接接收 *schema.Message，不经过 sessions.ContentBlock 或其他中间消息模型。
 type SessionWriter interface {
-	AppendAssistantMessage(
-		ctx context.Context,
-		sessionID string,
-		message *schema.Message,
-		persistence sessions.AssistantPersistence,
-	) (sessions.Message, error)
+	AppendAssistantMessage(ctx context.Context, sessionID string, message *schema.Message, persistence sessions.AssistantPersistence) (sessions.Message, error)
 
-	AppendToolResult(
-		ctx context.Context,
-		sessionID string,
-		message *schema.Message,
-		persistence sessions.ToolResultPersistence,
-	) (sessions.Message, error)
+	AppendToolResult(ctx context.Context, sessionID string, message *schema.Message, persistence sessions.ToolResultPersistence) (sessions.Message, error)
 }
 
 // RuntimeManifest 是一次 Runtime Resolve 后对“这个 Agent 下一次请求会携带什么能力”的
@@ -147,34 +120,31 @@ type SessionWriter interface {
 // Manifest 与真正的 Turn Snapshot 由同一个 Resolver 生成；Settings 修改只会影响下一次
 // Resolve，正在执行的 Turn 仍然使用已经冻结的 Snapshot。
 type RuntimeManifest struct {
-	AgentID   string `json:"agentID"`
-	AgentName string `json:"agentName"`
-
-	ModelID           string                    `json:"modelID"`
-	ModelDisplayName  string                    `json:"modelDisplayName"`
-	ModelRevision     uint64                    `json:"modelRevision"`
-	ModelRole         string                    `json:"modelRole"`
-	ModelCapabilities models.Capabilities       `json:"modelCapabilities"`
-	ModelRoles        RuntimeModelRolesManifest `json:"modelRoles"`
-
-	ToolRevision     uint64   `json:"toolRevision"`
-	BuiltinToolNames []string `json:"builtinToolNames"`
-
-	SkillRevision string   `json:"skillRevision,omitempty"`
-	SkillNames    []string `json:"skillNames"`
-
-	MCPRevision    uint64                             `json:"mcpRevision"`
-	MCPServers     []humbertmcp.RuntimeServerSnapshot `json:"mcpServers"`
-	MCPUnavailable []humbertmcp.RuntimeServerFailure  `json:"mcpUnavailable,omitempty"`
-	MCPTools       []humbertmcp.RuntimeToolSnapshot   `json:"mcpTools"`
-	MCPToolNames   []string                           `json:"mcpToolNames"`
+	// Extensions 描述已显式选择的模块能力，新增功能不再增加模块专属字段。
+	Extensions        []CapabilitySummary                `json:"extensions,omitempty"`
+	AgentID           string                             `json:"agentID"`
+	AgentName         string                             `json:"agentName"`
+	ModelID           string                             `json:"modelID"`
+	ModelDisplayName  string                             `json:"modelDisplayName"`
+	ModelRevision     uint64                             `json:"modelRevision"`
+	ModelRole         string                             `json:"modelRole"`
+	ModelCapabilities models.Capabilities                `json:"modelCapabilities"`
+	ModelRoles        RuntimeModelRolesManifest          `json:"modelRoles"`
+	ToolRevision      uint64                             `json:"toolRevision"`
+	BuiltinToolNames  []string                           `json:"builtinToolNames"`
+	SkillRevision     string                             `json:"skillRevision,omitempty"`
+	SkillNames        []string                           `json:"skillNames"`
+	MCPRevision       uint64                             `json:"mcpRevision"`
+	MCPServers        []humbertmcp.RuntimeServerSnapshot `json:"mcpServers"`
+	MCPUnavailable    []humbertmcp.RuntimeServerFailure  `json:"mcpUnavailable,omitempty"`
+	MCPTools          []humbertmcp.RuntimeToolSnapshot   `json:"mcpTools"`
+	MCPToolNames      []string                           `json:"mcpToolNames"`
 
 	// ExposedToolNames 是模型侧最终可见 Tool 名称的稳定并集：Builtin + MCP + Skill。
 	// 该字段只用于检查/展示，不代替真正的 []tool.BaseTool。
-	ExposedToolNames []string `json:"exposedToolNames"`
-
-	Workspace RuntimeWorkspaceManifest `json:"workspace"`
-	Sandbox   RuntimeSandboxManifest   `json:"sandbox"`
+	ExposedToolNames []string                 `json:"exposedToolNames"`
+	Workspace        RuntimeWorkspaceManifest `json:"workspace"`
+	Sandbox          RuntimeSandboxManifest   `json:"sandbox"`
 }
 
 // RuntimeModelRolesManifest 描述本次 Resolve 后各角色实际使用的模型。
@@ -218,15 +188,12 @@ const (
 
 // ActiveRunStatus 是当前 Session 活动 Turn 的安全只读投影。
 type ActiveRunStatus struct {
-	RequestID string `json:"requestID"`
-	RunID     string `json:"runID"`
-	SessionID string `json:"sessionID"`
-
-	Phase RunPhase `json:"phase"`
-
-	StartedAt string `json:"startedAt"`
-
-	WaitingApprovalID string `json:"waitingApprovalID,omitempty"`
+	RequestID         string   `json:"requestID"`
+	RunID             string   `json:"runID"`
+	SessionID         string   `json:"sessionID"`
+	Phase             RunPhase `json:"phase"`
+	StartedAt         string   `json:"startedAt"`
+	WaitingApprovalID string   `json:"waitingApprovalID,omitempty"`
 
 	// Approval 仅在 waiting_approval 阶段提供 Permission 层已经脱敏的安全请求，便于 UI
 	// 在重新挂载后恢复审批卡片；raw Tool Arguments 仍不会通过该状态接口暴露。
@@ -240,13 +207,10 @@ type ActiveRunStatus struct {
 // ContextOverview 把 Context Usage、Context Assembly、下一 Turn Runtime Manifest 与当前活动
 // Turn 状态放在一个只读快照中。UI 因此不需要跨多个 Store 自行推导 Runtime 生命周期。
 type ContextOverview struct {
-	Usage contextengine.Usage `json:"usage"`
-
+	Usage    contextengine.Usage    `json:"usage"`
 	Assembly contextengine.Assembly `json:"assembly"`
-
-	Runtime RuntimeManifest `json:"runtime"`
-
-	Active *ActiveRunStatus `json:"active,omitempty"`
+	Runtime  RuntimeManifest        `json:"runtime"`
+	Active   *ActiveRunStatus       `json:"active,omitempty"`
 }
 
 // Snapshot 是一次 User Turn 的不可变 Runtime Snapshot。
@@ -254,33 +218,23 @@ type Snapshot struct {
 	MaxIterations int
 	// Manifest 是本 Turn 已冻结的统一能力身份。执行所需的 Model/Tools 仍保存在下方专用字段；
 	// Manifest 只负责审计、事件和 UI 检查，避免这些消费者各自重新拼装。
-	Manifest RuntimeManifest
-
+	Manifest  RuntimeManifest
 	RequestID string
-
-	RunID string
-
+	RunID     string
 	SessionID string
-
-	AgentID string
-
+	AgentID   string
 	AgentName string
 
 	// Instruction 是本轮冻结的系统指令，包含用户明确保存的个人偏好。
 	Instruction string
 
 	// ModelID 是 Humbert models.json 中的配置 ID，只用于 Runtime Event/日志。
-	ModelID string
-
-	ModelRevision uint64
-
-	ModelRole string
-
+	ModelID           string
+	ModelRevision     uint64
+	ModelRole         string
 	ModelCapabilities models.Capabilities
-
-	ToolRevision uint64
-
-	BuiltinToolNames []string
+	ToolRevision      uint64
+	BuiltinToolNames  []string
 
 	// SkillRevision 标识本 Turn 冻结的 Skill 集合及包内容身份。它不是全局递增版本，
 	// 而是由启用 Skill 名称和文件哈希计算出的稳定摘要，便于日志和未来 Run 重放判断。
@@ -307,56 +261,36 @@ type Snapshot struct {
 	MCPToolNames []string
 
 	// 以下字段用于给 JSONL AssistantMessage 补充实际 Provider/Model 描述。
-	ProviderID string
-
-	ProviderAPI string
-
-	ProviderName string
-
-	ModelName string
-
-	ModelDisplayName string
-
-	Model einomodel.ToolCallingChatModel
-
-	ContextWindow int
-
-	MaxOutputTokens int
-
+	ProviderID        string
+	ProviderAPI       string
+	ProviderName      string
+	ModelName         string
+	ModelDisplayName  string
+	Model             einomodel.ToolCallingChatModel
+	ContextWindow     int
+	MaxOutputTokens   int
 	ToolTokenEstimate int
-
-	ContextBudget contextengine.Budget
-
-	ContextUsage contextengine.Usage
-
-	ContextAssembly contextengine.Assembly
-
-	ContextHandler *contextengine.MidRunCompactor
+	ContextBudget     contextengine.Budget
+	ContextUsage      contextengine.Usage
+	ContextAssembly   contextengine.Assembly
+	ContextHandler    *contextengine.MidRunCompactor
 
 	// AgentHandlers 只包含本 Turn 冻结的 Eino ChatModelAgent Handler。当前 Context Handler
 	// 使用 BeforeModelRewriteState 保护同一个 ReAct tool loop 的 Context，不直接写 JSONL。
-	AgentHandlers []adk.ChatModelAgentMiddleware
-
-	Tools []einotool.BaseTool
-
-	Messages []*schema.Message
-
-	Workspace workspace.Workspace
-
-	Sandbox sandbox.EffectivePolicy
-
-	SessionWriter SessionWriter
-
-	EventReporter EventReporter
-
+	AgentHandlers   []adk.ChatModelAgentMiddleware
+	Tools           []einotool.BaseTool
+	Messages        []*schema.Message
+	Workspace       workspace.Workspace
+	Sandbox         sandbox.EffectivePolicy
+	SessionWriter   SessionWriter
+	EventReporter   EventReporter
 	ExecutionLimits ExecutionLimits
 	limitState      *executionLimitState
 }
 
 // StartTurnInput 描述新的 User Turn。
 type StartTurnInput struct {
-	SessionID string
-
+	SessionID          string
 	Input              sessions.UserInput
 	RetryUserMessageID string
 	Limits             ExecutionLimits
@@ -379,18 +313,13 @@ type ResolveTurnOptions struct {
 
 // StartTurnResult 是异步 Turn 启动结果。
 type StartTurnResult struct {
-	RequestID string `json:"requestID"`
-
-	RunID string `json:"runID"`
-
-	SessionID string `json:"sessionID"`
-
+	RequestID     string `json:"requestID"`
+	RunID         string `json:"runID"`
+	SessionID     string `json:"sessionID"`
 	UserMessageID string `json:"userMessageID"`
 	// StartError 表示用户消息已保存，但运行初始化失败；Desktop 仍须返回收据用于安全重试。
-	StartError string `json:"startError,omitempty"`
-
-	ContextUsage contextengine.Usage `json:"contextUsage"`
-
+	StartError      string                 `json:"startError,omitempty"`
+	ContextUsage    contextengine.Usage    `json:"contextUsage"`
 	ContextAssembly contextengine.Assembly `json:"contextAssembly"`
 
 	// Runtime 是这个已经启动的 Turn 真正冻结的 Manifest；它可能与发送前最后一次
@@ -400,9 +329,8 @@ type StartTurnResult struct {
 
 // ManualCompactionResult 是手动压缩后的持久化结果和预算。
 type ManualCompactionResult struct {
-	Compaction contextengine.CompactResult `json:"compaction"`
-
-	ContextUsage contextengine.Usage `json:"contextUsage"`
+	Compaction   contextengine.CompactResult `json:"compaction"`
+	ContextUsage contextengine.Usage         `json:"contextUsage"`
 }
 
 // ExecutionResult 是 Executor 最终结果。
@@ -410,8 +338,7 @@ type ManualCompactionResult struct {
 // MessageID 指向最后一个已持久化的 AssistantMessage；如果模型尚未形成任何完整
 // Assistant Step 就失败，则为空。
 type ExecutionResult struct {
-	Content string
-
+	Content   string
 	MessageID string
 
 	// Interrupted 非空表示 Eino 已保存 Checkpoint，当前 Turn 正等待 Human Approval。

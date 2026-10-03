@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 )
 
@@ -17,19 +16,13 @@ import (
 //
 // 不包含 credential_id，也绝不会返回 API Key。
 type ProviderDTO struct {
-	ID string `json:"id"`
-
-	Name string `json:"name"`
-
-	Type string `json:"type"`
-
-	BaseURL string `json:"baseURL"`
-
-	HasCredential bool `json:"hasCredential"`
-
-	CreatedAt string `json:"createdAt"`
-
-	UpdatedAt string `json:"updatedAt"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	BaseURL       string `json:"baseURL"`
+	HasCredential bool   `json:"hasCredential"`
+	CreatedAt     string `json:"createdAt"`
+	UpdatedAt     string `json:"updatedAt"`
 }
 
 // ModelCapabilityConfigDTO 是用户对模型能力的三态覆盖配置。
@@ -55,33 +48,20 @@ type ModelCapabilitiesDTO struct {
 
 // ModelDTO 是返回给 Vue 的 Model 数据。
 type ModelDTO struct {
-	ID string `json:"id"`
-
-	ProviderID string `json:"providerID"`
-
-	ProviderName string `json:"providerName"`
-
-	ProviderType string `json:"providerType"`
-
-	ModelName string `json:"modelName"`
-
-	DisplayName string `json:"displayName"`
-
-	TimeoutMS int `json:"timeoutMS"`
-
-	ContextWindow int `json:"contextWindow"`
-
-	MaxOutputTokens int `json:"maxOutputTokens"`
-
+	ID               string                   `json:"id"`
+	ProviderID       string                   `json:"providerID"`
+	ProviderName     string                   `json:"providerName"`
+	ProviderType     string                   `json:"providerType"`
+	ModelName        string                   `json:"modelName"`
+	DisplayName      string                   `json:"displayName"`
+	TimeoutMS        int                      `json:"timeoutMS"`
+	ContextWindow    int                      `json:"contextWindow"`
+	MaxOutputTokens  int                      `json:"maxOutputTokens"`
 	CapabilityConfig ModelCapabilityConfigDTO `json:"capabilityConfig"`
-
-	Capabilities ModelCapabilitiesDTO `json:"capabilities"`
-
-	Enabled bool `json:"enabled"`
-
-	CreatedAt string `json:"createdAt"`
-
-	UpdatedAt string `json:"updatedAt"`
+	Capabilities     ModelCapabilitiesDTO     `json:"capabilities"`
+	Enabled          bool                     `json:"enabled"`
+	CreatedAt        string                   `json:"createdAt"`
+	UpdatedAt        string                   `json:"updatedAt"`
 }
 
 // MultimediaConfigDTO 是设置页维护的应用级多媒体模型路由。
@@ -91,64 +71,45 @@ type MultimediaConfigDTO struct {
 
 // ModelSettingsState 用一次 Bridge 调用返回完整模型设置状态。
 type ModelSettingsState struct {
-	Revision uint64 `json:"revision"`
-
-	Providers []ProviderDTO `json:"providers"`
-
-	Models []ModelDTO `json:"models"`
-
+	Revision   uint64              `json:"revision"`
+	Providers  []ProviderDTO       `json:"providers"`
+	Models     []ModelDTO          `json:"models"`
 	Multimedia MultimediaConfigDTO `json:"multimedia"`
 }
 
 // CreateProviderRequest 描述前端创建 Provider 请求。
 type CreateProviderRequest struct {
-	Name string `json:"name"`
-
-	Type string `json:"type"`
-
+	Name    string `json:"name"`
+	Type    string `json:"type"`
 	BaseURL string `json:"baseURL"`
-
-	APIKey string `json:"apiKey"`
+	APIKey  string `json:"apiKey"`
 }
 
 // UpdateProviderRequest 描述前端编辑 Provider 请求。
 type UpdateProviderRequest struct {
-	Name string `json:"name"`
-
-	Type string `json:"type"`
-
-	BaseURL string `json:"baseURL"`
-
-	APIKey string `json:"apiKey"`
-
-	UpdateAPIKey bool `json:"updateAPIKey"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+	BaseURL      string `json:"baseURL"`
+	APIKey       string `json:"apiKey"`
+	UpdateAPIKey bool   `json:"updateAPIKey"`
 }
 
 // SaveModelRequest 同时用于新增和编辑 Model。
 type SaveModelRequest struct {
-	ProviderID string `json:"providerID"`
-
-	ModelName string `json:"modelName"`
-
-	DisplayName string `json:"displayName"`
-
-	TimeoutMS int `json:"timeoutMS"`
-
-	ContextWindow int `json:"contextWindow"`
-
-	MaxOutputTokens int `json:"maxOutputTokens"`
-
+	ProviderID       string                   `json:"providerID"`
+	ModelName        string                   `json:"modelName"`
+	DisplayName      string                   `json:"displayName"`
+	TimeoutMS        int                      `json:"timeoutMS"`
+	ContextWindow    int                      `json:"contextWindow"`
+	MaxOutputTokens  int                      `json:"maxOutputTokens"`
 	CapabilityConfig ModelCapabilityConfigDTO `json:"capabilityConfig"`
-
-	Enabled bool `json:"enabled"`
+	Enabled          bool                     `json:"enabled"`
 }
 
 // TestModelResponse 返回真实连接测试结果。
 type TestModelResponse struct {
-	Success bool `json:"success"`
-
-	DurationMS int64 `json:"durationMS"`
-
+	Success         bool   `json:"success"`
+	DurationMS      int64  `json:"durationMS"`
 	ResponsePreview string `json:"responsePreview"`
 }
 
@@ -168,66 +129,38 @@ type ModelDiagnostic struct {
 // 所有真正业务逻辑位于 models.Registry，
 // 这里仅负责 DTO 转换与 Wails 调用超时。
 type ModelService struct {
-	core *coreapp.Application
+	deps ModelDependencies
 }
 
 // NewModelService 创建 ModelService。
-func NewModelService(
-	core *coreapp.Application,
-) *ModelService {
-	return &ModelService{
-		core: core,
-	}
-}
+func NewModelService(deps ModelDependencies) *ModelService { return &ModelService{deps: deps} }
 
 // State 返回 Provider + Model 完整状态。
-func (s *ModelService) State() (
-	ModelSettingsState,
-	error,
-) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+func (s *ModelService) State() (ModelSettingsState, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	providers, err :=
-		s.core.Models().
-			ListProviders(ctx)
+	providers, err := s.deps.Models.ListProviders(ctx)
 	if err != nil {
-		return ModelSettingsState{}, fmt.Errorf(
-			"读取 Provider 列表失败: %w",
-			err,
-		)
+		return ModelSettingsState{}, fmt.Errorf("读取 Provider 列表失败: %w", err)
 	}
 
-	modelList, err :=
-		s.core.Models().
-			ListModels(ctx)
+	modelList, err := s.deps.Models.ListModels(ctx)
 	if err != nil {
-		return ModelSettingsState{}, fmt.Errorf(
-			"读取 Model 列表失败: %w",
-			err,
-		)
+		return ModelSettingsState{}, fmt.Errorf("读取 Model 列表失败: %w", err)
 	}
 
-	multimedia, err := s.core.Models().MultimediaConfig(ctx)
+	multimedia, err := s.deps.Models.MultimediaConfig(ctx)
 	if err != nil {
 		return ModelSettingsState{}, fmt.Errorf("读取多媒体模型配置失败: %w", err)
 	}
 
 	return ModelSettingsState{
-		Revision: s.core.Models().
-			Revision(),
+		Revision: s.deps.Models.Revision(),
 
-		Providers: toProviderDTOs(
-			providers,
-		),
+		Providers: toProviderDTOs(providers),
 
-		Models: toModelDTOs(
-			modelList,
-		),
+		Models: toModelDTOs(modelList),
 
 		Multimedia: multimediaConfigDTO(multimedia),
 	}, nil
@@ -238,9 +171,7 @@ func (s *ModelService) UpdateMultimediaConfig(request MultimediaConfigDTO) (Mult
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err := s.core.Models().SetMultimediaConfig(ctx, models.MultimediaConfig{
-		ImageModelID: request.ImageModelID,
-	})
+	value, err := s.deps.Models.SetMultimediaConfig(ctx, models.MultimediaConfig{ImageModelID: request.ImageModelID})
 	if err != nil {
 		return MultimediaConfigDTO{}, fmt.Errorf("更新多媒体模型配置失败: %w", err)
 	}
@@ -248,26 +179,18 @@ func (s *ModelService) UpdateMultimediaConfig(request MultimediaConfigDTO) (Mult
 }
 
 // CreateProvider 创建 Provider。
-func (s *ModelService) CreateProvider(
-	request CreateProviderRequest,
-) (ProviderDTO, error) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+func (s *ModelService) CreateProvider(request CreateProviderRequest) (ProviderDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	value, err :=
-		s.core.Models().
+		s.deps.Models.
 			CreateProvider(
 				ctx,
 				models.CreateProviderInput{
 					Name: request.Name,
 
-					Type: models.ProviderType(
-						request.Type,
-					),
+					Type: models.ProviderType(request.Type),
 
 					BaseURL: request.BaseURL,
 
@@ -275,40 +198,26 @@ func (s *ModelService) CreateProvider(
 				},
 			)
 	if err != nil {
-		return ProviderDTO{}, fmt.Errorf(
-			"创建 Provider 失败: %w",
-			err,
-		)
+		return ProviderDTO{}, fmt.Errorf("创建 Provider 失败: %w", err)
 	}
 
-	return toProviderDTO(
-		value,
-	), nil
+	return toProviderDTO(value), nil
 }
 
 // UpdateProvider 修改 Provider。
-func (s *ModelService) UpdateProvider(
-	id string,
-	request UpdateProviderRequest,
-) (ProviderDTO, error) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+func (s *ModelService) UpdateProvider(id string, request UpdateProviderRequest) (ProviderDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	value, err :=
-		s.core.Models().
+		s.deps.Models.
 			UpdateProvider(
 				ctx,
 				id,
 				models.UpdateProviderInput{
 					Name: request.Name,
 
-					Type: models.ProviderType(
-						request.Type,
-					),
+					Type: models.ProviderType(request.Type),
 
 					BaseURL: request.BaseURL,
 
@@ -318,57 +227,32 @@ func (s *ModelService) UpdateProvider(
 				},
 			)
 	if err != nil {
-		return ProviderDTO{}, fmt.Errorf(
-			"修改 Provider 失败: %w",
-			err,
-		)
+		return ProviderDTO{}, fmt.Errorf("修改 Provider 失败: %w", err)
 	}
 
-	return toProviderDTO(
-		value,
-	), nil
+	return toProviderDTO(value), nil
 }
 
 // DeleteProvider 删除 Provider。
-func (s *ModelService) DeleteProvider(
-	id string,
-) error {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+func (s *ModelService) DeleteProvider(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err :=
-		s.core.Models().
-			DeleteProvider(
-				ctx,
-				id,
-			); err != nil {
+	if err := s.deps.Models.DeleteProvider(ctx, id); err != nil {
 
-		return fmt.Errorf(
-			"删除 Provider 失败: %w",
-			err,
-		)
+		return fmt.Errorf("删除 Provider 失败: %w", err)
 	}
 
 	return nil
 }
 
 // CreateModel 创建 Model。
-func (s *ModelService) CreateModel(
-	request SaveModelRequest,
-) (ModelDTO, error) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+func (s *ModelService) CreateModel(request SaveModelRequest) (ModelDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	value, err :=
-		s.core.Models().
+		s.deps.Models.
 			CreateModel(
 				ctx,
 				models.CreateModelInput{
@@ -390,32 +274,19 @@ func (s *ModelService) CreateModel(
 				},
 			)
 	if err != nil {
-		return ModelDTO{}, fmt.Errorf(
-			"创建 Model 失败: %w",
-			err,
-		)
+		return ModelDTO{}, fmt.Errorf("创建 Model 失败: %w", err)
 	}
 
-	return s.modelDTOByID(
-		ctx,
-		value.ID,
-	)
+	return s.modelDTOByID(ctx, value.ID)
 }
 
 // UpdateModel 修改 Model。
-func (s *ModelService) UpdateModel(
-	id string,
-	request SaveModelRequest,
-) (ModelDTO, error) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+func (s *ModelService) UpdateModel(id string, request SaveModelRequest) (ModelDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	value, err :=
-		s.core.Models().
+		s.deps.Models.
 			UpdateModel(
 				ctx,
 				id,
@@ -438,79 +309,39 @@ func (s *ModelService) UpdateModel(
 				},
 			)
 	if err != nil {
-		return ModelDTO{}, fmt.Errorf(
-			"修改 Model 失败: %w",
-			err,
-		)
+		return ModelDTO{}, fmt.Errorf("修改 Model 失败: %w", err)
 	}
 
-	return s.modelDTOByID(
-		ctx,
-		value.ID,
-	)
+	return s.modelDTOByID(ctx, value.ID)
 }
 
 // DeleteModel 删除不再被当前 Agent 任一模型角色引用的模型。
 // 历史 Session 不阻止删除模型配置。
-func (s *ModelService) DeleteModel(
-	id string,
-) error {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+func (s *ModelService) DeleteModel(id string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err :=
-		s.core.Models().
-			DeleteModel(
-				ctx,
-				id,
-			); err != nil {
+	if err := s.deps.Models.DeleteModel(ctx, id); err != nil {
 
-		return fmt.Errorf(
-			"删除 Model 失败: %w",
-			err,
-		)
+		return fmt.Errorf("删除 Model 失败: %w", err)
 	}
 
 	return nil
 }
 
 // TestModel 发起一次真实模型 API 请求。
-func (s *ModelService) TestModel(
-	id string,
-) (TestModelResponse, error) {
+func (s *ModelService) TestModel(id string) (TestModelResponse, error) {
 	// 外部模型请求允许最长 5 分钟。
 	// 实际模型自身 Timeout 通常会更早终止。
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Minute,
-		)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	result, err :=
-		s.core.Models().
-			TestModel(
-				ctx,
-				id,
-			)
+	result, err := s.deps.Models.TestModel(ctx, id)
 	if err != nil {
-		return TestModelResponse{}, fmt.Errorf(
-			"测试 Model 失败: %w",
-			err,
-		)
+		return TestModelResponse{}, fmt.Errorf("测试 Model 失败: %w", err)
 	}
 
-	return TestModelResponse{
-		Success: result.Success,
-
-		DurationMS: result.DurationMS,
-
-		ResponsePreview: result.ResponsePreview,
-	}, nil
+	return TestModelResponse{Success: result.Success, DurationMS: result.DurationMS, ResponsePreview: result.ResponsePreview}, nil
 }
 
 // DiagnoseModel 发送最小请求，并把常见连接故障转换成可处理的提示。
@@ -527,7 +358,7 @@ func (s *ModelService) DiagnoseModel(id string) (ModelDiagnostic, error) {
 		result.Category, result.Summary, result.Action = "model_disabled", "模型未启用", "在模型设置中启用该模型后重试。"
 		return result, nil
 	}
-	providers, err := s.core.Models().ListProviders(ctx)
+	providers, err := s.deps.Models.ListProviders(ctx)
 	if err != nil {
 		return ModelDiagnostic{}, fmt.Errorf("读取供应商失败: %w", err)
 	}
@@ -539,7 +370,7 @@ func (s *ModelService) DiagnoseModel(id string) (ModelDiagnostic, error) {
 	}
 
 	started := time.Now()
-	test, err := s.core.Models().TestModel(ctx, id)
+	test, err := s.deps.Models.TestModel(ctx, id)
 	result.DurationMS = time.Since(started).Milliseconds()
 	if err != nil {
 		result.Category, result.Summary, result.Action = classifyModelDiagnostic(err)
@@ -581,53 +412,32 @@ func classifyModelDiagnostic(err error) (category, summary, action string) {
 	}
 }
 
-func (s *ModelService) modelDTOByID(
-	ctx context.Context,
-	id string,
-) (ModelDTO, error) {
-	values, err :=
-		s.core.Models().
-			ListModels(ctx)
+func (s *ModelService) modelDTOByID(ctx context.Context, id string) (ModelDTO, error) {
+	values, err := s.deps.Models.ListModels(ctx)
 	if err != nil {
 		return ModelDTO{}, err
 	}
 
 	for _, value := range values {
 		if value.Model.ID == id {
-			return toModelDTO(
-				value,
-			), nil
+			return toModelDTO(value), nil
 		}
 	}
 
-	return ModelDTO{}, fmt.Errorf(
-		"保存后的模型 %s 未找到",
-		id,
-	)
+	return ModelDTO{}, fmt.Errorf("保存后的模型 %s 未找到", id)
 }
 
-func toProviderDTOs(
-	values []models.Provider,
-) []ProviderDTO {
-	result := make(
-		[]ProviderDTO,
-		0,
-		len(values),
-	)
+func toProviderDTOs(values []models.Provider) []ProviderDTO {
+	result := make([]ProviderDTO, 0, len(values))
 
 	for _, value := range values {
-		result = append(
-			result,
-			toProviderDTO(value),
-		)
+		result = append(result, toProviderDTO(value))
 	}
 
 	return result
 }
 
-func toProviderDTO(
-	value models.Provider,
-) ProviderDTO {
+func toProviderDTO(value models.Provider) ProviderDTO {
 	return ProviderDTO{
 		ID: value.ID,
 
@@ -639,38 +449,23 @@ func toProviderDTO(
 
 		HasCredential: value.CredentialID != "",
 
-		CreatedAt: value.CreatedAt.Format(
-			time.RFC3339,
-		),
+		CreatedAt: value.CreatedAt.Format(time.RFC3339),
 
-		UpdatedAt: value.UpdatedAt.Format(
-			time.RFC3339,
-		),
+		UpdatedAt: value.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
-func toModelDTOs(
-	values []models.ModelInfo,
-) []ModelDTO {
-	result := make(
-		[]ModelDTO,
-		0,
-		len(values),
-	)
+func toModelDTOs(values []models.ModelInfo) []ModelDTO {
+	result := make([]ModelDTO, 0, len(values))
 
 	for _, value := range values {
-		result = append(
-			result,
-			toModelDTO(value),
-		)
+		result = append(result, toModelDTO(value))
 	}
 
 	return result
 }
 
-func toModelDTO(
-	value models.ModelInfo,
-) ModelDTO {
+func toModelDTO(value models.ModelInfo) ModelDTO {
 	return ModelDTO{
 		ID: value.Model.ID,
 
@@ -678,9 +473,7 @@ func toModelDTO(
 
 		ProviderName: value.ProviderName,
 
-		ProviderType: string(
-			value.ProviderType,
-		),
+		ProviderType: string(value.ProviderType),
 
 		ModelName: value.Model.ModelName,
 
@@ -694,21 +487,13 @@ func toModelDTO(
 
 		CapabilityConfig: capabilityConfigDTO(value.Model.Capabilities),
 
-		Capabilities: capabilitiesDTO(models.EffectiveCapabilities(
-			value.ProviderType,
-			value.Model.ModelName,
-			value.Model.Capabilities,
-		)),
+		Capabilities: capabilitiesDTO(models.EffectiveCapabilities(value.ProviderType, value.Model.ModelName, value.Model.Capabilities)),
 
 		Enabled: value.Model.Enabled,
 
-		CreatedAt: value.Model.CreatedAt.Format(
-			time.RFC3339,
-		),
+		CreatedAt: value.Model.CreatedAt.Format(time.RFC3339),
 
-		UpdatedAt: value.Model.UpdatedAt.Format(
-			time.RFC3339,
-		),
+		UpdatedAt: value.Model.UpdatedAt.Format(time.RFC3339),
 	}
 }
 

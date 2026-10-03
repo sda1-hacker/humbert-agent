@@ -1,19 +1,17 @@
-# App：依赖组装与生命周期
+# App：依赖装配与生命周期
 
-[总目录](../../docs/architecture/README.md) · [桌面服务](../services/README.md)
+[架构目录](../../docs/architecture/README.md) · [Services](../services/README.md)
 
-`cmd/desktop/main.go` 在离线备份/恢复后调用 `Bootstrap`。`application.go` 按依赖顺序创建配置、日志、凭据、Transcript、Workspace、Sandbox、Permission、模型、Agent、Session、Context、Runtime、Task、Proactive、搜索等组件；`tools.go` 统一注册内置与协作工具；`runtime_event_reporter.go` 把运行事件发布到 EventBus。`Application` 的 getter 供 Wails Service 使用，`Shutdown` 负责反向收敛。
+`application.go` 创建已有领域服务与应用用例，成功后返回 `Application`。`tools.go` 注册内置工厂；浏览器视觉模型选择已放到 `usecases.VisionInspector`。`runtime_event_reporter.go` 将运行事件发布到 EventBus。
 
-```mermaid
-flowchart TD
-  C[config + logging + credential] --> F[文件 Store / Workspace / Sandbox]
-  F --> A[Agent / Model / Session]
-  A --> X[Tools / Skills / MCP / Context]
-  X --> R[Runtime]
-  R --> T[Tasks / Proactive / Notifications]
-  T --> S[Wails Services]
-```
+`modules.go` 提供可选的静态模块装配：`Bootstrap(ctx, WithModules(installer))`。模块只获得通用平台依赖，继续拥有自己的数据、连接和 Agent 绑定；能力交给 Runtime，桌面服务由桌面装配点独立注册。最小示例见 [textstats.go](../../examples/modules/textstats.go)。
 
-Bootstrap 中先恢复 Agent 删除、隔离损坏 Session，然后再启动会发起运行的管理器，避免后台任务在基础数据未就绪时启动。初始化失败的资源由延迟清理关闭，成功后归 Application 所有。更改依赖时需要同时检查启动顺序、错误回滚和 `Shutdown`；不要在 `services` 里私建第二套 Runtime。
+`lifecycle.go` 保存每个已构造资源的清理方法。启动失败与正常退出共用清单，资源只关闭一次，一个关闭失败不会跳过后续清理：
 
-阅读顺序：`cmd/desktop/main.go` → `application.go:Bootstrap` → `tools.go:buildToolRegistry` → `application.go:Shutdown`。断点用组件构造失败处定位启动问题，运行时问题应进入对应领域包。
+1. 停止模块后台工作、Proactive 和 Tasks，阻止继续派发。
+2. 取消并等待 Runtime 的初始化、执行和审批等待者。
+3. 逆构造顺序关闭模块连接、事件总线、工具工厂、搜索索引、会话数据库、MCP、工作区和日志。
+
+新模块有后台工作时同时提供 `Start/Stop`，即使 `Start` 部分失败也会调用 `Stop`。构造器返回错误时，尚未交给宿主的资源由构造器清理。清理回调需要遵守传入 Context。
+
+Application getter 只供装配点使用；桌面 Service 构造函数接收明确的 Dependencies。跨模块业务规则放在 `usecases`，这里不增加模块业务分支。

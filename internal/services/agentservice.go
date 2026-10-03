@@ -12,13 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 const agentServiceTimeout = 10 * time.Second
@@ -35,39 +34,25 @@ const agentServiceTimeout = 10 * time.Second
 //   - managed 时返回真正的 ~/.humbert-agent/workspaces/<agent-id>；
 //   - custom 时返回用户选择目录。
 type AgentDTO struct {
-	ID string `json:"id"`
-
-	Name string `json:"name"`
-
-	Avatar string `json:"avatar"`
-
-	SubagentEnabled bool `json:"subagentEnabled"`
-
-	Instruction string `json:"instruction"`
-
-	ModelID string `json:"modelID"`
-
-	ModelDisplayName string `json:"modelDisplayName"`
-
-	ModelRoles AgentModelRolesDTO `json:"modelRoles"`
-
-	EnabledSkills []string `json:"enabledSkills"`
-
-	EnabledBuiltinTools    []string         `json:"enabledBuiltinTools"`
-	BuiltinToolsConfigured bool             `json:"builtinToolsConfigured"`
-	AvailableBuiltinTools  []BuiltinToolDTO `json:"availableBuiltinTools"`
-	Sandbox                SandboxPolicyDTO `json:"sandbox"`
-	SandboxStatus          SandboxStatusDTO `json:"sandboxStatus"`
-
-	WorkspaceMode string `json:"workspaceMode"`
-
-	WorkspacePath string `json:"workspacePath"`
-
-	WorkspaceDisplayPath string `json:"workspaceDisplayPath"`
-
-	CreatedAt string `json:"createdAt"`
-
-	UpdatedAt string `json:"updatedAt"`
+	ID                     string             `json:"id"`
+	Name                   string             `json:"name"`
+	Avatar                 string             `json:"avatar"`
+	SubagentEnabled        bool               `json:"subagentEnabled"`
+	Instruction            string             `json:"instruction"`
+	ModelID                string             `json:"modelID"`
+	ModelDisplayName       string             `json:"modelDisplayName"`
+	ModelRoles             AgentModelRolesDTO `json:"modelRoles"`
+	EnabledSkills          []string           `json:"enabledSkills"`
+	EnabledBuiltinTools    []string           `json:"enabledBuiltinTools"`
+	BuiltinToolsConfigured bool               `json:"builtinToolsConfigured"`
+	AvailableBuiltinTools  []BuiltinToolDTO   `json:"availableBuiltinTools"`
+	Sandbox                SandboxPolicyDTO   `json:"sandbox"`
+	SandboxStatus          SandboxStatusDTO   `json:"sandboxStatus"`
+	WorkspaceMode          string             `json:"workspaceMode"`
+	WorkspacePath          string             `json:"workspacePath"`
+	WorkspaceDisplayPath   string             `json:"workspaceDisplayPath"`
+	CreatedAt              string             `json:"createdAt"`
+	UpdatedAt              string             `json:"updatedAt"`
 }
 
 // SandboxPolicyDTO 是 Agent Profile 中可编辑的 Sandbox 覆盖配置。
@@ -197,17 +182,11 @@ type UpdateAgentRequest struct {
 // 文件夹选择也放在这里，是因为 Native Dialog 属于 Desktop Adapter，
 // 不应该进入 workspace 或 agents Domain Package。
 type AgentService struct {
-	core *coreapp.Application
+	deps AgentDependencies
 }
 
 // NewAgentService 创建 Agent Desktop Service。
-func NewAgentService(
-	core *coreapp.Application,
-) *AgentService {
-	return &AgentService{
-		core: core,
-	}
-}
+func NewAgentService(deps AgentDependencies) *AgentService { return &AgentService{deps: deps} }
 
 // ServiceName 返回 Wails Service Name。
 func (s *AgentService) ServiceName() string {
@@ -215,105 +194,55 @@ func (s *AgentService) ServiceName() string {
 }
 
 // ListAgents 返回全部 Agent。
-func (s *AgentService) ListAgents() (
-	[]AgentDTO,
-	error,
-) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			agentServiceTimeout,
-		)
+func (s *AgentService) ListAgents() ([]AgentDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 
 	defer cancel()
 
-	values, err :=
-		s.core.Agents().
-			List(ctx)
+	values, err := s.deps.Agents.List(ctx)
 
 	if err != nil {
-		return nil, fmt.Errorf(
-			"读取 Agent 列表失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("读取 Agent 列表失败: %w", err)
 	}
 
-	result :=
-		make(
-			[]AgentDTO,
-			0,
-			len(values),
-		)
+	result := make([]AgentDTO, 0, len(values))
 
 	for _, value := range values {
 
-		dto, err :=
-			s.toDTO(value)
+		dto, err := s.toDTO(value)
 
 		if err != nil {
 			return nil, err
 		}
 
-		result = append(
-			result,
-			dto,
-		)
+		result = append(result, dto)
 	}
 
 	return result, nil
 }
 
 // GetAgent 返回指定 Agent。
-func (s *AgentService) GetAgent(
-	id string,
-) (
-	AgentDTO,
-	error,
-) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			agentServiceTimeout,
-		)
+func (s *AgentService) GetAgent(id string) (AgentDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 
 	defer cancel()
 
-	value, err :=
-		s.core.Agents().
-			Get(
-				ctx,
-				id,
-			)
+	value, err := s.deps.Agents.Get(ctx, id)
 
 	if err != nil {
-		return AgentDTO{},
-			fmt.Errorf(
-				"读取 Agent 失败: %w",
-				err,
-			)
+		return AgentDTO{}, fmt.Errorf("读取 Agent 失败: %w", err)
 	}
 
 	return s.toDTO(value)
 }
 
 // CreateAgent 创建 Agent。
-func (s *AgentService) CreateAgent(
-	request CreateAgentRequest,
-) (
-	AgentDTO,
-	error,
-) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			agentServiceTimeout,
-		)
+func (s *AgentService) CreateAgent(request CreateAgentRequest) (AgentDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 
 	defer cancel()
 
-	createInput := agents.CreateInput{
-		Sandbox: sandboxPolicyFromDTO(request.Sandbox), SubagentEnabled: request.SubagentEnabled,
-	}
+	createInput := agents.CreateInput{Sandbox: sandboxPolicyFromDTO(request.Sandbox), SubagentEnabled: request.SubagentEnabled}
 	if request.BuiltinToolsConfigured {
 		if err := s.validateBuiltinToolNames(request.EnabledBuiltinTools); err != nil {
 			return AgentDTO{}, err
@@ -322,7 +251,7 @@ func (s *AgentService) CreateAgent(
 	}
 
 	value, err :=
-		s.core.Agents().
+		s.deps.Agents.
 			Create(
 				ctx,
 				agents.CreateInput{
@@ -342,38 +271,22 @@ func (s *AgentService) CreateAgent(
 					EnabledBuiltinTools: createInput.EnabledBuiltinTools,
 					Sandbox:             createInput.Sandbox,
 
-					WorkspaceMode: workspace.Mode(
-						request.WorkspaceMode,
-					),
+					WorkspaceMode: workspace.Mode(request.WorkspaceMode),
 
 					WorkspacePath: request.WorkspacePath,
 				},
 			)
 
 	if err != nil {
-		return AgentDTO{},
-			fmt.Errorf(
-				"创建 Agent 失败: %w",
-				err,
-			)
+		return AgentDTO{}, fmt.Errorf("创建 Agent 失败: %w", err)
 	}
 
 	return s.toDTO(value)
 }
 
 // UpdateAgent 修改 Agent。
-func (s *AgentService) UpdateAgent(
-	id string,
-	request UpdateAgentRequest,
-) (
-	AgentDTO,
-	error,
-) {
-	ctx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			agentServiceTimeout,
-		)
+func (s *AgentService) UpdateAgent(id string, request UpdateAgentRequest) (AgentDTO, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 
 	defer cancel()
 
@@ -398,7 +311,7 @@ func (s *AgentService) UpdateAgent(
 	subagentEnabled := request.SubagentEnabled
 
 	value, err :=
-		s.core.Agents().
+		s.deps.Agents.
 			Update(
 				ctx,
 				id,
@@ -419,20 +332,14 @@ func (s *AgentService) UpdateAgent(
 					EnabledBuiltinTools: enabledBuiltinTools,
 					Sandbox:             sandboxPolicy,
 
-					WorkspaceMode: workspace.Mode(
-						request.WorkspaceMode,
-					),
+					WorkspaceMode: workspace.Mode(request.WorkspaceMode),
 
 					WorkspacePath: request.WorkspacePath,
 				},
 			)
 
 	if err != nil {
-		return AgentDTO{},
-			fmt.Errorf(
-				"更新 Agent 失败: %w",
-				err,
-			)
+		return AgentDTO{}, fmt.Errorf("更新 Agent 失败: %w", err)
 	}
 
 	return s.toDTO(value)
@@ -442,7 +349,7 @@ func (s *AgentService) UpdateAgent(
 func (s *AgentService) UpdateAgentProfile(id string, request AgentProfileRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	value, err := s.core.Agents().UpdateProfile(ctx, id, request.Name, request.Avatar, request.Instruction)
+	value, err := s.deps.Agents.UpdateProfile(ctx, id, request.Name, request.Avatar, request.Instruction)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent Profile 失败: %w", err)
 	}
@@ -453,7 +360,7 @@ func (s *AgentService) UpdateAgentProfile(id string, request AgentProfileRequest
 func (s *AgentService) SetAgentModel(id string, request AgentModelRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	value, err := s.core.Agents().SetModel(ctx, id, request.ModelID)
+	value, err := s.deps.Agents.SetModel(ctx, id, request.ModelID)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("切换 Agent Model 失败: %w", err)
 	}
@@ -464,9 +371,7 @@ func (s *AgentService) SetAgentModel(id string, request AgentModelRequest) (Agen
 func (s *AgentService) SetAgentModelRoles(id string, request AgentModelRolesRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	value, err := s.core.Agents().SetModelRoles(ctx, id, agents.ModelRoles{
-		UtilityModelID: request.UtilityModelID,
-	})
+	value, err := s.deps.Agents.SetModelRoles(ctx, id, agents.ModelRoles{UtilityModelID: request.UtilityModelID})
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent Model Roles 失败: %w", err)
 	}
@@ -477,7 +382,7 @@ func (s *AgentService) SetAgentModelRoles(id string, request AgentModelRolesRequ
 func (s *AgentService) SetAgentSkills(id string, request AgentSkillsRequest) (AgentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	value, err := s.core.Agents().SetSkills(ctx, id, request.EnabledSkills)
+	value, err := s.deps.Agents.SetSkills(ctx, id, request.EnabledSkills)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent Skills 失败: %w", err)
 	}
@@ -486,7 +391,7 @@ func (s *AgentService) SetAgentSkills(id string, request AgentSkillsRequest) (Ag
 
 // ListBuiltinTools 返回当前 Registry 中可供 Agent 选择的 Builtin Tool。
 func (s *AgentService) ListBuiltinTools() []BuiltinToolDTO {
-	descriptors := s.core.Tools().List()
+	descriptors := s.deps.Tools.List()
 	result := make([]BuiltinToolDTO, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		if descriptor.Internal {
@@ -508,11 +413,11 @@ func (s *AgentService) ListBuiltinTools() []BuiltinToolDTO {
 
 // GetSandboxStatus 返回当前平台能力探测结果，不触发任何子进程。
 func (s *AgentService) GetSandboxStatus() SandboxStatusDTO {
-	manager := s.core.Sandbox()
+	manager := s.deps.Sandbox
 	capability := manager.Capability()
 	cfg := manager.Config()
 	runtimeShellActive := false
-	for _, descriptor := range s.core.Tools().List() {
+	for _, descriptor := range s.deps.Tools.List() {
 		if descriptor.Name == "run_command" {
 			runtimeShellActive = true
 			break
@@ -524,7 +429,7 @@ func (s *AgentService) GetSandboxStatus() SandboxStatusDTO {
 		Network: capability.Network, DefaultProfile: string(cfg.DefaultProfile),
 		DefaultNetworkMode: string(cfg.DefaultNetworkMode), DefaultNativeMode: string(cfg.DefaultNativeMode),
 		CommandGracePeriodMS: int(cfg.CommandGracePeriod / time.Millisecond),
-		ShellEnabled:         s.core.Config().Security.ShellEnabled,
+		ShellEnabled:         s.deps.Config.Security.ShellEnabled,
 		ShellRuntimeActive:   runtimeShellActive,
 	}
 }
@@ -544,12 +449,7 @@ func (s *AgentService) UpdateSandboxSettings(request SandboxSettingsRequest) (Sa
 
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	if err := config.SaveSandboxAndShellConfig(
-		ctx,
-		s.core.Config().Paths.ConfigFile,
-		cfg,
-		request.ShellEnabled,
-	); err != nil {
+	if err := config.SaveSandboxAndShellConfig(ctx, s.deps.Config.Paths.ConfigFile, cfg, request.ShellEnabled); err != nil {
 		return SandboxStatusDTO{}, err
 	}
 
@@ -559,13 +459,13 @@ func (s *AgentService) UpdateSandboxSettings(request SandboxSettingsRequest) (Sa
 		DefaultNativeMode:  sandbox.NativeMode(cfg.NativeMode),
 		CommandGracePeriod: time.Duration(cfg.CommandGracePeriodMS) * time.Millisecond,
 	}
-	if err := s.core.Sandbox().UpdateConfig(runtimeCfg); err != nil {
+	if err := s.deps.Sandbox.UpdateConfig(runtimeCfg); err != nil {
 		return SandboxStatusDTO{}, fmt.Errorf("更新运行时 Sandbox Policy 失败: %w", err)
 	}
-	s.core.Config().Security.Sandbox = cfg
-	s.core.Config().Security.ShellEnabled = request.ShellEnabled
+	s.deps.Config.Security.Sandbox = cfg
+	s.deps.Config.Security.ShellEnabled = request.ShellEnabled
 
-	s.core.Logger().Info(
+	s.deps.Logger.Info(
 		ctx,
 		"Sandbox 默认策略已更新",
 		"operation", "sandbox.settings.update",
@@ -599,7 +499,7 @@ func (s *AgentService) RunSandboxDiagnostics() (SandboxDiagnosticsDTO, error) {
 		return SandboxDiagnosticsDTO{}, fmt.Errorf("创建自检外部目录失败: %w", err)
 	}
 
-	policy, err := s.core.Sandbox().Resolve(ctx, workspaceRoot, sandbox.AgentPolicy{
+	policy, err := s.deps.Sandbox.Resolve(ctx, workspaceRoot, sandbox.AgentPolicy{
 		// 使用 Standard 才能验证“普通 Home 可读，但敏感文件仍被硬保护”的真实产品语义。
 		Profile: sandbox.ProfileStandard, NetworkMode: sandbox.NetworkPublic, NativeMode: sandbox.NativeRequired,
 	})
@@ -626,14 +526,14 @@ func (s *AgentService) RunSandboxDiagnostics() (SandboxDiagnosticsDTO, error) {
 		appendCheck("pathguard_outside", "工作目录外写入阻止", "fail", "工作目录外的创建操作被错误允许。")
 	}
 
-	protectedProbe := filepath.Join(s.core.Config().Paths.SecretsDir, "diagnostic-probe")
+	protectedProbe := filepath.Join(s.deps.Config.Paths.SecretsDir, "diagnostic-probe")
 	if _, checkErr := policy.CheckPath(protectedProbe, sandbox.OpRead); checkErr != nil {
 		appendCheck("pathguard_protected", "敏感目录保护", "pass", "Humbert 的敏感数据目录已正确阻止访问。")
 	} else {
 		appendCheck("pathguard_protected", "敏感目录保护", "fail", "Humbert 的敏感数据目录被错误允许读取。")
 	}
 
-	protectedFileProbe := s.core.Config().Paths.ConfigFile
+	protectedFileProbe := s.deps.Config.Paths.ConfigFile
 	if decision, checkErr := policy.CheckPath(protectedFileProbe, sandbox.OpRead); checkErr != nil && decision.Source == sandbox.RuleSourceProtectedFile {
 		appendCheck("pathguard_protected_file", "敏感文件保护", "pass", "Humbert 配置文件位于普通 Home 可读范围内，但已被单文件硬保护规则正确阻止。")
 	} else if checkErr != nil {
@@ -651,7 +551,7 @@ func (s *AgentService) RunSandboxDiagnostics() (SandboxDiagnosticsDTO, error) {
 		appendCheck("pathguard_symlink", "符号链接逃逸保护", "fail", "符号链接错误地允许写出工作目录。")
 	}
 
-	capability := s.core.Sandbox().Capability()
+	capability := s.deps.Sandbox.Capability()
 	if !capability.Available {
 		appendCheck("native_filesystem", "本地程序文件隔离", "warning", "当前系统的本地程序隔离不可用："+capability.Reason)
 	} else if !capability.Filesystem {
@@ -668,7 +568,7 @@ func (s *AgentService) RunSandboxDiagnostics() (SandboxDiagnosticsDTO, error) {
 			touchPath, _ = filepath.Abs(touchPath)
 			insideNative := filepath.Join(workspaceRoot, "native-inside.txt")
 			var insideStderr bytes.Buffer
-			insideResult, runErr := s.core.Sandbox().Runner().Run(ctx, policy, sandbox.ProcessSpec{
+			insideResult, runErr := s.deps.Sandbox.Runner().Run(ctx, policy, sandbox.ProcessSpec{
 				Executable: touchPath, Args: []string{insideNative}, Dir: workspaceRoot, Env: []string{},
 				Stdout: io.Discard, Stderr: &insideStderr,
 			})
@@ -684,7 +584,7 @@ func (s *AgentService) RunSandboxDiagnostics() (SandboxDiagnosticsDTO, error) {
 			} else {
 				outsideNative := filepath.Join(outsideRoot, "native-outside.txt")
 				var outsideStderr bytes.Buffer
-				outsideResult, outsideErr := s.core.Sandbox().Runner().Run(ctx, policy, sandbox.ProcessSpec{
+				outsideResult, outsideErr := s.deps.Sandbox.Runner().Run(ctx, policy, sandbox.ProcessSpec{
 					Executable: touchPath, Args: []string{outsideNative}, Dir: workspaceRoot, Env: []string{},
 					Stdout: io.Discard, Stderr: &outsideStderr,
 				})
@@ -742,7 +642,7 @@ func (s *AgentService) UpdateAgentSecurity(id string, request AgentSecurityReque
 		NetworkMode:          sandbox.NetworkMode(request.Sandbox.NetworkMode),
 		NativeMode:           sandbox.NativeMode(request.Sandbox.NativeMode),
 	}
-	updated, err := s.core.Agents().UpdateSecurity(ctx, id, enabled, policy)
+	updated, err := s.deps.Agents.UpdateSecurity(ctx, id, enabled, policy)
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent Security 失败: %w", err)
 	}
@@ -761,22 +661,8 @@ func (s *AgentService) SelectSandboxDirectory(currentPath string) (string, error
 func (s *AgentService) DeleteAgent(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-	releaseTasks := s.core.Tasks().SuspendAgent(id)
-	defer releaseTasks()
-
-	deletedSessions, err := s.core.Runtime().DeleteAgent(ctx, id, func(deleteCtx context.Context) error {
-		return s.core.Agents().Delete(deleteCtx, id)
-	})
-	if err != nil {
+	if err := s.deps.Lifecycle.DeleteAgent(ctx, id); err != nil {
 		return fmt.Errorf("删除 Agent 失败: %w", err)
-	}
-	if err := s.core.Sessions().PurgeAgentMetadata(ctx, id); err != nil {
-		return fmt.Errorf("清理 Agent 会话元数据失败: %w", err)
-	}
-	if s.core.Permissions() != nil {
-		for _, sessionID := range deletedSessions {
-			s.core.Permissions().ClearSessionRules(sessionID)
-		}
 	}
 	return nil
 }
@@ -811,34 +697,19 @@ func selectDirectory(title, currentPath string) (string, error) {
 	return strings.TrimSpace(path), nil
 }
 
-func (s *AgentService) toDTO(
-	value agents.AgentInfo,
-) (
-	AgentDTO,
-	error,
-) {
-	displayPath :=
-		value.Agent.WorkspacePath
+func (s *AgentService) toDTO(value agents.AgentInfo) (AgentDTO, error) {
+	displayPath := value.Agent.WorkspacePath
 
 	if value.Agent.WorkspaceMode ==
 		workspace.ModeManaged {
 
-		path, err :=
-			s.core.Workspaces().
-				ManagedPath(
-					value.Agent.ID,
-				)
+		path, err := s.deps.Workspaces.ManagedPath(value.Agent.ID)
 
 		if err != nil {
-			return AgentDTO{},
-				fmt.Errorf(
-					"计算 Agent Managed Workspace 路径失败: %w",
-					err,
-				)
+			return AgentDTO{}, fmt.Errorf("计算 Agent Managed Workspace 路径失败: %w", err)
 		}
 
-		displayPath =
-			path
+		displayPath = path
 	}
 
 	return AgentDTO{
@@ -866,38 +737,24 @@ func (s *AgentService) toDTO(
 		Sandbox:                sandboxPolicyDTO(value.Agent.Sandbox),
 		SandboxStatus:          s.GetSandboxStatus(),
 
-		WorkspaceMode: string(
-			value.Agent.WorkspaceMode,
-		),
+		WorkspaceMode: string(value.Agent.WorkspaceMode),
 
 		WorkspacePath: value.Agent.WorkspacePath,
 
 		WorkspaceDisplayPath: displayPath,
 
-		CreatedAt: value.Agent.CreatedAt.
-			UTC().
-			Format(
-				time.RFC3339Nano,
-			),
+		CreatedAt: value.Agent.CreatedAt.UTC().Format(time.RFC3339Nano),
 
-		UpdatedAt: value.Agent.UpdatedAt.
-			UTC().
-			Format(
-				time.RFC3339Nano,
-			),
+		UpdatedAt: value.Agent.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}, nil
 }
 
 func modelRolesFromDTO(value AgentModelRolesDTO) agents.ModelRoles {
-	return agents.ModelRoles{
-		UtilityModelID: value.UtilityModelID,
-	}
+	return agents.ModelRoles{UtilityModelID: value.UtilityModelID}
 }
 
 func modelRolesDTO(value agents.ModelRoles) AgentModelRolesDTO {
-	return AgentModelRolesDTO{
-		UtilityModelID: value.UtilityModelID,
-	}
+	return AgentModelRolesDTO{UtilityModelID: value.UtilityModelID}
 }
 
 func sandboxPolicyFromDTO(value SandboxPolicyDTO) sandbox.AgentPolicy {
@@ -918,7 +775,7 @@ func sandboxPolicyDTO(value sandbox.AgentPolicy) SandboxPolicyDTO {
 
 func (s *AgentService) validateBuiltinToolNames(values []string) error {
 	known := make(map[string]struct{})
-	for _, descriptor := range s.core.Tools().List() {
+	for _, descriptor := range s.deps.Tools.List() {
 		if descriptor.MCPOrigin == nil {
 			known[descriptor.Name] = struct{}{}
 		}

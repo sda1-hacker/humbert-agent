@@ -6,13 +6,12 @@ import (
 	"sync"
 	"time"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
 const RuntimeEventName = "humbert:runtime:event"
@@ -22,15 +21,12 @@ const RuntimeEventName = "humbert:runtime:event"
 // Wails binding generator 能够识别直接 RegisterEvent 调用，
 // 并为事件数据生成对应类型信息。
 func init() {
-	application.RegisterEvent[agentruntime.Event](
-		RuntimeEventName,
-	)
+	application.RegisterEvent[agentruntime.Event](RuntimeEventName)
 }
 
 // StartTurnRequest 是 Vue 发起聊天请求时的 DTO。
 type StartTurnRequest struct {
-	SessionID string `json:"sessionID"`
-
+	SessionID          string              `json:"sessionID"`
 	Content            string              `json:"content"`
 	Attachments        []AttachmentRequest `json:"attachments,omitempty"`
 	RetryUserMessageID string              `json:"retryUserMessageID,omitempty"`
@@ -76,17 +72,13 @@ type ResolveApprovalRequest struct {
 //	  ↓
 //	Vue Events.On()
 type ChatService struct {
-	core *coreapp.Application
-
-	mu sync.Mutex
-
+	deps        ChatDependencies
+	mu          sync.Mutex
 	unsubscribe func()
 }
 
 // NewChatService 创建 ChatService。
-func NewChatService(core *coreapp.Application) *ChatService {
-	return &ChatService{core: core}
-}
+func NewChatService(deps ChatDependencies) *ChatService { return &ChatService{deps: deps} }
 
 // ServiceName 返回 Wails Service 名称。
 func (s *ChatService) ServiceName() string {
@@ -95,10 +87,10 @@ func (s *ChatService) ServiceName() string {
 
 // ServiceStartup 建立 Runtime EventBus → Wails Event Bridge。
 func (s *ChatService) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
-	unsubscribe, err := s.core.Events().Subscribe(agentruntime.TopicEvent, func(ctx context.Context, payload any) {
+	unsubscribe, err := s.deps.Events.Subscribe(agentruntime.TopicEvent, func(ctx context.Context, payload any) {
 		event, ok := payload.(agentruntime.Event)
 		if !ok {
-			s.core.Logger().Warn(ctx, "收到非法 Runtime Event payload", "payload_type", fmt.Sprintf("%T", payload))
+			s.deps.Logger.Warn(ctx, "收到非法 Runtime Event payload", "payload_type", fmt.Sprintf("%T", payload))
 			return
 		}
 		if app := application.Get(); app != nil {
@@ -111,7 +103,7 @@ func (s *ChatService) ServiceStartup(ctx context.Context, _ application.ServiceO
 	s.mu.Lock()
 	s.unsubscribe = unsubscribe
 	s.mu.Unlock()
-	s.core.Logger().Info(ctx, "ChatService Runtime Event Bridge 已启动")
+	s.deps.Logger.Info(ctx, "ChatService Runtime Event Bridge 已启动")
 	return nil
 }
 
@@ -134,7 +126,7 @@ func (s *ChatService) ServiceShutdown() error {
 func (s *ChatService) StartTurn(request StartTurnRequest) (agentruntime.StartTurnResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.contextOperationTimeout())
 	defer cancel()
-	result, err := s.core.Runtime().StartTurn(ctx, agentruntime.StartTurnInput{
+	result, err := s.deps.Runtime.StartTurn(ctx, agentruntime.StartTurnInput{
 		SessionID:          request.SessionID,
 		Input:              sessions.UserInput{Text: request.Content, Attachments: attachmentInputs(request.Attachments)},
 		RetryUserMessageID: request.RetryUserMessageID,
@@ -158,7 +150,7 @@ func (s *ChatService) ContextStatus(sessionID string) (contextengine.Usage, erro
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	usage, err := s.core.Runtime().ContextStatus(ctx, sessionID)
+	usage, err := s.deps.Runtime.ContextStatus(ctx, sessionID)
 	if err != nil {
 		return contextengine.Usage{}, fmt.Errorf("读取 Context 使用情况失败: %w", err)
 	}
@@ -173,7 +165,7 @@ func (s *ChatService) ContextOverview(sessionID string) (agentruntime.ContextOve
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	overview, err := s.core.Runtime().ContextOverview(ctx, sessionID)
+	overview, err := s.deps.Runtime.ContextOverview(ctx, sessionID)
 	if err != nil {
 		return agentruntime.ContextOverview{}, fmt.Errorf("读取 Runtime Context Overview 失败: %w", err)
 	}
@@ -183,13 +175,11 @@ func (s *ChatService) ContextOverview(sessionID string) (agentruntime.ContextOve
 // CompactContext 执行用户主动压缩。
 //
 // 运行中的会话由 Runtime reservation 拒绝，摘要提交与普通聊天共享一致性边界。
-func (s *ChatService) CompactContext(
-	sessionID string,
-) (agentruntime.ManualCompactionResult, error) {
+func (s *ChatService) CompactContext(sessionID string) (agentruntime.ManualCompactionResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.contextOperationTimeout())
 	defer cancel()
 
-	result, err := s.core.Runtime().ManualCompact(ctx, sessionID)
+	result, err := s.deps.Runtime.ManualCompact(ctx, sessionID)
 	if err != nil {
 		return agentruntime.ManualCompactionResult{}, fmt.Errorf("手动压缩 Context 失败: %w", err)
 	}
@@ -201,13 +191,11 @@ func (s *ChatService) CompactContext(
 // 该 Wails 调用只等待 Permission Rule（如果选择了 Session/Agent 授权）提交完成，不等待
 // Tool 或后续模型回复。真实执行结果继续通过 humbert:runtime:event 返回，因此前端按钮不会
 // 被长时间模型调用阻塞。
-func (s *ChatService) ResolveApproval(
-	request ResolveApprovalRequest,
-) (agentruntime.ResolveApprovalResult, error) {
+func (s *ChatService) ResolveApproval(request ResolveApprovalRequest) (agentruntime.ResolveApprovalResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	result, err := s.core.Runtime().ResolveApproval(ctx, agentruntime.ResolveApprovalInput{
+	result, err := s.deps.Runtime.ResolveApproval(ctx, agentruntime.ResolveApprovalInput{
 		ApprovalID: request.ApprovalID,
 		Decision:   request.Decision,
 	})
@@ -226,7 +214,7 @@ func attachmentInputs(values []AttachmentRequest) []sessions.AttachmentInput {
 }
 
 func (s *ChatService) contextOperationTimeout() time.Duration {
-	configured := time.Duration(s.core.Config().Runtime.Context.OperationTimeoutMS) * time.Millisecond
+	configured := time.Duration(s.deps.Config.Runtime.Context.OperationTimeoutMS) * time.Millisecond
 	if configured <= 0 {
 		configured = 2 * time.Minute
 	}
@@ -237,7 +225,7 @@ func (s *ChatService) contextOperationTimeout() time.Duration {
 
 // CancelTurn 请求取消指定 Turn。
 func (s *ChatService) CancelTurn(requestID string) error {
-	if err := s.core.Runtime().CancelTurn(requestID); err != nil {
+	if err := s.deps.Runtime.CancelTurn(requestID); err != nil {
 		return fmt.Errorf("取消 Agent Turn 失败: %w", err)
 	}
 	return nil

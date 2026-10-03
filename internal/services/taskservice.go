@@ -8,10 +8,9 @@ import (
 	"sync"
 	"time"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
-	"github.com/sda1-hacker/humbert-agent/internal/tasks"
-
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"github.com/sda1-hacker/humbert-agent/internal/tasks"
 )
 
 const TaskEventName = "humbert:task:event"
@@ -51,15 +50,14 @@ type TaskDTO struct {
 
 	// ConversationMode / PersistentSessionID 让桌面端明确展示任务的会话策略。
 	// PersistentSessionID 只用于状态展示，不要求前端直接操作 Session 生命周期。
-	ConversationMode    string `json:"conversationMode"`
-	PersistentSessionID string `json:"persistentSessionID,omitempty"`
-
-	Status    string          `json:"status"`
-	Schedule  TaskScheduleDTO `json:"schedule"`
-	Limits    TaskLimitsDTO   `json:"limits"`
-	NextRunAt string          `json:"nextRunAt,omitempty"`
-	CreatedAt string          `json:"createdAt"`
-	UpdatedAt string          `json:"updatedAt"`
+	ConversationMode    string          `json:"conversationMode"`
+	PersistentSessionID string          `json:"persistentSessionID,omitempty"`
+	Status              string          `json:"status"`
+	Schedule            TaskScheduleDTO `json:"schedule"`
+	Limits              TaskLimitsDTO   `json:"limits"`
+	NextRunAt           string          `json:"nextRunAt,omitempty"`
+	CreatedAt           string          `json:"createdAt"`
+	UpdatedAt           string          `json:"updatedAt"`
 }
 
 type TaskApprovalDTO struct {
@@ -116,16 +114,16 @@ type TaskStatusRequest struct {
 }
 
 type TaskService struct {
-	core        *coreapp.Application
+	deps        TaskDependencies
 	mu          sync.Mutex
 	unsubscribe func()
 }
 
-func NewTaskService(core *coreapp.Application) *TaskService { return &TaskService{core: core} }
-func (s *TaskService) ServiceName() string                  { return "TaskService" }
+func NewTaskService(deps TaskDependencies) *TaskService { return &TaskService{deps: deps} }
+func (s *TaskService) ServiceName() string              { return "TaskService" }
 
 func (s *TaskService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	unsubscribe, err := s.core.Events().Subscribe(tasks.TopicEvent, func(ctx context.Context, payload any) {
+	unsubscribe, err := s.deps.Events.Subscribe(tasks.TopicEvent, func(ctx context.Context, payload any) {
 		event, ok := payload.(tasks.Event)
 		if !ok {
 			return
@@ -159,7 +157,7 @@ func (s *TaskService) ServiceShutdown() error {
 func (s *TaskService) List() ([]TaskDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	values, err := s.core.Tasks().List(ctx)
+	values, err := s.deps.Tasks.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("读取任务列表失败: %w", err)
 	}
@@ -173,7 +171,7 @@ func (s *TaskService) List() ([]TaskDTO, error) {
 func (s *TaskService) Runs(taskID string) ([]TaskRunDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	values, err := s.core.Tasks().Runs(ctx, taskID)
+	values, err := s.deps.Tasks.Runs(ctx, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("读取任务运行历史失败: %w", err)
 	}
@@ -186,7 +184,7 @@ func (s *TaskService) Runs(taskID string) ([]TaskRunDTO, error) {
 		if value.SessionID != "" {
 			available, known := sessionAvailability[value.SessionID]
 			if !known {
-				_, sessionErr := s.core.Sessions().Get(ctx, value.SessionID)
+				_, sessionErr := s.deps.Sessions.Get(ctx, value.SessionID)
 				available = sessionErr == nil
 				sessionAvailability[value.SessionID] = available
 			}
@@ -204,7 +202,7 @@ func (s *TaskService) Create(request SaveTaskRequest) (TaskDTO, error) {
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.core.Tasks().Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
+	value, err := s.deps.Tasks.Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("创建任务失败: %w", err)
 	}
@@ -218,7 +216,7 @@ func (s *TaskService) Update(id string, request SaveTaskRequest) (TaskDTO, error
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.core.Tasks().Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
+	value, err := s.deps.Tasks.Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("更新任务失败: %w", err)
 	}
@@ -229,7 +227,7 @@ func (s *TaskService) Update(id string, request SaveTaskRequest) (TaskDTO, error
 func (s *TaskService) SetStatus(id string, request TaskStatusRequest) (TaskDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.core.Tasks().SetStatus(ctx, id, tasks.TaskStatus(request.Status))
+	value, err := s.deps.Tasks.SetStatus(ctx, id, tasks.TaskStatus(request.Status))
 	if err != nil {
 		return TaskDTO{}, fmt.Errorf("切换任务状态失败: %w", err)
 	}
@@ -239,7 +237,7 @@ func (s *TaskService) SetStatus(id string, request TaskStatusRequest) (TaskDTO, 
 func (s *TaskService) Archive(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := s.core.Tasks().Archive(ctx, id); err != nil {
+	if _, err := s.deps.Tasks.Archive(ctx, id); err != nil {
 		return fmt.Errorf("归档任务失败: %w", err)
 	}
 	return nil
@@ -248,7 +246,7 @@ func (s *TaskService) Archive(id string) error {
 func (s *TaskService) Delete(id string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	deletedSessionIDs, err := s.core.Tasks().Delete(ctx, id)
+	deletedSessionIDs, err := s.deps.Tasks.Delete(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("删除任务失败: %w", err)
 	}
@@ -259,7 +257,7 @@ func (s *TaskService) Delete(id string) ([]string, error) {
 func (s *TaskService) DeleteRun(id string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	deletedSessionIDs, err := s.core.Tasks().DeleteRun(ctx, id)
+	deletedSessionIDs, err := s.deps.Tasks.DeleteRun(ctx, id)
 	if err != nil {
 		return nil, fmt.Errorf("删除运行记录失败: %w", err)
 	}
@@ -270,7 +268,7 @@ func (s *TaskService) DeleteRun(id string) ([]string, error) {
 func (s *TaskService) ClearRuns(taskID string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	deletedSessionIDs, err := s.core.Tasks().ClearRuns(ctx, taskID)
+	deletedSessionIDs, err := s.deps.Tasks.ClearRuns(ctx, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("清空运行历史失败: %w", err)
 	}
@@ -281,12 +279,12 @@ func (s *TaskService) ClearRuns(taskID string) ([]string, error) {
 // clearSessionRules 只清理后端已经真正删除的 Session。连续任务删除单条运行记录或
 // 清空运行历史时，共享 Session 仍然存在，因此不能顺手撤销它的会话级权限。
 func (s *TaskService) clearSessionRules(sessionIDs []string) {
-	if s.core.Permissions() == nil {
+	if s.deps.Permissions == nil {
 		return
 	}
 	for _, sessionID := range sessionIDs {
 		if strings.TrimSpace(sessionID) != "" {
-			s.core.Permissions().ClearSessionRules(sessionID)
+			s.deps.Permissions.ClearSessionRules(sessionID)
 		}
 	}
 }
@@ -294,7 +292,7 @@ func (s *TaskService) clearSessionRules(sessionIDs []string) {
 func (s *TaskService) RunNow(id string) (TaskRunDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	value, err := s.core.Tasks().RunNow(ctx, id)
+	value, err := s.deps.Tasks.RunNow(ctx, id)
 	if err != nil {
 		return TaskRunDTO{}, fmt.Errorf("启动任务失败: %w", err)
 	}
@@ -304,7 +302,7 @@ func (s *TaskService) RunNow(id string) (TaskRunDTO, error) {
 func (s *TaskService) CancelRun(id string) (TaskRunDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.core.Tasks().CancelRun(ctx, id)
+	value, err := s.deps.Tasks.CancelRun(ctx, id)
 	if err != nil {
 		return TaskRunDTO{}, fmt.Errorf("取消任务运行失败: %w", err)
 	}

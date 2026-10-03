@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/cloudwego/eino/schema"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
@@ -18,35 +16,24 @@ import (
 
 // SessionDTO 是返回给 Vue 的 Session。
 type SessionDTO struct {
-	ID string `json:"id"`
-
-	AgentID string `json:"agentID"`
-
-	Title    string `json:"title"`
-	Archived bool   `json:"archived"`
-
+	ID        string `json:"id"`
+	AgentID   string `json:"agentID"`
+	Title     string `json:"title"`
+	Archived  bool   `json:"archived"`
 	CreatedAt string `json:"createdAt"`
-
 	UpdatedAt string `json:"updatedAt"`
 }
 
 // MessageDTO 是聊天界面的唯一只读协议，由持久化消息投影得到，不写回历史。
 type MessageDTO struct {
-	MessageNo int64 `json:"messageNo"`
-
-	ID string `json:"id"`
-
-	SessionID string `json:"sessionID"`
-
-	Role string `json:"role"`
-
-	Content string `json:"content"`
-
-	Metadata MessageMetadataDTO `json:"metadata"`
-
-	Attachments []AttachmentDTO `json:"attachments,omitempty"`
-
-	CreatedAt string `json:"createdAt"`
+	MessageNo   int64              `json:"messageNo"`
+	ID          string             `json:"id"`
+	SessionID   string             `json:"sessionID"`
+	Role        string             `json:"role"`
+	Content     string             `json:"content"`
+	Metadata    MessageMetadataDTO `json:"metadata"`
+	Attachments []AttachmentDTO    `json:"attachments,omitempty"`
+	CreatedAt   string             `json:"createdAt"`
 }
 
 // MessageMetadataDTO 显式约束 UI 需要的字段，避免各入口自行拼接无类型 metadata。
@@ -66,11 +53,9 @@ type MessageMetadataDTO struct {
 
 // MessagePageDTO 是聊天界面的游标分页结果。
 type MessagePageDTO struct {
-	Messages []MessageDTO `json:"messages"`
-
-	HasMore bool `json:"hasMore"`
-
-	NextBeforeID string `json:"nextBeforeID"`
+	Messages     []MessageDTO `json:"messages"`
+	HasMore      bool         `json:"hasMore"`
+	NextBeforeID string       `json:"nextBeforeID"`
 }
 
 // AttachmentDTO 是 UserMessage 附件的安全元数据；二进制通过 ReadAttachment 按需读取。
@@ -90,8 +75,7 @@ type AttachmentContentDTO struct {
 
 // SessionService 是 Session Domain 的 Wails Adapter。
 type SessionService struct {
-	core   *coreapp.Application
-	search *searchindex.Controller
+	deps SessionDependencies
 }
 
 type SessionSearchDTO struct {
@@ -101,32 +85,14 @@ type SessionSearchDTO struct {
 }
 
 // NewSessionService 创建 SessionService。
-func NewSessionService(core *coreapp.Application) *SessionService {
-	return &SessionService{core: core, search: searchindex.NewController(filepath.Join(core.Config().Paths.CacheDir, "conversation-search.sqlite"))}
-}
-
-func (s *SessionService) ServiceShutdown() error { return s.search.Close() }
+func NewSessionService(deps SessionDependencies) *SessionService { return &SessionService{deps: deps} }
 
 // Search 先读可丢弃的 SQLite 投影；过期检查在后台执行。前端按 updating 轮询，
 // 因此首轮建索引不会把一次搜索请求挂起到两分钟。
 func (s *SessionService) Search(query string) (SessionSearchDTO, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return SessionSearchDTO{Results: []searchindex.Result{}}, nil
-	}
-	if len([]rune(query)) > 200 {
-		return SessionSearchDTO{}, fmt.Errorf("搜索词不能超过 200 字")
-	}
-	index, status, release, err := s.search.Acquire("sessions", func(ctx context.Context, index *searchindex.Index) error {
-		return searchindex.RefreshSessions(ctx, index, s.core.Agents(), s.core.Sessions())
-	})
-	if err != nil {
-		return SessionSearchDTO{}, err
-	}
-	defer release()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	results, err := index.Search(ctx, query, 50)
+	results, status, err := s.deps.Search.SearchSessions(ctx, query)
 	if err != nil {
 		return SessionSearchDTO{}, err
 	}
@@ -138,7 +104,7 @@ func (s *SessionService) List(agentID string) ([]SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	values, err := s.core.Sessions().List(ctx, agentID)
+	values, err := s.deps.Sessions.List(ctx, agentID)
 	if err != nil {
 		return nil, fmt.Errorf("读取 Session 列表失败: %w", err)
 	}
@@ -155,10 +121,7 @@ func (s *SessionService) Create(agentID string, title string) (SessionDTO, error
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err := s.core.Sessions().Create(ctx, sessions.CreateSessionInput{
-		AgentID: agentID,
-		Title:   title,
-	})
+	value, err := s.deps.Sessions.Create(ctx, sessions.CreateSessionInput{AgentID: agentID, Title: title})
 	if err != nil {
 		return SessionDTO{}, fmt.Errorf("创建 Session 失败: %w", err)
 	}
@@ -170,7 +133,7 @@ func (s *SessionService) Rename(id string, title string) (SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err := s.core.Sessions().Rename(ctx, id, title)
+	value, err := s.deps.Sessions.Rename(ctx, id, title)
 	if err != nil {
 		return SessionDTO{}, fmt.Errorf("修改 Session 失败: %w", err)
 	}
@@ -180,7 +143,7 @@ func (s *SessionService) Rename(id string, title string) (SessionDTO, error) {
 func (s *SessionService) SetArchived(id string, archived bool) (SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.core.Sessions().SetArchived(ctx, id, archived)
+	value, err := s.deps.Sessions.SetArchived(ctx, id, archived)
 	if err != nil {
 		return SessionDTO{}, fmt.Errorf("更新会话归档状态失败: %w", err)
 	}
@@ -191,18 +154,8 @@ func (s *SessionService) SetArchived(id string, archived bool) (SessionDTO, erro
 func (s *SessionService) Delete(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	// 删除普通对话时这里只会移除 Session；如果 TaskRun 引用了它，Task Manager 会在
-	// 同一个调度临界区内同时删除全部对应运行历史并解除连续任务引用。
-	if _, err := s.core.Tasks().DeleteConversation(ctx, id); err != nil {
+	if err := s.deps.Lifecycle.DeleteSession(ctx, id); err != nil {
 		return fmt.Errorf("删除 Session 失败: %w", err)
-	}
-
-	// Session Scope Rule 只属于当前进程中的临时授权。Session 删除后立即释放对应规则，
-	// 防止长时间运行的桌面进程积累已经不可达的授权状态。Session ID 使用 UUID 不会复用，
-	// 但主动清理仍能保持清晰生命周期。
-	if s.core.Permissions() != nil {
-		s.core.Permissions().ClearSessionRules(id)
 	}
 	return nil
 }
@@ -215,7 +168,7 @@ func (s *SessionService) Messages(sessionID string, limit int) ([]MessageDTO, er
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	values, err := s.core.Sessions().Messages(ctx, sessionID, limit)
+	values, err := s.deps.Sessions.Messages(ctx, sessionID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("读取 Session Message 失败: %w", err)
 	}
@@ -236,7 +189,7 @@ func (s *SessionService) MessagePage(sessionID string, beforeEntryID string, lim
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	page, err := s.core.Sessions().MessagePage(ctx, sessionID, beforeEntryID, limit)
+	page, err := s.deps.Sessions.MessagePage(ctx, sessionID, beforeEntryID, limit)
 	if err != nil {
 		return MessagePageDTO{}, fmt.Errorf("分页读取 Session Message 失败: %w", err)
 	}
@@ -249,11 +202,7 @@ func (s *SessionService) MessagePage(sessionID string, beforeEntryID string, lim
 		}
 		result = append(result, dto)
 	}
-	return MessagePageDTO{
-		Messages:     result,
-		HasMore:      page.HasMore,
-		NextBeforeID: page.NextBeforeID,
-	}, nil
+	return MessagePageDTO{Messages: result, HasMore: page.HasMore, NextBeforeID: page.NextBeforeID}, nil
 }
 
 // MessageWindow locates a search hit through the transcript location index and
@@ -261,7 +210,7 @@ func (s *SessionService) MessagePage(sessionID string, beforeEntryID string, lim
 func (s *SessionService) MessageWindow(sessionID, entryID string) (MessagePageDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	entries, err := s.core.Sessions().ReadActiveBranchRange(ctx, sessionID, entryID, 80, 80)
+	entries, err := s.deps.Sessions.ReadActiveBranchRange(ctx, sessionID, entryID, 80, 80)
 	if err != nil {
 		return MessagePageDTO{}, err
 	}
@@ -289,7 +238,7 @@ func (s *SessionService) MessageWindow(sessionID, entryID string) (MessagePageDT
 		return MessagePageDTO{}, fmt.Errorf("目标消息不存在")
 	}
 	beforeID := messages[0].ID
-	older, err := s.core.Sessions().MessagePage(ctx, sessionID, beforeID, 1)
+	older, err := s.deps.Sessions.MessagePage(ctx, sessionID, beforeID, 1)
 	if err != nil {
 		return MessagePageDTO{}, err
 	}
@@ -300,7 +249,7 @@ func (s *SessionService) MessageWindow(sessionID, entryID string) (MessagePageDT
 func (s *SessionService) ReadAttachment(sessionID string, attachmentID string) (AttachmentContentDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	data, err := s.core.Sessions().ReadAttachment(ctx, sessionID, attachmentID)
+	data, err := s.deps.Sessions.ReadAttachment(ctx, sessionID, attachmentID)
 	if err != nil {
 		return AttachmentContentDTO{}, fmt.Errorf("读取附件失败: %w", err)
 	}

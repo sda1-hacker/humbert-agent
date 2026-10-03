@@ -10,11 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sda1-hacker/humbert-agent/internal/agents"
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
-	"github.com/sda1-hacker/humbert-agent/internal/skills"
-
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"github.com/sda1-hacker/humbert-agent/internal/agents"
+	"github.com/sda1-hacker/humbert-agent/internal/skills"
 )
 
 const (
@@ -27,8 +26,7 @@ const (
 // 它既用于 State.Agents 驱动“先选 Agent，再开关 Skill”，也用于 SkillDTO.UsedByAgents 展示
 // 当前启用情况。真正关系仍只存在 Agent Profile.enabled_skills；删除时后端会重新扫描。
 type SkillAgentDTO struct {
-	ID string `json:"id"`
-
+	ID   string `json:"id"`
 	Name string `json:"name"`
 
 	// EnabledSkills 是该 Agent Profile 当前保存的 canonical Skill 名称副本。
@@ -41,11 +39,9 @@ type SkillAgentDTO struct {
 // Path 始终是已经过 skills.Manager 校验的 `/` 分隔相对路径；Text=false 的文件只展示在树中，
 // 不允许通过 ReadSkillFile 把二进制内容送入 WebView。
 type SkillFileDTO struct {
-	Path string `json:"path"`
-
-	SizeBytes int64 `json:"sizeBytes"`
-
-	Text bool `json:"text"`
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"sizeBytes"`
+	Text      bool   `json:"text"`
 }
 
 // SkillSourceDTO 是详情页可展示的来源投影。
@@ -53,57 +49,37 @@ type SkillFileDTO struct {
 // DisplayURL 会去掉 query/fragment，避免 Direct ZIP 的短期签名参数进入 WebView；真正的完整
 // OriginalURL 只保存在 0600 的 Humbert 来源文件中，并由 Go Update/Reinstall 内部使用。
 type SkillSourceDTO struct {
-	Known bool `json:"known"`
-
-	Kind string `json:"kind,omitempty"`
-
-	Provider string `json:"provider,omitempty"`
-
-	DisplayURL string `json:"displayUrl,omitempty"`
-
-	LocalDirectory string `json:"localDirectory,omitempty"`
-
-	SkillPath string `json:"skillPath,omitempty"`
-
-	Repository string `json:"repository,omitempty"`
-
-	Ref string `json:"ref,omitempty"`
-
-	InstalledAt string `json:"installedAt,omitempty"`
-
-	UpdatedAt string `json:"updatedAt,omitempty"`
-
+	Known            bool   `json:"known"`
+	Kind             string `json:"kind,omitempty"`
+	Provider         string `json:"provider,omitempty"`
+	DisplayURL       string `json:"displayUrl,omitempty"`
+	LocalDirectory   string `json:"localDirectory,omitempty"`
+	SkillPath        string `json:"skillPath,omitempty"`
+	Repository       string `json:"repository,omitempty"`
+	Ref              string `json:"ref,omitempty"`
+	InstalledAt      string `json:"installedAt,omitempty"`
+	UpdatedAt        string `json:"updatedAt,omitempty"`
 	RecordedIdentity string `json:"recordedIdentity,omitempty"`
-
-	Drifted bool `json:"drifted"`
+	Drifted          bool   `json:"drifted"`
 }
 
 // SkillUpdateCheckDTO 是用户显式点击“检查更新”后的结果。
 type SkillUpdateCheckDTO struct {
-	Name string `json:"name"`
-
-	CurrentIdentity string `json:"currentIdentity"`
-
+	Name              string `json:"name"`
+	CurrentIdentity   string `json:"currentIdentity"`
 	CandidateIdentity string `json:"candidateIdentity"`
-
-	UpdateAvailable bool `json:"updateAvailable"`
-
-	SourceDrifted bool `json:"sourceDrifted"`
-
-	CheckedAt string `json:"checkedAt"`
+	UpdateAvailable   bool   `json:"updateAvailable"`
+	SourceDrifted     bool   `json:"sourceDrifted"`
+	CheckedAt         string `json:"checkedAt"`
 }
 
 // SkillUpdateResultDTO 是 Update/Reinstall 的提交结果。
 type SkillUpdateResultDTO struct {
-	Name string `json:"name"`
-
-	Identity string `json:"identity"`
-
-	PreviousIdentity string `json:"previousIdentity"`
-
-	Changed bool `json:"changed"`
-
-	Source SkillSourceDTO `json:"source"`
+	Name             string         `json:"name"`
+	Identity         string         `json:"identity"`
+	PreviousIdentity string         `json:"previousIdentity"`
+	Changed          bool           `json:"changed"`
+	Source           SkillSourceDTO `json:"source"`
 }
 
 // SkillDiagnosticDTO 是前端展示的兼容诊断。
@@ -157,56 +133,34 @@ type SkillDiscoveryDTO struct {
 // State 不再长期把 SKILL.md/脚本正文放进 WebView；详情页只加载文件树，具体文本文件仍在用户
 // 点击时通过 ReadSkillFile 单独读取。
 type SkillDetailDTO struct {
-	Name string `json:"name"`
-
-	Alias string `json:"alias,omitempty"`
-
-	Description string `json:"description"`
-
-	SpecStatus string `json:"specStatus"`
-
-	SpecMessage string `json:"specMessage,omitempty"`
-
-	License string `json:"license,omitempty"`
-
-	Compatibility string `json:"compatibility,omitempty"`
-
-	Metadata map[string]string `json:"metadata,omitempty"`
-
-	AllowedTools string `json:"allowedTools,omitempty"`
-
-	RuntimeStatus string `json:"runtimeStatus"`
-
-	RuntimeMessage string `json:"runtimeMessage,omitempty"`
-
-	Diagnostics []SkillDiagnosticDTO `json:"diagnostics,omitempty"`
-
+	Name           string                  `json:"name"`
+	Alias          string                  `json:"alias,omitempty"`
+	Description    string                  `json:"description"`
+	SpecStatus     string                  `json:"specStatus"`
+	SpecMessage    string                  `json:"specMessage,omitempty"`
+	License        string                  `json:"license,omitempty"`
+	Compatibility  string                  `json:"compatibility,omitempty"`
+	Metadata       map[string]string       `json:"metadata,omitempty"`
+	AllowedTools   string                  `json:"allowedTools,omitempty"`
+	RuntimeStatus  string                  `json:"runtimeStatus"`
+	RuntimeMessage string                  `json:"runtimeMessage,omitempty"`
+	Diagnostics    []SkillDiagnosticDTO    `json:"diagnostics,omitempty"`
 	ScriptRuntimes []SkillScriptRuntimeDTO `json:"scriptRuntimes,omitempty"`
-
-	HasAssets bool `json:"hasAssets"`
-
-	RootDir string `json:"rootDir"`
-
-	Identity string `json:"identity"`
-
-	FileCount int `json:"fileCount"`
-
-	SizeBytes int64 `json:"sizeBytes"`
-
-	UpdatedAt string `json:"updatedAt"`
-
-	Source SkillSourceDTO `json:"source"`
-
-	Files []SkillFileDTO `json:"files"`
+	HasAssets      bool                    `json:"hasAssets"`
+	RootDir        string                  `json:"rootDir"`
+	Identity       string                  `json:"identity"`
+	FileCount      int                     `json:"fileCount"`
+	SizeBytes      int64                   `json:"sizeBytes"`
+	UpdatedAt      string                  `json:"updatedAt"`
+	Source         SkillSourceDTO          `json:"source"`
+	Files          []SkillFileDTO          `json:"files"`
 }
 
 // SkillFileContentDTO 是详情页一次文本预览的返回值。
 type SkillFileContentDTO struct {
-	Path string `json:"path"`
-
-	SizeBytes int64 `json:"sizeBytes"`
-
-	Content string `json:"content"`
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"sizeBytes"`
+	Content   string `json:"content"`
 }
 
 // SkillDTO 是设置页与 Agent Skill Selector 使用的安全 Skill 元数据。
@@ -217,56 +171,33 @@ type SkillDTO struct {
 	Name string `json:"name"`
 
 	// Alias 是 Humbert 用户自己的本地展示名称。它不参与 Skill 身份、Agent 引用或 Runtime。
-	Alias string `json:"alias,omitempty"`
-
-	Description string `json:"description"`
-
-	SpecStatus string `json:"specStatus"`
-
-	SpecMessage string `json:"specMessage,omitempty"`
-
-	License string `json:"license,omitempty"`
-
-	Compatibility string `json:"compatibility,omitempty"`
-
-	Metadata map[string]string `json:"metadata,omitempty"`
-
-	AllowedTools string `json:"allowedTools,omitempty"`
-
-	RuntimeStatus string `json:"runtimeStatus"`
-
-	RuntimeMessage string `json:"runtimeMessage,omitempty"`
-
-	Diagnostics []SkillDiagnosticDTO `json:"diagnostics,omitempty"`
-
+	Alias          string                  `json:"alias,omitempty"`
+	Description    string                  `json:"description"`
+	SpecStatus     string                  `json:"specStatus"`
+	SpecMessage    string                  `json:"specMessage,omitempty"`
+	License        string                  `json:"license,omitempty"`
+	Compatibility  string                  `json:"compatibility,omitempty"`
+	Metadata       map[string]string       `json:"metadata,omitempty"`
+	AllowedTools   string                  `json:"allowedTools,omitempty"`
+	RuntimeStatus  string                  `json:"runtimeStatus"`
+	RuntimeMessage string                  `json:"runtimeMessage,omitempty"`
+	Diagnostics    []SkillDiagnosticDTO    `json:"diagnostics,omitempty"`
 	ScriptRuntimes []SkillScriptRuntimeDTO `json:"scriptRuntimes,omitempty"`
-
-	DirectoryName string `json:"directoryName"`
-
-	RootDir string `json:"rootDir"`
-
-	Identity string `json:"identity"`
-
-	Valid bool `json:"valid"`
-
-	Error string `json:"error,omitempty"`
-
-	FileCount int `json:"fileCount"`
-
-	SizeBytes int64 `json:"sizeBytes"`
-
-	HasReferences bool `json:"hasReferences"`
-
-	HasScripts bool `json:"hasScripts"`
-
-	HasAssets bool `json:"hasAssets"`
-
-	UpdatedAt string `json:"updatedAt"`
+	DirectoryName  string                  `json:"directoryName"`
+	RootDir        string                  `json:"rootDir"`
+	Identity       string                  `json:"identity"`
+	Valid          bool                    `json:"valid"`
+	Error          string                  `json:"error,omitempty"`
+	FileCount      int                     `json:"fileCount"`
+	SizeBytes      int64                   `json:"sizeBytes"`
+	HasReferences  bool                    `json:"hasReferences"`
+	HasScripts     bool                    `json:"hasScripts"`
+	HasAssets      bool                    `json:"hasAssets"`
+	UpdatedAt      string                  `json:"updatedAt"`
 
 	// Source 是 Humbert 记录的安装来源投影。Invalid Skill 也会携带它，
 	// 这样详情页可以直接提供“从来源修复”，而不要求 Package 当前可解析。
-	Source SkillSourceDTO `json:"source"`
-
+	Source       SkillSourceDTO  `json:"source"`
 	UsedByAgents []SkillAgentDTO `json:"usedByAgents"`
 }
 
@@ -276,15 +207,13 @@ type SkillStateDTO struct {
 
 	// SourceError 只表示来源元数据不可用，不应让整个 Catalog 失效。Skill 安装、启停和删除
 	// 仍然可以继续；更新/修复来源需要用户先处理该警告。
-	SourceError string `json:"sourceError,omitempty"`
-
+	SourceError     string   `json:"sourceError,omitempty"`
 	SourceResolvers []string `json:"sourceResolvers"`
 
 	// Agents 是 Skills 设置页顶部可选择的 Agent 列表，并携带 enabled_skills 只读投影。
 	// 开关操作最终仍然只修改 Agent.config.json，不创建第二份 Skill 关系存储。
 	Agents []SkillAgentDTO `json:"agents"`
-
-	Skills []SkillDTO `json:"skills"`
+	Skills []SkillDTO      `json:"skills"`
 }
 
 // SkillService 是本地 Skill Package 的 Wails Desktop Adapter。
@@ -292,13 +221,11 @@ type SkillStateDTO struct {
 // 路径选择器属于桌面适配层；真正的目录安全校验、复制、哈希和 Runtime Snapshot 都由
 // skills.Manager 完成。文件详情也只通过 Manager 的受控只读接口按需读取。
 type SkillService struct {
-	core *coreapp.Application
+	deps SkillDependencies
 }
 
 // NewSkillService 创建 Skill Desktop Service。
-func NewSkillService(core *coreapp.Application) *SkillService {
-	return &SkillService{core: core}
-}
+func NewSkillService(deps SkillDependencies) *SkillService { return &SkillService{deps: deps} }
 
 // ServiceName 返回 Wails Service Name。
 func (s *SkillService) ServiceName() string {
@@ -313,20 +240,20 @@ func (s *SkillService) State() (SkillStateDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
 
-	values, err := s.core.Skills().List(ctx)
+	values, err := s.deps.Skills.List(ctx)
 	if err != nil {
 		return SkillStateDTO{}, fmt.Errorf("读取 Skill 列表失败: %w", err)
 	}
-	agentValues, err := s.core.Agents().List(ctx)
+	agentValues, err := s.deps.Agents.List(ctx)
 	if err != nil {
 		return SkillStateDTO{}, fmt.Errorf("读取 Agent Skill 配置失败: %w", err)
 	}
 	usage := buildSkillUsageMap(agentValues)
-	aliases, err := s.core.Skills().Aliases(ctx)
+	aliases, err := s.deps.Skills.Aliases(ctx)
 	if err != nil {
 		return SkillStateDTO{}, fmt.Errorf("读取 Skill 展示 Alias 失败: %w", err)
 	}
-	sources, sourceErr := s.core.Skills().Sources(ctx)
+	sources, sourceErr := s.deps.Skills.Sources(ctx)
 	sourceError := ""
 	if sourceErr != nil {
 		// 来源元数据属于更新/修复控制面，不应该因为它损坏就让整个 Skills Catalog 空白。
@@ -348,9 +275,9 @@ func (s *SkillService) State() (SkillStateDTO, error) {
 		result = append(result, dto)
 	}
 	return SkillStateDTO{
-		RootDir:         s.core.Skills().RootDir(),
+		RootDir:         s.deps.Skills.RootDir(),
 		SourceError:     sourceError,
-		SourceResolvers: s.core.Skills().RemoteSourceResolvers(),
+		SourceResolvers: s.deps.Skills.RemoteSourceResolvers(),
 		Agents:          projectSkillAgents(agentValues),
 		Skills:          result,
 	}, nil
@@ -366,15 +293,15 @@ func (s *SkillService) SkillDetail(name string) (SkillDetailDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
 
-	pkg, err := s.core.Skills().Get(ctx, name)
+	pkg, err := s.deps.Skills.Get(ctx, name)
 	if err != nil {
 		return SkillDetailDTO{}, fmt.Errorf("读取 Skill 详情失败: %w", err)
 	}
-	aliases, err := s.core.Skills().Aliases(ctx)
+	aliases, err := s.deps.Skills.Aliases(ctx)
 	if err != nil {
 		return SkillDetailDTO{}, fmt.Errorf("读取 Skill 展示 Alias 失败: %w", err)
 	}
-	source, sourceKnown, err := s.core.Skills().Source(ctx, pkg.Info.Name)
+	source, sourceKnown, err := s.deps.Skills.Source(ctx, pkg.Info.Name)
 	if err != nil {
 		return SkillDetailDTO{}, fmt.Errorf("读取 Skill 安装来源失败: %w", err)
 	}
@@ -419,15 +346,11 @@ func (s *SkillService) ReadSkillFile(name string, relativePath string) (SkillFil
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
 
-	content, info, err := s.core.Skills().ReadTextFile(ctx, name, relativePath)
+	content, info, err := s.deps.Skills.ReadTextFile(ctx, name, relativePath)
 	if err != nil {
 		return SkillFileContentDTO{}, fmt.Errorf("读取 Skill 文件失败: %w", err)
 	}
-	return SkillFileContentDTO{
-		Path:      info.Path,
-		SizeBytes: info.SizeBytes,
-		Content:   content,
-	}, nil
+	return SkillFileContentDTO{Path: info.Path, SizeBytes: info.SizeBytes, Content: content}, nil
 }
 
 // SelectSkillDirectory 打开原生目录选择器，选择一个包含 SKILL.md 的本地目录。
@@ -443,10 +366,7 @@ func (s *SkillService) SelectSkillDirectory(currentPath string) (string, error) 
 		return "", errors.New("Wails Application 尚未初始化")
 	}
 
-	dialog := app.Dialog.
-		OpenFile().
-		SetTitle("选择 Skill 或包含多个 Skills 的目录").
-		CanChooseDirectories(true).
+	dialog := app.Dialog.OpenFile().SetTitle("选择 Skill 或包含多个 Skills 的目录").CanChooseDirectories(true).
 		CanChooseFiles(false).
 		CanCreateDirectories(false)
 
@@ -471,7 +391,7 @@ func (s *SkillService) InstallSkill(sourceDirectory string) (SkillDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceInstallTimeout)
 	defer cancel()
 
-	value, err := s.core.Skills().InstallFromDirectory(ctx, sourceDirectory)
+	value, err := s.deps.Skills.InstallFromDirectory(ctx, sourceDirectory)
 	if err != nil {
 		return SkillDTO{}, fmt.Errorf("安装本地 Skill 失败: %w", err)
 	}
@@ -490,7 +410,7 @@ func (s *SkillService) InstallSkillFromURL(sourceURL string, skillPath string) (
 	}
 
 	timeout := skillServiceInstallTimeout
-	if cfg := s.core.Config(); cfg != nil {
+	if cfg := s.deps.Config; cfg != nil {
 		configured := time.Duration(cfg.Runtime.Skills.DownloadTimeoutMS) * time.Millisecond
 		if configured > timeout {
 			timeout = configured + 5*time.Second
@@ -499,7 +419,7 @@ func (s *SkillService) InstallSkillFromURL(sourceURL string, skillPath string) (
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	value, err := s.core.Skills().InstallFromURL(ctx, sourceURL, skillPath)
+	value, err := s.deps.Skills.InstallFromURL(ctx, sourceURL, skillPath)
 	if err != nil {
 		return SkillDTO{}, fmt.Errorf("安装远程 Skill 失败: %w", err)
 	}
@@ -513,7 +433,7 @@ func (s *SkillService) DiscoverSkillSource(sourceURL string, skillPath string) (
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
-	result, err := s.core.Skills().DiscoverFromURL(ctx, sourceURL, skillPath)
+	result, err := s.deps.Skills.DiscoverFromURL(ctx, sourceURL, skillPath)
 	if err != nil {
 		return SkillDiscoveryDTO{}, fmt.Errorf("扫描远程 Skill Source 失败: %w", err)
 	}
@@ -527,7 +447,7 @@ func (s *SkillService) DiscoverLocalSkillSource(sourceDirectory string) (SkillDi
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
-	result, err := s.core.Skills().DiscoverFromDirectory(ctx, sourceDirectory)
+	result, err := s.deps.Skills.DiscoverFromDirectory(ctx, sourceDirectory)
 	if err != nil {
 		return SkillDiscoveryDTO{}, fmt.Errorf("扫描本地 Skill Source 失败: %w", err)
 	}
@@ -541,7 +461,7 @@ func (s *SkillService) InstallDiscoveredSkillsFromURL(sourceURL string, paths []
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
-	values, err := s.core.Skills().InstallDiscoveredFromURL(ctx, sourceURL, paths)
+	values, err := s.deps.Skills.InstallDiscoveredFromURL(ctx, sourceURL, paths)
 	if err != nil {
 		return nil, fmt.Errorf("批量安装远程 Skills 失败: %w", err)
 	}
@@ -559,7 +479,7 @@ func (s *SkillService) InstallDiscoveredSkillsFromDirectory(sourceDirectory stri
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceInstallTimeout)
 	defer cancel()
-	values, err := s.core.Skills().InstallDiscoveredFromDirectory(ctx, sourceDirectory, paths)
+	values, err := s.deps.Skills.InstallDiscoveredFromDirectory(ctx, sourceDirectory, paths)
 	if err != nil {
 		return nil, fmt.Errorf("批量安装本地 Skills 失败: %w", err)
 	}
@@ -578,7 +498,7 @@ func (s *SkillService) CheckSkillUpdate(name string) (SkillUpdateCheckDTO, error
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.core.Skills().CheckUpdate(ctx, name)
+	result, err := s.deps.Skills.CheckUpdate(ctx, name)
 	if err != nil {
 		return SkillUpdateCheckDTO{}, fmt.Errorf("检查 Skill 更新失败: %w", err)
 	}
@@ -600,7 +520,7 @@ func (s *SkillService) UpdateSkill(name string) (SkillUpdateResultDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.core.Skills().Update(ctx, name)
+	result, err := s.deps.Skills.Update(ctx, name)
 	if err != nil {
 		return SkillUpdateResultDTO{}, fmt.Errorf("更新 Skill 失败: %w", err)
 	}
@@ -615,7 +535,7 @@ func (s *SkillService) ReinstallSkill(name string) (SkillUpdateResultDTO, error)
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.core.Skills().Reinstall(ctx, name)
+	result, err := s.deps.Skills.Reinstall(ctx, name)
 	if err != nil {
 		return SkillUpdateResultDTO{}, fmt.Errorf("重新安装 Skill 失败: %w", err)
 	}
@@ -623,18 +543,14 @@ func (s *SkillService) ReinstallSkill(name string) (SkillUpdateResultDTO, error)
 }
 
 // ReinstallSkillFromURL 为旧版本/手工安装的 Skill 建立远程来源，或显式更换来源。
-func (s *SkillService) ReinstallSkillFromURL(
-	name string,
-	sourceURL string,
-	skillPath string,
-) (SkillUpdateResultDTO, error) {
+func (s *SkillService) ReinstallSkillFromURL(name string, sourceURL string, skillPath string) (SkillUpdateResultDTO, error) {
 	if err := s.validate(); err != nil {
 		return SkillUpdateResultDTO{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.core.Skills().ReinstallFromURL(ctx, name, sourceURL, skillPath)
+	result, err := s.deps.Skills.ReinstallFromURL(ctx, name, sourceURL, skillPath)
 	if err != nil {
 		return SkillUpdateResultDTO{}, fmt.Errorf("从 URL 重新安装 Skill 失败: %w", err)
 	}
@@ -642,17 +558,14 @@ func (s *SkillService) ReinstallSkillFromURL(
 }
 
 // ReinstallSkillFromDirectory 为旧版本/手工安装的 Skill 建立本地来源，或显式更换来源。
-func (s *SkillService) ReinstallSkillFromDirectory(
-	name string,
-	sourceDirectory string,
-) (SkillUpdateResultDTO, error) {
+func (s *SkillService) ReinstallSkillFromDirectory(name string, sourceDirectory string) (SkillUpdateResultDTO, error) {
 	if err := s.validate(); err != nil {
 		return SkillUpdateResultDTO{}, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.core.Skills().ReinstallFromDirectory(ctx, name, sourceDirectory)
+	result, err := s.deps.Skills.ReinstallFromDirectory(ctx, name, sourceDirectory)
 	if err != nil {
 		return SkillUpdateResultDTO{}, fmt.Errorf("从本地目录重新安装 Skill 失败: %w", err)
 	}
@@ -669,7 +582,7 @@ func (s *SkillService) SetSkillAlias(name string, alias string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
 
-	if err := s.core.Skills().SetAlias(ctx, name, alias); err != nil {
+	if err := s.deps.Skills.SetAlias(ctx, name, alias); err != nil {
 		return fmt.Errorf("保存 Skill Alias 失败: %w", err)
 	}
 	return nil
@@ -686,7 +599,7 @@ func (s *SkillService) EnableSkillForAgent(skillName string, agentID string) err
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
 
-	if _, err := s.core.Agents().EnableSkillForAgent(ctx, agentID, skillName); err != nil {
+	if _, err := s.deps.Agents.EnableSkillForAgent(ctx, agentID, skillName); err != nil {
 		return fmt.Errorf("启用 Agent Skill 失败: %w", err)
 	}
 	return nil
@@ -702,7 +615,7 @@ func (s *SkillService) DisableSkillForAgent(skillName string, agentID string) er
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
 
-	if _, err := s.core.Agents().DisableSkillForAgent(ctx, agentID, skillName); err != nil {
+	if _, err := s.deps.Agents.DisableSkillForAgent(ctx, agentID, skillName); err != nil {
 		return fmt.Errorf("禁用 Agent Skill 失败: %w", err)
 	}
 	return nil
@@ -718,27 +631,7 @@ func (s *SkillService) DeleteSkill(name string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
-
-	users, err := s.core.Agents().AgentsUsingSkill(ctx, name)
-	if err != nil {
-		return fmt.Errorf("检查 Skill Agent 引用失败: %w", err)
-	}
-	if len(users) > 0 {
-		names := make([]string, 0, len(users))
-		for _, user := range users {
-			names = append(names, user.Agent.Name)
-		}
-		return fmt.Errorf(
-			"Skill %q 仍被 %d 个 Agent 使用（%s），请先在“技能”页面切换对应 Agent 并关闭该 Skill",
-			name,
-			len(users),
-			strings.Join(names, "、"),
-		)
-	}
-	if err := s.core.Skills().Remove(ctx, name); err != nil {
-		return fmt.Errorf("删除 Skill 失败: %w", err)
-	}
-	return nil
+	return s.deps.Maintenance.Remove(ctx, name)
 }
 
 func projectSkillAgents(values []agents.AgentInfo) []SkillAgentDTO {
@@ -782,10 +675,7 @@ func buildSkillUsageMap(values []agents.AgentInfo) map[string][]SkillAgentDTO {
 				continue
 			}
 			seen[skillName] = struct{}{}
-			result[skillName] = append(result[skillName], SkillAgentDTO{
-				ID:   agentID,
-				Name: agentName,
-			})
+			result[skillName] = append(result[skillName], SkillAgentDTO{ID: agentID, Name: agentName})
 		}
 	}
 
@@ -805,11 +695,7 @@ func buildSkillUsageMap(values []agents.AgentInfo) map[string][]SkillAgentDTO {
 func projectSkillFiles(values []skills.FileInfo) []SkillFileDTO {
 	result := make([]SkillFileDTO, 0, len(values))
 	for _, value := range values {
-		result = append(result, SkillFileDTO{
-			Path:      value.Path,
-			SizeBytes: value.SizeBytes,
-			Text:      value.Text,
-		})
+		result = append(result, SkillFileDTO{Path: value.Path, SizeBytes: value.SizeBytes, Text: value.Text})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Path < result[j].Path
@@ -819,8 +705,8 @@ func projectSkillFiles(values []skills.FileInfo) []SkillFileDTO {
 
 func (s *SkillService) skillMutationTimeout() time.Duration {
 	timeout := skillServiceInstallTimeout
-	if s != nil && s.core != nil {
-		if cfg := s.core.Config(); cfg != nil {
+	if s != nil {
+		if cfg := s.deps.Config; cfg != nil {
 			configured := time.Duration(cfg.Runtime.Skills.DownloadTimeoutMS) * time.Millisecond
 			if configured > timeout {
 				timeout = configured + 5*time.Second
@@ -899,7 +785,7 @@ func projectSkillUpdateResult(value skills.UpdateResult) SkillUpdateResultDTO {
 }
 
 func (s *SkillService) validate() error {
-	if s == nil || s.core == nil || s.core.Skills() == nil || s.core.Agents() == nil {
+	if s == nil || s.deps.Skills == nil || s.deps.Agents == nil {
 		return errors.New("SkillService 尚未正确初始化")
 	}
 	return nil
@@ -954,11 +840,7 @@ func projectSkillDiagnostics(values []skills.Diagnostic) []SkillDiagnosticDTO {
 	}
 	result := make([]SkillDiagnosticDTO, 0, len(values))
 	for _, value := range values {
-		result = append(result, SkillDiagnosticDTO{
-			Code:    value.Code,
-			Level:   string(value.Level),
-			Message: value.Message,
-		})
+		result = append(result, SkillDiagnosticDTO{Code: value.Code, Level: string(value.Level), Message: value.Message})
 	}
 	return result
 }

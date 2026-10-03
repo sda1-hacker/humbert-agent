@@ -27,11 +27,10 @@ type Authorizer interface {
 // 持久化 Agent Rule 来自 Store；Session Rule 仅存在内存，并在 Session/应用生命周期内
 // 生效。Engine 不负责 Eino Interrupt/Resume，那属于 Approval + Runtime 层。
 type Engine struct {
-	configMu sync.RWMutex
-	config   config.PermissionConfig
-	store    *Store
-	logger   *logging.Logger
-
+	configMu     sync.RWMutex
+	config       config.PermissionConfig
+	store        *Store
+	logger       *logging.Logger
 	mu           sync.RWMutex
 	sessionRules map[string][]Rule
 }
@@ -48,12 +47,7 @@ func NewEngine(cfg config.PermissionConfig, store *Store, logger *logging.Logger
 	if logger == nil {
 		return nil, errors.New("PermissionEngine Logger 不能为空")
 	}
-	return &Engine{
-		config:       cfg,
-		store:        store,
-		logger:       logger,
-		sessionRules: make(map[string][]Rule),
-	}, nil
+	return &Engine{config: cfg, store: store, logger: logger, sessionRules: make(map[string][]Rule)}, nil
 }
 
 // Evaluate 按“显式拒绝 → 审批模式 → Session Allow → Agent Allow → 常规操作识别”计算结论。
@@ -155,12 +149,7 @@ func (e *Engine) Evaluate(ctx context.Context, request Request) (Decision, error
 		action = ActionAsk
 		reason = "对话安排任务要求逐次确认"
 	}
-	decision := Decision{
-		Action:       action,
-		Reason:       reason,
-		Identity:     request.Identity.Normalize(),
-		Presentation: presentation,
-	}
+	decision := Decision{Action: action, Reason: reason, Identity: request.Identity.Normalize(), Presentation: presentation}
 	if action == ActionAsk {
 		decision.ApprovalID = uuid.NewString()
 	}
@@ -301,12 +290,7 @@ func (e *Engine) DeletePersistentRule(ctx context.Context, ruleID string) error 
 	if err := e.store.Delete(ctx, ruleID); err != nil {
 		return err
 	}
-	e.logger.Info(
-		ctx,
-		"Permission 长期规则已删除",
-		"operation", "permission.rule.delete",
-		"rule_id", ruleID,
-	)
+	e.logger.Info(ctx, "Permission 长期规则已删除", "operation", "permission.rule.delete", "rule_id", ruleID)
 	return nil
 }
 
@@ -476,6 +460,8 @@ func capabilityLogicalTarget(identity CapabilityIdentity) string {
 		return string(identity.Kind) + "|" + identity.Tool + "|" + identity.SkillName + "|" + identity.Script
 	case CapabilityMCP:
 		return string(identity.Kind) + "|" + identity.Tool + "|" + identity.MCPServerID + "|" + identity.MCPTool
+	case CapabilityModule:
+		return string(identity.Kind) + "|" + identity.Tool + "|" + identity.ModuleID
 	default:
 		return string(identity.Kind) + "|" + identity.Tool
 	}

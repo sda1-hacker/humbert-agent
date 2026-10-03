@@ -3,14 +3,11 @@ package services
 import (
 	"context"
 	"fmt"
-	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
-	"path/filepath"
-	"strings"
 	"time"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
+	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 )
 
 const workspaceServiceTimeout = 15 * time.Second
@@ -71,8 +68,7 @@ type WorkspacePreviewDTO struct {
 // 所有查询都要求 AgentID，并由 Core 的 WorkspaceView Service 重新解析该 Agent 当前
 // Workspace；前端不能提交绝对 Workspace Root 来读取任意目录。
 type WorkspaceService struct {
-	core      *coreapp.Application
-	documents *searchindex.Controller
+	deps WorkspaceDependencies
 }
 
 type DocumentSearchDTO struct {
@@ -81,11 +77,9 @@ type DocumentSearchDTO struct {
 	Error    string                       `json:"error,omitempty"`
 }
 
-func NewWorkspaceService(core *coreapp.Application) *WorkspaceService {
-	return &WorkspaceService{core: core, documents: searchindex.NewController(filepath.Join(core.Config().Paths.CacheDir, "document-search.sqlite"))}
+func NewWorkspaceService(deps WorkspaceDependencies) *WorkspaceService {
+	return &WorkspaceService{deps: deps}
 }
-
-func (s *WorkspaceService) ServiceShutdown() error { return s.documents.Close() }
 
 func (s *WorkspaceService) ServiceName() string { return "WorkspaceService" }
 
@@ -93,7 +87,7 @@ func (s *WorkspaceService) ServiceName() string { return "WorkspaceService" }
 func (s *WorkspaceService) Overview(agentID string) (WorkspaceOverviewDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceServiceTimeout)
 	defer cancel()
-	value, err := s.core.WorkspaceView().Overview(ctx, agentID)
+	value, err := s.deps.WorkspaceView.Overview(ctx, agentID)
 	if err != nil {
 		return WorkspaceOverviewDTO{}, fmt.Errorf("读取工作区总览失败: %w", err)
 	}
@@ -104,7 +98,7 @@ func (s *WorkspaceService) Overview(agentID string) (WorkspaceOverviewDTO, error
 func (s *WorkspaceService) ListDirectory(agentID, path string) (WorkspaceDirectoryDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceServiceTimeout)
 	defer cancel()
-	value, err := s.core.WorkspaceView().ListDirectory(ctx, agentID, path)
+	value, err := s.deps.WorkspaceView.ListDirectory(ctx, agentID, path)
 	if err != nil {
 		return WorkspaceDirectoryDTO{}, fmt.Errorf("读取工作区目录失败: %w", err)
 	}
@@ -115,7 +109,7 @@ func (s *WorkspaceService) ListDirectory(agentID, path string) (WorkspaceDirecto
 func (s *WorkspaceService) PreviewFile(agentID, path string) (WorkspacePreviewDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceServiceTimeout)
 	defer cancel()
-	value, err := s.core.WorkspaceView().PreviewFile(ctx, agentID, path)
+	value, err := s.deps.WorkspaceView.PreviewFile(ctx, agentID, path)
 	if err != nil {
 		return WorkspacePreviewDTO{}, fmt.Errorf("预览工作区文件失败: %w", err)
 	}
@@ -124,31 +118,9 @@ func (s *WorkspaceService) PreviewFile(agentID, path string) (WorkspacePreviewDT
 
 // SearchDocuments 立即检索已提交索引，后台同步当前工作区文件。工作区位置每次重新解析。
 func (s *WorkspaceService) SearchDocuments(agentID, query string) (DocumentSearchDTO, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return DocumentSearchDTO{Results: []searchindex.DocumentResult{}}, nil
-	}
-	if len([]rune(query)) > 200 {
-		return DocumentSearchDTO{}, fmt.Errorf("搜索词不能超过 200 字")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	info, err := s.core.Agents().Get(ctx, agentID)
-	if err != nil {
-		return DocumentSearchDTO{}, err
-	}
-	resolved, err := s.core.Workspaces().Resolve(ctx, info.Agent.ID, info.Agent.WorkspaceMode, info.Agent.WorkspacePath)
-	if err != nil {
-		return DocumentSearchDTO{}, err
-	}
-	index, status, release, err := s.documents.Acquire(agentID+"\x00"+resolved.RootDir, func(ctx context.Context, index *searchindex.Index) error {
-		return searchindex.RefreshDocuments(ctx, index, s.core.Workspaces(), agentID, resolved)
-	})
-	if err != nil {
-		return DocumentSearchDTO{}, err
-	}
-	defer release()
-	results, err := index.SearchDocuments(ctx, agentID, resolved.RootDir, query, 50)
+	results, status, err := s.deps.Search.SearchDocuments(ctx, agentID, query)
 	if err != nil {
 		return DocumentSearchDTO{}, err
 	}

@@ -1,66 +1,47 @@
 package services
 
 import (
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
-
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 )
 
-// All 返回 Humbert Desktop 当前需要注册的全部 Wails Service。
-//
-// 所有 Service 注册集中在一个地方，可以避免 main.go 随着业务增加
-// 逐渐变成几十行 Service 初始化代码。
-func All(
-	core *coreapp.Application,
-) []application.Service {
-	return []application.Service{
-		application.NewService(
-			NewAppService(core),
-		),
-
-		application.NewService(
-			NewPreferenceService(core),
-		),
-
-		application.NewService(
-			NewModelService(core),
-		),
-
-		application.NewService(
-			NewAgentService(core),
-		),
-
-		application.NewService(
-			NewSessionService(core),
-		),
-
-		application.NewService(
-			NewPermissionService(core),
-		),
-
-		application.NewService(
-			NewSkillService(core),
-		),
-
-		application.NewService(
-			NewMCPService(core),
-		),
-
-		application.NewService(
-			NewChatService(core),
-		),
-
-		application.NewService(
-			NewTaskService(core),
-		),
-
-		application.NewService(
-			NewProactiveService(core),
-		),
-
-		// WorkspaceService 只暴露指定 Agent Workspace 的受控只读浏览与预览。
-		application.NewService(
-			NewWorkspaceService(core),
-		),
+// All 是唯一知道 Core 装配结果的桌面注册点；各 Service 仅接收自己的 Dependencies。
+// 新模块可在桌面装配处追加已构造的 Service，不必改动既有服务或公共业务规则。
+func All(core *coreapp.Application, additional ...application.Service) []application.Service {
+	services := []application.Service{
+		application.NewService(NewAgentService(AgentDependencies{
+			Agents: core.Agents(), Config: core.Config(), Lifecycle: core.Lifecycle(), Logger: core.Logger(),
+			Sandbox: core.Sandbox(), Tools: core.Tools(), Workspaces: core.Workspaces(),
+		})),
+		application.NewService(NewAppService(AppDependencies{Config: core.Config(), Logger: core.Logger(), Status: core.Status})),
+		application.NewService(NewChatService(ChatDependencies{
+			Config: core.Config(), Events: core.Events(), Logger: core.Logger(), Runtime: core.Runtime(),
+		})),
+		application.NewService(NewMCPService(MCPDependencies{
+			Agents: core.Agents(), Configuration: core.MCPConfiguration(), MCP: core.MCP(),
+		})),
+		application.NewService(NewModelService(ModelDependencies{Models: core.Models()})),
+		application.NewService(NewPermissionService(PermissionDependencies{
+			Agents: core.Agents(), Approvals: core.Approvals(), Config: core.Config(), Logger: core.Logger(),
+			MCP: core.MCP(), Permissions: core.Permissions(),
+		})),
+		application.NewService(NewPreferenceService(PreferenceDependencies{
+			Preferences: core.Preferences(), Sessions: core.Sessions(),
+		})),
+		application.NewService(NewProactiveService(ProactiveDependencies{
+			Agents: core.Agents(), Events: core.Events(), Notifications: core.Notifications(), Proactive: core.Proactive(),
+		})),
+		application.NewService(NewSessionService(SessionDependencies{
+			Lifecycle: core.Lifecycle(), Search: core.Search(), Sessions: core.Sessions(),
+		})),
+		application.NewService(NewSkillService(SkillDependencies{
+			Agents: core.Agents(), Config: core.Config(), Maintenance: core.Maintenance(), Skills: core.Skills(),
+		})),
+		application.NewService(NewTaskService(TaskDependencies{
+			Events: core.Events(), Permissions: core.Permissions(), Sessions: core.Sessions(), Tasks: core.Tasks(),
+		})),
+		application.NewService(NewWorkspaceService(WorkspaceDependencies{Search: core.Search(), WorkspaceView: core.WorkspaceView()})),
 	}
+	return append(services, additional...)
 }

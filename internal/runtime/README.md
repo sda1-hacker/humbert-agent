@@ -33,7 +33,12 @@ flowchart LR
 
 | 文件 | 关键函数 |
 | --- | --- |
-| `service.go` | `StartTurn`、`registerInterruptedRun`、`ResolveApproval`、`completeTurn`、`cleanupRun`。 |
+| `service.go` | `StartTurn`、Context 查询与手动压缩入口。 |
+| `operations.go` | Session reservation 与 Agent/会话删除门闩。 |
+| `approvals.go` | 审批等待、checkpoint 恢复与取消收敛。 |
+| `runs.go` / `events.go` | 执行清理、关闭、事件与安全投影。 |
+| `capabilities.go` / `extensions.go` | 主/子 Agent 共用能力装配及新增模块接入。 |
+| `eino_builder.go` | 共用 ChatModelAgent 构造和中间件顺序。 |
 | `resolver.go` | `resolveContextBase`、`ResolveTurn`、`MaintainAfterTurn`。 |
 | `executor.go` | `buildRunner`、`consumeEvents`、`persistAssistantMessage`、`persistCompletedTool`。 |
 | `types.go` | `Snapshot`、`ExecutionLimits`、`Event`、`RuntimeManifest`。 |
@@ -59,3 +64,9 @@ ResolveApproval: permission decision → Resume(checkpoint) → 同样三种出�
 中间件固定顺序为 Skill → Reduction → Summarization/硬预算。`MaintainAfterTurn` 仅校准实际 usage 并提交待定摘要，不发起第二次摘要模型调用。详见 [Context](../contextengine/README.md)。
 
 模型/工具次数与上下文窗口大小是两类限制。`model_accounting.go` 在真实模型调用入口统一统计主模型、摘要、视觉辅助和子 Agent；`limits.go` 原子预留次数，达到已报告 Token 阈值后停止后续调用。工具上下文携带共享预算，浏览器截图分析也通过 `TrackAuxiliaryModel` 接入。流式 Usage 按累计差值记账，Executor 不再重复计数。
+
+## 新模块能力
+
+`component.Provider` 只贡献 Agent 显式选择的 Eino 工具。Describe 用于本地预览和预算，Resolve 用于真实 Turn；两者返回相同工具名称及内容版本。模块工具与 Builtin/Skills/MCP 一起做名称冲突检查、Schema Token 估算和 Reduction，并复用统一 Permission Guard。
+
+子 Agent 使用自己的模块绑定，授权 Scope 仍继承父运行。宿主复制模块请求中的可变集合；Manifest 只公开模块 ID、版本和工具名称。Allow 精确绑定版本，Deny 绑定稳定模块与工具。实现或配置变化必须更新版本，当前 Turn 使用已经捕获的配置与连接，审批恢复不重新装配。

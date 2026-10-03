@@ -18,6 +18,7 @@ const (
 	CapabilityCommand     CapabilityKind = "command"
 	CapabilitySkillScript CapabilityKind = "skill_script"
 	CapabilityMCP         CapabilityKind = "mcp"
+	CapabilityModule      CapabilityKind = "module"
 )
 
 // CapabilityIdentity 是 Permission v2 的可复用授权身份。
@@ -28,26 +29,24 @@ const (
 // Deny Rule 会在创建时通过 DenyScope() 收敛为更稳定的限制身份，例如 run_command 只绑定
 // command 名称、MCP 只绑定 ServerID + Tool，从而保证环境变化不会意外放宽用户已经保存的拒绝。
 type CapabilityIdentity struct {
-	Version int            `json:"version,omitempty"`
-	Kind    CapabilityKind `json:"kind,omitempty"`
-
-	Tool string    `json:"tool,omitempty"`
-	Risk RiskLevel `json:"risk,omitempty"`
-
-	SandboxFingerprint string `json:"sandboxFingerprint,omitempty"`
-
-	Command    string `json:"command,omitempty"`
-	Executable string `json:"executable,omitempty"`
+	Version            int            `json:"version,omitempty"`
+	Kind               CapabilityKind `json:"kind,omitempty"`
+	Tool               string         `json:"tool,omitempty"`
+	Risk               RiskLevel      `json:"risk,omitempty"`
+	SandboxFingerprint string         `json:"sandboxFingerprint,omitempty"`
+	Command            string         `json:"command,omitempty"`
+	Executable         string         `json:"executable,omitempty"`
 	// InvocationFingerprint 绑定完整 argv、实际工作目录及超时，不保存可能含密钥的原始参数。
 	InvocationFingerprint string `json:"invocationFingerprint,omitempty"`
-
-	SkillName     string `json:"skillName,omitempty"`
-	SkillIdentity string `json:"skillIdentity,omitempty"`
-	Script        string `json:"script,omitempty"`
-
-	MCPServerID          string `json:"mcpServerId,omitempty"`
-	MCPServerFingerprint string `json:"mcpServerFingerprint,omitempty"`
-	MCPTool              string `json:"mcpTool,omitempty"`
+	SkillName             string `json:"skillName,omitempty"`
+	SkillIdentity         string `json:"skillIdentity,omitempty"`
+	Script                string `json:"script,omitempty"`
+	MCPServerID           string `json:"mcpServerId,omitempty"`
+	MCPServerFingerprint  string `json:"mcpServerFingerprint,omitempty"`
+	MCPTool               string `json:"mcpTool,omitempty"`
+	// 模块身份不含配置正文，Allow 绑定版本，Deny 只绑定稳定模块/工具。
+	ModuleID       string `json:"moduleId,omitempty"`
+	ModuleRevision string `json:"moduleRevision,omitempty"`
 }
 
 func (i CapabilityIdentity) Empty() bool {
@@ -57,7 +56,7 @@ func (i CapabilityIdentity) Empty() bool {
 		strings.TrimSpace(i.InvocationFingerprint) == "" &&
 		strings.TrimSpace(i.SkillIdentity) == "" && strings.TrimSpace(i.Script) == "" &&
 		strings.TrimSpace(i.MCPServerID) == "" && strings.TrimSpace(i.MCPServerFingerprint) == "" &&
-		strings.TrimSpace(i.MCPTool) == ""
+		strings.TrimSpace(i.MCPTool) == "" && strings.TrimSpace(i.ModuleID) == "" && strings.TrimSpace(i.ModuleRevision) == ""
 }
 
 // Normalize 返回用于比较和持久化的 canonical identity。
@@ -73,6 +72,8 @@ func (i CapabilityIdentity) Normalize() CapabilityIdentity {
 	i.MCPServerID = strings.TrimSpace(i.MCPServerID)
 	i.MCPServerFingerprint = strings.TrimSpace(i.MCPServerFingerprint)
 	i.MCPTool = strings.TrimSpace(i.MCPTool)
+	i.ModuleID = strings.TrimSpace(i.ModuleID)
+	i.ModuleRevision = strings.TrimSpace(i.ModuleRevision)
 	if runtime.GOOS == "windows" {
 		i.Command = strings.ToLower(i.Command)
 	}
@@ -96,7 +97,14 @@ func (i CapabilityIdentity) Validate() error {
 		return errors.New("Capability Identity SandboxFingerprint 不能为空")
 	}
 
+	if i.Kind != CapabilityModule && (i.ModuleID != "" || i.ModuleRevision != "") {
+		return errors.New("非模块授权包含模块身份")
+	}
 	switch i.Kind {
+	case CapabilityModule:
+		if i.ModuleID == "" || i.ModuleRevision == "" {
+			return errors.New("模块授权必须包含模块 ID 与冻结版本")
+		}
 	case CapabilityBuiltin:
 		if i.Command != "" || i.Executable != "" || i.SkillName != "" || i.MCPServerID != "" {
 			return errors.New("Builtin Capability Identity 包含不属于 Builtin 的字段")
@@ -132,17 +140,15 @@ func (i CapabilityIdentity) EqualExact(other CapabilityIdentity) bool {
 // executable path、Skill package identity、MCP fingerprint 等易变化字段。
 func (i CapabilityIdentity) DenyScope() CapabilityIdentity {
 	i = i.Normalize()
-	result := CapabilityIdentity{
-		Version: CapabilityIdentityVersion,
-		Kind:    i.Kind,
-		Tool:    i.Tool,
-	}
+	result := CapabilityIdentity{Version: CapabilityIdentityVersion, Kind: i.Kind, Tool: i.Tool}
 	switch i.Kind {
 	case CapabilityCommand:
 		result.Command = i.Command
 	case CapabilitySkillScript:
 		result.SkillName = i.SkillName
 		result.Script = i.Script
+	case CapabilityModule:
+		result.ModuleID = i.ModuleID
 	case CapabilityMCP:
 		result.MCPServerID = i.MCPServerID
 		result.MCPTool = i.MCPTool
@@ -170,6 +176,9 @@ func (i CapabilityIdentity) MatchesDeny(current CapabilityIdentity) bool {
 		return false
 	}
 	if i.MCPServerID != "" && i.MCPServerID != current.MCPServerID {
+		return false
+	}
+	if i.ModuleID != "" && i.ModuleID != current.ModuleID {
 		return false
 	}
 	if i.MCPTool != "" && i.MCPTool != current.MCPTool {

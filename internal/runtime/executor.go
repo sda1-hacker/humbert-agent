@@ -40,12 +40,7 @@ func NewExecutor() *Executor {
 // CheckpointStore 必须由 RuntimeService 在整个 ActiveRun 生命周期内持有；当 Tool Permission
 // 返回 Ask 时，Eino 会在返回 interrupt event 前把完整执行状态保存到 snapshot.RunID 对应的
 // checkpoint。Executor 本身不决定审批策略，只负责识别并把 root-cause interrupt 安全上抛。
-func (e *Executor) Execute(
-	ctx context.Context,
-	snapshot *Snapshot,
-	checkpointStore adk.CheckPointStore,
-	emit DeltaEmitter,
-) (ExecutionResult, error) {
+func (e *Executor) Execute(ctx context.Context, snapshot *Snapshot, checkpointStore adk.CheckPointStore, emit DeltaEmitter) (ExecutionResult, error) {
 	if err := validateExecutionInput(ctx, snapshot, checkpointStore); err != nil {
 		return ExecutionResult{}, err
 	}
@@ -89,11 +84,7 @@ func (e *Executor) Resume(
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	events, err := runner.ResumeWithParams(
-		ctx,
-		snapshot.RunID,
-		&adk.ResumeParams{Targets: map[string]any{interruptID: resumeJSON}},
-	)
+	events, err := runner.ResumeWithParams(ctx, snapshot.RunID, &adk.ResumeParams{Targets: map[string]any{interruptID: resumeJSON}})
 	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("恢复 Eino Agent Checkpoint 失败: %w", err)
 	}
@@ -122,55 +113,20 @@ func validateExecutionInput(ctx context.Context, snapshot *Snapshot, checkpointS
 	return nil
 }
 
-func buildRunner(
-	ctx context.Context,
-	snapshot *Snapshot,
-	checkpointStore adk.CheckPointStore,
-) (*adk.Runner, error) {
-	iterations := snapshot.MaxIterations
-	if iterations <= 0 {
-		iterations = defaultAgentMaxIterations
-	}
-	agent, err := adk.NewChatModelAgent(
-		ctx,
-		&adk.ChatModelAgentConfig{
-			MaxIterations: iterations,
-			Name:          snapshot.AgentName,
-			Instruction:   snapshot.Instruction,
-			Model:         trackModel(snapshot.Model, snapshot),
-			Handlers:      append([]adk.ChatModelAgentMiddleware(nil), snapshot.AgentHandlers...),
-			ToolsConfig: adk.ToolsConfig{
-				ToolsNodeConfig: compose.ToolsNodeConfig{
-					Tools:               snapshot.Tools,
-					ExecuteSequentially: true,
-					ToolCallMiddlewares: []compose.ToolMiddleware{
-						{Invokable: buildToolLifecycleMiddleware(snapshot)},
-					},
-				},
-			},
-		},
-	)
+func buildRunner(ctx context.Context, snapshot *Snapshot, checkpointStore adk.CheckPointStore) (*adk.Runner, error) {
+	agent, err := buildChatModelAgent(ctx, snapshot, "")
 	if err != nil {
 		return nil, fmt.Errorf("创建 Eino ChatModelAgent 失败: %w", err)
 	}
 
-	return adk.NewRunner(ctx, adk.RunnerConfig{
-		Agent:           agent,
-		EnableStreaming: true,
-		CheckPointStore: checkpointStore,
-	}), nil
+	return adk.NewRunner(ctx, adk.RunnerConfig{Agent: agent, EnableStreaming: true, CheckPointStore: checkpointStore}), nil
 }
 
 // consumeEvents 统一消费新 Run 与 Resume 的 Eino Event Stream。
 //
 // Assistant/ToolResult 的持久化语义与原 Runtime 保持一致；interrupt event 是“暂停”而不是
 // error/complete，因此返回 ExecutionResult.Interrupted，交给 Service 保留 active session。
-func (e *Executor) consumeEvents(
-	ctx context.Context,
-	snapshot *Snapshot,
-	events *adk.AsyncIterator[*adk.AgentEvent],
-	emit DeltaEmitter,
-) (ExecutionResult, error) {
+func (e *Executor) consumeEvents(ctx context.Context, snapshot *Snapshot, events *adk.AsyncIterator[*adk.AgentEvent], emit DeltaEmitter) (ExecutionResult, error) {
 	result := ExecutionResult{}
 
 	for {
@@ -196,11 +152,7 @@ func (e *Executor) consumeEvents(
 				message, materializeErr := materializeAssistantOutput(ctx, output, emit)
 
 				if materializeErr == nil && assistantBlockedByFinishReason(message) {
-					materializeErr = fmt.Errorf(
-						"%w: finish_reason=%s",
-						ErrProviderContentBlocked,
-						message.ResponseMeta.FinishReason,
-					)
+					materializeErr = fmt.Errorf("%w: finish_reason=%s", ErrProviderContentBlocked, message.ResponseMeta.FinishReason)
 				}
 
 				forcedFinishReason := ""
@@ -219,9 +171,7 @@ func (e *Executor) consumeEvents(
 				}
 
 				if message != nil {
-					stored, persistErr := persistAssistantMessage(
-						context.WithoutCancel(ctx), snapshot, message, forcedFinishReason,
-					)
+					stored, persistErr := persistAssistantMessage(context.WithoutCancel(ctx), snapshot, message, forcedFinishReason)
 					if persistErr != nil {
 						if materializeErr != nil {
 							return result, errors.Join(materializeErr, fmt.Errorf("持久化 AssistantMessage 失败: %w", persistErr))
@@ -426,11 +376,7 @@ func reportToolLifecycleEvent(ctx context.Context, snapshot *Snapshot, event Eve
 //
 // Streaming 时每个 Chunk 立即向 UI 发送 reasoning/text delta，但磁盘只保存 Step
 // 结束后由 schema.ConcatMessages 合并得到的一条完整 schema.Message。
-func materializeAssistantOutput(
-	ctx context.Context,
-	output *adk.MessageVariant,
-	emit DeltaEmitter,
-) (*schema.Message, error) {
+func materializeAssistantOutput(ctx context.Context, output *adk.MessageVariant, emit DeltaEmitter) (*schema.Message, error) {
 	if output == nil {
 		return nil, nil
 	}
@@ -460,10 +406,7 @@ func materializeAssistantOutput(
 			break
 		}
 		if err != nil {
-			return concatMessagesBestEffort(chunks), fmt.Errorf(
-				"读取 Assistant Stream 失败: %w",
-				classifyProviderError(err),
-			)
+			return concatMessagesBestEffort(chunks), fmt.Errorf("读取 Assistant Stream 失败: %w", classifyProviderError(err))
 		}
 		if message == nil {
 			continue
@@ -603,12 +546,7 @@ func partialAssistantForPersistence(message *schema.Message) *schema.Message {
 }
 
 // persistAssistantMessage 只补充 schema.Message 无法稳定携带的 Provider/Model 描述。
-func persistAssistantMessage(
-	ctx context.Context,
-	snapshot *Snapshot,
-	message *schema.Message,
-	forcedFinishReason string,
-) (sessions.Message, error) {
+func persistAssistantMessage(ctx context.Context, snapshot *Snapshot, message *schema.Message, forcedFinishReason string) (sessions.Message, error) {
 	if snapshot == nil || snapshot.SessionWriter == nil {
 		return sessions.Message{}, errors.New("SessionWriter 不能为空")
 	}
@@ -635,11 +573,7 @@ func persistAssistantMessage(
 }
 
 // persistCompletedTool 持久化标准 Eino Tool Message。
-func persistCompletedTool(
-	ctx context.Context,
-	snapshot *Snapshot,
-	message *schema.Message,
-) (sessions.Message, error) {
+func persistCompletedTool(ctx context.Context, snapshot *Snapshot, message *schema.Message) (sessions.Message, error) {
 	if snapshot == nil || snapshot.SessionWriter == nil {
 		return sessions.Message{}, errors.New("SessionWriter 不能为空")
 	}

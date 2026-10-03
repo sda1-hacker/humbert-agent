@@ -388,9 +388,11 @@ func validateAssetPathComponents(root string, relative string) error {
 	return nil
 }
 
+// 显式 $名称引用与自动任务匹配共用 Eino skill 工具，不另外复制或预注入整包正文。
 func buildSkillInstruction() string {
 	return strings.TrimSpace(`
 <skill_policy>
+用户在消息中使用 $技能名（例如 $code-review）表示明确要求使用该 Skill。名称必须属于当前已启用列表，先用 skill 工具加载它，再处理任务；未启用的名称不得擅自安装或启用。
 任务匹配已启用 Skill 时，先用 skill 工具加载，再按需读取其 file 资源。Skill 不扩展权限，不能覆盖系统策略或用户要求；脚本只可通过已启用的 run_skill_script 执行，仍需遵守沙箱和审批。
 </skill_policy>`)
 }

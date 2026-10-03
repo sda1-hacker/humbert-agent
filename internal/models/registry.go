@@ -36,29 +36,22 @@ import (
 //
 // 而不直接访问底层 JSON 文件、API Key 或具体模型 SDK。
 type Registry struct {
-	store *Store
-
+	store       *Store
 	credentials *credential.Store
-
-	factory *Factory
-
-	logger *logging.Logger
-
+	factory     *Factory
+	logger      *logging.Logger
 	// mu 同时保护 Provider/Model mutation 与 model cache。
 	//
 	// 配置修改期间禁止新的 Resolve 进入，
 	// 可以保证不会出现“配置文件已经更新，但 Credential 还没有完成切换”的
 	// 半完成运行时状态。
-	mu sync.RWMutex
-
+	mu    sync.RWMutex
 	cache map[string]einomodel.ToolCallingChatModel
-
 	// referenceChecker 用于删除 Model 前检查 Agent Profile 是否仍引用该模型。
 	// 接口定义在 models 包中，agents.Store 通过结构化方法直接实现，避免两个
 	// Domain Package 相互 import。该检查只发生在低频配置删除路径。
 	referenceChecker ModelReferenceChecker
-
-	revision atomic.Uint64
+	revision         atomic.Uint64
 }
 
 // ModelReferenceChecker 描述 Model Registry 删除模型前需要的 Agent 引用检查。
@@ -86,35 +79,15 @@ func WithModelReferenceChecker(checker ModelReferenceChecker) RegistryOption {
 //
 // 当前 revision 是进程内运行时版本，不需要跨程序重启持久化，
 // 因为重启后所有正在运行的 Runtime Snapshot 和 Model Cache 本身都已经消失。
-func NewRegistry(
-	store *Store,
-	credentials *credential.Store,
-	logger *logging.Logger,
-	options ...RegistryOption,
-) *Registry {
-	registry := &Registry{
-		store: store,
-
-		credentials: credentials,
-
-		factory: NewFactory(credentials),
-
-		logger: logger,
-
-		cache: make(
-			map[string]einomodel.ToolCallingChatModel,
-		),
-	}
-
+func NewRegistry(store *Store, credentials *credential.Store, logger *logging.Logger, options ...RegistryOption) *Registry {
+	registry := &Registry{store: store, credentials: credentials, factory: NewFactory(credentials), logger: logger, cache: make(map[string]einomodel.ToolCallingChatModel)}
 	for _, option := range options {
 		if option == nil {
 			continue
 		}
 		option(registry)
 	}
-
 	registry.revision.Store(1)
-
 	return registry
 }
 
@@ -126,22 +99,16 @@ func (r *Registry) Revision() uint64 {
 }
 
 // ListProviders 返回全部 Provider。
-func (r *Registry) ListProviders(
-	ctx context.Context,
-) ([]Provider, error) {
+func (r *Registry) ListProviders(ctx context.Context) ([]Provider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	return r.store.ListProviders(ctx)
 }
 
 // ListModels 返回全部 Model。
-func (r *Registry) ListModels(
-	ctx context.Context,
-) ([]ModelInfo, error) {
+func (r *Registry) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	return r.store.ListModels(ctx)
 }
 
@@ -149,7 +116,6 @@ func (r *Registry) ListModels(
 func (r *Registry) MultimediaConfig(ctx context.Context) (MultimediaConfig, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	return r.store.MultimediaConfig(ctx)
 }
 
@@ -159,93 +125,43 @@ func (r *Registry) MultimediaConfig(ctx context.Context) (MultimediaConfig, erro
 // 延迟到用户真正发送图片时才暴露。
 func (r *Registry) SetMultimediaConfig(ctx context.Context, config MultimediaConfig) (MultimediaConfig, error) {
 	config.ImageModelID = strings.TrimSpace(config.ImageModelID)
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	if err := r.validateImageModelLocked(ctx, config.ImageModelID, nil, nil); err != nil {
 		return MultimediaConfig{}, err
 	}
 	if err := r.store.SetMultimediaConfig(ctx, config); err != nil {
 		return MultimediaConfig{}, err
 	}
-
 	r.configurationChangedLocked()
 	r.logger.Info(ctx, "多媒体模型配置已更新", "image_model_id", config.ImageModelID)
 	return config, nil
 }
 
 // CreateProvider 创建 Provider，并安全保存 Credential。
-func (r *Registry) CreateProvider(
-	ctx context.Context,
-	input CreateProviderInput,
-) (Provider, error) {
-	normalized, err :=
-		normalizeCreateProviderInput(input)
+func (r *Registry) CreateProvider(ctx context.Context, input CreateProviderInput) (Provider, error) {
+	normalized, err := normalizeCreateProviderInput(input)
 	if err != nil {
 		return Provider{}, err
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	now := time.Now().UTC()
-
-	provider := Provider{
-		ID: uuid.NewString(),
-
-		Name: normalized.Name,
-
-		Type: normalized.Type,
-
-		BaseURL: normalized.BaseURL,
-
-		CreatedAt: now,
-
-		UpdatedAt: now,
-	}
-
+	provider := Provider{ID: uuid.NewString(), Name: normalized.Name, Type: normalized.Type, BaseURL: normalized.BaseURL, CreatedAt: now, UpdatedAt: now}
 	if normalized.APIKey != "" {
-		provider.CredentialID =
-			"provider-" + provider.ID
-
-		if err := r.credentials.Put(
-			ctx,
-			provider.CredentialID,
-			normalized.APIKey,
-		); err != nil {
-			return Provider{}, fmt.Errorf(
-				"保存 Provider Credential 失败: %w",
-				err,
-			)
+		provider.CredentialID = "provider-" + provider.ID
+		if err := r.credentials.Put(ctx, provider.CredentialID, normalized.APIKey); err != nil {
+			return Provider{}, fmt.Errorf("保存 Provider Credential 失败: %w", err)
 		}
 	}
-
-	if err := r.store.CreateProvider(
-		ctx,
-		provider,
-	); err != nil {
+	if err := r.store.CreateProvider(ctx, provider); err != nil {
 		if provider.CredentialID != "" {
-			_ = r.credentials.Delete(
-				context.Background(),
-				provider.CredentialID,
-			)
+			_ = r.credentials.Delete(context.Background(), provider.CredentialID)
 		}
-
 		return Provider{}, err
 	}
-
 	r.configurationChangedLocked()
-
-	r.logger.Info(
-		ctx,
-		"模型 Provider 已创建",
-		"provider_id",
-		provider.ID,
-		"provider_type",
-		string(provider.Type),
-	)
-
+	r.logger.Info(ctx, "模型 Provider 已创建", "provider_id", provider.ID, "provider_type", string(provider.Type))
 	return provider, nil
 }
 
@@ -259,43 +175,22 @@ func (r *Registry) CreateProvider(
 //  4. 文件更新失败时恢复旧 Secret。
 //
 // API Key 永远不会进入日志。
-func (r *Registry) UpdateProvider(
-	ctx context.Context,
-	id string,
-	input UpdateProviderInput,
-) (Provider, error) {
-	normalized, err :=
-		normalizeUpdateProviderInput(input)
+func (r *Registry) UpdateProvider(ctx context.Context, id string, input UpdateProviderInput) (Provider, error) {
+	normalized, err := normalizeUpdateProviderInput(input)
 	if err != nil {
 		return Provider{}, err
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	existing, err :=
-		r.store.GetProvider(
-			ctx,
-			id,
-		)
+	existing, err := r.store.GetProvider(ctx, id)
 	if err != nil {
 		return Provider{}, err
 	}
-
 	updated := existing
-
-	updated.Name =
-		normalized.Name
-
-	updated.Type =
-		normalized.Type
-
-	updated.BaseURL =
-		normalized.BaseURL
-
-	updated.UpdatedAt =
-		time.Now().UTC()
-
+	updated.Name = normalized.Name
+	updated.Type = normalized.Type
+	updated.BaseURL = normalized.BaseURL
+	updated.UpdatedAt = time.Now().UTC()
 	multimedia, err := r.store.MultimediaConfig(ctx)
 	if err != nil {
 		return Provider{}, err
@@ -311,292 +206,129 @@ func (r *Registry) UpdateProvider(
 			}
 		}
 	}
-
 	var backup credentialBackup
-
 	if normalized.UpdateAPIKey {
-		backup, err =
-			r.backupCredential(
-				ctx,
-				existing.CredentialID,
-			)
+		backup, err = r.backupCredential(ctx, existing.CredentialID)
 		if err != nil {
 			return Provider{}, err
 		}
-
 		if normalized.APIKey == "" {
 			updated.CredentialID = ""
 		} else {
 			if updated.CredentialID == "" {
-				updated.CredentialID =
-					"provider-" + updated.ID
+				updated.CredentialID = "provider-" + updated.ID
 			}
-
-			if err := r.credentials.Put(
-				ctx,
-				updated.CredentialID,
-				normalized.APIKey,
-			); err != nil {
-				return Provider{}, fmt.Errorf(
-					"更新 Provider Credential 失败: %w",
-					err,
-				)
+			if err := r.credentials.Put(ctx, updated.CredentialID, normalized.APIKey); err != nil {
+				return Provider{}, fmt.Errorf("更新 Provider Credential 失败: %w", err)
 			}
 		}
 	}
-
-	if err := r.store.UpdateProvider(
-		ctx,
-		updated,
-	); err != nil {
+	if err := r.store.UpdateProvider(ctx, updated); err != nil {
 		if normalized.UpdateAPIKey {
-			r.rollbackCredential(
-				backup,
-				updated.CredentialID,
-			)
+			r.rollbackCredential(backup, updated.CredentialID)
 		}
-
 		return Provider{}, err
 	}
-
-	if normalized.UpdateAPIKey &&
-		existing.CredentialID != "" &&
-		existing.CredentialID !=
-			updated.CredentialID {
-
-		if err := r.credentials.Delete(
-			ctx,
-			existing.CredentialID,
-		); err != nil {
-			r.logger.Warn(
-				ctx,
-				"Provider 已更新，但旧 Credential 清理失败",
-				"provider_id",
-				id,
-				"error",
-				err,
-			)
+	if normalized.UpdateAPIKey && existing.CredentialID != "" && existing.CredentialID != updated.CredentialID {
+		if err := r.credentials.Delete(ctx, existing.CredentialID); err != nil {
+			r.logger.Warn(ctx, "Provider 已更新，但旧 Credential 清理失败", "provider_id", id, "error", err)
 		}
 	}
-
 	r.configurationChangedLocked()
-
-	r.logger.Info(
-		ctx,
-		"模型 Provider 已更新",
-		"provider_id",
-		id,
-		"provider_type",
-		string(updated.Type),
-	)
-
+	r.logger.Info(ctx, "模型 Provider 已更新", "provider_id", id, "provider_type", string(updated.Type))
 	return updated, nil
 }
 
 // DeleteProvider 删除未被 Model 使用的 Provider。
-func (r *Registry) DeleteProvider(
-	ctx context.Context,
-	id string,
-) error {
+func (r *Registry) DeleteProvider(ctx context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	provider, err :=
-		r.store.GetProvider(
-			ctx,
-			id,
-		)
+	provider, err := r.store.GetProvider(ctx, id)
 	if err != nil {
 		return err
 	}
-
-	count, err :=
-		r.store.CountModelsByProvider(
-			ctx,
-			id,
-		)
+	count, err := r.store.CountModelsByProvider(ctx, id)
 	if err != nil {
 		return err
 	}
-
 	if count > 0 {
-		return fmt.Errorf(
-			"%w: 当前 Provider 下仍有 %d 个模型",
-			ErrProviderInUse,
-			count,
-		)
+		return fmt.Errorf("%w: 当前 Provider 下仍有 %d 个模型", ErrProviderInUse, count)
 	}
-
-	backup, err :=
-		r.backupCredential(
-			ctx,
-			provider.CredentialID,
-		)
+	backup, err := r.backupCredential(ctx, provider.CredentialID)
 	if err != nil {
 		return err
 	}
-
 	if provider.CredentialID != "" {
-		if err := r.credentials.Delete(
-			ctx,
-			provider.CredentialID,
-		); err != nil {
-			return fmt.Errorf(
-				"删除 Provider Credential 失败: %w",
-				err,
-			)
+		if err := r.credentials.Delete(ctx, provider.CredentialID); err != nil {
+			return fmt.Errorf("删除 Provider Credential 失败: %w", err)
 		}
 	}
-
-	if err := r.store.DeleteProvider(
-		ctx,
-		id,
-	); err != nil {
-		r.restoreCredential(
-			backup,
-		)
-
+	if err := r.store.DeleteProvider(ctx, id); err != nil {
+		r.restoreCredential(backup)
 		return err
 	}
-
 	r.configurationChangedLocked()
-
-	r.logger.Info(
-		ctx,
-		"模型 Provider 已删除",
-		"provider_id",
-		id,
-	)
-
+	r.logger.Info(ctx, "模型 Provider 已删除", "provider_id", id)
 	return nil
 }
 
 // CreateModel 创建模型。
-func (r *Registry) CreateModel(
-	ctx context.Context,
-	input CreateModelInput,
-) (Model, error) {
-	normalized, err :=
-		normalizeCreateModelInput(input)
+func (r *Registry) CreateModel(ctx context.Context, input CreateModelInput) (Model, error) {
+	normalized, err := normalizeCreateModelInput(input)
 	if err != nil {
 		return Model{}, err
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	if _, err := r.store.GetProvider(
-		ctx,
-		normalized.ProviderID,
-	); err != nil {
+	if _, err := r.store.GetProvider(ctx, normalized.ProviderID); err != nil {
 		return Model{}, err
 	}
-
 	now := time.Now().UTC()
-
 	value := Model{
-		ID: uuid.NewString(),
-
-		ProviderID: normalized.ProviderID,
-
-		ModelName: normalized.ModelName,
-
-		DisplayName: normalized.DisplayName,
-
-		TimeoutMS: normalized.TimeoutMS,
-
-		ContextWindow: normalized.ContextWindow,
-
+		ID:              uuid.NewString(),
+		ProviderID:      normalized.ProviderID,
+		ModelName:       normalized.ModelName,
+		DisplayName:     normalized.DisplayName,
+		TimeoutMS:       normalized.TimeoutMS,
+		ContextWindow:   normalized.ContextWindow,
 		MaxOutputTokens: normalized.MaxOutputTokens,
-
-		Capabilities: normalized.Capabilities,
-
-		Enabled: normalized.Enabled,
-
-		CreatedAt: now,
-
-		UpdatedAt: now,
+		Capabilities:    normalized.Capabilities,
+		Enabled:         normalized.Enabled,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
-
-	if err := r.store.CreateModel(
-		ctx,
-		value,
-	); err != nil {
+	if err := r.store.CreateModel(ctx, value); err != nil {
 		return Model{}, err
 	}
-
 	r.configurationChangedLocked()
-
-	r.logger.Info(
-		ctx,
-		"模型已创建",
-		"model_id",
-		value.ID,
-		"provider_id",
-		value.ProviderID,
-	)
-
+	r.logger.Info(ctx, "模型已创建", "model_id", value.ID, "provider_id", value.ProviderID)
 	return value, nil
 }
 
 // UpdateModel 更新模型配置。
-func (r *Registry) UpdateModel(
-	ctx context.Context,
-	id string,
-	input UpdateModelInput,
-) (Model, error) {
-	normalized, err :=
-		normalizeUpdateModelInput(input)
+func (r *Registry) UpdateModel(ctx context.Context, id string, input UpdateModelInput) (Model, error) {
+	normalized, err := normalizeUpdateModelInput(input)
 	if err != nil {
 		return Model{}, err
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	existing, err :=
-		r.store.GetModel(
-			ctx,
-			id,
-		)
+	existing, err := r.store.GetModel(ctx, id)
 	if err != nil {
 		return Model{}, err
 	}
-
-	if _, err := r.store.GetProvider(
-		ctx,
-		normalized.ProviderID,
-	); err != nil {
+	if _, err := r.store.GetProvider(ctx, normalized.ProviderID); err != nil {
 		return Model{}, err
 	}
-
-	existing.ProviderID =
-		normalized.ProviderID
-
-	existing.ModelName =
-		normalized.ModelName
-
-	existing.DisplayName =
-		normalized.DisplayName
-
-	existing.TimeoutMS =
-		normalized.TimeoutMS
-
-	existing.ContextWindow =
-		normalized.ContextWindow
-
-	existing.MaxOutputTokens =
-		normalized.MaxOutputTokens
-
-	existing.Capabilities =
-		normalized.Capabilities
-
-	existing.Enabled =
-		normalized.Enabled
-
-	existing.UpdatedAt =
-		time.Now().UTC()
-
+	existing.ProviderID = normalized.ProviderID
+	existing.ModelName = normalized.ModelName
+	existing.DisplayName = normalized.DisplayName
+	existing.TimeoutMS = normalized.TimeoutMS
+	existing.ContextWindow = normalized.ContextWindow
+	existing.MaxOutputTokens = normalized.MaxOutputTokens
+	existing.Capabilities = normalized.Capabilities
+	existing.Enabled = normalized.Enabled
+	existing.UpdatedAt = time.Now().UTC()
 	multimedia, err := r.store.MultimediaConfig(ctx)
 	if err != nil {
 		return Model{}, err
@@ -606,23 +338,11 @@ func (r *Registry) UpdateModel(
 			return Model{}, err
 		}
 	}
-
-	if err := r.store.UpdateModel(
-		ctx,
-		existing,
-	); err != nil {
+	if err := r.store.UpdateModel(ctx, existing); err != nil {
 		return Model{}, err
 	}
-
 	r.configurationChangedLocked()
-
-	r.logger.Info(
-		ctx,
-		"模型配置已更新",
-		"model_id",
-		id,
-	)
-
+	r.logger.Info(ctx, "模型配置已更新", "model_id", id)
 	return existing, nil
 }
 
@@ -631,34 +351,21 @@ func (r *Registry) UpdateModel(
 // 历史 Session 不构成删除阻塞条件：AssistantMessage 已经持久化实际 Provider/Model
 // 元数据，删除 models.json 中的配置不会破坏历史记录。只有当前 Agent 的任一模型角色
 // 仍指向该模型时才拒绝删除，避免产生悬空配置引用。
-func (r *Registry) DeleteModel(
-	ctx context.Context,
-	id string,
-) error {
+func (r *Registry) DeleteModel(ctx context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
-	if _, err := r.store.GetModel(
-		ctx,
-		id,
-	); err != nil {
+	if _, err := r.store.GetModel(ctx, id); err != nil {
 		return err
 	}
-
 	if r.referenceChecker != nil {
 		agentCount, err := r.referenceChecker.CountAgentsByModel(ctx, id)
 		if err != nil {
 			return fmt.Errorf("检查 Model 的 Agent 引用失败: %w", err)
 		}
 		if agentCount > 0 {
-			return fmt.Errorf(
-				"%w: 当前仍有 %d 个 Agent 在 Chat/Utility 角色中使用该模型，请先切换相关模型角色",
-				ErrModelInUse,
-				agentCount,
-			)
+			return fmt.Errorf("%w: 当前仍有 %d 个 Agent 在 Chat/Utility 角色中使用该模型，请先切换相关模型角色", ErrModelInUse, agentCount)
 		}
 	}
-
 	multimedia, err := r.store.MultimediaConfig(ctx)
 	if err != nil {
 		return err
@@ -666,23 +373,11 @@ func (r *Registry) DeleteModel(
 	if multimedia.ImageModelID == id {
 		return fmt.Errorf("%w: 当前模型是设置中的图片理解模型，请先在多媒体设置中切换或清除", ErrModelInUse)
 	}
-
-	if err := r.store.DeleteModel(
-		ctx,
-		id,
-	); err != nil {
+	if err := r.store.DeleteModel(ctx, id); err != nil {
 		return err
 	}
-
 	r.configurationChangedLocked()
-
-	r.logger.Info(
-		ctx,
-		"模型已删除",
-		"model_id",
-		id,
-	)
-
+	r.logger.Info(ctx, "模型已删除", "model_id", id)
 	return nil
 }
 
@@ -692,130 +387,51 @@ func (r *Registry) DeleteModel(
 // 配置可以被真实验证。
 //
 // 测试提示词非常短，但仍可能产生少量 API Token 费用。
-func (r *Registry) TestModel(
-	ctx context.Context,
-	id string,
-) (TestResult, error) {
+func (r *Registry) TestModel(ctx context.Context, id string) (TestResult, error) {
 	r.mu.RLock()
-
-	resolved, err :=
-		r.store.ResolveModel(
-			ctx,
-			id,
-		)
+	resolved, err := r.store.ResolveModel(ctx, id)
 	if err != nil {
 		r.mu.RUnlock()
-
 		return TestResult{}, err
 	}
-
-	instance, err :=
-		r.factory.Create(
-			ctx,
-			resolved,
-		)
-
+	instance, err := r.factory.Create(ctx, resolved)
 	r.mu.RUnlock()
-
 	if err != nil {
 		return TestResult{}, err
 	}
-
-	timeout :=
-		time.Duration(
-			resolved.Model.TimeoutMS,
-		) * time.Millisecond
-
-	testCtx, cancel :=
-		context.WithTimeout(
-			ctx,
-			timeout,
-		)
+	timeout := time.Duration(resolved.Model.TimeoutMS) * time.Millisecond
+	testCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-
 	started := time.Now()
-
-	response, err :=
-		instance.Generate(
-			testCtx,
-			[]*schema.Message{
-				{
-					Role: schema.User,
-
-					Content: "Reply with exactly OK.",
-				},
-			},
-		)
-
-	duration :=
-		time.Since(
-			started,
-		)
-
+	response, err := instance.Generate(testCtx, []*schema.Message{{Role: schema.User, Content: "Reply with exactly OK."}})
+	duration := time.Since(started)
 	if err != nil {
-		return TestResult{}, fmt.Errorf(
-			"模型连接测试失败: %w",
-			err,
-		)
+		return TestResult{}, fmt.Errorf("模型连接测试失败: %w", err)
 	}
-
 	if response == nil {
-		return TestResult{}, errors.New(
-			"模型请求成功但返回空响应",
-		)
+		return TestResult{}, errors.New("模型请求成功但返回空响应")
 	}
-
-	preview :=
-		strings.TrimSpace(
-			response.Content,
-		)
-
+	preview := strings.TrimSpace(response.Content)
 	if preview == "" {
-		preview =
-			"(请求成功，模型返回空文本)"
+		preview = "(请求成功，模型返回空文本)"
 	}
-
 	if len(preview) > 200 {
-		preview =
-			preview[:200]
+		preview = preview[:200]
 	}
-
-	r.logger.Info(
-		ctx,
-		"模型连接测试成功",
-		"model_id",
-		id,
-		logging.Duration(
-			started,
-		),
-	)
-
-	return TestResult{
-		Success: true,
-
-		DurationMS: duration.Milliseconds(),
-
-		ResponsePreview: preview,
-	}, nil
+	r.logger.Info(ctx, "模型连接测试成功", "model_id", id, logging.Duration(started))
+	return TestResult{Success: true, DurationMS: duration.Milliseconds(), ResponsePreview: preview}, nil
 }
 
 func (r *Registry) configurationChangedLocked() {
 	clear(r.cache)
-
 	r.revision.Add(1)
 }
 
-func (r *Registry) validateImageModelLocked(
-	ctx context.Context,
-	id string,
-	modelOverride *Model,
-	providerOverride *Provider,
-) error {
+func (r *Registry) validateImageModelLocked(ctx context.Context, id string, modelOverride *Model, providerOverride *Provider) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil
 	}
-
 	var model Model
 	if modelOverride != nil && modelOverride.ID == id {
 		model = *modelOverride
@@ -829,7 +445,6 @@ func (r *Registry) validateImageModelLocked(
 	if !model.Enabled {
 		return fmt.Errorf("图片理解模型必须处于启用状态: %s", id)
 	}
-
 	var provider Provider
 	if providerOverride != nil && providerOverride.ID == model.ProviderID {
 		provider = *providerOverride
@@ -847,85 +462,37 @@ func (r *Registry) validateImageModelLocked(
 }
 
 type credentialBackup struct {
-	ID string
-
-	Value string
-
+	ID     string
+	Value  string
 	Exists bool
 }
 
-func (r *Registry) backupCredential(
-	ctx context.Context,
-	id string,
-) (credentialBackup, error) {
+func (r *Registry) backupCredential(ctx context.Context, id string) (credentialBackup, error) {
 	if id == "" {
 		return credentialBackup{}, nil
 	}
-
-	value, err :=
-		r.credentials.Get(
-			ctx,
-			id,
-		)
+	value, err := r.credentials.Get(ctx, id)
 	if err != nil {
-		if errors.Is(
-			err,
-			credential.ErrNotFound,
-		) {
-			return credentialBackup{
-				ID: id,
-			}, nil
+		if errors.Is(err, credential.ErrNotFound) {
+			return credentialBackup{ID: id}, nil
 		}
-
-		return credentialBackup{}, fmt.Errorf(
-			"备份 Credential 失败: %w",
-			err,
-		)
+		return credentialBackup{}, fmt.Errorf("备份 Credential 失败: %w", err)
 	}
-
-	return credentialBackup{
-		ID: id,
-
-		Value: value,
-
-		Exists: true,
-	}, nil
+	return credentialBackup{ID: id, Value: value, Exists: true}, nil
 }
 
-func (r *Registry) rollbackCredential(
-	backup credentialBackup,
-	newCredentialID string,
-) {
+func (r *Registry) rollbackCredential(backup credentialBackup, newCredentialID string) {
 	if newCredentialID != "" {
-		_ = r.credentials.Delete(
-			context.Background(),
-			newCredentialID,
-		)
+		_ = r.credentials.Delete(context.Background(), newCredentialID)
 	}
-
 	r.restoreCredential(backup)
 }
 
-func (r *Registry) restoreCredential(
-	backup credentialBackup,
-) {
-	if !backup.Exists ||
-		backup.ID == "" {
+func (r *Registry) restoreCredential(backup credentialBackup) {
+	if !backup.Exists || backup.ID == "" {
 		return
 	}
-
-	if err := r.credentials.Put(
-		context.Background(),
-		backup.ID,
-		backup.Value,
-	); err != nil {
-		r.logger.Error(
-			context.Background(),
-			"恢复 Provider Credential 失败",
-			"credential_id",
-			backup.ID,
-			"error",
-			err,
-		)
+	if err := r.credentials.Put(context.Background(), backup.ID, backup.Value); err != nil {
+		r.logger.Error(context.Background(), "恢复 Provider Credential 失败", "credential_id", backup.ID, "error", err)
 	}
 }

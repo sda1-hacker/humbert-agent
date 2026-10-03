@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sda1-hacker/humbert-agent/internal/credential"
-
 	"github.com/cloudwego/eino-ext/components/model/ollama"
 	"github.com/cloudwego/eino-ext/components/model/openai"
+	"github.com/sda1-hacker/humbert-agent/internal/credential"
+
 	einomodel "github.com/cloudwego/eino/components/model"
 )
 
@@ -36,102 +36,63 @@ type Factory struct {
 	credentials *credential.Store
 }
 
-// NewFactory 创建 Eino Model Factory。
 func NewFactory(credentials *credential.Store) *Factory {
 	return &Factory{credentials: credentials}
 }
 
-// Create 创建一个支持 Tool Calling 的 Eino ChatModel。
-//
-// 返回 ToolCallingChatModel 而不是具体 OpenAI/Ollama 类型，后续 Agent Runtime 因此
-// 完全不需要知道模型厂商。
-func (f *Factory) Create(
-	ctx context.Context,
-	resolved ResolvedModel,
-) (
-	einomodel.ToolCallingChatModel,
-	error,
-) {
-	responseTimeout := time.Duration(resolved.Model.TimeoutMS) * time.Millisecond
-	maxOutputTokens := resolved.Model.MaxOutputTokens
-	httpClient, err := newStreamingHTTPClient(responseTimeout)
+// Create 统一准备流式连接与凭证，直接使用 Eino 官方 SDK；缓存由 Registry 管理。
+// 当前配置只支持三种协议，在这个入口明确映射即可，无需再维护工厂注册表和请求包装。
+func (f *Factory) Create(ctx context.Context, resolved ResolvedModel) (einomodel.ToolCallingChatModel, error) {
+	if ctx == nil {
+		return nil, errors.New("context.Context 不能为空")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	providerType := resolved.Provider.Type
+	if providerType != ProviderTypeOpenAI && providerType != ProviderTypeOpenAICompatible && providerType != ProviderTypeOllama {
+		return nil, fmt.Errorf("不支持的 Provider 类型: %q", resolved.Provider.Type)
+	}
+	client, err := newStreamingHTTPClient(time.Duration(resolved.Model.TimeoutMS) * time.Millisecond)
 	if err != nil {
 		return nil, fmt.Errorf("创建 Streaming HTTP Client 失败: %w", err)
 	}
-
-	switch resolved.Provider.Type {
-	case ProviderTypeOpenAI:
-		apiKey, err := f.requiredCredential(ctx, resolved.Provider)
+	apiKey := ""
+	if resolved.Provider.Type == ProviderTypeOpenAI {
+		apiKey, err = f.requiredCredential(ctx, resolved.Provider)
+	} else if resolved.Provider.Type != ProviderTypeOllama && resolved.Provider.CredentialID != "" {
+		if f.credentials == nil {
+			return nil, errors.New("Provider Credential Store 未初始化")
+		}
+		apiKey, err = f.credentials.Get(ctx, resolved.Provider.CredentialID)
 		if err != nil {
-			return nil, err
+			err = fmt.Errorf("读取 Provider Credential 失败: %w", err)
 		}
-
-		value, err := openai.NewChatModel(
-			ctx,
-			&openai.ChatModelConfig{
-				APIKey:              apiKey,
-				BaseURL:             resolved.Provider.BaseURL,
-				Model:               resolved.Model.ModelName,
-				MaxCompletionTokens: &maxOutputTokens,
-
-				// HTTPClient 一旦显式设置，Eino OpenAI Adapter 不再使用
-				// ChatModelConfig.Timeout，也就不会创建带总请求 Timeout 的 Client。
-				HTTPClient: httpClient,
-			},
-		)
-		if err != nil {
-			return nil, fmt.Errorf("创建 OpenAI ChatModel 失败: %w", err)
-		}
-
-		return &reasoningOmittingModel{inner: value}, nil
-
-	case ProviderTypeOpenAICompatible:
-		apiKey := ""
-
-		if resolved.Provider.CredentialID != "" {
-			value, err := f.credentials.Get(ctx, resolved.Provider.CredentialID)
-			if err != nil {
-				return nil, fmt.Errorf("读取 OpenAI-Compatible Credential 失败: %w", err)
-			}
-
-			apiKey = value
-		}
-
-		value, err := openai.NewChatModel(
-			ctx,
-			&openai.ChatModelConfig{
-				APIKey:     apiKey,
-				BaseURL:    resolved.Provider.BaseURL,
-				Model:      resolved.Model.ModelName,
-				MaxTokens:  &maxOutputTokens,
-				HTTPClient: httpClient,
-			},
-		)
-		if err != nil {
-			return nil, fmt.Errorf("创建 OpenAI-Compatible ChatModel 失败: %w", err)
-		}
-
-		return &reasoningOmittingModel{inner: value}, nil
-
-	case ProviderTypeOllama:
-		value, err := ollama.NewChatModel(
-			ctx,
-			&ollama.ChatModelConfig{
-				BaseURL:    resolved.Provider.BaseURL,
-				Model:      resolved.Model.ModelName,
-				HTTPClient: httpClient,
-				Options:    &ollama.Options{NumPredict: maxOutputTokens},
-			},
-		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if providerType == ProviderTypeOllama {
+		value, err := ollama.NewChatModel(ctx, &ollama.ChatModelConfig{BaseURL: resolved.Provider.BaseURL, Model: resolved.Model.ModelName,
+			HTTPClient: client, Options: &ollama.Options{NumPredict: resolved.Model.MaxOutputTokens}})
 		if err != nil {
 			return nil, fmt.Errorf("创建 Ollama ChatModel 失败: %w", err)
 		}
-
 		return value, nil
-
-	default:
-		return nil, fmt.Errorf("不支持的 Provider 类型: %q", resolved.Provider.Type)
 	}
+	// 官方与兼容协议的输出预算字段不同，合并公共初始化时仍保留原请求语义。
+	maxOutput := resolved.Model.MaxOutputTokens
+	cfg := &openai.ChatModelConfig{APIKey: apiKey, BaseURL: resolved.Provider.BaseURL, Model: resolved.Model.ModelName, HTTPClient: client}
+	if providerType == ProviderTypeOpenAI {
+		cfg.MaxCompletionTokens = &maxOutput
+	} else {
+		cfg.MaxTokens = &maxOutput
+	}
+	value, err := openai.NewChatModel(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("创建 %s ChatModel 失败: %w", providerType, err)
+	}
+	return &reasoningOmittingModel{inner: value}, nil
 }
 
 // newStreamingHTTPClient 创建适用于 LLM SSE/Streaming 的 HTTP Client。
@@ -143,18 +104,14 @@ func newStreamingHTTPClient(responseHeaderTimeout time.Duration) (*http.Client, 
 	if responseHeaderTimeout <= 0 {
 		return nil, errors.New("Response Header Timeout 必须大于 0")
 	}
-
 	baseTransport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok || baseTransport == nil {
 		return nil, errors.New("http.DefaultTransport 不是 *http.Transport")
 	}
-
 	transport := baseTransport.Clone()
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
-
 	return &http.Client{
 		Transport: transport,
-
 		// 必须保持 0。非零值会覆盖整个请求生命周期并在 Streaming Body 仍然活跃时
 		// 强制取消，这正是 60 秒 Thinking Stream 报 context deadline exceeded 的根因。
 		Timeout: 0,
@@ -165,11 +122,12 @@ func (f *Factory) requiredCredential(ctx context.Context, provider Provider) (st
 	if provider.CredentialID == "" {
 		return "", errors.New("当前 Provider 尚未配置 API Key")
 	}
-
+	if f.credentials == nil {
+		return "", errors.New("Provider Credential Store 未初始化")
+	}
 	value, err := f.credentials.Get(ctx, provider.CredentialID)
 	if err != nil {
 		return "", fmt.Errorf("读取 Provider Credential 失败: %w", err)
 	}
-
 	return value, nil
 }

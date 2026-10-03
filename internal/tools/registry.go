@@ -35,14 +35,10 @@ import (
 //
 // 而正在执行的 Turn 永远使用它创建时冻结的 ToolSet。
 type Registry struct {
-	mu sync.RWMutex
-
-	factories map[string]Factory
-
-	revision uint64
-
-	authorizer Authorizer
-
+	mu             sync.RWMutex
+	factories      map[string]Factory
+	revision       uint64
+	authorizer     Authorizer
 	resultArchiver ResultArchiver
 }
 
@@ -71,14 +67,9 @@ func (r *Registry) Close() error {
 //
 // 后续每一次真正改变 Registry Definition 的 Register/Unregister
 // 都会递增 Revision。
-func NewRegistry(
-	authorizer Authorizer,
-	archivers ...ResultArchiver,
-) (*Registry, error) {
+func NewRegistry(authorizer Authorizer, archivers ...ResultArchiver) (*Registry, error) {
 	if authorizer == nil {
-		return nil, errors.New(
-			"Tool Registry Authorizer 不能为空",
-		)
+		return nil, errors.New("Tool Registry Authorizer 不能为空")
 	}
 
 	var archiver ResultArchiver
@@ -86,16 +77,7 @@ func NewRegistry(
 		archiver = archivers[0]
 	}
 
-	return &Registry{
-		factories: make(
-			map[string]Factory,
-		),
-
-		revision: 1,
-
-		authorizer:     authorizer,
-		resultArchiver: archiver,
-	}, nil
+	return &Registry{factories: make(map[string]Factory), revision: 1, authorizer: authorizer, resultArchiver: archiver}, nil
 }
 
 // Revision 返回当前 Tool Registry Revision。
@@ -110,21 +92,14 @@ func (r *Registry) Revision() uint64 {
 //
 // 重复名称不会覆盖已有 Tool，防止一个动态 Skill/MCP
 // 静默替换 Builtin Tool。
-func (r *Registry) Register(
-	factory Factory,
-) error {
+func (r *Registry) Register(factory Factory) error {
 	if factory == nil {
-		return fmt.Errorf(
-			"%w: Factory 不能为空",
-			ErrInvalidTool,
-		)
+		return fmt.Errorf("%w: Factory 不能为空", ErrInvalidTool)
 	}
 
-	descriptor :=
-		factory.Descriptor()
+	descriptor := factory.Descriptor()
 
-	if err :=
-		descriptor.Validate(); err != nil {
+	if err := descriptor.Validate(); err != nil {
 
 		return err
 	}
@@ -132,14 +107,9 @@ func (r *Registry) Register(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists :=
-		r.factories[descriptor.Name]; exists {
+	if _, exists := r.factories[descriptor.Name]; exists {
 
-		return fmt.Errorf(
-			"%w: %s",
-			ErrToolExists,
-			descriptor.Name,
-		)
+		return fmt.Errorf("%w: %s", ErrToolExists, descriptor.Name)
 	}
 
 	r.factories[descriptor.Name] = factory
@@ -152,26 +122,16 @@ func (r *Registry) Register(
 // Unregister 删除一个 Tool Definition。
 //
 // 已经创建出来的 RuntimeSnapshot 不受影响。
-func (r *Registry) Unregister(
-	name string,
-) error {
+func (r *Registry) Unregister(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists :=
-		r.factories[name]; !exists {
+	if _, exists := r.factories[name]; !exists {
 
-		return fmt.Errorf(
-			"%w: %s",
-			ErrToolNotFound,
-			name,
-		)
+		return fmt.Errorf("%w: %s", ErrToolNotFound, name)
 	}
 
-	delete(
-		r.factories,
-		name,
-	)
+	delete(r.factories, name)
 
 	r.revision++
 
@@ -184,31 +144,19 @@ func (r *Registry) Unregister(
 func (r *Registry) List() []Descriptor {
 	r.mu.RLock()
 
-	result :=
-		make(
-			[]Descriptor,
-			0,
-			len(r.factories),
-		)
+	result := make([]Descriptor, 0, len(r.factories))
 
 	for _, factory := range r.factories {
 
-		result = append(
-			result,
-			factory.Descriptor(),
-		)
+		result = append(result, factory.Descriptor())
 	}
 
 	r.mu.RUnlock()
 
 	sort.Slice(
 		result,
-		func(
-			i int,
-			j int,
-		) bool {
-			return result[i].Name <
-				result[j].Name
+		func(i int, j int) bool {
+			return result[i].Name < result[j].Name
 		},
 	)
 
@@ -227,65 +175,33 @@ func (r *Registry) List() []Descriptor {
 //
 // Build 不在 Registry Lock 内执行，避免未来 MCP/Skill Tool
 // 初始化耗时导致整个 Registry 长时间阻塞。
-func (r *Registry) Resolve(
-	ctx context.Context,
-	scope Scope,
-) (
-	ResolvedTools,
-	error,
-) {
+func (r *Registry) Resolve(ctx context.Context, scope Scope) (ResolvedTools, error) {
 	if err := ctx.Err(); err != nil {
-		return ResolvedTools{},
-			fmt.Errorf(
-				"解析 Tool Snapshot 被取消: %w",
-				err,
-			)
+		return ResolvedTools{}, fmt.Errorf("解析 Tool Snapshot 被取消: %w", err)
 	}
 
-	if err :=
-		scope.Validate(); err != nil {
+	if err := scope.Validate(); err != nil {
 
-		return ResolvedTools{},
-			fmt.Errorf(
-				"Tool Scope 无效: %w",
-				err,
-			)
+		return ResolvedTools{}, fmt.Errorf("Tool Scope 无效: %w", err)
 	}
 
 	r.mu.RLock()
 
-	revision :=
-		r.revision
+	revision := r.revision
 
-	factories :=
-		make(
-			[]Factory,
-			0,
-			len(r.factories),
-		)
+	factories := make([]Factory, 0, len(r.factories))
 
 	for _, factory := range r.factories {
 
-		factories = append(
-			factories,
-			factory,
-		)
+		factories = append(factories, factory)
 	}
 
 	r.mu.RUnlock()
 
 	sort.Slice(
 		factories,
-		func(
-			i int,
-			j int,
-		) bool {
-			return factories[i].
-				Descriptor().
-				Name <
-				factories[j].
-					Descriptor().
-					Name
+		func(i int, j int) bool {
+			return factories[i].Descriptor().Name < factories[j].Descriptor().Name
 		},
 	)
 
@@ -314,11 +230,7 @@ func (r *Registry) Resolve(
 	for _, factory := range factories {
 
 		if err := ctx.Err(); err != nil {
-			return ResolvedTools{},
-				fmt.Errorf(
-					"解析 Tool Snapshot 被取消: %w",
-					err,
-				)
+			return ResolvedTools{}, fmt.Errorf("解析 Tool Snapshot 被取消: %w", err)
 		}
 
 		descriptor := factory.Descriptor()
@@ -331,35 +243,15 @@ func (r *Registry) Resolve(
 			}
 		}
 
-		instance, err :=
-			factory.Build(
-				ctx,
-				scope,
-			)
+		instance, err := factory.Build(ctx, scope)
 
 		if err != nil {
-			return ResolvedTools{},
-				fmt.Errorf(
-					"构建 Tool %q 失败: %w",
-					descriptor.Name,
-					err,
-				)
+			return ResolvedTools{}, fmt.Errorf("构建 Tool %q 失败: %w", descriptor.Name, err)
 		}
 
-		guarded, err := GuardInvokableTool(
-			ctx,
-			r.authorizer,
-			descriptor,
-			scope,
-			instance,
-		)
+		guarded, err := GuardInvokableTool(ctx, r.authorizer, descriptor, scope, instance)
 		if err != nil {
-			return ResolvedTools{},
-				fmt.Errorf(
-					"保护 Tool %q 失败: %w",
-					descriptor.Name,
-					err,
-				)
+			return ResolvedTools{}, fmt.Errorf("保护 Tool %q 失败: %w", descriptor.Name, err)
 		}
 
 		resolved = append(resolved, guarded)
@@ -367,10 +259,10 @@ func (r *Registry) Resolve(
 		resolvedNames = append(resolvedNames, descriptor.Name)
 	}
 
-	return ResolvedTools{
-		Tools:       resolved,
-		Descriptors: resolvedDescriptors,
-		ToolNames:   resolvedNames,
-		Revision:    revision,
-	}, nil
+	return ResolvedTools{Tools: resolved, Descriptors: resolvedDescriptors, ToolNames: resolvedNames, Revision: revision}, nil
+}
+
+// Guard 让模块工具复用 Registry 注入的同一个 Authorizer；宿主无需公开权限引擎。
+func (r *Registry) Guard(ctx context.Context, descriptor Descriptor, scope Scope, tool einotool.InvokableTool) (einotool.BaseTool, error) {
+	return GuardInvokableTool(ctx, r.authorizer, descriptor, scope, tool)
 }

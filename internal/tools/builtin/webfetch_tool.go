@@ -621,7 +621,7 @@ func truncateUTF8ByRunes(
 	var builder strings.Builder
 
 	builder.Grow(
-		minInt(
+		min(
 			len(value),
 			maxRunes*3,
 		),
@@ -841,7 +841,7 @@ func looksLikeHTML(
 	body []byte,
 ) bool {
 	limit :=
-		minInt(
+		min(
 			512,
 			len(body),
 		)

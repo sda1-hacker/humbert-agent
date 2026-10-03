@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
 )
@@ -19,7 +18,7 @@ func (s *PermissionService) Mode() (string, error) {
 	if err := s.validate(); err != nil {
 		return "", err
 	}
-	return s.core.Permissions().Config().Mode, nil
+	return s.deps.Permissions.Config().Mode, nil
 }
 
 // SetMode 只变更审批模式，保留等待时间；与设置页复用同一持久化和运行时更新入口。
@@ -33,12 +32,12 @@ func (s *PermissionService) SetMode(mode string) (string, error) {
 	default:
 		return "", fmt.Errorf("不支持的审批模式 %q", mode)
 	}
-	cfg := s.core.Permissions().Config()
+	cfg := s.deps.Permissions.Config()
 	if err := s.UpdateSettings(UpdatePermissionSettingsRequest{Mode: mode, Enabled: cfg.Enabled,
 		ReadAction: cfg.ReadAction, WriteAction: cfg.WriteAction, ExecAction: cfg.ExecAction, ApprovalTimeoutMS: cfg.ApprovalTimeoutMS}); err != nil {
 		return "", err
 	}
-	return s.core.Permissions().Config().Mode, nil
+	return s.deps.Permissions.Config().Mode, nil
 }
 
 // PermissionRuleDTO 是设置页可以安全展示的一条 Permission Rule。
@@ -47,35 +46,28 @@ func (s *PermissionService) SetMode(mode string) (string, error) {
 // 后续扩展 Browser Host 等能力时，也必须坚持只暴露规则本身，而不是某次调用的 Secret、
 // 文件正文或其他敏感参数。
 type PermissionRuleDTO struct {
-	ID string `json:"id"`
-
-	AgentID   string `json:"agentID"`
-	AgentName string `json:"agentName"`
-
-	SessionID string `json:"sessionID,omitempty"`
-
-	ToolName string `json:"toolName"`
-	Action   string `json:"action"`
-	Scope    string `json:"scope"`
-
-	CapabilityKind string `json:"capabilityKind,omitempty"`
-
+	ID                    string `json:"id"`
+	AgentID               string `json:"agentID"`
+	AgentName             string `json:"agentName"`
+	SessionID             string `json:"sessionID,omitempty"`
+	ToolName              string `json:"toolName"`
+	Action                string `json:"action"`
+	Scope                 string `json:"scope"`
+	CapabilityKind        string `json:"capabilityKind,omitempty"`
 	Command               string `json:"command,omitempty"`
 	Executable            string `json:"executable,omitempty"`
 	InvocationFingerprint string `json:"invocationFingerprint,omitempty"`
-
-	SkillName     string `json:"skillName,omitempty"`
-	SkillIdentity string `json:"skillIdentity,omitempty"`
-	Script        string `json:"script,omitempty"`
-
-	MCPServerID          string `json:"mcpServerID,omitempty"`
-	MCPServerName        string `json:"mcpServerName,omitempty"`
-	MCPServerFingerprint string `json:"mcpServerFingerprint,omitempty"`
-	MCPTool              string `json:"mcpTool,omitempty"`
-
-	SandboxFingerprint string `json:"sandboxFingerprint,omitempty"`
-
-	CreatedAt string `json:"createdAt"`
+	SkillName             string `json:"skillName,omitempty"`
+	SkillIdentity         string `json:"skillIdentity,omitempty"`
+	Script                string `json:"script,omitempty"`
+	MCPServerID           string `json:"mcpServerID,omitempty"`
+	MCPServerName         string `json:"mcpServerName,omitempty"`
+	MCPServerFingerprint  string `json:"mcpServerFingerprint,omitempty"`
+	MCPTool               string `json:"mcpTool,omitempty"`
+	ModuleID              string `json:"moduleID,omitempty"`
+	ModuleRevision        string `json:"moduleRevision,omitempty"`
+	SandboxFingerprint    string `json:"sandboxFingerprint,omitempty"`
+	CreatedAt             string `json:"createdAt"`
 }
 
 // PermissionStateDTO 是“权限与审批”设置页的完整可管理状态。
@@ -84,17 +76,14 @@ type PermissionRuleDTO struct {
 // 应用重启后自然消失。默认策略来自 PermissionEngine 当前运行配置，与通过 Viper 写回的
 // config.yaml 保持一致。
 type PermissionStateDTO struct {
-	Mode    string `json:"mode"`
-	Enabled bool   `json:"enabled"`
-
-	ReadAction  string `json:"readAction"`
-	WriteAction string `json:"writeAction"`
-	ExecAction  string `json:"execAction"`
-
-	ApprovalTimeoutMS int `json:"approvalTimeoutMS"`
-
-	PersistentRules []PermissionRuleDTO `json:"persistentRules"`
-	SessionRules    []PermissionRuleDTO `json:"sessionRules"`
+	Mode              string              `json:"mode"`
+	Enabled           bool                `json:"enabled"`
+	ReadAction        string              `json:"readAction"`
+	WriteAction       string              `json:"writeAction"`
+	ExecAction        string              `json:"execAction"`
+	ApprovalTimeoutMS int                 `json:"approvalTimeoutMS"`
+	PersistentRules   []PermissionRuleDTO `json:"persistentRules"`
+	SessionRules      []PermissionRuleDTO `json:"sessionRules"`
 }
 
 // UpdatePermissionSettingsRequest 是设置页允许修改的 Permission 应用级配置。
@@ -102,14 +91,12 @@ type PermissionStateDTO struct {
 // Action 使用 allow/ask/deny；ApprovalTimeoutMS 使用毫秒。后端会再次规范化和校验，前端
 // 表单约束不能被视作安全边界。
 type UpdatePermissionSettingsRequest struct {
-	Mode    string `json:"mode"`
-	Enabled bool   `json:"enabled"`
-
-	ReadAction  string `json:"readAction"`
-	WriteAction string `json:"writeAction"`
-	ExecAction  string `json:"execAction"`
-
-	ApprovalTimeoutMS int `json:"approvalTimeoutMS"`
+	Mode              string `json:"mode"`
+	Enabled           bool   `json:"enabled"`
+	ReadAction        string `json:"readAction"`
+	WriteAction       string `json:"writeAction"`
+	ExecAction        string `json:"execAction"`
+	ApprovalTimeoutMS int    `json:"approvalTimeoutMS"`
 }
 
 // PermissionService 是 Permission Domain 的 Wails Desktop Adapter。
@@ -117,12 +104,12 @@ type UpdatePermissionSettingsRequest struct {
 // PermissionEngine 保持与桌面框架无关；本 Service 只负责 DTO 投影、Viper 配置更新和设置页
 // 管理。持久化 Rule 仍由 permission.Store 原子提交，Session Rule 仍由 Engine 内存管理。
 type PermissionService struct {
-	core *coreapp.Application
+	deps PermissionDependencies
 }
 
 // NewPermissionService 创建 Permission Desktop Service。
-func NewPermissionService(core *coreapp.Application) *PermissionService {
-	return &PermissionService{core: core}
+func NewPermissionService(deps PermissionDependencies) *PermissionService {
+	return &PermissionService{deps: deps}
 }
 
 // ServiceName 返回稳定的 Wails Service 名称。
@@ -142,7 +129,7 @@ func (s *PermissionService) State(sessionID string) (PermissionStateDTO, error) 
 	ctx, cancel := context.WithTimeout(context.Background(), permissionServiceTimeout)
 	defer cancel()
 
-	persistentRules, err := s.core.Permissions().ListPersistentRules(ctx)
+	persistentRules, err := s.deps.Permissions.ListPersistentRules(ctx)
 	if err != nil {
 		return PermissionStateDTO{}, fmt.Errorf("读取持久化 Permission Rules 失败: %w", err)
 	}
@@ -156,16 +143,16 @@ func (s *PermissionService) State(sessionID string) (PermissionStateDTO, error) 
 		// Permission 设置本身是安全恢复入口。即使 MCP Store 损坏，也必须允许用户
 		// 查看并撤销既有规则，因此 MCP 展示名称解析失败时降级为占位名称。
 		mcpServerNames = map[string]string{}
-		s.core.Logger().Warn(ctx, "读取 Permission Rule MCP Server 展示名称失败",
+		s.deps.Logger.Warn(ctx, "读取 Permission Rule MCP Server 展示名称失败",
 			"operation", "permission.rule.mcp_names",
 			"error", mcpNamesErr,
 		)
 	}
 
 	sessionID = strings.TrimSpace(sessionID)
-	sessionRules := s.core.Permissions().ListSessionRules(sessionID)
+	sessionRules := s.deps.Permissions.ListSessionRules(sessionID)
 
-	cfg := s.core.Permissions().Config()
+	cfg := s.deps.Permissions.Config()
 	return PermissionStateDTO{
 		Mode:              cfg.Mode,
 		Enabled:           cfg.Enabled,
@@ -203,17 +190,17 @@ func (s *PermissionService) UpdateSettings(request UpdatePermissionSettingsReque
 
 	ctx, cancel := context.WithTimeout(context.Background(), permissionServiceTimeout)
 	defer cancel()
-	if err := config.SavePermissionConfig(ctx, s.core.Config().Paths.ConfigFile, cfg); err != nil {
+	if err := config.SavePermissionConfig(ctx, s.deps.Config.Paths.ConfigFile, cfg); err != nil {
 		return err
 	}
-	if err := s.core.Permissions().UpdateConfig(cfg); err != nil {
+	if err := s.deps.Permissions.UpdateConfig(cfg); err != nil {
 		return fmt.Errorf("更新运行时 Permission Policy 失败: %w", err)
 	}
-	if err := s.core.Approvals().UpdateTimeout(time.Duration(cfg.ApprovalTimeoutMS) * time.Millisecond); err != nil {
+	if err := s.deps.Approvals.UpdateTimeout(time.Duration(cfg.ApprovalTimeoutMS) * time.Millisecond); err != nil {
 		return fmt.Errorf("更新 Approval Timeout 失败: %w", err)
 	}
 
-	s.core.Logger().Info(
+	s.deps.Logger.Info(
 		ctx,
 		"Permission 默认策略已更新",
 		"operation", "permission.settings.update",
@@ -242,7 +229,7 @@ func (s *PermissionService) DeleteRule(ruleID string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), permissionServiceTimeout)
 	defer cancel()
-	if err := s.core.Permissions().DeletePersistentRule(ctx, ruleID); err != nil {
+	if err := s.deps.Permissions.DeletePersistentRule(ctx, ruleID); err != nil {
 		return fmt.Errorf("删除 Permission Rule 失败: %w", err)
 	}
 	return nil
@@ -253,10 +240,10 @@ func (s *PermissionService) DeleteSessionRule(sessionID string, ruleID string) e
 	if err := s.validate(); err != nil {
 		return err
 	}
-	if err := s.core.Permissions().DeleteSessionRule(sessionID, ruleID); err != nil {
+	if err := s.deps.Permissions.DeleteSessionRule(sessionID, ruleID); err != nil {
 		return fmt.Errorf("删除 Session Permission Rule 失败: %w", err)
 	}
-	s.core.Logger().Info(
+	s.deps.Logger.Info(
 		context.Background(),
 		"Session Permission Rule 已撤销",
 		"operation", "permission.session_rule.delete",
@@ -275,8 +262,8 @@ func (s *PermissionService) ClearSessionRules(sessionID string) error {
 	if sessionID == "" {
 		return errors.New("Session ID 不能为空")
 	}
-	s.core.Permissions().ClearSessionRules(sessionID)
-	s.core.Logger().Info(
+	s.deps.Permissions.ClearSessionRules(sessionID)
+	s.deps.Logger.Info(
 		context.Background(),
 		"Session Permission Rules 已清除",
 		"operation", "permission.session_rule.clear",
@@ -295,7 +282,7 @@ func (s *PermissionService) ClearPersistentAllows() (int, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), permissionServiceTimeout)
 	defer cancel()
-	count, err := s.core.Permissions().ClearPersistentAllows(ctx)
+	count, err := s.deps.Permissions.ClearPersistentAllows(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("撤销全部长期授权失败: %w", err)
 	}
@@ -303,14 +290,14 @@ func (s *PermissionService) ClearPersistentAllows() (int, error) {
 }
 
 func (s *PermissionService) validate() error {
-	if s == nil || s.core == nil || s.core.Permissions() == nil || s.core.Approvals() == nil {
+	if s == nil || s.deps.Permissions == nil || s.deps.Approvals == nil {
 		return errors.New("PermissionService 尚未正确初始化")
 	}
 	return nil
 }
 
 func (s *PermissionService) agentNames(ctx context.Context) (map[string]string, error) {
-	agents, err := s.core.Agents().List(ctx)
+	agents, err := s.deps.Agents.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("读取 Permission Rule 对应 Agent 失败: %w", err)
 	}
@@ -322,7 +309,7 @@ func (s *PermissionService) agentNames(ctx context.Context) (map[string]string, 
 }
 
 func (s *PermissionService) mcpServerNames(ctx context.Context) (map[string]string, error) {
-	servers, err := s.core.MCP().List(ctx)
+	servers, err := s.deps.MCP.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("读取 Permission Rule 对应 MCP Server 失败: %w", err)
 	}
@@ -367,6 +354,8 @@ func projectPermissionRules(rules []permission.Rule, agentNames map[string]strin
 			MCPServerName:         mcpName,
 			MCPServerFingerprint:  identity.MCPServerFingerprint,
 			MCPTool:               identity.MCPTool,
+			ModuleID:              identity.ModuleID,
+			ModuleRevision:        identity.ModuleRevision,
 			SandboxFingerprint:    identity.SandboxFingerprint,
 			CreatedAt:             rule.CreatedAt.Format(time.RFC3339),
 		})

@@ -21,10 +21,10 @@ type Executor interface {
 }
 
 type NotificationExecutor struct {
-	notifications *notifications.Service
+	notifications notifications.Sender
 }
 
-func NewNotificationExecutor(service *notifications.Service) *NotificationExecutor {
+func NewNotificationExecutor(service notifications.Sender) *NotificationExecutor {
 	return &NotificationExecutor{notifications: service}
 }
 
@@ -55,10 +55,10 @@ func (e *NotificationExecutor) Execute(ctx context.Context, event Event, _ Decis
 }
 
 type AgentExecutor struct {
-	tasks *tasks.Manager
+	tasks AutomationRunner
 }
 
-func NewAgentExecutor(taskManager *tasks.Manager) *AgentExecutor {
+func NewAgentExecutor(taskManager AutomationRunner) *AgentExecutor {
 	return &AgentExecutor{tasks: taskManager}
 }
 

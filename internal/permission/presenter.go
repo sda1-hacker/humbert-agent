@@ -21,6 +21,18 @@ const maxApprovalFieldLength = 512
 // 合法 JSON：解析失败说明模型生成了不符合 Tool Schema 的调用，此时返回带上下文的错误，
 // 绝不能以空字段审批后继续执行。
 func BuildPresentation(request Request) (Presentation, error) {
+	if request.Identity.Kind == CapabilityModule {
+		// 新模块没有专属 Presenter 时只展示稳定来源，继续隐藏参数正文。
+		return Presentation{
+			Title:       "请求执行工具",
+			Description: "该工具需要用户确认。为避免外部工具参数泄露敏感信息，当前版本默认隐藏原始参数。长期授权只在当前安全能力身份不变时复用。",
+			Fields: []PresentationField{
+				{Label: "Module", Value: safeField(request.Identity.ModuleID)},
+				{Label: "Revision", Value: safeField(request.Identity.ModuleRevision)},
+				{Label: "工具", Value: safeField(request.ToolName)},
+			},
+		}, nil
+	}
 	if request.Identity.Kind == CapabilityMCP {
 		serverName := strings.TrimSpace(request.MCPServerName)
 		if serverName == "" {

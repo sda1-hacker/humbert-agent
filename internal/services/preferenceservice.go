@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	coreapp "github.com/sda1-hacker/humbert-agent/internal/app"
 	"github.com/sda1-hacker/humbert-agent/internal/preferences"
 )
 
@@ -16,11 +15,11 @@ type UserProfileDTO struct {
 }
 
 type PreferenceService struct {
-	core *coreapp.Application
+	deps PreferenceDependencies
 }
 
-func NewPreferenceService(core *coreapp.Application) *PreferenceService {
-	return &PreferenceService{core: core}
+func NewPreferenceService(deps PreferenceDependencies) *PreferenceService {
+	return &PreferenceService{deps: deps}
 }
 
 func (s *PreferenceService) ServiceName() string { return "PreferenceService" }
@@ -28,7 +27,7 @@ func (s *PreferenceService) ServiceName() string { return "PreferenceService" }
 func (s *PreferenceService) GetUserProfile() (UserProfileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.core.Preferences().Get(ctx)
+	value, err := s.deps.Preferences.Get(ctx)
 	if err != nil {
 		return UserProfileDTO{}, fmt.Errorf("读取用户资料失败: %w", err)
 	}
@@ -38,7 +37,7 @@ func (s *PreferenceService) GetUserProfile() (UserProfileDTO, error) {
 func (s *PreferenceService) UpdateUserProfile(request UserProfileDTO) (UserProfileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	value, err := s.core.Preferences().Update(ctx, preferences.UserProfile{Name: request.Name, Avatar: request.Avatar, Language: request.Language})
+	value, err := s.deps.Preferences.Update(ctx, preferences.UserProfile{Name: request.Name, Avatar: request.Avatar, Language: request.Language})
 	if err != nil {
 		return UserProfileDTO{}, fmt.Errorf("更新用户资料失败: %w", err)
 	}
@@ -48,7 +47,7 @@ func (s *PreferenceService) UpdateUserProfile(request UserProfileDTO) (UserProfi
 func (s *PreferenceService) SetLanguage(language string) (UserProfileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.core.Preferences().SetLanguage(ctx, language)
+	value, err := s.deps.Preferences.SetLanguage(ctx, language)
 	if err != nil {
 		return UserProfileDTO{}, fmt.Errorf("保存界面语言失败: %w", err)
 	}
@@ -63,39 +62,39 @@ func userProfileDTO(value preferences.UserProfile) UserProfileDTO {
 func (s *PreferenceService) ListPersonalMemories() ([]preferences.PersonalMemory, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.core.Preferences().ListMemories(ctx)
+	return s.deps.Preferences.ListMemories(ctx)
 }
 
 func (s *PreferenceService) AddPersonalMemory(text string) (preferences.PersonalMemory, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.core.Preferences().AddMemory(ctx, text)
+	return s.deps.Preferences.AddMemory(ctx, text)
 }
 
 func (s *PreferenceService) AddPersonalMemoryFromMessage(text, sessionID, entryID string) (preferences.PersonalMemory, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if _, err := s.core.Sessions().Get(ctx, sessionID); err != nil {
+	if _, err := s.deps.Sessions.Get(ctx, sessionID); err != nil {
 		return preferences.PersonalMemory{}, err
 	}
-	entries, err := s.core.Sessions().ReadActiveBranchRange(ctx, sessionID, entryID, 0, 0)
+	entries, err := s.deps.Sessions.ReadActiveBranchRange(ctx, sessionID, entryID, 0, 0)
 	if err != nil {
 		return preferences.PersonalMemory{}, err
 	}
 	if len(entries) != 1 || entries[0].ID != entryID || entries[0].Message == nil {
 		return preferences.PersonalMemory{}, fmt.Errorf("来源消息不在当前会话分支中")
 	}
-	return s.core.Preferences().AddMemoryWithSource(ctx, text, sessionID, entryID)
+	return s.deps.Preferences.AddMemoryWithSource(ctx, text, sessionID, entryID)
 }
 
 func (s *PreferenceService) UpdatePersonalMemory(id string, text string) (preferences.PersonalMemory, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.core.Preferences().UpdateMemory(ctx, id, text)
+	return s.deps.Preferences.UpdateMemory(ctx, id, text)
 }
 
 func (s *PreferenceService) DeletePersonalMemory(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return s.core.Preferences().DeleteMemory(ctx, id)
+	return s.deps.Preferences.DeleteMemory(ctx, id)
 }

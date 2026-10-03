@@ -28,6 +28,17 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		SandboxFingerprint: sandboxFingerprint,
 	}
 
+	if origin := descriptor.ModuleOrigin; origin != nil {
+		identity.Kind = permission.CapabilityModule
+		identity.ModuleID = origin.ID
+		identity.ModuleRevision = origin.Revision
+		identity = identity.Normalize()
+		if err := identity.Validate(); err != nil {
+			return permission.CapabilityIdentity{}, err
+		}
+		return identity, nil
+	}
+
 	if origin := descriptor.MCPOrigin; origin != nil {
 		identity.Kind = permission.CapabilityMCP
 		identity.MCPServerID = origin.ServerID

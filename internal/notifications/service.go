@@ -47,6 +47,11 @@ type Provider interface {
 	Send(ctx context.Context, notification Notification) error
 }
 
+// Sender 是通知能力的消费接口，任务与主动助手无需依赖具体桌面/事件 Provider。
+type Sender interface {
+	Send(context.Context, Notification) error
+}
+
 type Service struct {
 	mu        sync.RWMutex
 	providers []Provider

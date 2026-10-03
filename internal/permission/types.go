@@ -44,17 +44,14 @@ type Request struct {
 	RunID     string
 	SessionID string
 	AgentID   string
-
-	ToolName string
-	Risk     RiskLevel
-
+	ToolName  string
+	Risk      RiskLevel
 	Arguments string
 
 	// WorkspaceRoot 由 Tool Guard 注入，用于判断操作是否越出当前项目。
 	WorkspaceRoot string
 	NativeSandbox bool
-
-	Identity CapabilityIdentity
+	Identity      CapabilityIdentity
 
 	// 以下字段只用于 MCP Approval 展示，不参与规则匹配；真正匹配使用 Identity。
 	MCPServerName  string
@@ -106,15 +103,11 @@ type Presentation struct {
 
 // Decision 是 PermissionEngine 对单次调用的不可变判断结果。
 type Decision struct {
-	Action Action
-	Reason string
-
-	RuleID string
-
-	ApprovalID string
-
-	Identity CapabilityIdentity
-
+	Action       Action
+	Reason       string
+	RuleID       string
+	ApprovalID   string
+	Identity     CapabilityIdentity
 	Presentation Presentation
 }
 
@@ -123,21 +116,14 @@ type Decision struct {
 // Allow Rule 保存完整 CapabilityIdentity；Deny Rule 保存 DenyScope() 后的稳定限制身份。
 // 因此 Allow 会在安全边界变化时自动失效，而 Deny 不会因为 Workspace/Runtime 变化被静默放宽。
 type Rule struct {
-	ID string `json:"id"`
-
-	AgentID string `json:"agentId"`
-
-	SessionID string `json:"sessionId,omitempty"`
-
-	ToolName string `json:"tool"`
-
-	Action Action `json:"action"`
-
-	Scope GrantScope `json:"scope"`
-
-	Identity CapabilityIdentity `json:"identity"`
-
-	CreatedAt time.Time `json:"createdAt"`
+	ID        string             `json:"id"`
+	AgentID   string             `json:"agentId"`
+	SessionID string             `json:"sessionId,omitempty"`
+	ToolName  string             `json:"tool"`
+	Action    Action             `json:"action"`
+	Scope     GrantScope         `json:"scope"`
+	Identity  CapabilityIdentity `json:"identity"`
+	CreatedAt time.Time          `json:"createdAt"`
 }
 
 // Validate 校验 v2 Rule。
@@ -180,7 +166,7 @@ func (r Rule) Validate() error {
 		return errors.New("Permission Deny Rule Identity Tool 不能为空")
 	}
 	switch identity.Kind {
-	case CapabilityBuiltin, CapabilityCommand, CapabilitySkillScript, CapabilityMCP:
+	case CapabilityBuiltin, CapabilityCommand, CapabilitySkillScript, CapabilityMCP, CapabilityModule:
 	default:
 		return fmt.Errorf("Permission Deny Rule Identity Kind %q 不受支持", identity.Kind)
 	}

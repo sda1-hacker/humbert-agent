@@ -25,14 +25,33 @@ type ApprovalReader interface {
 	Get(approvalID string) (approval.Request, bool)
 }
 
+// AutomationRunner 是自动执行器需要的最小接口；可以独立替换执行器或任务实现。
+type AutomationRunner interface {
+	RunAutomation(context.Context, tasks.AutomationInput) (tasks.Task, tasks.Run, error)
+}
+
+// AutomationTasks 只提供主动助手关联任务、恢复记录和归档所需的能力。
+// 任务状态与幂等键仍由任务组件管理，主动助手不读写其他模块的 Store。
+type AutomationTasks interface {
+	AutomationRunner
+	ActiveRunForSession(context.Context, string) (tasks.Run, bool)
+	Run(context.Context, string) (tasks.Run, error)
+	Archive(context.Context, string) (tasks.Task, error)
+	AutomationByOrigin(context.Context, string, string) (tasks.Task, tasks.Run, bool, error)
+}
+
+type WorkspaceScanner interface {
+	Scan(context.Context) ([]WorkspaceSnapshot, error)
+}
+
 type Manager struct {
 	store         *Store
-	tasks         *tasks.Manager
+	tasks         AutomationTasks
 	approvals     ApprovalReader
 	events        *eventbus.Bus
-	notifications *notifications.Service
+	notifications notifications.Sender
 	decision      DecisionEngine
-	workspace     *WorkspaceMonitor
+	workspace     WorkspaceScanner
 	logger        *logging.Logger
 
 	executors map[Action]Executor
@@ -52,11 +71,11 @@ type Manager struct {
 
 func NewManager(
 	store *Store,
-	taskManager *tasks.Manager,
+	taskManager AutomationTasks,
 	approvals ApprovalReader,
 	events *eventbus.Bus,
-	notificationService *notifications.Service,
-	workspaceMonitor *WorkspaceMonitor,
+	notificationService notifications.Sender,
+	workspaceMonitor WorkspaceScanner,
 	logger *logging.Logger,
 ) (*Manager, error) {
 	if store == nil || taskManager == nil || approvals == nil || events == nil || notificationService == nil || logger == nil {
