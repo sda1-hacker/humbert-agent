@@ -60,7 +60,7 @@ Chat/Task/Proactive Service 在 startup 订阅 Core EventBus，将类型化 payl
 
 实现均在 [stores](../../frontend/src/stores)。界面缓存不负责写 Transcript；LocalStorage 中的草稿也不是已发送用户消息。选中 Agent、选中 Session、正在运行的 request 必须分别判断。
 
-[utils/latestRequest.js](../../frontend/src/utils/latestRequest.js) 用 WeakMap 按 owner/key 保存 Symbol token。一次加载返回前检查是否仍是最新请求；切换资源主动 invalidate，使较慢旧响应不能覆盖新选择。它阻止旧响应提交状态，并不自动取消后端正在进行的工作。
+[utils/latestRequest.js](../../frontend/src/utils/latestRequest.js) 用 WeakMap 按 owner/key 保存 Symbol token。owner 先通过 Vue `toRaw` 取得原始对象，使 Pinia 开发工具为不同 action 创建的代理仍共享同一组请求；普通对象保持原身份。一次加载返回前检查是否仍是最新请求；切换资源主动 invalidate，使较慢旧响应不能覆盖新选择。它阻止旧响应提交状态，并不自动取消后端正在进行的工作。代理身份与资源隔离的回归测试见 [latestRequest.test.js](../../frontend/src/utils/latestRequest.test.js)。
 
 ## 流式消息：缓冲、对齐和收尾
 
@@ -95,6 +95,16 @@ ComposerBar 处理输入、附件、模型选择、发送/取消、上下文用�
 URL allowlist 接受 HTTP/HTTPS、mailto 和限定类型的 base64 图片。内嵌 data 图片可以显示；远程图片显示“打开远程图片”按钮，用户点击后才打开。普通 HTTP 链接通过 Wails Browser.OpenURL；HTML 标签按文本处理，javascript/file 等不符合 allowlist 的链接不会成为可执行链接。
 
 [MessageAttachments.vue](../../frontend/src/components/chat/MessageAttachments.vue) 通过 Session API 按 ID 读取附件。图片保存为 data URL，共享同一附件的加载 Promise；下载将 base64 转成 Blob，建立短暂 object URL，点击下载后 revoke。附件不是把任意本地路径直接交给 WebView 读取。
+
+## 工作区文件同步与失效处理
+
+[ContextPanel.vue](../../frontend/src/components/workspace/ContextPanel.vue) 只在聊天右侧面板挂载时运行同步循环。每次后台刷新完成后等待两秒再发起下一次，避免慢请求持续叠加；窗口隐藏时停止定时检查，收到 `focus` 或恢复可见时立即尝试刷新。卸载会移除监听和计时器，在途任务结束后不会重建循环。选中 Agent 与 workspace Store 的 Agent 尚未一致时跳过同步。聊天终态和主动助手事件触发的短延迟刷新仍保留。
+
+[stores/workspace.js](../../frontend/src/stores/workspace.js) 的 `refresh({ background: true })` 重读已展开目录和当前选择的父目录，不遍历整个工作区统计总览。目录返回后，`reconcileDirectory` 核对每个缓存、展开及加载中的路径是否仍有对应直接子项；确认缺失或类型变化时，清掉失效子树及目录请求 token。选中项失效时同时清掉选中路径、预览和 loading，并使旧预览响应失效。目录列表被截断时，未列出的项目可能仍存在，不能据此当成删除。用户在请求期间换了选择时，旧结果不会清空新选择。
+
+刷新先完成目录核对，再决定是否读取预览，避免重复读取已经删除的文件。后台只在没有预览、文件大小或修改时间变化时读取；手动/事件刷新仍重读预览。如果用户在同步前点击已删除的旧节点，预览失败会复查父目录：目录确认删除后清理选择，权限不足等无法确认删除的情况仍保留原错误。目录读取失败也沿父目录核对，因此删除整个展开目录时能够清掉子树。折叠后重新展开强制读取最新内容，不沿用旧缓存。持续的同一后台错误只提示一次，成功恢复后再次失败仍会提示。
+
+这是一套可见面板的按需同步，没有额外文件监听服务。通常在下一次两秒间隔检查及目录读取完成后反映外部变化；相同大小和修改时间的内容替换不会仅凭后台元数据检查识别。回归测试见 [workspaceStateFlow.test.js](../../frontend/src/utils/workspaceStateFlow.test.js) 和 [workspacePanelSync.test.js](../../frontend/src/utils/workspacePanelSync.test.js)，覆盖真实临时文件删除、失效子树、迟到响应、截断目录、内容变更及同步生命周期。
 
 ## 其他界面与构建
 

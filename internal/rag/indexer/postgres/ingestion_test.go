@@ -102,7 +102,7 @@ func TestReplaceDocumentPersistsFullMarkdown(t *testing.T) {
 	indexer := newIndexerWithDatabase(db, cfg)
 
 	batch := testParentChildBatch()
-	batch.Markdown = "# 完整 Markdown\n\n这里是完整文档。"
+	batch.Markdown = "# 完整 Markdown\n\n这里是完整文档。" + strings.Repeat("文", 100)
 
 	if err := indexer.ReplaceDocument(context.Background(), batch); err != nil {
 		t.Fatal(err)
@@ -227,7 +227,7 @@ func testParentChildBatch() application.IngestionBatch {
 		CollectionID: "kb-1",
 		DocumentID:   "doc-1",
 		Title:        "产品手册",
-		Markdown:     "# 产品手册\n\n完整正文。",
+		Markdown:     strings.Repeat("文", 100),
 		Metadata: map[string]any{
 			"_title":    "产品手册",
 			"file_name": "manual.md",

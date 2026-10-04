@@ -12,6 +12,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
@@ -52,10 +53,11 @@ type execCall struct {
 }
 
 type fakeTransaction struct {
-	calls      []execCall
-	execErr    error
-	committed  bool
-	rolledBack bool
+	staleAttempt bool
+	calls        []execCall
+	execErr      error
+	committed    bool
+	rolledBack   bool
 }
 
 func (f *fakeTransaction) Exec(
@@ -72,7 +74,10 @@ func (f *fakeTransaction) Exec(
 		args: append([]any(nil), arguments...),
 	})
 
-	return pgconn.NewCommandTag("OK"), nil
+	if f.staleAttempt && strings.Contains(sql, "UPDATE rag_document_heads") {
+		return pgconn.NewCommandTag("UPDATE 0"), nil
+	}
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 
 func (f *fakeTransaction) Commit(context.Context) error {
@@ -333,6 +338,9 @@ func TestStoreBatchesEmbedding(t *testing.T) {
 		validChunkDocumentWithIndex(4),
 	}
 
+	for _, doc := range docs {
+		doc.MetaData[application.MetaSourceChunkCount] = len(docs)
+	}
 	_, err := idx.Store(
 		context.Background(),
 		docs,
@@ -515,14 +523,11 @@ func TestStoreDeletesOldChunksOnlyOncePerDocument(t *testing.T) {
 
 	idx := newIndexerWithDatabase(db, cfg)
 
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocumentWithIndex(0),
-			validChunkDocumentWithIndex(1),
-			validChunkDocumentWithIndex(2),
-		},
-	)
+	docs := []*schema.Document{validChunkDocumentWithIndex(0), validChunkDocumentWithIndex(1), validChunkDocumentWithIndex(2)}
+	for _, doc := range docs {
+		doc.MetaData[application.MetaSourceChunkCount] = len(docs)
+	}
+	_, err := idx.Store(context.Background(), docs)
 
 	if err != nil {
 		t.Fatal(err)
@@ -728,14 +733,16 @@ func validChunkDocumentWithIndex(
 		Content: "## 安装\n\n这里是安装正文。",
 
 		MetaData: map[string]any{
-			"title":                "产品手册",
-			metaSourceDocumentID:   "doc-1",
-			metaChunkIndex:         index,
-			metaChunkStart:         index * 100,
-			metaChunkEnd:           index*100 + 15,
-			metaContextHeader:      "# 产品手册\n## 安装",
-			"file_name":            "manual.pdf",
-			"business_custom_data": "keep",
+			"title":                          "产品手册",
+			metaSourceDocumentID:             "doc-1",
+			metaChunkIndex:                   index,
+			metaChunkStart:                   index * 100,
+			metaChunkEnd:                     index*100 + 15,
+			metaContextHeader:                "# 产品手册\n## 安装",
+			"file_name":                      "manual.pdf",
+			"business_custom_data":           "keep",
+			application.MetaSourceMarkdown:   strings.Repeat("文", 1000),
+			application.MetaSourceChunkCount: 1,
 		},
 	}
 }

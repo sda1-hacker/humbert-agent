@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -24,6 +26,10 @@ const (
 	MetaContextHeader    = "rag_context_header"
 	MetaChunkType        = "rag_chunk_type"
 	MetaParentChunkID    = "rag_parent_chunk_id"
+	// These transient adapter fields carry a complete flat source envelope.
+	// They must be removed before persisting chunk metadata.
+	MetaSourceMarkdown   = "rag_source_markdown"
+	MetaSourceChunkCount = "rag_source_chunk_count"
 )
 
 var (
@@ -78,7 +84,10 @@ type ChunkRecord struct {
 // Store 应当删除这个 Document 的旧 Chunk，
 // 再原子写入新的完整集合。
 type IngestionBatch struct {
-	CollectionID string
+	Attempt       int64
+	ContentHash   string
+	ProcessConfig json.RawMessage
+	CollectionID  string
 
 	DocumentID string
 	Title      string
@@ -110,6 +119,10 @@ type IngestionStore interface {
 	ReplaceDocument(ctx context.Context, batch IngestionBatch) error
 }
 
+type VersionedIngestionStore interface {
+	ReserveDocument(context.Context, string, string) (int64, error)
+}
+
 // SearchEngine 是一个已经绑定具体 Collection 的搜索执行器。
 type SearchEngine interface {
 	Search(ctx context.Context, query string) (search.Response, error)
@@ -128,6 +141,10 @@ type SearchEngine interface {
 // 以后换其他后端时，只需要换 Factory Adapter。
 type SearchFactory interface {
 	ForCollection(collectionID string) (SearchEngine, error)
+}
+
+type RequestSearchFactory interface {
+	ForRequest(SearchRequest) (SearchEngine, error)
 }
 
 // Service 是当前 RAG Application Facade。
@@ -161,6 +178,10 @@ func NewService(loader document.Loader, store IngestionStore, searchFactory Sear
 
 // IngestRequest 是单次文档导入请求。
 type IngestRequest struct {
+	// DocumentID is allocated by the knowledge business layer and survives
+	// source path changes. Attempt can reuse a previously reserved worker job.
+	DocumentID   string
+	Attempt      int64
 	CollectionID string
 
 	Source document.Source
@@ -182,6 +203,7 @@ type IngestRequest struct {
 
 // IngestDocumentResult 描述一个 Loader 输出 Document 的处理结果。
 type IngestDocumentResult struct {
+	Attempt    int64  `json:"attempt"`
 	DocumentID string `json:"document_id"`
 
 	ParentCount int `json:"parent_count"`
@@ -201,6 +223,8 @@ type IngestResponse struct {
 
 // SearchRequest 是最终查询入口。
 type SearchRequest struct {
+	Mode         string
+	Limit        int
 	CollectionID string
 	Query        string
 }
@@ -235,10 +259,35 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 	if err := ctx.Err(); err != nil {
 		return IngestResponse{}, err
 	}
+	if err := req.Splitter.Validate(); err != nil {
+		return IngestResponse{}, err
+	}
+	if req.ParentChunkSize < 0 || req.ChildChunkSize < 0 {
+		return IngestResponse{}, errors.New("rag application: negative parent/child size")
+	}
+	req.DocumentID = strings.TrimSpace(req.DocumentID)
+	if req.Attempt < 0 {
+		return IngestResponse{}, errors.New("rag application: negative ingestion attempt")
+	}
+	if versioned, ok := s.store.(VersionedIngestionStore); ok {
+		if req.DocumentID == "" {
+			return IngestResponse{}, errors.New("rag application: stable DocumentID is required for versioned ingestion")
+		}
+		if req.Attempt == 0 {
+			attempt, err := versioned.ReserveDocument(ctx, req.CollectionID, req.DocumentID)
+			if err != nil {
+				return IngestResponse{}, err
+			}
+			req.Attempt = attempt
+		}
+	}
 
 	sourceDocs, err := s.loader.Load(ctx, req.Source)
 	if err != nil {
 		return IngestResponse{}, fmt.Errorf("load source document: %w", err)
+	}
+	if req.DocumentID != "" && len(sourceDocs) > 1 {
+		return IngestResponse{}, errors.New("rag application: one stable DocumentID cannot identify multiple source documents")
 	}
 
 	baseCfg := chunker.NormalizeSplitterConfig(req.Splitter)
@@ -255,6 +304,12 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 		if sourceDoc == nil {
 			continue
 		}
+		copy := *sourceDoc
+		copy.ID = strings.TrimSpace(copy.ID)
+		if req.DocumentID != "" {
+			copy.ID = req.DocumentID
+		}
+		sourceDoc = &copy
 
 		documentID := strings.TrimSpace(sourceDoc.ID)
 		if documentID == "" {
@@ -270,6 +325,13 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 			batch IngestionBatch
 			diag  *chunker.Diagnostics
 		)
+		processConfig := struct {
+			Version        string                  `json:"version"`
+			Splitter       chunker.SplitterConfig  `json:"splitter"`
+			ParentChild    bool                    `json:"parent_child"`
+			ParentSplitter *chunker.SplitterConfig `json:"parent_splitter,omitempty"`
+			ChildSplitter  *chunker.SplitterConfig `json:"child_splitter,omitempty"`
+		}{Version: "humbert-rag-v2", Splitter: baseCfg, ParentChild: req.ParentChild}
 
 		if req.ParentChild {
 			parentCfg, childCfg := chunker.DeriveParentChildConfigs(
@@ -277,6 +339,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 				req.ParentChunkSize,
 				req.ChildChunkSize,
 			)
+			processConfig.ParentSplitter, processConfig.ChildSplitter = &parentCfg, &childCfg
 
 			parentChild, diagnostics := chunker.SplitParentChildWithDiagnostics(markdown, parentCfg, childCfg)
 			diag = diagnostics
@@ -299,11 +362,18 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 			)
 		}
 
+		batch.Attempt = req.Attempt
+		batch.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(markdown)))
+		batch.ProcessConfig, err = json.Marshal(processConfig)
+		if err != nil {
+			return IngestResponse{}, fmt.Errorf("encode effective process config: %w", err)
+		}
 		if err := s.store.ReplaceDocument(ctx, batch); err != nil {
 			return IngestResponse{}, fmt.Errorf("store document %q: %w", documentID, err)
 		}
 
 		item := IngestDocumentResult{
+			Attempt:     req.Attempt,
 			DocumentID:  documentID,
 			ParentCount: len(batch.Parents),
 			ChildCount:  len(batch.Children),
@@ -320,6 +390,17 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 
 // Search 是最终应用级搜索入口。
 func (s *Service) Search(ctx context.Context, req SearchRequest) (search.Response, error) {
+	if err := ctx.Err(); err != nil {
+		return search.Response{}, err
+	}
+	if req.Limit < 0 || req.Limit > 200 {
+		return search.Response{}, errors.New("rag application: result limit must be 0..200")
+	}
+	switch req.Mode {
+	case "", "hybrid", "semantic", "keyword":
+	default:
+		return search.Response{}, errors.New("rag application: unknown search mode")
+	}
 	if s.searchFactory == nil {
 		return search.Response{}, ErrMissingSearchFactory
 	}
@@ -334,7 +415,17 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (search.Respons
 		return search.Response{}, ErrEmptyQuery
 	}
 
-	engine, err := s.searchFactory.ForCollection(collectionID)
+	var engine SearchEngine
+	var err error
+	if factory, ok := s.searchFactory.(RequestSearchFactory); ok {
+		req.CollectionID = collectionID
+		engine, err = factory.ForRequest(req)
+	} else {
+		if req.Mode != "" && req.Mode != "hybrid" || req.Limit != 0 {
+			return search.Response{}, errors.New("rag application: search factory does not support request options")
+		}
+		engine, err = s.searchFactory.ForCollection(collectionID)
+	}
 	if err != nil {
 		return search.Response{}, fmt.Errorf("create search engine for collection %q: %w", collectionID, err)
 	}

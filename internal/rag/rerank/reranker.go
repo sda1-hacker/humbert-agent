@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
@@ -181,17 +182,29 @@ type Result struct {
 }
 
 type Engine struct {
-	scorer Scorer
-	config Config
+	scorer    Scorer
+	config    Config
+	configErr error
 }
 
 func NewEngine(scorer Scorer, cfg Config) *Engine {
+	err := cfg.Validate()
 	cfg = normalizeConfig(cfg)
 
 	return &Engine{
-		scorer: scorer,
-		config: cfg,
+		scorer:    scorer,
+		config:    cfg,
+		configErr: err,
 	}
+}
+
+// RerankCandidates preserves the accepted candidate pool for context grouping.
+// The search pipeline owns the final context count; standalone Rerank retains
+// its configured TopK behavior. MaxCandidates still limits model requests.
+func (e *Engine) RerankCandidates(ctx context.Context, query string, candidates []retrieval.SearchResult) (Result, error) {
+	copy := *e
+	copy.config.TopK = len(candidates)
+	return copy.Rerank(ctx, query, candidates)
 }
 
 // Rerank 执行完整重排。
@@ -210,6 +223,12 @@ func NewEngine(scorer Scorer, cfg Config) *Engine {
 //
 // 因为取消请求不能被误认为“模型暂时失败”。
 func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieval.SearchResult) (Result, error) {
+	if e.configErr != nil {
+		return Result{}, e.configErr
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	query = strings.TrimSpace(query)
 
 	diag := Diagnostics{
@@ -273,6 +292,9 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	}
 
 	modelScores, err := e.scorer.Score(ctx, query, passages)
+	if contextErr := ctx.Err(); contextErr != nil {
+		return Result{}, contextErr
+	}
 
 	if err != nil {
 		if errors.Is(err, context.Canceled) ||
@@ -284,7 +306,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 		results := fallbackResults(candidates, e.config.TopK)
 
 		diag.Outcome = OutcomeModelError
-		diag.Error = err.Error()
+		diag.Error = logging.SafeErrorText(err, 2048)
 		diag.ResultCount = len(results)
 
 		return Result{
@@ -791,18 +813,6 @@ func normalizeConfig(cfg Config) Config {
 		cfg.MaxCandidates = defaults.MaxCandidates
 	}
 
-	if cfg.DegradeFactor <= 0 || cfg.DegradeFactor >= 1 {
-		cfg.DegradeFactor = defaults.DegradeFactor
-	}
-
-	if cfg.DegradeFloor <= 0 {
-		cfg.DegradeFloor = defaults.DegradeFloor
-	}
-
-	if cfg.FallbackMinScore <= 0 {
-		cfg.FallbackMinScore = defaults.FallbackMinScore
-	}
-
 	// 三个 Weight 允许调用方显式把其中某一个设成0。
 	//
 	// 只有三个都没有设置时，才恢复默认权重。
@@ -815,7 +825,7 @@ func normalizeConfig(cfg Config) Config {
 		cfg.SourceWeight = defaults.SourceWeight
 	}
 
-	if cfg.MMRLambda <= 0 || cfg.MMRLambda > 1 {
+	if cfg.MMRLambda < 0 || cfg.MMRLambda > 1 {
 		cfg.MMRLambda = defaults.MMRLambda
 	}
 

@@ -27,7 +27,7 @@ import "strings"
 //	Parent 1
 //	Parent 2
 //	    ↓
-//	每个 Parent.Content 再调用 Split(childCfg)
+//	每个 Parent 的原文区间再调用 Split(childCfg)
 //	    ↓
 //	Child
 //	    ↓
@@ -202,6 +202,7 @@ func splitParentChild(
 	// Child.Seq 必须在整个文档范围内连续，
 	// 而不是每个 Parent 都从0重新开始。
 	childSeq := 0
+	source := []rune(text)
 
 	for _, parent := range parents {
 		// ---------------------------------------------------------------------
@@ -224,7 +225,20 @@ func splitParentChild(
 		// Child Split 就有机会得到更细的 Breadcrumb。
 		// ---------------------------------------------------------------------
 
-		subs := Split(parent.Content, childCfg)
+		// Content can contain zero-width synthetic table headers. Split the
+		// canonical source range, so local child offsets remain source offsets.
+		body := string(source[parent.Start:parent.End])
+		subs := Split(body, childCfg)
+		prefix := ""
+		if strings.HasSuffix(parent.Content, body) {
+			prefix = strings.TrimSuffix(parent.Content, body)
+		}
+		for i := range subs {
+			if prefix != "" && !headerAlreadyPresent(prefix, subs[i].Content, "") &&
+				!headerColumnMismatch(prefix, subs[i].Content) {
+				subs[i].Content = prefix + subs[i].Content
+			}
+		}
 
 		// -1 表示这个 Child 没有必要关联一个单独保存的 Parent。
 		parentIndex := -1
@@ -277,11 +291,11 @@ func splitParentChild(
 
 		for _, sub := range subs {
 			// -----------------------------------------------------------------
-			// Split(parent.Content, childCfg)
+			// Split(source[parent.Start:parent.End], childCfg)
 			//
 			// 得到的 sub.Start / sub.End 是：
 			//
-			//     “相对于 Parent.Content”
+			//     “相对于 Parent 原文区间”
 			//
 			// 的局部坐标。
 			//
@@ -342,15 +356,12 @@ func splitParentChild(
 				sub.ContextHeader,
 			)
 
-			// Child Seq 使用整个文档级连续编号。
-			sub.Seq = childSeq
-
-			children = append(children, ChildChunk{
-				Chunk:       sub,
-				ParentIndex: parentIndex,
-			})
-
-			childSeq++
+			// Recheck after adding inherited synthetic headers and breadcrumbs.
+			for _, part := range enforceTokenTarget(text, []Chunk{sub}, childCfg) {
+				part.Seq = childSeq
+				children = append(children, ChildChunk{Chunk: part, ParentIndex: parentIndex})
+				childSeq++
+			}
 		}
 	}
 

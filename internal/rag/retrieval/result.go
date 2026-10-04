@@ -1,5 +1,7 @@
 package retrieval
 
+import "strconv"
+
 // MatchType 表示一个 Chunk 是通过哪一路 Retriever 命中的。
 type MatchType string
 
@@ -44,9 +46,11 @@ const (
 //
 // 始终知道究竟是哪个小块真正被检索命中。
 type SearchResult struct {
-	ChunkID string `json:"chunk_id"`
+	CollectionID string `json:"collection_id,omitempty"`
+	ChunkID      string `json:"chunk_id"`
 
-	DocumentID string `json:"document_id"`
+	DocumentID       string `json:"document_id"`
+	DocumentRevision int64  `json:"document_revision"`
 
 	ParentChunkID string `json:"parent_chunk_id,omitempty"`
 
@@ -133,9 +137,24 @@ type SearchResult struct {
 	// Parent-Child：
 	//
 	//     ContextContent = Parent.Content
-	ContextContent string `json:"context_content,omitempty"`
+	ContextContent      string `json:"context_content,omitempty"`
+	ContextStartRune    int    `json:"context_start_rune"`
+	ContextEndRune      int    `json:"context_end_rune"`
+	ContextSourceHeader string `json:"context_source_header,omitempty"`
+
+	// Evidence survives parent grouping, retaining the child ranges used for
+	// citations and evaluation rather than discarding all but one child.
+	Evidence []HitEvidence `json:"evidence,omitempty"`
 
 	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type HitEvidence struct {
+	ChunkID   string  `json:"chunk_id"`
+	StartRune int     `json:"start_rune"`
+	EndRune   int     `json:"end_rune"`
+	Content   string  `json:"content"`
+	Score     float64 `json:"score"`
 }
 
 // EffectiveContent 返回最终应该交给 LLM 阅读的文本。
@@ -162,4 +181,13 @@ func (r SearchResult) EffectiveChunkID() string {
 	}
 
 	return r.ChunkID
+}
+
+// IdentityKey prevents cross-collection/document collisions when results are
+// merged. Legacy standalone results with only a ChunkID retain their key.
+func (r SearchResult) IdentityKey() string {
+	if r.CollectionID == "" && r.DocumentID == "" && r.DocumentRevision == 0 {
+		return r.ChunkID
+	}
+	return r.CollectionID + "\x00" + r.DocumentID + "\x00" + strconv.FormatInt(r.DocumentRevision, 10) + "\x00" + r.ChunkID
 }

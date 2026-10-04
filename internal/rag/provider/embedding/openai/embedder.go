@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	einoopenai "github.com/cloudwego/eino-ext/components/embedding/openai"
 	"github.com/cloudwego/eino/components/embedding"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/embeddinginput"
 )
 
 var (
@@ -24,22 +26,23 @@ var (
 //
 // 只要服务兼容：
 //
-//     POST /v1/embeddings
+//	POST /v1/embeddings
 //
 // 就可以使用，例如：
 //
-//     OpenAI
-//     vLLM
-//     LocalAI
-//     一些企业内部 OpenAI-compatible gateway
+//	OpenAI
+//	vLLM
+//	LocalAI
+//	一些企业内部 OpenAI-compatible gateway
 //
 // 对于 vLLM:
 //
-//     BaseURL = "http://127.0.0.1:8001/v1"
-//     APIKey  = "EMPTY"
-//     Model   = "BAAI/bge-m3"
+//	BaseURL = "http://127.0.0.1:8001/v1"
+//	APIKey  = "EMPTY"
+//	Model   = "BAAI/bge-m3"
 type Config struct {
-	APIKey string
+	InputBudget embeddinginput.Budget
+	APIKey      string
 
 	// BaseURL 必须是 OpenAI API Base。
 	//
@@ -52,7 +55,8 @@ type Config struct {
 	//     http://127.0.0.1:8001/v1/embeddings
 	BaseURL string
 
-	Model string
+	Model         string
+	ModelRevision string
 
 	// Dimensions <= 0 表示不向 Provider 显式传 dimensions。
 	//
@@ -86,6 +90,15 @@ func DefaultConfig() Config {
 }
 
 func (c Config) Validate() error {
+	if strings.TrimSpace(c.BaseURL) != "" {
+		u, err := url.Parse(strings.TrimSpace(c.BaseURL))
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return errors.New("openai embedding: BaseURL must be an HTTP(S) API base without embedded credentials, query or fragment")
+		}
+	}
+	if err := c.InputBudget.Validate(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(c.Model) == "" {
 		return ErrMissingModel
 	}
@@ -108,9 +121,9 @@ func (c Config) Validate() error {
 //
 // 这样可以继续获得：
 //
-//     Eino callback
-//     embedding.WithModel()
-//     OpenAI-compatible protocol
+//	Eino callback
+//	embedding.WithModel()
+//	OpenAI-compatible protocol
 //
 // 等能力。
 func New(ctx context.Context, cfg Config) (embedding.Embedder, error) {
@@ -142,5 +155,5 @@ func New(ctx context.Context, cfg Config) (embedding.Embedder, error) {
 		return nil, fmt.Errorf("create openai compatible embedder: %w", err)
 	}
 
-	return embedder, nil
+	return embeddinginput.Limit(embedder, cfg.InputBudget), nil
 }

@@ -26,6 +26,9 @@ func TestSupportedExtension(t *testing.T) {
 		"html",
 		"htm",
 		"epub",
+		"txt",
+		"md",
+		"csv",
 	}
 
 	for _, ext := range supported {
@@ -36,9 +39,6 @@ func TestSupportedExtension(t *testing.T) {
 
 	unsupported := []string{
 		"",
-		"txt",
-		"md",
-		"csv",
 		"jpg",
 		"png",
 		"zip",
@@ -375,7 +375,7 @@ func TestLoaderRejectsRemoteSource(t *testing.T) {
 // 纯文本/Markdown 未来可以直接走一个非常简单的 Eino File Loader，
 // 没必要绕一遍 Tabula。
 func TestLoaderRejectsUnsupportedFormat(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "demo.txt")
+	path := filepath.Join(t.TempDir(), "demo.jpg")
 
 	if err := os.WriteFile(path, []byte("hello"), 0o600); err != nil {
 		t.Fatal(err)
@@ -390,7 +390,7 @@ func TestLoaderRejectsUnsupportedFormat(t *testing.T) {
 
 	if !errors.Is(err, ErrUnsupportedFormat) {
 		t.Fatalf(
-			"txt 应返回 ErrUnsupportedFormat: got=%v",
+			"jpg 应返回 ErrUnsupportedFormat: got=%v",
 			err,
 		)
 	}

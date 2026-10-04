@@ -70,9 +70,9 @@ func TestNormalizeSplitterConfigDefaults(t *testing.T) {
 		)
 	}
 
-	if cfg.ChunkOverlap != DefaultChunkOverlap {
+	if cfg.ChunkOverlap != 0 {
 		t.Fatalf(
-			"ChunkOverlap 默认值错误: %d",
+			"空配置的 overlap 应为 0: %d",
 			cfg.ChunkOverlap,
 		)
 	}
@@ -140,19 +140,7 @@ func TestNormalizeSplitterConfigKeepsCustomValues(t *testing.T) {
 	}
 }
 
-// TestNormalizeSplitterConfigZeroOverlap
-//
-// 这个测试非常有价值。
-//
-// 它不是在证明“这样设计最好”，
-//
-// 而是在固定当前 WeKnora 的真实行为：
-//
-//	ChunkOverlap <= 0
-//	    ↓
-//	DefaultChunkOverlap
-//
-// 所以 0 最终也是 80。
+// Explicit zero disables overlap; DefaultConfig supplies the recommended 80.
 func TestNormalizeSplitterConfigZeroOverlap(t *testing.T) {
 	cfg := NormalizeSplitterConfig(
 		SplitterConfig{
@@ -161,10 +149,9 @@ func TestNormalizeSplitterConfigZeroOverlap(t *testing.T) {
 		},
 	)
 
-	if cfg.ChunkOverlap != DefaultChunkOverlap {
+	if cfg.ChunkOverlap != 0 {
 		t.Fatalf(
-			"当前对标行为要求 overlap=0 归一化为 %d, got=%d",
-			DefaultChunkOverlap,
+			"显式 overlap=0 应保留，got=%d",
 			cfg.ChunkOverlap,
 		)
 	}

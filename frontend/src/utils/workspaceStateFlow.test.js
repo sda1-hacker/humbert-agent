@@ -1,6 +1,9 @@
 import test, { beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { createPinia, setActivePinia } from "pinia";
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 let fetchOverview, fetchDirectory, fetchPreview;
 mock.module("../api/workspace.js", { namedExports: {
@@ -35,6 +38,7 @@ test("后台刷新不会把用户刚选的文件切回旧文件", async () => {
 });
 
 test("刷新预览只更新内容，保留选中文件的元数据", async () => {
+    fetchDirectory = async () => ({ entries: [{ path: "file.txt", type: "file", size: 123 }] });
     const store = useWorkspaceStore(); store.resetForAgent("agent");
     await store.selectEntry({ path: "file.txt", type: "file", size: 123 });
     fetchPreview = async () => ({ content: "updated" });
@@ -112,8 +116,120 @@ test("目录加载期间收起后不会被响应重新展开", async () => {
 });
 
 test("当前预览失败仍向调用方报告，并结束加载状态", async () => {
+    fetchDirectory = async () => ({ entries: [{ path: "missing.txt", type: "file" }] });
     fetchPreview = async () => { throw new Error("current failure"); };
     const store = useWorkspaceStore(); store.resetForAgent("agent");
     await assert.rejects(store.openPath("missing.txt"), /current failure/);
     assert.equal(store.loadingPreview, false);
+});
+
+test("外部删除选中文件后同步列表和预览，不再次读取已删除文件", async (t) => {
+    const root = await mkdtemp(join(tmpdir(), "humbert-workspace-sync-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeFile(join(root, "aaaa.md"), "temporary file");
+    await writeFile(join(root, "aaaa.txt"), "keep this file");
+    let previews = 0;
+    fetchDirectory = async () => ({ entries: await Promise.all((await readdir(root)).map(async (name) => {
+        const info = await stat(join(root, name));
+        return { path: name, name, type: "file", size: info.size, modifiedAt: info.mtime.toISOString() };
+    })) });
+    fetchPreview = async (agent, path) => {
+        previews++;
+        return { path, content: await readFile(join(root, path), "utf8") };
+    };
+    const store = useWorkspaceStore();
+    await store.load("agent");
+    await store.selectEntry(store.rootEntries.find((entry) => entry.path === "aaaa.md"));
+    await rm(join(root, "aaaa.md"));
+    await store.refresh({ background: true });
+    assert.deepEqual(store.rootEntries.map((entry) => entry.path), ["aaaa.txt"]);
+    assert.equal(store.selectedPath, "");
+    assert.equal(store.selectedEntry, null);
+    assert.equal(store.preview, null);
+    assert.equal(store.loadingPreview, false);
+    assert.equal(store.error, "");
+    assert.equal(previews, 1);
+});
+
+test("在下次同步前点击已经删除的旧节点会核对目录并清理，不弹预览错误", async () => {
+    const store = useWorkspaceStore(); store.resetForAgent("agent");
+    store.directories = { ".": { entries: [{ path: "gone.txt", type: "file" }] } };
+    fetchPreview = async () => { throw new Error("stat gone.txt: no such file"); };
+    await store.selectEntry(store.rootEntries[0]);
+    assert.deepEqual(store.rootEntries, []);
+    assert.equal(store.selectedEntry, null);
+    assert.equal(store.preview, null);
+    assert.equal(store.loadingPreview, false);
+});
+
+test("整个展开目录删除后清掉子树缓存，迟到预览不能复活选中项", async () => {
+    const pending = deferred();
+    fetchPreview = () => pending.promise;
+    fetchDirectory = async (agent, path) => {
+        if (path !== ".") throw new Error("directory removed");
+        return { entries: [] };
+    };
+    const store = useWorkspaceStore(); store.resetForAgent("agent");
+    store.directories = { ".": { entries: [{ path: "src", type: "directory" }] }, src: { entries: [] }, "src/nested": { entries: [] } };
+    store.expandedPaths = [".", "src", "src/nested"];
+    const preview = store.openPath("src/nested/file.txt");
+    await store.refresh({ background: true });
+    pending.resolve({ content: "deleted contents" }); await preview;
+    assert.deepEqual(Object.keys(store.directories), ["."]);
+    assert.deepEqual(store.expandedPaths, ["."]);
+    assert.equal(store.selectedPath, "");
+    assert.equal(store.preview, null);
+    assert.equal(store.loadingPreview, false);
+    assert.equal(store.error, "");
+});
+
+test("删除的尚未缓存目录，其迟到结果也不能重新写入缓存", async () => {
+    const pending = deferred();
+    fetchDirectory = (agent, path) => path === "src" ? pending.promise : Promise.resolve({ entries: [] });
+    const store = useWorkspaceStore(); store.resetForAgent("agent");
+    const directory = store.loadDirectory("src", true);
+    await store.loadDirectory(".", true);
+    pending.resolve({ entries: [{ path: "src/deleted.txt", type: "file" }] }); await directory;
+    assert.equal(store.directories.src, undefined);
+    assert.equal(store.loadingDirectories.src, undefined);
+});
+
+test("目录结果被截断时不能把未列出的文件和目录当成已删除", async () => {
+    const store = useWorkspaceStore(); store.resetForAgent("agent");
+    store.directories = { src: { entries: [] } };
+    store.expandedPaths = [".", "src"];
+    await store.openPath("src/file.txt");
+    fetchDirectory = async () => ({ entries: [], truncated: true });
+    await store.loadDirectory(".", true);
+    assert.equal(store.selectedPath, "src/file.txt");
+    assert.equal(store.preview.content, "src/file.txt");
+    assert.ok(store.directories.src);
+    assert.deepEqual(store.expandedPaths, [".", "src"]);
+});
+
+test("后台同步不扫描总览或重复读取未变化文件，但外部编辑会更新预览", async () => {
+    let info = { path: "file.txt", type: "file", size: 10, modifiedAt: "before" };
+    let overviews = 0, previews = 0;
+    fetchOverview = async () => { overviews++; return {}; };
+    fetchDirectory = async () => ({ entries: [{ ...info }] });
+    fetchPreview = async () => { previews++; return { ...info, content: info.modifiedAt }; };
+    const store = useWorkspaceStore();
+    await store.load("agent"); await store.selectEntry(store.rootEntries[0]);
+    await store.refresh({ background: true });
+    assert.equal(previews, 1);
+    assert.equal(overviews, 1);
+    info = { ...info, modifiedAt: "after" };
+    await store.refresh({ background: true });
+    assert.equal(store.preview.content, "after");
+    assert.equal(previews, 2);
+    await store.refresh({ background: true });
+    assert.equal(previews, 2);
+    assert.equal(overviews, 1);
+});
+
+test("收起目录再次展开时重新读内容，避免复用外部删除前的缓存", async () => {
+    const store = useWorkspaceStore(); store.resetForAgent("agent");
+    store.directories = { src: { entries: [{ path: "src/old.txt", type: "file" }] } };
+    await store.toggleDirectory("src");
+    assert.deepEqual(store.directories.src.entries, []);
 });

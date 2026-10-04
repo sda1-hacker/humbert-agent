@@ -6,42 +6,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/tsawler/tabula"
-	"github.com/tsawler/tabula/rag"
+	"github.com/sda1-hacker/humbert-agent/internal/documentparse"
 )
 
 const maxInputBytes = 12 << 20
 const maxOutputBytes = 512 << 10
 const maxOfficeExpandedBytes = 64 << 20
 const parseTimeout = 20 * time.Second
-const workerEnv = "HUMBERT_DOCUMENT_WORKER_FILE"
-
-// 同一二进制在受控环境中作为一次性文档解析进程启动。解析超时由父进程终止。
-func init() {
-	if path := os.Getenv(workerEnv); path != "" {
-		options := rag.DefaultMarkdownOptions()
-		if strings.EqualFold(filepath.Ext(path), ".pdf") {
-			options.IncludePageNumbers = true
-		}
-		markdown, _, err := tabula.Open(path).ToMarkdownWithOptions(options)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		if _, err := io.WriteString(os.Stdout, markdown); err != nil {
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-}
 
 var supported = map[string]string{
 	".pdf":  "application/pdf",
@@ -121,53 +98,13 @@ func Extract(ctx context.Context, name, mimeType string, data []byte) (string, s
 }
 
 func parseInWorker(ctx context.Context, path string) (string, error) {
-	executable, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	command := exec.CommandContext(ctx, executable)
-	command.Env = []string{workerEnv + "=" + path}
-	command.WaitDelay = time.Second
-	output := &boundedWriter{limit: maxOutputBytes + 1}
-	errorsOutput := &boundedWriter{limit: 4096}
-	command.Stdout, command.Stderr = output, errorsOutput
-	if err := command.Run(); err != nil {
-		if ctx.Err() != nil {
-			return "", ctx.Err()
-		}
-		if output.exceeded {
-			return "", errors.New("文档 Markdown 超过 512 KiB，请拆分文档")
-		}
-		return "", fmt.Errorf("文档解析子进程失败: %s: %w", strings.TrimSpace(errorsOutput.String()), err)
-	}
-	if output.exceeded {
-		return "", errors.New("文档 Markdown 超过 512 KiB，请拆分文档")
-	}
-	return output.String(), nil
+	result, err := documentparse.ExtractFile(ctx, path, documentparse.Options{
+		MaxInputBytes: maxInputBytes, MaxOutputBytes: maxOutputBytes,
+		MaxExpandedBytes: maxOfficeExpandedBytes, MaxArchiveEntries: 2048,
+		Timeout: parseTimeout, IncludePageNumbers: strings.EqualFold(filepath.Ext(path), ".pdf"),
+	})
+	return result.Markdown, err
 }
-
-type boundedWriter struct {
-	buffer   bytes.Buffer
-	limit    int
-	exceeded bool
-}
-
-func (w *boundedWriter) Write(value []byte) (int, error) {
-	original := len(value)
-	remaining := w.limit - w.buffer.Len()
-	if remaining <= 0 {
-		w.exceeded = true
-		return original, nil
-	}
-	if len(value) > remaining {
-		w.exceeded = true
-		value = value[:remaining]
-	}
-	_, _ = w.buffer.Write(value)
-	return original, nil
-}
-
-func (w *boundedWriter) String() string { return w.buffer.String() }
 
 func preflightOffice(data []byte) error {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))

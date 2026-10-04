@@ -144,6 +144,11 @@ func (l *ParentLoader) LoadParents(
 			}
 		}
 
+		parent.CollectionID = l.collectionID
+		parent.DocumentRevision, err = documentRevision(parent.Metadata)
+		if err != nil {
+			return nil, err
+		}
 		result[parent.ChunkID] = parent
 	}
 
@@ -159,18 +164,12 @@ func (l *ParentLoader) LoadParents(
 
 const parentChunkSQL = `
 SELECT
-    id,
-    document_id,
-    content,
-    context_header,
-    chunk_index,
-    start_rune,
-    end_rune,
-    parent_chunk_id,
-    metadata
-FROM chunks
-WHERE collection_id = $1
-  AND id = ANY($2::text[])
+    c.id, c.document_id, c.content, c.context_header, c.chunk_index,
+    c.start_rune, c.end_rune, c.parent_chunk_id,
+    c.metadata || jsonb_build_object('rag_document_revision', d.revision::text)
+FROM chunks c
+JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
+WHERE c.collection_id = $1 AND c.id = ANY($2::text[]) AND c.chunk_type='parent_text'
 `
 
 func uniqueStrings(values []string) []string {

@@ -2,9 +2,12 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
 
@@ -64,6 +67,18 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 	if err := validateIngestionBatch(batch); err != nil {
 		return err
 	}
+	if p.config.VersionedDocuments && batch.Attempt == 0 {
+		return errors.New("rag: reserve a document attempt before ingestion")
+	}
+	if err := p.ensureProfile(ctx, batch.CollectionID); err != nil {
+		return err
+	}
+	if batch.ContentHash == "" {
+		batch.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(batch.Markdown)))
+	}
+	if len(batch.ProcessConfig) == 0 {
+		batch.ProcessConfig = json.RawMessage("{}")
+	}
 
 	if p.config.Embedder == nil {
 		return ErrMissingEmbedder
@@ -75,6 +90,10 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 	}
 
 	preparedChildren, texts, err := p.prepareSearchableChunks(batch)
+	if err != nil {
+		return err
+	}
+	batch.ProcessConfig, err = processSnapshot(batch, texts)
 	if err != nil {
 		return err
 	}
@@ -91,6 +110,7 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 		texts,
 		p.config.EmbeddingBatchSize,
 		nil,
+		p.config.InputBudget,
 	)
 
 	if err != nil {
@@ -127,9 +147,16 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 		return fmt.Errorf("begin ingestion transaction: %w", err)
 	}
 
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
+	defer rollbackTransaction(ctx, tx)
+	if batch.Attempt > 0 {
+		tag, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND document_id=$2 AND attempt=$3 AND NOT deleted`, batch.CollectionID, batch.DocumentID, batch.Attempt)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return ErrStaleIngestion
+		}
+	}
 
 	// -------------------------------------------------------------------------
 	// 完整 Document 原文在这里正式持久化。
@@ -137,7 +164,7 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 	// 这也是为什么前面不能从 Chunks 反向重建 Markdown。
 	// -------------------------------------------------------------------------
 
-	if _, err := tx.Exec(
+	tag, err := tx.Exec(
 		ctx,
 		upsertIngestionDocumentSQL,
 		batch.CollectionID,
@@ -145,8 +172,15 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 		batch.Title,
 		batch.Markdown,
 		documentMetadataJSON,
-	); err != nil {
+		batch.Attempt,
+		batch.ContentHash,
+		string(batch.ProcessConfig),
+	)
+	if err != nil {
 		return fmt.Errorf("upsert ingestion document %q: %w", batch.DocumentID, err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrStaleIngestion
 	}
 
 	// 删除旧 Chunk。
@@ -215,6 +249,9 @@ func (p *Indexer) prepareSearchableChunks(
 		record := prepared[i].record
 
 		metadata := cloneIngestionMetadata(record.Metadata)
+		// Explicit fields are authoritative; metadata may have been supplied
+		// by an adapter or copied from an earlier chunk.
+		metadata[metaContextHeader] = record.ContextHeader
 
 		// SearchContent Builder 默认会寻找：
 		//
@@ -276,6 +313,21 @@ func prepareStoredChunks(records []application.ChunkRecord) ([]preparedIngestion
 }
 
 func validateIngestionBatch(batch application.IngestionBatch) error {
+	if batch.Attempt < 0 {
+		return fmt.Errorf("%w: negative attempt", ErrInvalidIngestionBatch)
+	}
+	if batch.ContentHash != "" && batch.ContentHash != fmt.Sprintf("%x", sha256.Sum256([]byte(batch.Markdown))) {
+		return fmt.Errorf("%w: content hash does not match Markdown", ErrInvalidIngestionBatch)
+	}
+	if len(batch.ProcessConfig) > 0 && !json.Valid(batch.ProcessConfig) {
+		return fmt.Errorf("%w: invalid process config", ErrInvalidIngestionBatch)
+	}
+	if len(batch.ProcessConfig) > 0 {
+		var config map[string]json.RawMessage
+		if json.Unmarshal(batch.ProcessConfig, &config) != nil || config == nil {
+			return fmt.Errorf("%w: process config must be an object", ErrInvalidIngestionBatch)
+		}
+	}
 	if strings.TrimSpace(batch.CollectionID) == "" {
 		return fmt.Errorf("%w: missing collection id", ErrInvalidIngestionBatch)
 	}
@@ -285,7 +337,9 @@ func validateIngestionBatch(batch application.IngestionBatch) error {
 	}
 
 	ids := make(map[string]struct{}, len(batch.Parents)+len(batch.Children))
-	parentIDs := make(map[string]struct{}, len(batch.Parents))
+	parentIDs := make(map[string]application.ChunkRecord, len(batch.Parents))
+	indexes := make(map[string]map[int]bool)
+	sourceRunes := utf8.RuneCountInString(batch.Markdown)
 
 	validateRecord := func(record application.ChunkRecord) error {
 		if strings.TrimSpace(record.ID) == "" {
@@ -306,7 +360,7 @@ func validateIngestionBatch(batch application.IngestionBatch) error {
 			return fmt.Errorf("%w: chunk %q has negative index", ErrInvalidIngestionBatch, record.ID)
 		}
 
-		if record.StartRune < 0 || record.EndRune < record.StartRune {
+		if strings.TrimSpace(record.Content) == "" || record.StartRune < 0 || record.EndRune <= record.StartRune || record.EndRune > sourceRunes {
 			return fmt.Errorf(
 				"%w: chunk %q has invalid rune range [%d,%d)",
 				ErrInvalidIngestionBatch,
@@ -321,6 +375,13 @@ func validateIngestionBatch(batch application.IngestionBatch) error {
 		}
 
 		ids[record.ID] = struct{}{}
+		if indexes[record.ChunkType] == nil {
+			indexes[record.ChunkType] = make(map[int]bool)
+		}
+		if indexes[record.ChunkType][record.ChunkIndex] {
+			return fmt.Errorf("%w: duplicate %s chunk index %d", ErrInvalidIngestionBatch, record.ChunkType, record.ChunkIndex)
+		}
+		indexes[record.ChunkType][record.ChunkIndex] = true
 		return nil
 	}
 
@@ -338,7 +399,10 @@ func validateIngestionBatch(batch application.IngestionBatch) error {
 			return err
 		}
 
-		parentIDs[parent.ID] = struct{}{}
+		if parent.ParentChunkID != "" {
+			return fmt.Errorf("%w: nested parent chunks are unsupported", ErrInvalidIngestionBatch)
+		}
+		parentIDs[parent.ID] = parent
 	}
 
 	for _, child := range batch.Children {
@@ -366,6 +430,10 @@ func validateIngestionBatch(batch application.IngestionBatch) error {
 				child.ID,
 				child.ParentChunkID,
 			)
+		}
+		parent := parentIDs[child.ParentChunkID]
+		if child.StartRune < parent.StartRune || child.EndRune > parent.EndRune {
+			return fmt.Errorf("%w: child %q is outside parent source range", ErrInvalidIngestionBatch, child.ID)
 		}
 	}
 
@@ -421,14 +489,20 @@ INSERT INTO documents (
     id,
     title,
     markdown,
-    metadata
+    metadata,
+    revision,
+    content_hash,
+    process_config
 )
 VALUES (
     $1,
     $2,
     $3,
     $4,
-    $5::jsonb
+    $5::jsonb,
+    $6,
+    $7,
+    $8::jsonb
 )
 ON CONFLICT (
     collection_id,
@@ -438,5 +512,11 @@ DO UPDATE SET
     title = EXCLUDED.title,
     markdown = EXCLUDED.markdown,
     metadata = EXCLUDED.metadata,
+    revision = EXCLUDED.revision,
+    content_hash = EXCLUDED.content_hash,
+    process_config = EXCLUDED.process_config,
     updated_at = NOW()
+WHERE (documents.revision=0 AND EXCLUDED.revision=0)
+   OR documents.revision<EXCLUDED.revision
+   OR (documents.revision=EXCLUDED.revision AND documents.content_hash=EXCLUDED.content_hash AND documents.process_config=EXCLUDED.process_config)
 `

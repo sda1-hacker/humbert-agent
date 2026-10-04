@@ -229,17 +229,7 @@ func SelectStrategy(profile *DocProfile) []StrategyTier {
 //
 // Split() 使用的是 ensureDefaults()。
 func ensureDefaults(cfg SplitterConfig) SplitterConfig {
-	if cfg.ChunkSize <= 0 {
-		cfg.ChunkSize = DefaultChunkSize
-	}
-
-	if cfg.ChunkOverlap <= 0 {
-		cfg.ChunkOverlap = DefaultChunkOverlap
-	}
-
-	if len(cfg.Separators) == 0 {
-		cfg.Separators = DefaultSeparators()
-	}
+	cfg = NormalizeSplitterConfig(cfg)
 
 	// ---------------------------------------------------------------------
 	// TokenLimit
@@ -412,6 +402,12 @@ func Split(text string, cfg SplitterConfig) []Chunk {
 	}
 
 	cfg = ensureDefaults(cfg)
+	// All strategy exits, including rejected legacy fallbacks, receive the
+	// same final token-target handling.
+	return enforceTokenTarget(text, splitConfigured(text, cfg), cfg)
+}
+
+func splitConfigured(text string, cfg SplitterConfig) []Chunk {
 
 	chain, profile := resolveChainWithProfile(text, cfg)
 	totalChars := RuneLen(text)
@@ -470,6 +466,12 @@ func Split(text string, cfg SplitterConfig) []Chunk {
 // 不建议在高频生产入库热路径中无条件使用，
 // 因为会创建额外的 Diagnostics / Rejection 对象。
 func SplitWithDiagnostics(text string, cfg SplitterConfig) ([]Chunk, *Diagnostics) {
+	cfg = ensureDefaults(cfg)
+	chunks, diag := splitConfiguredWithDiagnostics(text, cfg)
+	return enforceTokenTarget(text, chunks, cfg), diag
+}
+
+func splitConfiguredWithDiagnostics(text string, cfg SplitterConfig) ([]Chunk, *Diagnostics) {
 	// 即使输入为空，也让 SelectedTier 有一个有效值，
 	// 避免调试 UI 显示空字符串。
 	diag := &Diagnostics{

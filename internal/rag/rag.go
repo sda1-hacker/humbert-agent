@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/embeddinginput"
 	indexerpostgres "github.com/sda1-hacker/humbert-agent/internal/rag/indexer/postgres"
 	tabulaloader "github.com/sda1-hacker/humbert-agent/internal/rag/loader/tabula"
 	embeddingopenai "github.com/sda1-hacker/humbert-agent/internal/rag/provider/embedding/openai"
@@ -17,6 +18,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/rag/rerank"
 	retrieverpostgres "github.com/sda1-hacker/humbert-agent/internal/rag/retriever/postgres"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/search"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
 var (
@@ -40,6 +42,8 @@ var (
 //	注入依赖
 //	保证同一 Embedder 同时用于 Index + Query
 type Config struct {
+	// pgsql 的 url
+	// 'postgres://USER:PASSWORD@HOST:5432/humbert_rag_eval?sslmode=disable'
 	DatabaseURL string
 
 	// EnsureSchema=true：
@@ -90,7 +94,7 @@ func DefaultConfig() Config {
 	embeddingCfg.Dimensions = indexerpostgres.EmbeddingDimensions
 
 	return Config{
-		EnsureSchema: true,
+		EnsureSchema: false,
 
 		Loader: tabulaloader.DefaultConfig(),
 
@@ -107,6 +111,37 @@ func DefaultConfig() Config {
 }
 
 func (c Config) Validate() error {
+	if err := c.Loader.ParseOptions.Validate(); err != nil {
+		return err
+	}
+	if err := c.Indexer.InputBudget.Validate(); err != nil {
+		return err
+	}
+	if c.Indexer.InputBudget.MaxInputTokens != 0 || c.Indexer.InputBudget.MaxBatchTokens != 0 || c.Indexer.InputBudget.CountTokens != nil {
+		return fmt.Errorf("rag: configure Embedding.InputBudget for both index and query; Indexer.InputBudget is for standalone indexers")
+	}
+	if c.Indexer.EmbeddingBatchSize < 0 {
+		return fmt.Errorf("rag: negative embedding batch size")
+	}
+	if err := c.Hybrid.Validate(); err != nil {
+		return err
+	}
+	if err := c.Rerank.Validate(); err != nil {
+		return err
+	}
+	if err := c.Search.Validate(); err != nil {
+		return err
+	}
+	if c.Search.FinalTopK > retrieverpostgres.MaxTopK {
+		return fmt.Errorf("rag: final top k exceeds maximum recall size %d", retrieverpostgres.MaxTopK)
+	}
+	if c.Hybrid.TopK > 0 && c.Search.FinalTopK > c.Hybrid.TopK {
+		return fmt.Errorf("rag: recall pool must be at least final top k")
+	}
+	if c.Rerank.MaxCandidates > 0 && c.RerankProvider != nil && c.Rerank.MaxCandidates < c.Search.FinalTopK {
+		return fmt.Errorf("rag: rerank candidate pool must be at least final top k")
+	}
+
 	if strings.TrimSpace(c.DatabaseURL) == "" {
 		return ErrMissingDatabaseURL
 	}
@@ -155,7 +190,8 @@ func (c Config) Validate() error {
 type RAG struct {
 	service *application.Service
 
-	pool *pgxpool.Pool
+	pool    *pgxpool.Pool
+	indexer *indexerpostgres.Indexer
 
 	embedder embedding.Embedder
 }
@@ -215,6 +251,9 @@ func NewRAG(ctx context.Context, cfg Config) (*RAG, error) {
 		}
 	}
 
+	if err := indexerpostgres.CheckSchema(ctx, pool); err != nil {
+		return nil, err
+	}
 	// -------------------------------------------------------------------------
 	// Embedding
 	// -------------------------------------------------------------------------
@@ -233,6 +272,11 @@ func NewRAG(ctx context.Context, cfg Config) (*RAG, error) {
 
 	indexerCfg := cfg.Indexer
 	indexerCfg.Embedder = embedder
+	indexerCfg.InputBudget = cfg.Embedding.InputBudget
+	profile := cfg.EmbeddingProfile()
+	indexerCfg.ProfileID = profile.ID()
+	indexerCfg.ProfileJSON = profile.JSON()
+	indexerCfg.VersionedDocuments = true
 
 	pgIndexer, err := indexerpostgres.NewIndexer(pool, indexerCfg)
 	if err != nil {
@@ -278,9 +322,11 @@ func NewRAG(ctx context.Context, cfg Config) (*RAG, error) {
 	searchFactory, err := retrieverpostgres.NewPipelineFactory(
 		pool,
 		retrieverpostgres.PipelineFactoryConfig{
-			Hybrid:   hybridCfg,
-			Reranker: rerankEngine,
-			Search:   cfg.Search,
+			Hybrid:      hybridCfg,
+			ProfileID:   profile.ID(),
+			ProfileJSON: profile.JSON(),
+			Reranker:    rerankEngine,
+			Search:      cfg.Search,
 		},
 	)
 	if err != nil {
@@ -308,6 +354,7 @@ func NewRAG(ctx context.Context, cfg Config) (*RAG, error) {
 	return &RAG{
 		service:  service,
 		pool:     pool,
+		indexer:  pgIndexer,
 		embedder: embedder,
 	}, nil
 }
@@ -376,4 +423,37 @@ func (r *RAG) Close() {
 	if r.pool != nil {
 		r.pool.Close()
 	}
+}
+
+// EmbeddingProfile contains no credentials. ModelRevision must be bumped when
+// model weights behind an alias change. Key/timeout changes do not alter it.
+func (c Config) EmbeddingProfile() embeddinginput.Profile {
+	endpoint := strings.TrimRight(strings.TrimSpace(c.Embedding.BaseURL), "/")
+	if endpoint == "" {
+		endpoint = "https://api.openai.com/v1"
+	}
+	builder := c.Indexer.SearchBuilder
+	if len(builder.TitleKeys) == 0 && builder.ContextHeaderKey == "" {
+		builder = searchcontent.DefaultBuilder()
+	}
+	return embeddinginput.Profile{Provider: "openai-compatible", Endpoint: endpoint, Model: strings.TrimSpace(c.Embedding.Model), Revision: c.Embedding.ModelRevision, Dimensions: indexerpostgres.EmbeddingDimensions, InputVersion: "humbert-search-content-v1", SearchBuilder: builder}
+}
+
+func (r *RAG) ReserveDocument(ctx context.Context, collectionID, documentID string) (int64, error) {
+	if r == nil || r.indexer == nil {
+		return 0, errors.New("rag: not initialized")
+	}
+	return r.indexer.ReserveDocument(ctx, collectionID, documentID)
+}
+func (r *RAG) CancelDocument(ctx context.Context, collectionID, documentID string) error {
+	if r == nil || r.indexer == nil {
+		return errors.New("rag: not initialized")
+	}
+	return r.indexer.InvalidateDocument(ctx, collectionID, documentID)
+}
+func (r *RAG) DeleteDocument(ctx context.Context, collectionID, documentID string) error {
+	if r == nil || r.indexer == nil {
+		return errors.New("rag: not initialized")
+	}
+	return r.indexer.DeleteDocument(ctx, collectionID, documentID)
 }

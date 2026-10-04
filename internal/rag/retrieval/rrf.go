@@ -1,6 +1,7 @@
 package retrieval
 
 import (
+	"fmt"
 	"math"
 	"sort"
 )
@@ -70,7 +71,16 @@ func FuseRRF(
 	keywordResults []SearchResult,
 	cfg RRFConfig,
 ) []SearchResult {
+	if cfg.Validate() != nil {
+		return nil
+	}
 	cfg = normalizeRRFConfig(cfg)
+	if cfg.VectorWeight == 0 {
+		vectorResults = nil
+	}
+	if cfg.KeywordWeight == 0 {
+		keywordResults = nil
+	}
 
 	vectorResults = prepareChannel(vectorResults, MatchVector)
 	keywordResults = prepareChannel(keywordResults, MatchKeyword)
@@ -87,11 +97,11 @@ func FuseRRF(
 	keywordRanks := make(map[string]int, len(keywordResults))
 
 	for i := range vectorResults {
-		vectorRanks[vectorResults[i].ChunkID] = i + 1
+		vectorRanks[vectorResults[i].IdentityKey()] = i + 1
 	}
 
 	for i := range keywordResults {
-		keywordRanks[keywordResults[i].ChunkID] = i + 1
+		keywordRanks[keywordResults[i].IdentityKey()] = i + 1
 	}
 
 	// all 保存所有唯一 Chunk。
@@ -103,27 +113,27 @@ func FuseRRF(
 
 	for _, item := range vectorResults {
 		item.VectorScore = item.Score
-		item.VectorRank = vectorRanks[item.ChunkID]
+		item.VectorRank = vectorRanks[item.IdentityKey()]
 		item.MatchType = MatchVector
 
-		all[item.ChunkID] = item
+		all[item.IdentityKey()] = item
 	}
 
 	for _, item := range keywordResults {
-		if existing, ok := all[item.ChunkID]; ok {
+		if existing, ok := all[item.IdentityKey()]; ok {
 			existing.KeywordScore = item.Score
-			existing.KeywordRank = keywordRanks[item.ChunkID]
+			existing.KeywordRank = keywordRanks[item.IdentityKey()]
 			existing.MatchType = MatchHybrid
 
-			all[item.ChunkID] = existing
+			all[item.IdentityKey()] = existing
 			continue
 		}
 
 		item.KeywordScore = item.Score
-		item.KeywordRank = keywordRanks[item.ChunkID]
+		item.KeywordRank = keywordRanks[item.IdentityKey()]
 		item.MatchType = MatchKeyword
 
-		all[item.ChunkID] = item
+		all[item.IdentityKey()] = item
 	}
 
 	// 一个 Chunk 同时排名两个 Retriever 第一时的理论最大 RRF。
@@ -189,11 +199,11 @@ func prepareChannel(results []SearchResult, matchType MatchType) []SearchResult 
 			continue
 		}
 
-		existing, exists := best[item.ChunkID]
+		existing, exists := best[item.IdentityKey()]
 
 		if !exists || item.Score > existing.Score {
 			item.MatchType = matchType
-			best[item.ChunkID] = item
+			best[item.IdentityKey()] = item
 		}
 	}
 
@@ -283,20 +293,24 @@ func Limit(results []SearchResult, topK int) []SearchResult {
 
 func normalizeRRFConfig(cfg RRFConfig) RRFConfig {
 	defaults := DefaultRRFConfig()
-
-	if cfg.K <= 0 {
-		cfg.K = defaults.K
-	}
-
-	if cfg.VectorWeight <= 0 {
-		cfg.VectorWeight = defaults.VectorWeight
-	}
-
-	if cfg.KeywordWeight <= 0 {
-		cfg.KeywordWeight = defaults.KeywordWeight
+	if cfg == (RRFConfig{}) {
+		return defaults
 	}
 
 	return cfg
+}
+
+func (c RRFConfig) Effective() RRFConfig { return normalizeRRFConfig(c) }
+
+func (c RRFConfig) Validate() error {
+	if c == (RRFConfig{}) {
+		return nil
+	}
+	if c.K < 0 || c.K > 1_000_000 || math.IsNaN(c.VectorWeight) || math.IsNaN(c.KeywordWeight) || math.IsInf(c.VectorWeight, 0) || math.IsInf(c.KeywordWeight, 0) ||
+		c.VectorWeight < 0 || c.KeywordWeight < 0 || c.VectorWeight+c.KeywordWeight <= 0 || math.IsInf(c.VectorWeight+c.KeywordWeight, 0) {
+		return fmt.Errorf("rag RRF: invalid k or weights")
+	}
+	return nil
 }
 
 // sortResults 统一保证：
@@ -311,6 +325,6 @@ func sortResults(results []SearchResult) {
 			return results[i].Score > results[j].Score
 		}
 
-		return results[i].ChunkID < results[j].ChunkID
+		return results[i].IdentityKey() < results[j].IdentityKey()
 	})
 }

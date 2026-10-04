@@ -25,6 +25,17 @@ function normalizeArray(value) {
     return Array.isArray(value) ? value : [];
 }
 
+function parentDirectory(path) {
+    const separator = path.lastIndexOf("/");
+    return separator < 0 ? "." : path.slice(0, separator);
+}
+
+function directChildPath(directory, path) {
+    const prefix = directory === "." ? "" : `${directory}/`;
+    if (!path || path === directory || !path.startsWith(prefix)) return "";
+    return prefix + path.slice(prefix.length).split("/")[0];
+}
+
 export const useWorkspaceStore = defineStore("workspace", {
     state: () => ({
         /**
@@ -179,20 +190,58 @@ export const useWorkspaceStore = defineStore("workspace", {
                 return this.directories[path];
             }
             const isCurrent = beginLatestRequest(this, `directory:${path}`);
+            const selection = this.selectedEntry;
             this.loadingDirectories = { ...this.loadingDirectories, [path]: true };
             try {
                 const value = await listWorkspaceDirectory(agentID, path);
                 if (!isCurrent()) return null;
                 const normalized = { ...value, entries: normalizeArray(value?.entries) };
                 this.directories = { ...this.directories, [path]: normalized };
+                this.reconcileDirectory(path, normalized, selection);
                 return normalized;
             } catch (error) {
+                // 目录可能刚被外部删除；由父目录确认，不能根据错误文本猜测或隐藏权限错误。
+                if (isCurrent() && path !== ".") {
+                    try { await this.loadDirectory(parentDirectory(path), true); }
+                    catch { /* 父目录无法确认时仍报告原读取错误。 */ }
+                }
                 if (isCurrent()) throw error;
                 return null;
             } finally {
                 if (isCurrent()) {
                     this.loadingDirectories = { ...this.loadingDirectories, [path]: false };
                 }
+            }
+        },
+
+        /** 用完整目录结果清理失效子树；截断列表中的缺项不能证明文件已删除。 */
+        reconcileDirectory(path, listing, selection) {
+            const entries = new Map(listing.entries.map((entry) => [entry.path, entry]));
+            const missing = (target, type) => {
+                const child = directChildPath(path, target);
+                if (!child) return false;
+                const entry = entries.get(child);
+                if (!entry) return !listing.truncated;
+                return entry.type !== (child === target ? type : "directory");
+            };
+            const directories = { ...this.directories };
+            const loading = { ...this.loadingDirectories };
+            for (const cached of new Set([...Object.keys(directories), ...Object.keys(loading), ...this.expandedPaths])) {
+                if (!missing(cached, "directory")) continue;
+                invalidateRequests(this, `directory:${cached}`);
+                delete directories[cached];
+                delete loading[cached];
+            }
+            this.directories = directories;
+            this.loadingDirectories = loading;
+            this.expandedPaths = this.expandedPaths.filter((item) => !missing(item, "directory"));
+            // 请求发出后用户可能换了文件，旧目录结果不能清掉新的选择。
+            if (selection && this.selectedEntry === selection && missing(selection.path, selection.type)) {
+                invalidateRequests(this, "preview");
+                this.selectedEntry = null;
+                this.selectedPath = "";
+                this.preview = null;
+                this.loadingPreview = false;
             }
         },
 
@@ -205,7 +254,7 @@ export const useWorkspaceStore = defineStore("workspace", {
             }
             // 展开选择立即生效，目录加载结束不能撤销用户随后执行的收起操作。
             this.expandedPaths = [...this.expandedPaths, path];
-            await this.loadDirectory(path);
+            await this.loadDirectory(path, true);
         },
 
         /** 文件点击后读取预览；目录点击只更新选中信息，不读取文件内容。 */
@@ -233,6 +282,10 @@ export const useWorkspaceStore = defineStore("workspace", {
                 this.preview = value;
                 return value;
             } catch (error) {
+                if (isCurrent()) {
+                    try { await this.loadDirectory(parentDirectory(entry.path), true); }
+                    catch { /* 未确认删除时保留原预览错误。 */ }
+                }
                 if (isCurrent()) throw error;
                 return null;
             } finally {
@@ -257,19 +310,33 @@ export const useWorkspaceStore = defineStore("workspace", {
         },
 
         /**
-         * 刷新保持当前选中路径，但重读已展开目录，确保外部编辑器修改后树状态及时更新。
+         * 重读可见目录和选中文件的父目录，删除失效选择后再刷新预览。
+         * 后台同步不重复扫描总览，也不重读未变化的大文件/图片。
          */
-        async refresh() {
+        async refresh({ background = false } = {}) {
             if (!this.agentID) return;
             const isCurrent = beginLatestRequest(this, "workspace");
-            const expanded = [...this.expandedPaths];
+            const selection = this.selectedEntry;
+            const paths = new Set(this.expandedPaths);
+            if (selection) paths.add(parentDirectory(selection.path));
             this.error = "";
             try {
-                await Promise.all([
-                    this.loadOverview(),
-                    ...expanded.map((path) => this.loadDirectory(path, true)),
-                    this.loadPreview(),
+                const results = await Promise.allSettled([
+                    ...(background ? [] : [this.loadOverview()]),
+                    ...[...paths].map((path) => this.loadDirectory(path, true)),
                 ]);
+                if (!isCurrent()) return;
+                const rejected = results.find((item) => item.status === "rejected");
+                if (rejected) throw rejected.reason;
+                if (selection && this.selectedEntry === selection && selection.type === "file") {
+                    const current = this.directories[parentDirectory(selection.path)]?.entries
+                        .find((entry) => entry.path === selection.path);
+                    if (!background || !this.preview || current && (
+                        current.size !== this.preview.size || current.modifiedAt !== this.preview.modifiedAt
+                    )) {
+                        await this.loadPreview();
+                    }
+                }
             } catch (error) {
                 if (isCurrent()) {
                     this.error = error?.message ?? String(error);

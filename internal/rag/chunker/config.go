@@ -48,7 +48,7 @@ type SplitterConfig struct {
 	ChunkSize int
 
 	// 相邻 Chunk 最大重叠的字符数
-	// 默认 80，尽量寻找句末、换行、段落边界得到一个完整的尾部作为overlap
+	// 0 关闭重叠；DefaultConfig() 提供 80 的默认值。
 	ChunkOverlap int
 
 	// 递归切分的分隔符优先级
@@ -59,7 +59,7 @@ type SplitterConfig struct {
 	// 分块策略
 	Strategy string
 
-	// 表示 Embedding 模型允许的近似最大 Token 数
+	// 分块的近似 Token 目标；最终模型输入由 embeddinginput.Budget 校验。
 	TokenLimit int
 
 	// 语言提示。 []string{"zh"}、[]string{"en"}
@@ -94,8 +94,8 @@ func NormalizeSplitterConfig(cfg SplitterConfig) SplitterConfig {
 		cfg.ChunkSize = DefaultChunkSize
 	}
 
-	if cfg.ChunkOverlap <= 0 {
-		cfg.ChunkOverlap = DefaultChunkOverlap
+	if cfg.ChunkOverlap < 0 {
+		cfg.ChunkOverlap = 0
 	}
 
 	if len(cfg.Separators) == 0 {
@@ -135,6 +135,9 @@ func DeriveParentChildConfigs(
 		Strategy:     base.Strategy,
 		TokenLimit:   base.TokenLimit, // 使用TokenLimit，限制 Embedding输入的 token 大小
 		Languages:    cloneStrings(base.Languages),
+	}
+	if base.ChunkOverlap == 0 {
+		child.ChunkOverlap = 0
 	}
 
 	return parent, child

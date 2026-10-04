@@ -2,9 +2,31 @@
 
 > 一个以 Go 为核心、强调模块解耦、可替换 Provider、可测试和可扩展的 RAG 基础工程。
 >
-> 本文档描述项目 **第 1～16 阶段已经完成的能力**。你尚未接入的第 17 阶段 Evaluation / E2E Test 不纳入当前基线。
+> 本文档介绍 RAG 基础模块。2026-10-04 已补核心正确性、受控解析、版本化迁移和文档 attempt 校验；真实数据库测试仍需独立测试库。完整修复清单见 [修复说明](../../docs/reviews/2026-10-04-rag-fixes.md)。
 
 ---
+
+## 当前调用约定（2026-10-04）
+
+- 数据库要求 PostgreSQL 15+、pgvector 0.7.0+、pg_search 0.25.0+。这些是 SQL 的最低兼容门槛；真实后端基线还需跑下面的集成测试，不能仅凭版本号视为已验证。
+- `rag.DefaultConfig().EnsureSchema` 现在是 `false`。用迁移账号设置 `HUMBERT_RAG_DATABASE_URL`，执行 `go run ./cmd/rag-migrate`；普通启动只检查扩展与 schema version。
+- 正式导入使用 `engine.Ingest` 并传稳定的 `DocumentID`。同一文档更新继续使用该 ID，`Attempt=0` 自动在解析前领取新 attempt。后台任务可先调用 `ReserveDocument` 并传入返回的 attempt。
+- `CancelDocument` 使旧任务失效并保留已发布内容；`DeleteDocument` 原子删除内容并保留 tombstone，阻止迟到任务重新写入。
+- collection 首次使用时固定 embedding profile。修改模型、endpoint、模型 revision 或 SearchContent 表示需在新 collection 重建。旧索引若没有可信 profile，会明确拒绝自动绑定；迁移不会猜测历史模型。
+- `Embedding.InputBudget` 同时约束入库与查询，包含标题和 breadcrumb。默认 UTF-8 byte 计数是保守估计，可提供实际 tokenizer；默认单条/单批上限 8192/65536 是本地保护值，需要按供应商调整。`Splitter.TokenLimit` 是近似分块目标。
+- `ChunkOverlap=0`、检索阈值 0、单通道 RRF 权重 0 和 rerank 的各浮点参数 0 会保留。需要默认值时从各模块的 `DefaultConfig()` 开始修改；空 RRF 配置整体采用默认值。
+- 搜索支持 `Mode: "hybrid" / "semantic" / "keyword"` 和 `Limit: 0..200`。0 使用默认数量。Pipeline 在父块扩展/合并之后裁剪，并保留所有 child evidence、collection、revision 及实际 context 范围。
+- hybrid 默认严格失败；可设置 `Hybrid.FailurePolicy="allow_partial"`。结果中的 retrieval diagnostics 标明降级；取消始终传播。Search 默认总超时 30 秒，parent 读取失败可显式启用 `Search.AllowParentFallback`。
+- Eino `Transformer → Store` 只用于完整平面文档：每块携带完整源 Markdown 和源 chunk 总数，必须一次提交整文档。正式版本化 Indexer 禁止这条路径；父子分块走 `Ingest / ReplaceDocument`。
+- 解析使用独立 worker，默认文件/输出各 32 MiB、ZIP 展开 256 MiB、8192 个条目、1 分钟超时，可用 `Loader.ParseOptions` 调整。格式选项沿用 Loader 的页眉页脚/OCR 配置；解析进程不提供操作系统级内存硬上限。
+
+真实 SQL 测试需要已安装扩展的独立测试数据库。设置 `HUMBERT_RAG_TEST_DATABASE_URL` 后执行：
+
+```sh
+go test -count=1 -v ./internal/rag/indexer/postgres -run '^TestIntegration'
+```
+
+测试在随机 schema 中读写并清理该 schema，不自动安装扩展；未设置环境变量时明确跳过。普通单元测试通过不代表上述集成测试通过。
 
 ## 目录
 
@@ -963,80 +985,11 @@ final Chunk string
 
 更适合作为 overlap 的算法载体。
 
-## 8.8 `ChunkOverlap=0` 的注意事项
+## 8.8 `ChunkOverlap=0` 的语义
 
-当前实现有一个需要特别注意的配置语义。
+`SplitText`、`Split` 和 `NormalizeSplitterConfig` 都保留显式的 0。父子配置派生时，base overlap 为 0 也会关闭 parent 和 child 的 overlap。
 
-底层：
-
-```go
-SplitText()
-```
-
-中：
-
-```text
-ChunkOverlap = 0
-```
-
-代表：
-
-```text
-真的关闭 overlap
-```
-
-但是 top-level：
-
-```go
-Split()
-NormalizeSplitterConfig()
-```
-
-当前把：
-
-```text
-ChunkOverlap <= 0
-```
-
-视为：
-
-```text
-没有配置
-```
-
-因此会恢复默认：
-
-```text
-80
-```
-
-所以：
-
-> 如果你调用顶层 Adaptive `Split()`，当前实现中 `0` 并不能表达“显式关闭 overlap”。
-
-这是目前配置模型的一个已知语义限制。
-
-未来如果需要严格区分：
-
-```text
-unset
-vs
-explicit zero
-```
-
-推荐改成：
-
-```go
-*int
-```
-
-或者增加：
-
-```go
-DisableOverlap bool
-```
-
-。
+`DefaultConfig()` 提供默认 80；直接使用零值配置代表关闭 overlap。应用入口拒绝负 overlap，底层兼容函数对负值归零。
 
 ---
 
@@ -1765,16 +1718,7 @@ HTM
 EPUB
 ```
 
-当前没有直接把：
-
-```text
-TXT
-Markdown
-```
-
-绕进 Tabula。
-
-这类纯文本格式可以未来增加一个简单 Loader。
+另支持 UTF-8/BOM 的 `.txt`、`.md`、`.csv`，通过同一受控 worker 读取。CSV 首版保留原始文本，尚未实现逐列结构化索引。换行由 Loader/Application 统一为 LF。
 
 ## 18.1 为什么只调用 ToMarkdown
 
@@ -2557,9 +2501,9 @@ engine, err := rag.NewRAG(ctx, cfg)
 
 它负责：
 
-1. PostgreSQL extension bootstrap；
+1. PostgreSQL 扩展版本检查（显式 EnsureSchema 时才安装扩展）；
 2. pgvector type registration；
-3. Schema；
+3. Schema version 检查（显式 EnsureSchema 时执行版本化迁移）；
 4. Embedding Provider；
 5. PGIndexer；
 6. Rerank Provider；
@@ -2574,6 +2518,9 @@ engine, err := rag.NewRAG(ctx, cfg)
 ```go
 engine.Ingest(...)
 engine.Search(...)
+engine.ReserveDocument(...)
+engine.CancelDocument(...)
+engine.DeleteDocument(...)
 engine.Close()
 ```
 
@@ -2605,9 +2552,9 @@ go mod tidy
 需要：
 
 ```text
-PostgreSQL
-pgvector
-pg_search / ParadeDB
+PostgreSQL 15+
+pgvector 0.7.0+
+pg_search / ParadeDB 0.25.0+
 ```
 
 开发环境可以让：
@@ -2711,7 +2658,7 @@ cfg := rag.DefaultConfig()
 cfg.DatabaseURL =
     "postgres://postgres:postgres@127.0.0.1:5432/rag?sslmode=disable"
 
-cfg.EnsureSchema = true
+cfg.EnsureSchema = false // 先执行 go run ./cmd/rag-migrate
 
 cfg.Embedding.BaseURL =
     "http://127.0.0.1:8001/v1"
@@ -2769,6 +2716,7 @@ defer engine.Close()
 result, err := engine.Ingest(
     ctx,
     application.IngestRequest{
+        DocumentID: "manual-001", // 业务 ID；更新时沿用
         CollectionID:
             "kb-demo",
 
@@ -2800,6 +2748,7 @@ result, err := engine.Ingest(
 result, err := engine.Ingest(
     ctx,
     application.IngestRequest{
+        DocumentID: "manual-001", // 业务 ID；更新时沿用
         CollectionID:
             "kb-demo",
 
@@ -3059,7 +3008,7 @@ result, err :=
 | ChunkSize | 512 | 普通目标 Chunk 大小 |
 | ChunkOverlap | 80 | 语义 overlap 预算 |
 | Strategy | 视调用方式 | auto / heading / heuristic / legacy |
-| TokenLimit | 0 | 可选 embedding token budget |
+| TokenLimit | 0 | 近似分块目标；最终模型输入另受 InputBudget 校验 |
 | Separators | `\n\n`, `\n`, `。` | Recursive separator priority |
 
 ## Parent-Child
@@ -3068,7 +3017,7 @@ result, err :=
 |---|---:|
 | ParentChunkSize | 4096 |
 | ChildChunkSize | 384 |
-| ChildOverlap | childSize / 5 |
+| ChildOverlap | childSize / 5；base overlap=0 时为 0 |
 
 Parent 不继承 `TokenLimit`。
 

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 
+	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/embeddinginput"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
@@ -46,6 +49,7 @@ var (
 	ErrEmptySearchContent      = errors.New("postgres indexer: empty search content")
 	ErrSubIndexesUnsupported   = errors.New("postgres indexer: sub indexes are not supported")
 	ErrInvalidEmbedding        = errors.New("postgres indexer: invalid embedding")
+	ErrIncompleteSource        = errors.New("postgres indexer: Store requires a complete source envelope and all flat chunks; use ReplaceDocument for parent-child ingestion")
 )
 
 // Config 是 PostgreSQL Indexer 的长期默认配置。
@@ -78,9 +82,13 @@ var (
 //
 //	决定最终向量化/BM25 使用什么文本。
 type Config struct {
+	ProfileID          string
+	ProfileJSON        string
+	VersionedDocuments bool
 	CollectionID       string
 	Embedder           embedding.Embedder
 	EmbeddingBatchSize int
+	InputBudget        embeddinginput.Budget
 	SearchBuilder      searchcontent.Builder
 }
 
@@ -195,6 +203,12 @@ type Indexer struct {
 
 // NewIndexer 创建正式使用 pgxpool 的 PGIndexer。
 func NewIndexer(pool *pgxpool.Pool, config Config) (*Indexer, error) {
+	if err := config.InputBudget.Validate(); err != nil {
+		return nil, err
+	}
+	if config.EmbeddingBatchSize < 0 {
+		return nil, errors.New("postgres indexer: negative embedding batch size")
+	}
 	if pool == nil {
 		return nil, fmt.Errorf("postgres indexer: nil pool")
 	}
@@ -214,6 +228,7 @@ func newIndexerWithDatabase(db database, config Config) *Indexer {
 		config.SearchBuilder = searchcontent.DefaultBuilder()
 	}
 
+	config.SearchBuilder.TitleKeys = append([]string(nil), config.SearchBuilder.TitleKeys...)
 	return &Indexer{
 		db:     db,
 		config: config,
@@ -295,6 +310,12 @@ func (p *Indexer) Store(
 		return nil, ErrMissingEmbedder
 	}
 
+	if p.config.VersionedDocuments {
+		return nil, errors.New("rag: versioned collections require application.Ingest or ReplaceDocument")
+	}
+	if err := p.ensureProfile(ctx, collectionID); err != nil {
+		return nil, err
+	}
 	prepared, documents, texts, ids, err := p.prepareDocuments(docs)
 	if err != nil {
 		return nil, err
@@ -306,6 +327,7 @@ func (p *Indexer) Store(
 		texts,
 		p.config.EmbeddingBatchSize,
 		specific.embeddingOptions,
+		p.config.InputBudget,
 	)
 
 	if err != nil {
@@ -367,19 +389,28 @@ func (p *Indexer) Store(
 	for _, documentID := range documentIDs {
 		doc := documents[documentID]
 
-		if _, err := tx.Exec(
+		tag, err := tx.Exec(
 			ctx,
 			upsertDocumentSQL,
 			collectionID,
 			doc.documentID,
 			doc.title,
+			doc.markdown,
 			doc.metadataJSON,
-		); err != nil {
+			int64(0),
+			fmt.Sprintf("%x", sha256.Sum256([]byte(doc.markdown))),
+			"{}",
+		)
+		if err != nil {
 			return nil, fmt.Errorf(
 				"upsert document %q: %w",
 				doc.documentID,
 				err,
 			)
+		}
+
+		if tag.RowsAffected() != 1 {
+			return nil, ErrStaleIngestion
 		}
 
 		// chunks → retrieval_index 使用 ON DELETE CASCADE。
@@ -448,9 +479,11 @@ func (p *Indexer) Store(
 }
 
 type preparedDocument struct {
-	documentID   string
-	title        string
-	metadataJSON string
+	documentID     string
+	title          string
+	markdown       string
+	expectedChunks int
+	metadataJSON   string
 }
 
 type preparedChunk struct {
@@ -521,6 +554,11 @@ func (p *Indexer) prepareDocuments(
 				chunkID,
 			)
 		}
+		chunkType := metadataString(doc.MetaData, metaChunkType)
+		if chunkType != "" && chunkType != application.ChunkTypeText || metadataString(doc.MetaData, metaParentChunkID) != "" {
+			return nil, nil, nil, nil, ErrIncompleteSource
+		}
+		chunkType = application.ChunkTypeText
 
 		chunkIndex, err := metadataInt(
 			doc.MetaData,
@@ -602,7 +640,7 @@ func (p *Indexer) prepareDocuments(
 			)
 		}
 
-		chunkMetadataJSON, err := marshalMetadata(doc.MetaData)
+		chunkMetadataJSON, err := marshalMetadata(withoutAdapterEnvelope(doc.MetaData))
 
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf(
@@ -616,15 +654,6 @@ func (p *Indexer) prepareDocuments(
 			doc.MetaData,
 			metaContextHeader,
 		)
-
-		chunkType := metadataString(
-			doc.MetaData,
-			metaChunkType,
-		)
-
-		if chunkType == "" {
-			chunkType = "chunk"
-		}
 
 		parentChunkID := metadataString(
 			doc.MetaData,
@@ -649,6 +678,11 @@ func (p *Indexer) prepareDocuments(
 		ids = append(ids, chunkID)
 
 		if _, exists := documents[documentID]; !exists {
+			markdown, ok := doc.MetaData[application.MetaSourceMarkdown].(string)
+			expected, err := metadataInt(doc.MetaData, application.MetaSourceChunkCount)
+			if !ok || strings.TrimSpace(markdown) == "" || err != nil || expected <= 0 {
+				return nil, nil, nil, nil, ErrIncompleteSource
+			}
 			documentMetadata := stripChunkMetadata(doc.MetaData)
 
 			documentMetadataJSON, err := marshalMetadata(documentMetadata)
@@ -667,9 +701,27 @@ func (p *Indexer) prepareDocuments(
 			}
 
 			documents[documentID] = preparedDocument{
-				documentID:   documentID,
-				title:        title,
-				metadataJSON: documentMetadataJSON,
+				documentID:     documentID,
+				title:          title,
+				markdown:       markdown,
+				expectedChunks: expected,
+				metadataJSON:   documentMetadataJSON,
+			}
+		}
+		original := documents[documentID]
+		markdown, _ := doc.MetaData[application.MetaSourceMarkdown].(string)
+		expected, err := metadataInt(doc.MetaData, application.MetaSourceChunkCount)
+		if err != nil || expected != original.expectedChunks || markdown != original.markdown || endRune > len([]rune(original.markdown)) {
+			return nil, nil, nil, nil, ErrIncompleteSource
+		}
+	}
+	for id, doc := range documents {
+		if len(documentChunkIndexes[id]) != doc.expectedChunks {
+			return nil, nil, nil, nil, ErrIncompleteSource
+		}
+		for i := 0; i < doc.expectedChunks; i++ {
+			if _, ok := documentChunkIndexes[id][i]; !ok {
+				return nil, nil, nil, nil, ErrIncompleteSource
 			}
 		}
 	}
@@ -694,6 +746,7 @@ func embedTexts(
 	texts []string,
 	batchSize int,
 	opts []embedding.Option,
+	budgets ...embeddinginput.Budget,
 ) ([][]float64, error) {
 	if len(texts) == 0 {
 		return nil, nil
@@ -704,16 +757,18 @@ func embedTexts(
 	}
 
 	result := make([][]float64, 0, len(texts))
-
-	for start := 0; start < len(texts); start += batchSize {
+	budget := embeddinginput.Budget{}
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
+	batches, err := budget.Plan(texts, batchSize)
+	if err != nil {
+		return nil, err
+	}
+	for _, batch := range batches {
+		start, end := batch.Start, batch.End
 		if err := ctx.Err(); err != nil {
 			return nil, err
-		}
-
-		end := start + batchSize
-
-		if end > len(texts) {
-			end = len(texts)
 		}
 
 		vectors, err := embedder.EmbedStrings(
@@ -764,6 +819,7 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 	}
 
 	values := make([]float32, len(vector))
+	nonzero := false
 
 	for i, value := range vector {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
@@ -789,6 +845,14 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 		}
 
 		values[i] = float32(value)
+		// Values below half precision's smallest representable subnormal
+		// round to zero. Such a vector cannot participate in cosine search.
+		if math.Abs(float64(values[i])) > math.Ldexp(1, -25) {
+			nonzero = true
+		}
+	}
+	if !nonzero {
+		return pgvector.HalfVector{}, fmt.Errorf("%w: zero vector after half precision conversion", ErrInvalidEmbedding)
 	}
 
 	return pgvector.NewHalfVector(values), nil
@@ -920,8 +984,20 @@ func stripChunkMetadata(metadata map[string]any) map[string]any {
 	delete(result, metaContextHeader)
 	delete(result, metaChunkType)
 	delete(result, metaParentChunkID)
+	delete(result, application.MetaSourceMarkdown)
+	delete(result, application.MetaSourceChunkCount)
 
 	return result
+}
+
+func withoutAdapterEnvelope(metadata map[string]any) map[string]any {
+	copy := make(map[string]any, len(metadata))
+	for key, value := range metadata {
+		copy[key] = value
+	}
+	delete(copy, application.MetaSourceMarkdown)
+	delete(copy, application.MetaSourceChunkCount)
+	return copy
 }
 
 func nullableString(value string) any {
@@ -934,20 +1010,7 @@ func nullableString(value string) any {
 	return value
 }
 
-const upsertDocumentSQL = `
-INSERT INTO documents (
-    collection_id,
-    id,
-    title,
-    metadata
-)
-VALUES ($1, $2, $3, $4::jsonb)
-ON CONFLICT (collection_id, id)
-DO UPDATE SET
-    title = EXCLUDED.title,
-    metadata = EXCLUDED.metadata,
-    updated_at = NOW()
-`
+const upsertDocumentSQL = upsertIngestionDocumentSQL
 
 const deleteDocumentChunksSQL = `
 DELETE FROM chunks

@@ -1,5 +1,5 @@
 <script setup>
-import { onUnmounted, ref, watch } from "vue";
+import { onMounted, onUnmounted, ref, watch } from "vue";
 import { Message } from "../../utils/uiMessage.js";
 import { searchWorkspaceDocuments } from "../../api/workspace.js";
 import { pollIndexedSearch } from "../../utils/searchPolling.js";
@@ -21,8 +21,55 @@ const documentSearched = ref(false);
 let documentSearchSequence = 0;
 let fileDragging = false;
 let refreshTimer = null;
+let syncTimer = null;
+let syncActive = false;
+let syncRunning = false;
+let syncError = "";
 
 function report(error) { Message.error(error?.message || String(error)); }
+
+// 外部编辑器/文件管理器没有 Runtime 事件。只在面板可见时同步一层目录，避免常驻递归监听。
+async function syncWorkspace() {
+  if (!syncActive || syncRunning || document.hidden || !agents.selectedID || workspace.agentID !== agents.selectedID) return;
+  syncRunning = true;
+  try {
+    await workspace.refresh({ background: true });
+    syncError = "";
+  } catch (error) {
+    const message = error?.message || String(error);
+    if (syncActive && message !== syncError) report(error);
+    syncError = message;
+  } finally {
+    syncRunning = false;
+  }
+}
+function scheduleWorkspaceSync() {
+  if (syncTimer !== null) clearTimeout(syncTimer);
+  syncTimer = null;
+  if (!syncActive || document.hidden) return;
+  syncTimer = setTimeout(async () => {
+    syncTimer = null;
+    await syncWorkspace();
+    scheduleWorkspaceSync();
+  }, 2000);
+}
+function handleWorkspaceFocus() {
+  void syncWorkspace();
+  scheduleWorkspaceSync();
+}
+function startWorkspaceSync() {
+  syncActive = true;
+  window.addEventListener("focus", handleWorkspaceFocus);
+  document.addEventListener("visibilitychange", handleWorkspaceFocus);
+  scheduleWorkspaceSync();
+}
+function stopWorkspaceSync() {
+  syncActive = false;
+  if (syncTimer !== null) clearTimeout(syncTimer);
+  syncTimer = null;
+  window.removeEventListener("focus", handleWorkspaceFocus);
+  document.removeEventListener("visibilitychange", handleWorkspaceFocus);
+}
 function clampTreeWidth(value) {
   const available = fileBody.value?.clientWidth || panel.width;
   panel.setTreeWidth(Math.min(Math.max(125, available - 200), value));
@@ -81,7 +128,9 @@ watch(() => workspace.revision, () => {
     void workspace.refresh().catch(report);
   }, 250);
 });
+onMounted(startWorkspaceSync);
 onUnmounted(() => {
+  stopWorkspaceSync();
   if (refreshTimer) clearTimeout(refreshTimer);
   documentSearchSequence += 1;
 });

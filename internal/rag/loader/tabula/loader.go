@@ -11,6 +11,7 @@ import (
 
 	"github.com/cloudwego/eino/components/document"
 	"github.com/cloudwego/eino/schema"
+	"github.com/sda1-hacker/humbert-agent/internal/documentparse"
 	tabulalib "github.com/tsawler/tabula"
 )
 
@@ -196,6 +197,9 @@ var supportedExtensions = map[string]struct{}{
 	".html": {},
 	".htm":  {},
 	".epub": {},
+	".md":   {},
+	".txt":  {},
+	".csv":  {},
 }
 
 // IDGenerator 负责为 Loader 输出的 source Document 生成 ID。
@@ -230,6 +234,7 @@ type IDGenerator func(src document.Source) string
 //
 // 过早暴露几十个选项会让 Adapter 自己变成第二套 Tabula API。
 type Config struct {
+	ParseOptions documentparse.Options
 	// ExcludeHeadersAndFooters 是否让 Tabula 尝试删除重复 Header/Footer。
 	//
 	// 对 RAG 来说通常应该打开。
@@ -382,32 +387,17 @@ func (l *Loader) Load(
 		return nil, err
 	}
 
-	extractor := tabulalib.Open(path)
-
-	// Tabula 的 fluent method 返回新的 Extractor，
-	// 所以必须把返回值重新赋回来。
-	if l.config.ExcludeHeadersAndFooters {
-		extractor = extractor.ExcludeHeadersAndFooters()
-	}
-
-	if l.config.OCRLanguage != "" {
-		extractor = extractor.OCRLanguage(l.config.OCRLanguage)
-	}
-
-	// ToMarkdown 是 Tabula terminal operation。
-	//
-	// 它自己会关闭底层 reader，
-	// 因此这里不需要额外 defer extractor.Close()。
-	markdown, warnings, err := extractor.ToMarkdown()
+	opts := l.config.ParseOptions
+	opts.ExcludeHeadersAndFooters = l.config.ExcludeHeadersAndFooters
+	opts.OCRLanguage = l.config.OCRLanguage
+	result, err := documentparse.ExtractFile(ctx, path, opts)
+	markdown, warnings := result.Markdown, result.Warnings
 	if err != nil {
 		return nil, fmt.Errorf("tabula loader: extracting markdown from %q: %w", path, err)
 	}
 
-	// Tabula 当前 API 不接收 context.Context，
-	// 因此我们无法从 Adapter 外部真正中断正在执行的底层解析。
-	//
-	// 但是解析完成后再次检查 Context，
-	// 可以保证已经取消的 Eino Graph 不继续进入后续 Chunk / Index 阶段。
+	// The disposable worker is killed on cancellation. Check again before
+	// constructing output so a canceled graph cannot enter later stages.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -424,6 +414,7 @@ func (l *Loader) Load(
 	}
 
 	metadata := buildMetadata(src, path, info, warnings)
+	metadata["rag_source_content_hash"] = result.ContentHash
 
 	id := l.config.IDGenerator(src)
 	if id == "" {
@@ -460,6 +451,9 @@ func validateSource(src document.Source) (string, os.FileInfo, error) {
 		return "", nil, fmt.Errorf("%w: %s", ErrSourceIsDirectory, path)
 	}
 
+	if !info.Mode().IsRegular() {
+		return "", nil, errors.New("tabula loader: source must be a regular file")
+	}
 	ext := strings.ToLower(filepath.Ext(path))
 
 	if _, ok := supportedExtensions[ext]; !ok {
@@ -555,6 +549,9 @@ func buildMetadata(
 		MetaFileSize:  info.Size(),
 		MetaParser:    parserName,
 		MetaOCRUsed:   ocrUsed,
+	}
+	if ext == ".txt" || ext == ".md" || ext == ".csv" {
+		metadata[MetaParser] = "utf8-text"
 	}
 
 	if len(messages) > 0 {

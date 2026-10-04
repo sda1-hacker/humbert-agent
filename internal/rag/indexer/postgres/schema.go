@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -103,7 +102,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 
     FOREIGN KEY (collection_id, parent_chunk_id)
         REFERENCES chunks (collection_id, id)
-        ON DELETE SET NULL,
+        ON DELETE SET NULL (parent_chunk_id),
 
     CHECK (chunk_index >= 0),
     CHECK (start_rune >= 0),
@@ -243,25 +242,5 @@ WITH (
 `,
 }
 
-// EnsureSchema 初始化当前 Demo RAG 所需数据库结构。
-//
-// 当前阶段仍然允许在应用启动时调用。
-//
-// 真正生产系统应把这些 DDL 移到：
-//
-//	migrations/
-//
-// 由 migration 工具控制版本。
-func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error {
-	if pool == nil {
-		return fmt.Errorf("ensure schema: nil postgres pool")
-	}
-
-	for _, statement := range schemaStatements {
-		if _, err := pool.Exec(ctx, statement); err != nil {
-			return fmt.Errorf("execute rag schema statement: %w", err)
-		}
-	}
-
-	return nil
-}
+// EnsureSchema is the development convenience alias for versioned migrations.
+func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error { return Migrate(ctx, pool) }

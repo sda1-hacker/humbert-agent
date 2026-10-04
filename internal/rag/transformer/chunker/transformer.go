@@ -7,6 +7,7 @@ import (
 	"github.com/cloudwego/eino/components/document"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
 	corechunker "github.com/sda1-hacker/humbert-agent/internal/rag/chunker"
 )
 
@@ -391,12 +392,15 @@ func (t *Transformer) Transform(
 				return nil, err
 			}
 
-			result = append(result, chunkToDocument(
+			chunkDoc := chunkToDocument(
 				source,
 				sourceIndex,
 				chunk,
 				options.idGenerator,
-			))
+			)
+			chunkDoc.MetaData[application.MetaSourceMarkdown] = source.Content
+			chunkDoc.MetaData[application.MetaSourceChunkCount] = len(chunks)
+			result = append(result, chunkDoc)
 		}
 	}
 

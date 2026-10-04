@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/cloudwego/eino/components/embedding"
 	einoretriever "github.com/cloudwego/eino/components/retriever"
@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgvector "github.com/pgvector/pgvector-go"
 
+	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
@@ -139,6 +140,9 @@ func NewVectorRetriever(
 	pool *pgxpool.Pool,
 	cfg VectorConfig,
 ) (*VectorRetriever, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	if pool == nil {
 		return nil, fmt.Errorf("postgres vector retriever: nil pool")
 	}
@@ -291,6 +295,9 @@ func (r *VectorRetriever) search(
 	//     Score = 1 - cosine_distance
 	//
 	// 越大越好。
+	for i := range results {
+		results[i].CollectionID = collectionID
+	}
 	return filterByScore(results, threshold, topK), nil
 }
 
@@ -324,6 +331,9 @@ func NewBM25Retriever(
 	pool *pgxpool.Pool,
 	cfg BM25Config,
 ) (*BM25Retriever, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	if pool == nil {
 		return nil, fmt.Errorf("postgres bm25 retriever: nil pool")
 	}
@@ -430,6 +440,9 @@ func (r *BM25Retriever) search(
 		return nil, err
 	}
 
+	for i := range results {
+		results[i].CollectionID = collectionID
+	}
 	return filterByScore(results, threshold, topK), nil
 }
 
@@ -439,7 +452,10 @@ func (r *BM25Retriever) search(
 
 // HybridConfig 同时配置两个 Recall Channel。
 type HybridConfig struct {
-	CollectionID string
+	Timeout        time.Duration
+	ChannelTimeout time.Duration
+	FailurePolicy  string
+	CollectionID   string
 
 	Embedder embedding.Embedder
 
@@ -458,6 +474,9 @@ type HybridConfig struct {
 
 	RRF retrieval.RRFConfig
 }
+
+const FailureStrict = "strict"
+const FailureAllowPartial = "allow_partial"
 
 func DefaultHybridConfig() HybridConfig {
 	return HybridConfig{
@@ -545,6 +564,9 @@ func NewHybridRetriever(
 	pool *pgxpool.Pool,
 	cfg HybridConfig,
 ) (*HybridRetriever, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	if pool == nil {
 		return nil, fmt.Errorf("postgres hybrid retriever: nil pool")
 	}
@@ -585,21 +607,11 @@ func newHybridRetriever(
 		cfg.ChannelTopK = defaults.ChannelTopK
 	}
 
-	if cfg.VectorThreshold == 0 {
-		cfg.VectorThreshold = defaults.VectorThreshold
-	}
-
-	if cfg.KeywordThreshold == 0 {
-		cfg.KeywordThreshold = defaults.KeywordThreshold
-	}
-
 	if cfg.Dimensions <= 0 {
 		cfg.Dimensions = defaults.Dimensions
 	}
 
-	if cfg.RRF.K <= 0 {
-		cfg.RRF = defaults.RRF
-	}
+	cfg.RRF = cfg.RRF.Effective()
 
 	return &HybridRetriever{
 		vector:  vector,
@@ -622,15 +634,33 @@ func (r *HybridRetriever) Retrieve(
 }
 
 // Search 并发执行 Dense + BM25，然后做 Weighted RRF。
-func (r *HybridRetriever) Search(
+func (r *HybridRetriever) Search(ctx context.Context, query string, opts ...einoretriever.Option) ([]retrieval.SearchResult, error) {
+	results, _, err := r.SearchWithDiagnostics(ctx, query, opts...)
+	return results, err
+}
+
+func (r *HybridRetriever) SearchWithDiagnostics(
 	ctx context.Context,
 	query string,
 	opts ...einoretriever.Option,
-) ([]retrieval.SearchResult, error) {
+) ([]retrieval.SearchResult, retrieval.Diagnostics, error) {
+	diag := retrieval.Diagnostics{ModeUsed: retrieval.MatchHybrid}
+	if err := r.config.Validate(); err != nil {
+		return nil, diag, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, diag, err
+	}
+	timeout := r.config.Timeout
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	query = strings.TrimSpace(query)
 
 	if query == "" {
-		return nil, ErrEmptyQuery
+		return nil, diag, ErrEmptyQuery
 	}
 
 	collectionID := r.config.CollectionID
@@ -654,17 +684,17 @@ func (r *HybridRetriever) Search(
 	)
 
 	if err := validateCommonOptions(common); err != nil {
-		return nil, err
+		return nil, diag, err
 	}
 
-	if common.Embedding == nil {
-		return nil, ErrMissingEmbedder
+	if common.Embedding == nil && r.config.RRF.VectorWeight > 0 {
+		return nil, diag, ErrMissingEmbedder
 	}
 
 	if *common.ScoreThreshold < 0 ||
 		*common.ScoreThreshold > 1 {
 
-		return nil, ErrInvalidThreshold
+		return nil, diag, ErrInvalidThreshold
 	}
 
 	specific := einoretriever.GetImplSpecificOptions(
@@ -689,15 +719,15 @@ func (r *HybridRetriever) Search(
 	}
 
 	if err := validateTopK(channelTopK); err != nil {
-		return nil, err
+		return nil, diag, err
 	}
 
-	if vectorThreshold < 0 || vectorThreshold > 1 {
-		return nil, ErrInvalidThreshold
+	if !finite(vectorThreshold) || vectorThreshold < 0 || vectorThreshold > 1 {
+		return nil, diag, ErrInvalidThreshold
 	}
 
-	if keywordThreshold < 0 {
-		return nil, ErrInvalidThreshold
+	if !finite(keywordThreshold) || keywordThreshold < 0 {
+		return nil, diag, ErrInvalidThreshold
 	}
 
 	type response struct {
@@ -707,66 +737,81 @@ func (r *HybridRetriever) Search(
 
 	vectorCh := make(chan response, 1)
 	keywordCh := make(chan response, 1)
-
-	// 两路 Recall 没有数据依赖，
-	// 所以并发执行可以直接降低 Hybrid Retrieval latency。
-	var wg sync.WaitGroup
-	wg.Add(2)
+	vectorOut, keywordOut := vectorCh, keywordCh
 
 	go func() {
-		defer wg.Done()
-
-		results, err := r.vector.search(
-			ctx,
-			query,
-			strings.TrimSpace(*common.Index),
-			channelTopK,
-			vectorThreshold,
-			common.Embedding,
-		)
-
-		vectorCh <- response{
-			results: results,
-			err:     err,
+		channelCtx := ctx
+		cancelChannel := func() {}
+		if r.config.ChannelTimeout > 0 {
+			channelCtx, cancelChannel = context.WithTimeout(ctx, r.config.ChannelTimeout)
 		}
+		defer cancelChannel()
+		if r.config.RRF.VectorWeight == 0 {
+			vectorOut <- response{}
+			return
+		}
+		results, err := r.vector.search(channelCtx, query, strings.TrimSpace(*common.Index), channelTopK, vectorThreshold, common.Embedding)
+		vectorOut <- response{results: results, err: err}
 	}()
-
 	go func() {
-		defer wg.Done()
-
-		results, err := r.keyword.search(
-			ctx,
-			query,
-			strings.TrimSpace(*common.Index),
-			channelTopK,
-			keywordThreshold,
-		)
-
-		keywordCh <- response{
-			results: results,
-			err:     err,
+		channelCtx := ctx
+		cancelChannel := func() {}
+		if r.config.ChannelTimeout > 0 {
+			channelCtx, cancelChannel = context.WithTimeout(ctx, r.config.ChannelTimeout)
 		}
+		defer cancelChannel()
+		if r.config.RRF.KeywordWeight == 0 {
+			keywordOut <- response{}
+			return
+		}
+		results, err := r.keyword.search(channelCtx, query, strings.TrimSpace(*common.Index), channelTopK, keywordThreshold)
+		keywordOut <- response{results: results, err: err}
 	}()
-
-	// Wait 不是为了读取结果所必需，
-	// 但让两个 goroutine 生命周期明确结束在当前函数内。
-	wg.Wait()
-
-	vectorResponse := <-vectorCh
-	keywordResponse := <-keywordCh
-
-	if vectorResponse.err != nil {
-		return nil, fmt.Errorf(
-			"hybrid vector channel: %w",
-			vectorResponse.err,
-		)
+	var vectorResponse, keywordResponse response
+	for i := 0; i < 2; i++ {
+		var received response
+		var channel retrieval.MatchType
+		select {
+		case received = <-vectorCh:
+			vectorResponse = received
+			vectorCh = nil
+			channel = retrieval.MatchVector
+		case received = <-keywordCh:
+			keywordResponse = received
+			keywordCh = nil
+			channel = retrieval.MatchKeyword
+		case <-ctx.Done():
+			return nil, diag, ctx.Err()
+		}
+		if received.err != nil {
+			if ctx.Err() != nil {
+				return nil, diag, ctx.Err()
+			}
+			if errors.Is(received.err, context.Canceled) || r.config.FailurePolicy != FailureAllowPartial {
+				return nil, diag, fmt.Errorf("hybrid %s channel: %w", channel, received.err)
+			}
+			diag.Degraded = true
+			diag.Channels = append(diag.Channels, retrieval.ChannelDiagnostic{Channel: channel, Error: logging.SafeErrorText(received.err, 2048)})
+		}
 	}
-
+	if ctx.Err() != nil {
+		return nil, diag, ctx.Err()
+	}
+	if (vectorResponse.err != nil || r.config.RRF.VectorWeight == 0) && (keywordResponse.err != nil || r.config.RRF.KeywordWeight == 0) {
+		return nil, diag, errors.Join(vectorResponse.err, keywordResponse.err)
+	}
+	if vectorResponse.err != nil || r.config.RRF.VectorWeight == 0 {
+		diag.ModeUsed = retrieval.MatchKeyword
+	}
+	if keywordResponse.err != nil || r.config.RRF.KeywordWeight == 0 {
+		diag.ModeUsed = retrieval.MatchVector
+	}
+	// A failed channel never contributes partially returned rows.
+	if vectorResponse.err != nil {
+		vectorResponse.results = nil
+	}
 	if keywordResponse.err != nil {
-		return nil, fmt.Errorf(
-			"hybrid keyword channel: %w",
-			keywordResponse.err,
-		)
+		keywordResponse.results = nil
 	}
 
 	fused := retrieval.FuseRRF(
@@ -781,7 +826,7 @@ func (r *HybridRetriever) Search(
 		*common.TopK,
 	)
 
-	return fused, nil
+	return fused, diag, nil
 }
 
 // -----------------------------------------------------------------------------
@@ -823,12 +868,13 @@ SELECT
     c.start_rune,
     c.end_rune,
     c.parent_chunk_id,
-    c.metadata,
+    c.metadata || jsonb_build_object('rag_document_revision', d.revision::text),
     1.0 - n.distance AS score
 FROM nearest n
 JOIN chunks c
   ON c.collection_id = $2
  AND c.id = n.chunk_id
+JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
 ORDER BY score DESC, c.id ASC
 `
 
@@ -851,12 +897,13 @@ SELECT
     c.start_rune,
     c.end_rune,
     c.parent_chunk_id,
-    c.metadata,
+    c.metadata || jsonb_build_object('rag_document_revision', d.revision::text),
     pdb.score(ri.id)::float8 AS score
 FROM retrieval_index ri
 JOIN chunks c
   ON c.collection_id = ri.collection_id
  AND c.id = ri.chunk_id
+JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
 WHERE ri.collection_id = $1
   AND ri.enabled = TRUE
   AND ri.search_content ||| $2::text
@@ -917,6 +964,11 @@ func scanSearchResults(
 			}
 		}
 
+		revision, err := documentRevision(result.Metadata)
+		if err != nil {
+			return nil, err
+		}
+		result.DocumentRevision = revision
 		result.MatchType = matchType
 
 		switch matchType {
@@ -1028,7 +1080,7 @@ func validateCommonOptions(
 		return ErrDSLUnsupported
 	}
 
-	if options.ScoreThreshold == nil {
+	if options.ScoreThreshold == nil || !finite(*options.ScoreThreshold) {
 		return ErrInvalidThreshold
 	}
 
@@ -1090,6 +1142,7 @@ func toHalfVector(
 	}
 
 	values := make([]float32, len(vector))
+	nonzero := false
 
 	for i, value := range vector {
 		if math.IsNaN(value) ||
@@ -1111,8 +1164,14 @@ func toHalfVector(
 		}
 
 		values[i] = float32(value)
+		if math.Abs(float64(values[i])) > math.Ldexp(1, -25) {
+			nonzero = true
+		}
 	}
 
+	if !nonzero {
+		return pgvector.HalfVector{}, fmt.Errorf("%w: zero vector after half precision conversion", ErrInvalidEmbedding)
+	}
 	return pgvector.NewHalfVector(values), nil
 }
 
