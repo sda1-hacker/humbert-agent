@@ -88,6 +88,7 @@ type Event struct {
 	InputTokens   int              `json:"inputTokens,omitempty"`
 	OutputTokens  int              `json:"outputTokens,omitempty"`
 	TotalTokens   int              `json:"totalTokens,omitempty"`
+	ToolCalls     int              `json:"toolCalls,omitempty"` // 终态携带预算计数，覆盖中途事件持久化失败。
 	Error         string           `json:"error,omitempty"`
 
 	// Approval 只在 approval.* Runtime Event 中存在。Request 本身不包含 raw Tool

@@ -307,6 +307,7 @@ func (m *Manager) Update(ctx context.Context, id string, input UpdateServerInput
 	if err != nil {
 		return Server{}, err
 	}
+	previousFingerprint := ServerFingerprint(existing)
 	existing.Name = strings.TrimSpace(input.Name)
 	existing.Transport = input.Transport
 	existing.Stdio = cloneStdio(input.Stdio)
@@ -318,11 +319,31 @@ func (m *Manager) Update(ctx context.Context, id string, input UpdateServerInput
 	if err := m.store.Update(ctx, existing); err != nil {
 		return Server{}, err
 	}
-	m.invalidateRuntimeSession(existing.ID)
-	m.invalidateCatalog(existing.ID)
+	// Display Name 不改变连接/安全身份，不应关闭已冻结工具持有的 Session。
+	if ServerFingerprint(existing) != previousFingerprint {
+		m.mu.RLock()
+		backend := m.backend
+		m.mu.RUnlock()
+		if leased, ok := backend.(interface{ Retire(string) }); ok {
+			leased.Retire(existing.ID)
+		} else {
+			m.invalidateRuntimeSession(existing.ID)
+		}
+		m.invalidateCatalog(existing.ID)
+	}
 	m.bumpRevision()
 	m.logger.Info(ctx, "MCP Server 已更新", "operation", "mcp.server.update", "server_id", existing.ID, "server_key", existing.Key, "transport", existing.Transport)
 	return cloneServer(existing), nil
+}
+
+// ParentRunFinished 复用 Runtime 的生命周期观察者；主/子工具按父 RequestID 共用持有期。
+func (m *Manager) ParentRunFinished(_ context.Context, requestID string) {
+	m.mu.RLock()
+	backend := m.backend
+	m.mu.RUnlock()
+	if leased, ok := backend.(interface{ ReleaseRun(string) }); ok {
+		leased.ReleaseRun(requestID)
+	}
 }
 
 func (m *Manager) Delete(ctx context.Context, id string) error {

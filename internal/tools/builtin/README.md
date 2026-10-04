@@ -24,7 +24,7 @@ flowchart TD
 | 命令与 Git | `run_command.go`、`run_skill_script.go`、`git_tools.go` | 受命令配置、工作区、Sandbox Runner、时间和输出上限约束。 |
 | 文档 | `extract_document.go` | 从附件 ID 或允许路径读取，调用 `documenttext.Extract` 得到 Markdown，再按 offset/limit 返回。 |
 | 历史和大内容 | `context_history.go`、`context_artifact.go` | `session_history` 搜索/回读旧 Entry；`context_resource` 分段读附件或归档结果。 |
-| 网页 | `websearch_tool.go`、`websearch_backends.go`、`webfetch_tool.go`、`browser_tool.go` | 搜索/抓取与 Chrome CDP 操作分别实现；网络目标与内容长度受限。 |
+| 网页 | `websearch_tool.go`、`browser_proxy.go`、`webfetch_tool.go`、`browser_tool.go` | 搜索/抓取与 Chrome CDP 操作分别实现；网络目标与内容长度受限。 |
 | 扩展与系统 | `install_skill.go`、`collaboration_tools.go`、`schedule_task.go`、`system_tools.go` | 调用 Skill、子 Agent、Task Manager 或提供时间/计划辅助。 |
 
 `browser_tool.go` 启动独立配置的可见 Chrome 窗口，用户与 Agent 共用一页；每个 Agent 的配置保存在 cache/browser-profiles，Cookie 跨应用重启保留，其他 Agent 无法复用。CDP 负责交互，截图以原始 PNG 保存到当前会话的 attachments 并显示在聊天中，返回附件 ID。`copy_file` 可将当前会话附件复制到 Sandbox 允许的目标路径，因此保存或重命名截图无需在 browser 工具中处理。检测到网站验证页时只返回 `needs_human_verification`，交由用户在窗口中手动完成，工具不会自动操作验证控件。它没有桌面级操作能力。`webfetch_tool.go` 的网页正文是外部不可信内容；`htmlmarkdown.go` 只是格式转换。`run_command.go` 不应通过拼接字符串绕开 Sandbox Runner。`sandbox_fs.go` 是多个文件工具共享的路径入口；新增文件操作应优先复用它。
@@ -44,3 +44,5 @@ flowchart TD
 文件读写/编辑/目录/glob/grep 统一由 `filesystem.go` 的受限 Backend 接入 Eino 原生工具；原子写辅助在 `atomic_fs.go`，目录遍历辅助在 `search_files.go`。Schema 使用原生 file_path、offset/limit、old_string/new_string。
 
 递归遍历和目录列表通过 `sandboxTarget.canReadChild` 逐项检查策略，父目录授权不会覆盖禁止后代。`file_transactions.go` 协调所有文件修改工具的跨会话锁与提交前冲突检查；多文件统一排序取锁，等待响应 Context 取消。浏览器每次调用检查网络策略，禁网调用回收旧连接，close 保留为清理入口。
+
+浏览器进程使用专用本机 HTTP 代理，无 DIRECT 回退且关闭隐式本地目标 bypass。HTTP/HTTPS 和 WS/WSS 在实际 socket 连接处复用 `publicWebDialer` 的解析、拒绝和 IP 拨号，页面、弹窗及 worker 使用同一代理，不再以当前 page 的 Fetch 拦截充当进程网络边界。代理限制连接和请求并发，关闭时取消转发并释放 CONNECT/升级连接；Chrome 启动失败也回收代理和临时 Profile。启动参数禁用 QUIC，并请求 WebRTC 禁止非代理 UDP（后者仍需逐平台验证）；这不是对所有 Chrome 原生能力的 OS 沙箱保证。

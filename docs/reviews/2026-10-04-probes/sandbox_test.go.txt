@@ -1,0 +1,38 @@
+package sandbox
+
+import (
+    "os"
+    "path/filepath"
+    "testing"
+)
+
+func TestReviewSensitiveCachesMustBeBlocked(t *testing.T) {
+    // 全部使用临时的人工数据，不读取用户真实 Home 或凭据。
+    home := canonicalTempDir(t)
+    appHome := filepath.Join(home, ".humbert-agent")
+    workspace := filepath.Join(home, "project")
+    if err := os.MkdirAll(workspace, 0700); err != nil { t.Fatal(err) }
+    policy := EffectivePolicy{
+        Profile: ProfileStandard, WorkspaceRoot: workspace,
+        NetworkMode: NetworkPublic, NativeMode: NativeOff,
+        PathRules: sortedPathRules(append(protectedRulesFor(appHome, home),
+            PathRule{Root: home, Access: AccessReadOnly, Source: RuleSourceStandardHome},
+            PathRule{Root: workspace, Access: AccessFull, Source: RuleSourceWorkspace})),
+    }
+    paths := []string{
+        "agents/a/sessions/s/session.jsonl",
+        "cache/conversation-search.sqlite",
+        "cache/conversation-search.sqlite-wal",
+        "cache/document-search.sqlite",
+        "cache/browser-profiles/other-agent/Default/History",
+    }
+    for _, relative := range paths {
+        path := filepath.Join(appHome, relative)
+        if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil { t.Fatal(err) }
+        if err := os.WriteFile(path, []byte("artificial private content"), 0600); err != nil { t.Fatal(err) }
+        decision, err := policy.CheckPath(path, OpRead)
+        if err == nil {
+            t.Errorf("sensitive path readable: %s; access=%s source=%s", relative, decision.Access, decision.Source)
+        } else { t.Logf("blocked as expected: %s", relative) }
+    }
+}

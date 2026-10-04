@@ -158,6 +158,7 @@ gofmt -w <本次修改的 Go 文件>
 go test ./...
 go vet ./...
 git diff --check
+python3 docs/check_links.py
 cd frontend
 npm test
 npm run build

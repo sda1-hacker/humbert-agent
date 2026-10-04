@@ -32,6 +32,7 @@ type activeRun struct {
 	checkpointStore *approval.CheckpointStore
 	startedAt       time.Time
 	phase           RunPhase
+	finishOnce      sync.Once
 
 	// waitingApprovalID 非空表示当前没有 Executor worker，Run 正停在该审批点。字段只在
 	// Service.mu 下访问。approvalDone 用来停止该请求对应的 timeout worker。
@@ -168,6 +169,7 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 	reserved := true
 	defer func() {
 		if reserved {
+			s.notifyRunFinished(requestID)
 			s.releaseReservation(sessionID, requestID)
 		}
 	}()

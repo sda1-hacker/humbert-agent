@@ -52,3 +52,5 @@ sequenceDiagram
 例如远程 Server 暴露 `search`，模型可见名由 `NameExposedTool` 生成；调用时 Adapter 仍使用原始 `search`。如果另一 Server 也暴露 `search`，模型可见名必须保持唯一。工具的风险可以在 Server 上逐项覆盖，调用仍由 `GuardInvokableTool` 审批。Streamable HTTP 禁止网络时，快照解析阶段就拒绝或明确记录不可用状态，不能等工具调用时才隐式连接。
 
 排查顺序建议为：`Store.Get(ServerID)` → `DiscoverToolsFresh` → Agent Profile 选择 → `ResolveRuntimeSnapshot` → `Backend.Resolve` → `Adapter.BuildTools` → Guard/Permission → 远端响应。断开连接或改配置后，先确认 Revision/Fingerprint 变化，再看 SessionPool 是否使用新会话。
+
+显示名称和 Risk 更新不关闭连接。实际连接配置更新使用 `Retire`：新 Turn 不再复用旧配置，已经冻结的主/子工具按父 RequestID 持有旧连接；Runtime 结束或初始化失败通过 `ParentRunFinished` 释放，最后一个使用者退出后关闭旧连接。手动断开、停用和删除使用立即 `Invalidate`，包括已经 retired 的连接；不会自动将旧工具切换到新 Server 或重放调用。

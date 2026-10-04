@@ -68,7 +68,7 @@ Agent 可使用应用管理的工作区，也可指向用户选择的目录。�
 
 开启 Agent 的 browser 工具后，首次打开网页会启动由 Humbert 管理的独立可见 Chrome 窗口。用户和 Agent 查看、操作的是同一网页。工具支持 open、snapshot、click、type、scroll、press、back、forward、refresh、show、screenshot 和 close；网页截图以原始 PNG 保存到当前会话的 `attachments/`，并直接显示在聊天中。需要将截图保存到工作区或其他 Sandbox 允许的目录时，Agent 再调用独立的 `copy_file` 工具，用附件 ID 作为来源、目标路径作为文件名；同一轮和后续轮次都使用这条流程。模型支持视觉时，截图还会生成可供 Agent 使用的画面观察文本。每个 Agent 有独立的 Chrome 配置目录，保存在 `~/.humbert-agent/cache/browser-profiles/`，重启后仍保留网站 Cookie；不会借用用户日常 Chrome 的登录信息，清空该目录会重置浏览器状态，备份不包含此目录。网站仍可能要求安全验证。工具识别到验证页后会停止自动交互，提示用户在可见窗口手动完成，随后 Agent 可调用 snapshot 继续；Humbert 不自动识别或点击验证码。要求本机安装 Chrome，也可用 `HUMBERT_BROWSER_CHROME_PATH` 指定路径。网页只允许经过公网地址检查的 HTTP/HTTPS 目标；网页内容视为不可信信息。聊天中的普通链接仍使用系统默认浏览器打开。
 
-启用 `run_command` 后可以直接执行常用本地程序，无需维护程序名白名单。调用不经过 Shell，程序与其子进程在原生文件系统沙箱中只能以只读方式访问工作区；临时写入使用每次调用独立的 TMPDIR。直接删除命令和 `find -exec` 等明显破坏性参数会提前拒绝；解释器与子进程造成的写入也由操作系统沙箱阻断。原生文件隔离不可用时，本地命令拒绝执行。具体调用仍由权限设置决定是否询问，文件修改应使用受控文件工具。
+启用 `run_command` 后可以执行常用本地程序，无需维护程序名白名单。调用不经过 Shell，程序与子进程按本轮 Sandbox 目录权限执行：工作区可以修改，Standard 模式下用户 Home 的普通文件仅可读，凭据、Humbert 会话、日志和敏感缓存仍受保护。每次调用使用独立临时目录。Git 查询与 Skill 脚本采用派生的只读目录策略。受限模式所需的原生隔离不可用时，命令拒绝执行；具体调用仍由权限设置决定是否询问，权限 Allow 不会扩大本轮沙箱范围。
 
 定时与手动任务在左侧“任务”页面管理。
 
@@ -110,6 +110,8 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 | frontend/ | Vue 3 桌面界面与 Wails bindings |
 
 第一次阅读代码可从 [架构手册](docs/architecture/README.md) 进入各包的详细说明，并用 [代码阅读导引](docs/architecture/code-reading-guide.md) 跟踪一次聊天；设计约束见 [领域边界文档](docs/architecture/domain-boundaries.md)。
+
+基于当前实现的逐模块剖析见 [源码实现文档](docs/source-analysis/README.md)：覆盖全部非 RAG 内部模块、前端和桌面接口，解释调用流程、持久化、并发、失败处理与可选优化，并附文件、服务接口和工具参数索引。
 
 ### 默认数据目录
 

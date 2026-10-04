@@ -3,10 +3,14 @@ package builtin
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +22,40 @@ import (
 type screenshotAttachmentStub struct {
 	sessionID string
 	data      []byte
+}
+
+func TestBrowserNewTargetCannotBypassProxy(t *testing.T) {
+	if os.Getenv("HUMBERT_TEST_BROWSER") != "1" {
+		t.Skip("requires installed Chrome")
+	}
+	var requests atomic.Int64
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("private test page"))
+	}))
+	defer local.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	session, err := startBrowser(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.close()
+	// 此 Target 没有当前 page 的 Fetch 拦截；进程级代理仍须拒绝 loopback。
+	created, err := session.call(ctx, "Target.createTarget", map[string]any{"url": local.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target struct {
+		ID string `json:"targetId"`
+	}
+	if err := json.Unmarshal(created, &target); err != nil || target.ID == "" {
+		t.Fatalf("target not created: %s %v", created, err)
+	}
+	time.Sleep(time.Second)
+	if requests.Load() != 0 {
+		t.Fatal("new target bypassed public proxy")
+	}
 }
 
 func (s *screenshotAttachmentStub) SaveToolImage(_ context.Context, sessionID, _, _ string, data []byte) (string, error) {

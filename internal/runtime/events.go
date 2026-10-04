@@ -35,64 +35,50 @@ func (s *Service) deltaEmitter(snapshot *Snapshot) DeltaEmitter {
 	}
 }
 
-// handleExecutionError 只把执行失败投影成实时终态 Event 与结构化日志。
-//
-// 失败期间已经生成的 Assistant partial content 由 Executor 以 error/aborted
-// AssistantMessage 保存，因此这里严禁再次 AppendAssistantMessage，避免双写。
-func (s *Service) handleExecutionError(snapshot *Snapshot, result ExecutionResult, runErr error, startedAt time.Time) {
-	cancelled := errors.Is(runErr, context.Canceled)
-	eventType := EventTurnFailed
-	statusText := "failed"
-	if cancelled {
-		eventType = EventTurnCancelled
-		statusText = "cancelled"
-	}
-
-	userVisibleError := runtimeUserVisibleError(runErr)
-	s.publishEvent(Event{
-		Type:          eventType,
-		RequestID:     snapshot.RequestID,
-		RunID:         snapshot.RunID,
-		SessionID:     snapshot.SessionID,
-		AgentID:       snapshot.AgentID,
-		ModelID:       snapshot.ModelID,
-		ModelRevision: snapshot.ModelRevision,
-		ToolRevision:  snapshot.ToolRevision,
-		MessageID:     result.MessageID,
-		Error:         userVisibleError,
-		OccurredAt:    time.Now().UTC().Format(time.RFC3339Nano),
+// finishRun 是所有终态的唯一出口。完成必要收尾和释放 Session 后才通知订阅者。
+// Executor 已保存 partial/error 消息，这里只投影事件，不再次写 Transcript。
+func (s *Service) finishRun(active *activeRun, result ExecutionResult, runErr error) {
+	active.finishOnce.Do(func() {
+		s.cleanupRun(active)
+		snapshot := active.snapshot
+		eventType, operation, message := EventTurnCompleted, "runtime.turn.complete", "Agent Turn 已完成"
+		if errors.Is(runErr, context.Canceled) {
+			eventType, operation, message = EventTurnCancelled, "runtime.turn.cancelled", "Agent Turn 已取消"
+		} else if runErr != nil {
+			eventType, operation, message = EventTurnFailed, "runtime.turn.failed", "Agent Turn 执行失败"
+		}
+		s.publishEvent(Event{
+			Type: eventType, RequestID: active.RequestID, RunID: active.RunID,
+			SessionID: active.SessionID, AgentID: snapshot.AgentID,
+			ModelID: snapshot.ModelID, ModelRevision: snapshot.ModelRevision,
+			ToolRevision: snapshot.ToolRevision, MessageID: result.MessageID,
+			Error:      runtimeUserVisibleError(runErr),
+			ToolCalls:  toolCallCount(snapshot.limitState),
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		})
+		args := []any{
+			"operation", operation, "request_id", active.RequestID, "run_id", active.RunID,
+			"session_id", active.SessionID, "agent_id", snapshot.AgentID,
+			"message_id", result.MessageID, logging.Duration(active.startedAt),
+		}
+		if runErr == nil {
+			s.logger.Info(context.Background(), message, args...)
+		} else {
+			args = append(args, "error", runErr)
+			if eventType == EventTurnCancelled {
+				s.logger.Warn(context.Background(), message, args...)
+			} else {
+				s.logger.Error(context.Background(), message, args...)
+			}
+		}
 	})
+}
 
-	if cancelled {
-		s.logger.Warn(
-			context.Background(),
-			"Agent Turn 已取消",
-			"operation", "runtime.turn.cancelled",
-			"request_id", snapshot.RequestID,
-			"run_id", snapshot.RunID,
-			"session_id", snapshot.SessionID,
-			"agent_id", snapshot.AgentID,
-			"message_id", result.MessageID,
-			"status", statusText,
-			"error", runErr,
-			logging.Duration(startedAt),
-		)
-		return
+func toolCallCount(state *executionLimitState) int {
+	if state == nil {
+		return 0
 	}
-
-	s.logger.Error(
-		context.Background(),
-		"Agent Turn 执行失败",
-		"operation", "runtime.turn.failed",
-		"request_id", snapshot.RequestID,
-		"run_id", snapshot.RunID,
-		"session_id", snapshot.SessionID,
-		"agent_id", snapshot.AgentID,
-		"message_id", result.MessageID,
-		"status", statusText,
-		"error", runErr,
-		logging.Duration(startedAt),
-	)
+	return int(state.toolCalls.Load())
 }
 
 // runtimeUserVisibleError 把底层 Provider/Eino/HTTP 错误转换成适合直接展示给用户的文本。

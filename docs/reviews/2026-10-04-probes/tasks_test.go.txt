@@ -1,0 +1,32 @@
+package tasks
+
+import (
+    "context"
+    "testing"
+    "time"
+
+    "github.com/google/uuid"
+)
+
+func TestReviewFailedRunWithToolsMustNotBlindlyRetry(t *testing.T) {
+    store, agent := newTestStore(t)
+    task := createTestTask(t, store, agent)
+    task.Limits.MaxAttempts = 2
+    if err := store.UpdateTask(context.Background(), task); err != nil { t.Fatal(err) }
+    now := time.Now().UTC()
+    run, _, err := store.CreateRun(context.Background(), Run{
+        ID: uuid.NewString(), TaskID: task.ID, AgentID: agent, Trigger: TriggerManual,
+        ScheduledFor: now, Attempt: 1, Status: RunFailed, CreatedAt: now, FinishedAt: &now,
+        ToolCalls: 1, Error: "model request failed after a tool completed",
+    })
+    if err != nil { t.Fatal(err) }
+    manager := testManagerForSchedule(store)
+    manager.maybeRetry(run)
+    runs, err := store.ListRuns(context.Background(), task.ID)
+    if err != nil { t.Fatal(err) }
+    for _, next := range runs {
+        if next.ParentRunID == run.ID && next.Status == RunQueued {
+            t.Errorf("blind retry created after prior tool calls: attempt=%d trigger=%s", next.Attempt, next.Trigger)
+        }
+    }
+}

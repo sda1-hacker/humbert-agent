@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -247,45 +248,53 @@ func TestEnqueueDueDoesNotRaceAgentDeletion(t *testing.T) {
 	}
 }
 
-func TestRecoverRetriesIsIdempotent(t *testing.T) {
-	store, agentID := newTestStore(t)
-	task := createTestTask(t, store, agentID)
-	task.Limits.MaxAttempts = 3
-	task.Limits.RetryDelaySeconds = 1
-	if err := store.UpdateTask(context.Background(), task); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Add(-time.Minute)
-	failed, _, err := store.CreateRun(context.Background(), Run{
-		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
-		Trigger: TriggerManual, ScheduledFor: now, Attempt: 1,
-		Status: RunFailed, Error: "provider unavailable", CreatedAt: now, FinishedAt: timePointer(now),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	manager := testManagerForSchedule(store)
-	if err := manager.recoverRetries(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := manager.recoverRetries(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	runs, err := store.ListRuns(context.Background(), task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	retries := 0
-	for _, run := range runs {
-		if run.Trigger == TriggerRetry {
-			retries++
-			if run.ParentRunID != failed.ID || run.Attempt != 2 {
-				t.Fatalf("unexpected retry: %+v", run)
+func TestRecoverRetriesIsSafeAndIdempotent(t *testing.T) {
+	for _, toolCalls := range []int{0, 1} {
+		t.Run(fmt.Sprintf("tool_calls_%d", toolCalls), func(t *testing.T) {
+			store, agentID := newTestStore(t)
+			task := createTestTask(t, store, agentID)
+			task.Limits.MaxAttempts = 3
+			task.Limits.RetryDelaySeconds = 1
+			if err := store.UpdateTask(context.Background(), task); err != nil {
+				t.Fatal(err)
 			}
-		}
-	}
-	if retries != 1 {
-		t.Fatalf("retries=%d want=1", retries)
+			now := time.Now().UTC().Add(-time.Minute)
+			failed, _, err := store.CreateRun(context.Background(), Run{
+				ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+				Trigger: TriggerManual, ScheduledFor: now, Attempt: 1,
+				ToolCalls: toolCalls, Status: RunFailed, Error: "provider unavailable", CreatedAt: now, FinishedAt: timePointer(now),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			manager := testManagerForSchedule(store)
+			if err := manager.recoverRetries(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.recoverRetries(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			runs, err := store.ListRuns(context.Background(), task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			retries := 0
+			for _, run := range runs {
+				if run.Trigger == TriggerRetry {
+					retries++
+					if run.ParentRunID != failed.ID || run.Attempt != 2 {
+						t.Fatalf("unexpected retry: %+v", run)
+					}
+				}
+			}
+			want := 1
+			if toolCalls > 0 {
+				want = 0
+			}
+			if retries != want {
+				t.Fatalf("retries=%d want=%d", retries, want)
+			}
+		})
 	}
 }
 
@@ -378,5 +387,35 @@ func TestUnreferencedRunSessionIDsDeletesDedicatedSession(t *testing.T) {
 	got := unreferencedRunSessionIDs(task, nil, []Run{{SessionID: dedicated}})
 	if len(got) != 1 || got[0] != dedicated {
 		t.Fatalf("unreferenced session ids=%v want=[%s]", got, dedicated)
+	}
+}
+
+func TestDispatchCancelsUnsafeExistingRetry(t *testing.T) {
+	store, agentID := newTestStore(t)
+	task := createTestTask(t, store, agentID)
+	now := time.Now().UTC()
+	parent, _, err := store.CreateRun(context.Background(), Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+		Trigger: TriggerManual, ScheduledFor: now.Add(-time.Minute), Attempt: 1,
+		Status: RunFailed, ToolCalls: 1, CreatedAt: now.Add(-time.Minute), FinishedAt: timePointer(now),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, _, err := store.CreateRun(context.Background(), Run{
+		ID: uuid.NewString(), TaskID: task.ID, AgentID: agentID,
+		Trigger: TriggerRetry, ParentRunID: parent.ID, ScheduledFor: now.Add(-time.Second), Attempt: 2,
+		Status: RunQueued, CreatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := testManagerForSchedule(store)
+	if err := manager.dispatchLocked(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.GetRun(context.Background(), queued.ID)
+	if err != nil || current.Status != RunCancelled || current.Error == "" {
+		t.Fatalf("unsafe retry was not cancelled: %+v %v", current, err)
 	}
 }

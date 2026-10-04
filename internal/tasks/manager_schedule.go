@@ -264,13 +264,23 @@ func (m *Manager) dispatchLocked(ctx context.Context) error {
 		// 手动 RunNow 是用户的显式操作，允许在计划暂停时执行；计划运行和重试
 		// 则必须在真正启动前再次确认 Task 仍为 active。该校验是暂停时取消队列
 		// 之外的第二道防线，避免旧队列或异常数据绕过暂停状态。
+		blockedReason := ""
 		if task.Status == TaskStatusArchived || (task.Status != TaskStatusActive && run.Trigger != TriggerManual && run.Trigger != TriggerAutomation) {
+			blockedReason = "任务计划已暂停，排队中的自动运行不再启动。"
+		}
+		if run.Trigger == TriggerRetry {
+			parent, parentErr := m.store.GetRun(ctx, run.ParentRunID)
+			if parentErr != nil || !safeToRetry(parent) {
+				blockedReason = "无法确认原运行可安全重试，旧重试队列已取消；请先检查已完成的操作。"
+			}
+		}
+		if blockedReason != "" {
 			now := time.Now().UTC()
 			run, err = m.store.MutateRun(ctx, run.ID, func(current *Run) error {
 				if current.Status != RunQueued {
 					return ErrTaskBusy
 				}
-				current.Status, current.Error, current.FinishedAt = RunCancelled, "任务计划已暂停，排队中的自动运行不再启动。", &now
+				current.Status, current.Error, current.FinishedAt = RunCancelled, blockedReason, &now
 				return nil
 			})
 			if err != nil {

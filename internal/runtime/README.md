@@ -21,7 +21,7 @@ flowchart LR
   E2 --> W
 ```
 
-`StartTurn` 的顺序固定：校验输入 → 取得 Session/Agent → 占用 Session → 持久化或安全复用 UserMessage → 解析 Snapshot → 登记 `activeRun` → 异步执行。若解析失败，收据保留已经保存的 `UserMessageID`，避免前端重试重复追加。`executeTurn` 和 `resumeTurn` 最终都进入 `handleExecutionOutcome`：失败、再次审批中断、正常完成三种出口。`completeTurn` 做维护与终态事件；`cleanupRun` 释放占用。
+`StartTurn` 的顺序固定：校验输入 → 取得 Session/Agent → 占用 Session → 持久化或安全复用 UserMessage → 解析 Snapshot → 登记 `activeRun` → 异步执行。若解析失败，收据保留已经保存的 `UserMessageID`，避免前端重试重复追加。`executeTurn` 和 `resumeTurn` 最终都进入 `handleExecutionOutcome`：失败、再次审批中断、正常完成三种出口。`completeTurn` 做维护；所有成功、失败和审批取消进入 `finishRun`，完成清理后只发布一次终态。
 
 ## 并发与审批
 
@@ -51,8 +51,8 @@ flowchart LR
 ```text
 StartTurn: reserve → append user → ResolveTurn → activeRun
 executeTurn: EventTurnStarted → Eino events → persist completed steps
-  ├─ completed: MaintainAfterTurn → EventTurnCompleted → cleanupRun
-  ├─ failed/cancelled: EventTurnFailed/Cancelled → cleanupRun
+  ├─ completed: MaintainAfterTurn → finishRun(cleanupRun → EventTurnCompleted)
+  ├─ failed/cancelled: finishRun(cleanupRun → EventTurnFailed/Cancelled)
   └─ interrupt: register approval → 保留 activeRun 和 reservation
 ResolveApproval: permission decision → Resume(checkpoint) → 同样三种出口
 ```
@@ -70,3 +70,5 @@ ResolveApproval: permission decision → Resume(checkpoint) → 同样三种出�
 `component.Provider` 只贡献 Agent 显式选择的 Eino 工具。Describe 用于本地预览和预算，Resolve 用于真实 Turn；两者返回相同工具名称及内容版本。模块工具与 Builtin/Skills/MCP 一起做名称冲突检查、Schema Token 估算和 Reduction，并复用统一 Permission Guard。
 
 子 Agent 使用自己的模块绑定，授权 Scope 仍继承父运行。宿主复制模块请求中的可变集合；Manifest 只公开模块 ID、版本和工具名称。Allow 精确绑定版本，Deny 绑定稳定模块与工具。实现或配置变化必须更新版本，当前 Turn 使用已经捕获的配置与连接，审批恢复不重新装配。
+
+终态事件发布前已完成必要持久化、取消旧上下文、通知生命周期观察者并同时释放运行索引和 Session reservation。同步订阅者可立即预约下一轮；旧清理按 RequestID 校验，不能删除新运行占用。初始化失败也通知观察者，回收解析阶段已持有的 MCP 连接。

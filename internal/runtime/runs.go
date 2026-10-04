@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
-	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 )
 
@@ -64,7 +63,7 @@ func (s *Service) CancelTurn(requestID string) error {
 		OccurredAt:       time.Now().UTC().Format(time.RFC3339Nano),
 	})
 	s.approvals.Forget(waitingApprovalID)
-	s.finishCancelledWaitingRun(active)
+	s.finishRun(active, ExecutionResult{}, context.Canceled)
 	return nil
 }
 
@@ -126,14 +125,12 @@ func (s *Service) handleExecutionOutcome(active *activeRun, result ExecutionResu
 		defer s.approvals.Forget(previousApprovalID)
 	}
 	if runErr != nil {
-		s.handleExecutionError(active.snapshot, result, runErr, active.startedAt)
-		s.cleanupRun(active)
+		s.finishRun(active, result, runErr)
 		return
 	}
 	if result.Interrupted != nil {
 		if err := s.registerInterruptedRun(active, result.Interrupted); err != nil {
-			s.handleExecutionError(active.snapshot, result, fmt.Errorf("注册 Tool Approval 失败: %w", err), active.startedAt)
-			s.cleanupRun(active)
+			s.finishRun(active, result, fmt.Errorf("注册 Tool Approval 失败: %w", err))
 		}
 		return
 	}
@@ -168,36 +165,11 @@ func (s *Service) completeTurn(active *activeRun, result ExecutionResult) {
 	}
 	maintenanceCancel()
 	if err := active.ctx.Err(); err != nil {
-		s.handleExecutionError(snapshot, result, err, active.startedAt)
-		s.cleanupRun(active)
+		s.finishRun(active, result, err)
 		return
 	}
 
-	s.publishEvent(Event{
-		Type:          EventTurnCompleted,
-		RequestID:     snapshot.RequestID,
-		RunID:         snapshot.RunID,
-		SessionID:     snapshot.SessionID,
-		AgentID:       snapshot.AgentID,
-		ModelID:       snapshot.ModelID,
-		ModelRevision: snapshot.ModelRevision,
-		ToolRevision:  snapshot.ToolRevision,
-		MessageID:     result.MessageID,
-		OccurredAt:    time.Now().UTC().Format(time.RFC3339Nano),
-	})
-
-	s.logger.Info(
-		context.Background(),
-		"Agent Turn 已完成",
-		"operation", "runtime.turn.complete",
-		"request_id", snapshot.RequestID,
-		"run_id", snapshot.RunID,
-		"session_id", snapshot.SessionID,
-		"agent_id", snapshot.AgentID,
-		"message_id", result.MessageID,
-		logging.Duration(active.startedAt),
-	)
-	s.cleanupRun(active)
+	s.finishRun(active, result, nil)
 }
 
 func (s *Service) cleanupRun(active *activeRun) {
@@ -207,25 +179,27 @@ func (s *Service) cleanupRun(active *activeRun) {
 	active.cancel()
 	_ = active.checkpointStore.Delete(context.Background(), active.RunID)
 
+	s.notifyRunFinished(active.RequestID)
+
+	// 必要收尾完成后同时释放两个索引；旧收尾不能删除新运行的 reservation。
 	s.mu.Lock()
-	if current, exists := s.activeByRequest[active.RequestID]; exists && current == active {
+	defer s.mu.Unlock()
+	if s.activeByRequest[active.RequestID] == active {
 		signalApprovalDoneLocked(active)
 		delete(s.activeByRequest, active.RequestID)
 	}
-	s.mu.Unlock()
-
-	s.mu.Lock()
-	if current, exists := s.activeBySession[active.SessionID]; exists && current == active.RequestID {
+	if s.activeBySession[active.SessionID] == active.RequestID {
 		delete(s.activeBySession, active.SessionID)
 		delete(s.reservationAgents, active.SessionID)
 	}
-	s.mu.Unlock()
+}
 
+func (s *Service) notifyRunFinished(requestID string) {
 	s.mu.Lock()
 	observers := append([]RunLifecycleObserver(nil), s.lifecycleObservers...)
 	s.mu.Unlock()
 	for _, observer := range observers {
-		observer.ParentRunFinished(context.Background(), active.RequestID)
+		observer.ParentRunFinished(context.Background(), requestID)
 	}
 }
 

@@ -51,7 +51,7 @@ sequenceDiagram
 | `codec.go` | thinking、工具调用、工具结果、附件引用如何往返 Eino。 |
 | `location_index.go`、`cache.go` | 长会话按字节定位与小会话 LRU；索引失效重建。 |
 | `history_index.go` | `session_history` 所需的逆序遍历与局部范围读取。 |
-| `tool_result.go`、`artifacts.go` | 工具结果及文件效果的确定性提取。 |
+| `tool_result.go` | 工具结果及文件效果的确定性提取。 |
 
 追踪一条消息时记录 `sessionID`、`Entry.ID`、`ParentID`：先在 `AppendMessage` 看写入，再在 `LoadMessagePage` 看 UI 读取，最后在 `projectActiveBranch` 看模型可见形式。相关测试在本包 `*_test.go`；更高层读取由 `sessions.Service` 测试覆盖。
 

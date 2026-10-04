@@ -38,6 +38,8 @@ type Backend struct {
 	retryBackoff map[string]runtimeRetryState
 	generations  map[string]uint64
 	closed       bool
+	runSessions  map[string]map[*sessionEntry]struct{}
+	retired      map[*sessionEntry]struct{}
 }
 
 type sessionEntry struct {
@@ -48,6 +50,9 @@ type sessionEntry struct {
 	cleanup     func()
 	createdAt   time.Time
 	lastUsedAt  time.Time
+	activeRuns  int
+	closeOnce   sync.Once
+	closeErr    error
 }
 
 type runtimeStatusEntry struct {
@@ -99,6 +104,8 @@ func NewBackend(
 		statuses:     make(map[string]runtimeStatusEntry),
 		retryBackoff: make(map[string]runtimeRetryState),
 		generations:  make(map[string]uint64),
+		runSessions:  make(map[string]map[*sessionEntry]struct{}),
+		retired:      make(map[*sessionEntry]struct{}),
 	}, nil
 }
 
@@ -124,6 +131,9 @@ func (b *Backend) Resolve(ctx context.Context, request humbertmcp.ResolveRequest
 		}
 		session, err := b.runtimeSession(ctx, server, policy)
 		if err != nil {
+			return humbertmcp.RuntimeSnapshot{}, err
+		}
+		if err := b.retainRunSession(request.Scope.RequestID, session); err != nil {
 			return humbertmcp.RuntimeSnapshot{}, err
 		}
 		serverSnapshot, err := b.adapter.BuildTools(
@@ -184,6 +194,46 @@ func (b *Backend) DiscoverTools(ctx context.Context, server humbertmcp.Server) (
 	return items, nil
 }
 
+func (b *Backend) retainRunSession(requestID string, session *officialmcpsession.Session) error {
+	// 无运行身份的设置页诊断由 Backend.Close/Invalidate 管理，不长期持有快照。
+	if requestID == "" {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, entry := range b.sessions {
+		if entry.session != session {
+			continue
+		}
+		if b.runSessions[requestID] == nil {
+			b.runSessions[requestID] = make(map[*sessionEntry]struct{})
+		}
+		if _, held := b.runSessions[requestID][entry]; !held {
+			b.runSessions[requestID][entry] = struct{}{}
+			entry.activeRuns++
+		}
+		return nil
+	}
+	return errors.New("MCP Session 在解析过程中已失效")
+}
+
+func (b *Backend) ReleaseRun(requestID string) {
+	b.mu.Lock()
+	var toClose []*sessionEntry
+	for entry := range b.runSessions[requestID] {
+		entry.activeRuns--
+		if _, retired := b.retired[entry]; retired && entry.activeRuns == 0 {
+			delete(b.retired, entry)
+			toClose = append(toClose, entry)
+		}
+	}
+	delete(b.runSessions, requestID)
+	b.mu.Unlock()
+	for _, entry := range toClose {
+		_ = closeSessionEntry(entry)
+	}
+}
+
 func (b *Backend) RuntimeStatus(server humbertmcp.Server) humbertmcp.RuntimeStatus {
 	fingerprint := humbertmcp.ServerFingerprint(server)
 	b.mu.Lock()
@@ -207,6 +257,16 @@ func (b *Backend) RuntimeStatus(server humbertmcp.Server) humbertmcp.RuntimeStat
 }
 
 func (b *Backend) Invalidate(serverID string) {
+	b.resetServer(serverID, false)
+}
+
+// Retire 阻止新轮复用旧配置；已冻结的运行在结束时释放旧连接。
+// 手动断开、停用和删除仍使用 Invalidate，立即回收连接。
+func (b *Backend) Retire(serverID string) {
+	b.resetServer(serverID, true)
+}
+
+func (b *Backend) resetServer(serverID string, retire bool) {
 	serverID = strings.TrimSpace(serverID)
 	if serverID == "" {
 		return
@@ -224,10 +284,14 @@ func (b *Backend) Invalidate(serverID string) {
 		}
 	}
 	b.mu.Unlock()
-	b.invalidateSession(serverID, "", nil, nil)
+	b.removeSessions(serverID, "", nil, nil, retire)
 }
 
 func (b *Backend) invalidateSession(serverID, fingerprint string, expected *officialmcpsession.Session, cause error) {
+	b.removeSessions(serverID, fingerprint, expected, cause, false)
+}
+
+func (b *Backend) removeSessions(serverID, fingerprint string, expected *officialmcpsession.Session, cause error, retire bool) {
 	now := time.Now().UTC()
 	toClose := make([]*sessionEntry, 0, 2)
 	var history *sessionEntry
@@ -248,14 +312,27 @@ func (b *Backend) invalidateSession(serverID, fingerprint string, expected *offi
 		if history == nil || entry.lastUsedAt.After(history.lastUsedAt) {
 			history = entry
 		}
-		if entry.session != nil || entry.cleanup != nil {
+		if retire && entry.activeRuns > 0 {
+			b.retired[entry] = struct{}{}
+		} else if entry.session != nil || entry.cleanup != nil {
 			toClose = append(toClose, entry)
 		}
 		delete(b.sessions, key)
 	}
+	if !retire {
+		for entry := range b.retired {
+			if entry.serverID == serverID && (expected == nil || entry.session == expected) && (fingerprint == "" || entry.fingerprint == fingerprint) {
+				toClose = append(toClose, entry)
+				delete(b.retired, entry)
+			}
+		}
+	}
 	// 旧 Session 的失败/回收不能覆盖并发建立的新 Session 状态。
 	if !matchedExpected {
 		b.mu.Unlock()
+		for _, entry := range toClose {
+			_ = closeSessionEntry(entry)
+		}
 		return
 	}
 
@@ -337,15 +414,15 @@ func closeSessionEntry(entry *sessionEntry) error {
 	if entry == nil {
 		return nil
 	}
-	var err error
-	if entry.session != nil {
-		err = entry.session.Close()
-	}
-	if entry.cleanup != nil {
-		entry.cleanup()
-		entry.cleanup = nil
-	}
-	return err
+	entry.closeOnce.Do(func() {
+		if entry.session != nil {
+			entry.closeErr = entry.session.Close()
+		}
+		if entry.cleanup != nil {
+			entry.cleanup()
+		}
+	})
+	return entry.closeErr
 }
 
 func (b *Backend) Close() error {
@@ -356,11 +433,16 @@ func (b *Backend) Close() error {
 	}
 	b.closed = true
 	entries := b.sessions
+	for entry := range b.retired {
+		entries[fmt.Sprintf("retired:%p", entry)] = entry
+	}
 	attempts := b.connecting
 	b.sessions = make(map[string]*sessionEntry)
 	b.connecting = make(map[string]*connectionAttempt)
 	b.statuses = make(map[string]runtimeStatusEntry)
 	b.retryBackoff = make(map[string]runtimeRetryState)
+	b.runSessions = make(map[string]map[*sessionEntry]struct{})
+	b.retired = make(map[*sessionEntry]struct{})
 	b.mu.Unlock()
 
 	for _, attempt := range attempts {
@@ -468,6 +550,10 @@ func (b *Backend) sessionWithPolicy(ctx context.Context, server humbertmcp.Serve
 	}
 
 	old := b.sessions[cacheKey]
+	if old != nil && old.activeRuns > 0 {
+		b.retired[old] = struct{}{}
+		old = nil
+	}
 	delete(b.sessions, cacheKey)
 	attemptCtx, attemptCancel := context.WithCancel(ctx)
 	attempt := &connectionAttempt{

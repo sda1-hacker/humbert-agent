@@ -11,7 +11,7 @@ import (
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 )
 
-func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
+func (m *Manager) handleRuntimePayload(_ context.Context, payload any) {
 	event, ok := payload.(agentruntime.Event)
 	if !ok || strings.TrimSpace(event.SessionID) == "" {
 		return
@@ -43,6 +43,7 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 		if run.Status.Terminal() {
 			return nil
 		}
+		run.ToolCalls = max(run.ToolCalls, event.ToolCalls)
 		switch event.Type {
 		case agentruntime.EventTurnStarted:
 			run.Status = RunRunning
@@ -81,6 +82,9 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 		default:
 			return nil
 		}
+		if (run.Status == RunFailed || run.Status == RunTimedOut) && run.ToolCalls > 0 {
+			run.Error += " 已调用工具，自动重试已停止；请先检查已完成的操作再手动继续。"
+		}
 		changed = true
 		return nil
 	})
@@ -101,7 +105,6 @@ func (m *Manager) handleRuntimePayload(ctx context.Context, payload any) {
 		m.maybeRetry(run)
 		go m.runCycle()
 	}
-	_ = ctx
 }
 
 func (m *Manager) resultPreview(sessionID, messageID string) string {
@@ -118,8 +121,8 @@ func (m *Manager) resultPreview(sessionID, messageID string) string {
 			continue
 		}
 		value := strings.TrimSpace(message.Message.Content)
-		if len([]rune(value)) > 500 {
-			value = string([]rune(value)[:500]) + "…"
+		if runes := []rune(value); len(runes) > 500 {
+			value = string(runes[:500]) + "…"
 		}
 		return value
 	}
@@ -155,7 +158,7 @@ func (m *Manager) failRun(ctx context.Context, run Run, err error) {
 }
 
 func (m *Manager) maybeRetry(run Run) {
-	if run.Status != RunFailed && run.Status != RunTimedOut {
+	if !safeToRetry(run) {
 		return
 	}
 	task, err := m.store.GetTask(context.Background(), run.TaskID)
@@ -177,6 +180,11 @@ func (m *Manager) maybeRetry(run Run) {
 	}
 }
 
+func safeToRetry(run Run) bool {
+	// ToolStarted 包含等待审批/拒绝，保守地阻止整轮重放；工具结果未知不能当作未执行。
+	return (run.Status == RunFailed || run.Status == RunTimedOut) && run.ToolCalls == 0
+}
+
 // recoverRetries 修复“失败终态已经持久化，但对应重试尚未创建”这一进程崩溃窗口。
 // Store 以 ParentRunID 幂等去重，因此重复启动不会产生多个相同重试。
 func (m *Manager) recoverRetries(ctx context.Context) error {
@@ -193,9 +201,7 @@ func (m *Manager) recoverRetries(ctx context.Context) error {
 			return listErr
 		}
 		for _, run := range runs {
-			if (run.Status == RunFailed || run.Status == RunTimedOut) && run.Attempt < task.Limits.MaxAttempts {
-				m.maybeRetry(run)
-			}
+			m.maybeRetry(run)
 		}
 	}
 	return nil

@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
-	"github.com/sda1-hacker/humbert-agent/internal/logging"
 )
 
 // 本文件负责 Eino checkpoint 暂停、审批等待及恢复。等待审批期间必须继续保留
@@ -238,13 +237,11 @@ func (s *Service) awaitApproval(active *activeRun, request approval.Request, don
 		}
 		s.approvals.Cancel(request.ID)
 		s.approvals.Forget(request.ID)
-		s.handleExecutionError(
-			active.snapshot,
+		s.finishRun(
+			active,
 			ExecutionResult{},
 			fmt.Errorf("Approval 超时前检查 Runtime Checkpoint 失败: %w", checkpointErr),
-			active.startedAt,
 		)
-		s.cleanupRun(active)
 		return
 	}
 
@@ -312,32 +309,5 @@ func (s *Service) finalizeWaitingCancellation(active *activeRun, approvalID stri
 
 	s.approvals.Cancel(approvalID)
 	s.approvals.Forget(approvalID)
-	s.finishCancelledWaitingRun(active)
-}
-
-func (s *Service) finishCancelledWaitingRun(active *activeRun) {
-	snapshot := active.snapshot
-	s.publishEvent(Event{
-		Type:          EventTurnCancelled,
-		RequestID:     active.RequestID,
-		RunID:         active.RunID,
-		SessionID:     active.SessionID,
-		AgentID:       snapshot.AgentID,
-		ModelID:       snapshot.ModelID,
-		ModelRevision: snapshot.ModelRevision,
-		ToolRevision:  snapshot.ToolRevision,
-		Error:         "本次生成已取消。",
-		OccurredAt:    time.Now().UTC().Format(time.RFC3339Nano),
-	})
-	s.logger.Warn(
-		context.Background(),
-		"等待 Approval 的 Agent Turn 已取消",
-		"operation", "runtime.turn.cancelled",
-		"request_id", active.RequestID,
-		"run_id", active.RunID,
-		"session_id", active.SessionID,
-		"agent_id", snapshot.AgentID,
-		logging.Duration(active.startedAt),
-	)
-	s.cleanupRun(active)
+	s.finishRun(active, ExecutionResult{}, context.Canceled)
 }

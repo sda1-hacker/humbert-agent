@@ -380,6 +380,7 @@ func validateBrowserURL(ctx context.Context, raw string) error {
 
 type browserSession struct {
 	cmd       *exec.Cmd
+	proxy     *browserProxy
 	profile   string
 	ephemeral bool
 	conn      *websocket.Conn
@@ -462,14 +463,32 @@ func ensureBrowserProfileDirectory(path string) error {
 }
 
 func startBrowserWithProfile(ctx context.Context, visible bool, profile string, ephemeral bool) (*browserSession, error) {
+	started := false
+	defer func() {
+		if !started && ephemeral {
+			_ = os.RemoveAll(profile)
+		}
+	}()
 	// 持久 Profile 若上次异常退出，旧端口文件可能仍在；不能误连旧地址。
 	if !ephemeral {
 		if err := os.Remove(filepath.Join(profile, "DevToolsActivePort")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("清理旧 Chrome 调试端口失败: %w", err)
 		}
 	}
+	proxy, err := startBrowserProxy((&publicWebDialer{}).DialContext)
+	if err != nil {
+		return nil, fmt.Errorf("启动 browser 出站代理失败: %w", err)
+	}
+	defer func() {
+		if !started {
+			_ = proxy.Close()
+		}
+	}()
 	path := chromePath()
 	args := []string{"--no-first-run", "--no-default-browser-check", "--disable-extensions", "--disable-sync", "--disable-background-networking", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", "--user-data-dir=" + profile}
+	// HTTP 出站无 DIRECT 回退，移除本地地址 bypass；额外请求限制 QUIC/WebRTC UDP。
+	args = append(args, "--proxy-server=http://"+proxy.address, "--proxy-bypass-list=<-loopback>",
+		"--disable-quic", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp")
 	if visible {
 		args = append(args, "--window-size=1400,900", "--app=about:blank")
 	} else {
@@ -479,17 +498,11 @@ func startBrowserWithProfile(ctx context.Context, visible bool, profile string, 
 	var chromeStderr bytes.Buffer
 	cmd.Stderr = &chromeStderr
 	if err := cmd.Start(); err != nil {
-		if ephemeral {
-			_ = os.RemoveAll(profile)
-		}
 		return nil, fmt.Errorf("启动 Chrome 失败: %w", err)
 	}
 	cleanup := func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		if ephemeral {
-			_ = os.RemoveAll(profile)
-		}
 	}
 	var port string
 	startupDeadline := time.Now().Add(12 * time.Second)
@@ -555,7 +568,7 @@ func startBrowserWithProfile(ctx context.Context, visible bool, profile string, 
 	}
 	// 8 MiB PNG 的 Base64 CDP 消息可接近 11 MiB。
 	conn.SetReadLimit(12 << 20)
-	session := &browserSession{cmd: cmd, profile: profile, ephemeral: ephemeral, conn: conn, pending: make(map[int64]chan cdpMessage)}
+	session := &browserSession{cmd: cmd, proxy: proxy, profile: profile, ephemeral: ephemeral, conn: conn, pending: make(map[int64]chan cdpMessage)}
 	session.lastUsed.Store(time.Now().UnixNano())
 	go session.readLoop()
 	if _, err := session.call(ctx, "Page.enable", nil); err != nil {
@@ -573,10 +586,7 @@ func startBrowserWithProfile(ctx context.Context, visible bool, profile string, 
 			return nil, err
 		}
 	}
-	if _, err := session.call(ctx, "Fetch.enable", map[string]any{"patterns": []map[string]string{{"urlPattern": "*"}}}); err != nil {
-		session.close()
-		return nil, err
-	}
+	started = true
 	return session, nil
 }
 
@@ -591,28 +601,7 @@ func (s *browserSession) readLoop() {
 		if json.Unmarshal(data, &message) != nil {
 			continue
 		}
-		if message.Method == "Fetch.requestPaused" {
-			var paused struct {
-				RequestID string `json:"requestId"`
-				Request   struct {
-					URL string `json:"url"`
-				} `json:"request"`
-			}
-			if json.Unmarshal(message.Params, &paused) == nil {
-				go func() {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer cancel()
-					method := "Fetch.continueRequest"
-					params := map[string]any{"requestId": paused.RequestID}
-					if err := validateBrowserURL(ctx, paused.Request.URL); err != nil {
-						method = "Fetch.failRequest"
-						params["errorReason"] = "BlockedByClient"
-					}
-					_, _ = s.call(ctx, method, params)
-				}()
-			}
-			continue
-		}
+
 		if message.ID != 0 {
 			s.mu.Lock()
 			ch := s.pending[message.ID]
@@ -807,6 +796,9 @@ func (s *browserSession) close() {
 		return
 	}
 	_ = s.conn.Close(websocket.StatusNormalClosure, "closing")
+	if s.proxy != nil {
+		_ = s.proxy.Close()
+	}
 	if s.cmd.Process != nil {
 		_ = s.cmd.Process.Kill()
 		_ = s.cmd.Wait()

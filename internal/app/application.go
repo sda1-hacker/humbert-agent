@@ -311,6 +311,7 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 	runtimeService := agentruntime.NewService(runtimeResolver, runtimeExecutor, sessionService, events, logger, approvalManager)
 	resources.add(finishRuns, "Runtime", runtimeService.Close)
 	runtimeService.AddRunLifecycleObserver(collaborationManager)
+	runtimeService.AddRunLifecycleObserver(mcpManager)
 	taskStore, err := tasks.NewStore(ctx, cfg.Paths.AgentsDir)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Task Store 失败: %w", err)

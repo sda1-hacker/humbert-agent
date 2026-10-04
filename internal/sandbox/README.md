@@ -39,3 +39,5 @@ Profile 决定基本访问范围；Standard 可按规则读取 Home 下普通文
 应用把审批模式通过 `Manager.SetFullAccessProvider` 接入，选择“完全操作”后，新 Turn 的 Profile 为 `full_access`。已有 Turn 的目录 Policy 保持冻结；离开完全操作后，新 Turn 恢复 Agent/全局配置的 Profile。这个选项不改变配置中的网络限制或操作系统本身的文件权限。
 
 读 `manager.Resolve` 时关注受保护规则和 Agent 额外写目录的合并顺序；读 `pathguard.go` 时关注符号链接和缺失目标；读 `platform_*.go` 时确认某系统实际执行的限制。
+
+硬保护包含实际应用数据根下的 `cache/`：会话/文档 SQLite 搜索正文、WAL/SHM 和各 Agent 浏览器 Profile 与原始会话同样敏感，不能因可重建而开放。受信 UI/索引/浏览器服务使用自身接口访问，不通过 Agent 通用文件工具读取底层缓存。

@@ -2,7 +2,7 @@
 
 [总目录](../../docs/architecture/README.md) · [工具](../tools/README.md) · [会话](../sessions/README.md)
 
-工具结果过大时，`GuardInvokableTool` 可以把全文交给 `Store.Archive`，在 `session/context-artifacts/` 保存带 ID 的原件，返回较短预览及回查提示。`context_resource` 工具通过 `ReadContextArtifact` 受控读取，再按 offset/limit 分段返回。这样模型上下文不被一次大结果占满，也不丢失完整内容。
+工具结果过大时，`tools/reduction.go` 将全文交给 `Store.Archive`，在 `session/context-artifacts/` 保存带 ID 的原件，返回较短预览及回查提示。`context_resource` 工具通过 `ReadContextArtifact` 受控读取，再按 offset/limit 分段返回。这样模型上下文不被一次大结果占满，也不丢失完整内容。
 
 ```mermaid
 flowchart LR

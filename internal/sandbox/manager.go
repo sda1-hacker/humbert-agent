@@ -183,6 +183,8 @@ func protectedRulesFor(appHome, userHome string) []PathRule {
 		filepath.Join(appHome, "agents"),
 		filepath.Join(appHome, "mcp"),
 		filepath.Join(appHome, "logs"),
+		// 搜索正文和浏览器 Profile 同样属于私有数据，不能通过缓存副本绕过保护。
+		filepath.Join(appHome, "cache"),
 	} {
 		rules = appendProtectedPathRuleCandidates(rules, candidate, RuleSourceProtected)
 	}
