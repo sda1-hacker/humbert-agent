@@ -5,12 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
@@ -128,12 +125,12 @@ type SkillDiscoveryDTO struct {
 	Candidates    []SkillDiscoveryCandidateDTO `json:"candidates"`
 }
 
-// SkillDetailDTO 是用户点击一个 Skill 后按需加载的详情。
-//
-// State 不再长期把 SKILL.md/脚本正文放进 WebView；详情页只加载文件树，具体文本文件仍在用户
-// 点击时通过 ReadSkillFile 单独读取。
-type SkillDetailDTO struct {
-	Name           string                  `json:"name"`
+// SkillMetadataDTO 是列表和详情共用的安全元数据投影。
+// 匿名嵌入使 JSON 字段仍位于顶层，新增公共字段只需在此定义并在一个入口转换。
+// Metadata、诊断与解释器状态都复制后返回，WebView 不持有领域快照中的可变集合。
+type SkillMetadataDTO struct {
+	Name string `json:"name"`
+	// Alias 仅用于本地展示，不参与 Skill 身份或 Agent 引用。
 	Alias          string                  `json:"alias,omitempty"`
 	Description    string                  `json:"description"`
 	SpecStatus     string                  `json:"specStatus"`
@@ -152,8 +149,17 @@ type SkillDetailDTO struct {
 	FileCount      int                     `json:"fileCount"`
 	SizeBytes      int64                   `json:"sizeBytes"`
 	UpdatedAt      string                  `json:"updatedAt"`
-	Source         SkillSourceDTO          `json:"source"`
-	Files          []SkillFileDTO          `json:"files"`
+	// Source 也用于 invalid Skill 的来源修复；原始 URL 不进入 WebView。
+	Source SkillSourceDTO `json:"source"`
+}
+
+// SkillDetailDTO 是用户点击一个 Skill 后按需加载的详情。
+//
+// State 不再长期把 SKILL.md/脚本正文放进 WebView；详情页只加载文件树，具体文本文件仍在用户
+// 点击时通过 ReadSkillFile 单独读取。
+type SkillDetailDTO struct {
+	SkillMetadataDTO
+	Files []SkillFileDTO `json:"files"`
 }
 
 // SkillFileContentDTO 是详情页一次文本预览的返回值。
@@ -168,37 +174,13 @@ type SkillFileContentDTO struct {
 // SKILL.md 正文不会通过 Desktop Service 全量暴露给 WebView。Agent Runtime 直接从受控
 // skills.Manager Snapshot 读取内容，设置页只需要名称、描述、包大小与健康状态。
 type SkillDTO struct {
-	Name string `json:"name"`
-
-	// Alias 是 Humbert 用户自己的本地展示名称。它不参与 Skill 身份、Agent 引用或 Runtime。
-	Alias          string                  `json:"alias,omitempty"`
-	Description    string                  `json:"description"`
-	SpecStatus     string                  `json:"specStatus"`
-	SpecMessage    string                  `json:"specMessage,omitempty"`
-	License        string                  `json:"license,omitempty"`
-	Compatibility  string                  `json:"compatibility,omitempty"`
-	Metadata       map[string]string       `json:"metadata,omitempty"`
-	AllowedTools   string                  `json:"allowedTools,omitempty"`
-	RuntimeStatus  string                  `json:"runtimeStatus"`
-	RuntimeMessage string                  `json:"runtimeMessage,omitempty"`
-	Diagnostics    []SkillDiagnosticDTO    `json:"diagnostics,omitempty"`
-	ScriptRuntimes []SkillScriptRuntimeDTO `json:"scriptRuntimes,omitempty"`
-	DirectoryName  string                  `json:"directoryName"`
-	RootDir        string                  `json:"rootDir"`
-	Identity       string                  `json:"identity"`
-	Valid          bool                    `json:"valid"`
-	Error          string                  `json:"error,omitempty"`
-	FileCount      int                     `json:"fileCount"`
-	SizeBytes      int64                   `json:"sizeBytes"`
-	HasReferences  bool                    `json:"hasReferences"`
-	HasScripts     bool                    `json:"hasScripts"`
-	HasAssets      bool                    `json:"hasAssets"`
-	UpdatedAt      string                  `json:"updatedAt"`
-
-	// Source 是 Humbert 记录的安装来源投影。Invalid Skill 也会携带它，
-	// 这样详情页可以直接提供“从来源修复”，而不要求 Package 当前可解析。
-	Source       SkillSourceDTO  `json:"source"`
-	UsedByAgents []SkillAgentDTO `json:"usedByAgents"`
+	SkillMetadataDTO
+	DirectoryName string          `json:"directoryName"`
+	Valid         bool            `json:"valid"`
+	Error         string          `json:"error,omitempty"`
+	HasReferences bool            `json:"hasReferences"`
+	HasScripts    bool            `json:"hasScripts"`
+	UsedByAgents  []SkillAgentDTO `json:"usedByAgents"`
 }
 
 // SkillStateDTO 是 Skills 设置页一次加载需要的完整状态。
@@ -248,7 +230,8 @@ func (s *SkillService) State() (SkillStateDTO, error) {
 	if err != nil {
 		return SkillStateDTO{}, fmt.Errorf("读取 Agent Skill 配置失败: %w", err)
 	}
-	usage := buildSkillUsageMap(agentValues)
+	agentDTOs := projectSkillAgents(agentValues)
+	usage := buildSkillUsageMap(agentDTOs)
 	aliases, err := s.deps.Skills.Aliases(ctx)
 	if err != nil {
 		return SkillStateDTO{}, fmt.Errorf("读取 Skill 展示 Alias 失败: %w", err)
@@ -278,7 +261,7 @@ func (s *SkillService) State() (SkillStateDTO, error) {
 		RootDir:         s.deps.Skills.RootDir(),
 		SourceError:     sourceError,
 		SourceResolvers: s.deps.Skills.RemoteSourceResolvers(),
-		Agents:          projectSkillAgents(agentValues),
+		Agents:          agentDTOs,
 		Skills:          result,
 	}, nil
 }
@@ -306,33 +289,10 @@ func (s *SkillService) SkillDetail(name string) (SkillDetailDTO, error) {
 		return SkillDetailDTO{}, fmt.Errorf("读取 Skill 安装来源失败: %w", err)
 	}
 
-	updatedAt := ""
-	if !pkg.Info.UpdatedAt.IsZero() {
-		updatedAt = pkg.Info.UpdatedAt.UTC().Format(time.RFC3339Nano)
-	}
-	return SkillDetailDTO{
-		Name:           pkg.Info.Name,
-		Alias:          aliases[pkg.Info.Name],
-		Description:    pkg.Info.Description,
-		SpecStatus:     string(pkg.Info.SpecStatus),
-		SpecMessage:    pkg.Info.SpecMessage,
-		License:        pkg.Info.License,
-		Compatibility:  pkg.Info.Compatibility,
-		Metadata:       cloneSkillStringMap(pkg.Info.Metadata),
-		AllowedTools:   pkg.Info.AllowedTools,
-		RuntimeStatus:  string(pkg.Info.RuntimeStatus),
-		RuntimeMessage: pkg.Info.RuntimeMessage,
-		Diagnostics:    projectSkillDiagnostics(pkg.Info.Diagnostics),
-		ScriptRuntimes: projectSkillScriptRuntimes(pkg.Info.ScriptRuntimes),
-		HasAssets:      pkg.Info.HasAssets,
-		RootDir:        pkg.Info.RootDir,
-		Identity:       pkg.Info.Identity,
-		FileCount:      pkg.Info.FileCount,
-		SizeBytes:      pkg.Info.SizeBytes,
-		UpdatedAt:      updatedAt,
-		Source:         projectSkillSource(source, sourceKnown, pkg.Info.Identity),
-		Files:          projectSkillFiles(pkg.Files),
-	}, nil
+	metadata := projectSkillMetadata(pkg.Info)
+	metadata.Alias = aliases[pkg.Info.Name]
+	metadata.Source = projectSkillSource(source, sourceKnown, pkg.Info.Identity)
+	return SkillDetailDTO{SkillMetadataDTO: metadata, Files: projectSkillFiles(pkg.Files)}, nil
 }
 
 // ReadSkillFile 为 Skill 详情页按需读取一个包内 UTF-8 文本文件。
@@ -361,26 +321,7 @@ func (s *SkillService) SelectSkillDirectory(currentPath string) (string, error) 
 	if err := s.validate(); err != nil {
 		return "", err
 	}
-	app := application.Get()
-	if app == nil {
-		return "", errors.New("Wails Application 尚未初始化")
-	}
-
-	dialog := app.Dialog.OpenFile().SetTitle("选择 Skill 或包含多个 Skills 的目录").CanChooseDirectories(true).
-		CanChooseFiles(false).
-		CanCreateDirectories(false)
-
-	currentPath = strings.TrimSpace(currentPath)
-	if currentPath != "" {
-		if info, err := os.Stat(currentPath); err == nil && info.IsDir() {
-			dialog.SetDirectory(currentPath)
-		}
-	}
-	path, err := dialog.PromptForSingleSelection()
-	if err != nil {
-		return "", fmt.Errorf("打开 Skill 目录选择器失败: %w", err)
-	}
-	return strings.TrimSpace(path), nil
+	return selectDirectory("选择 Skill 或包含多个 Skills 的目录", currentPath, false)
 }
 
 // InstallSkill 从用户明确选择的本地目录安装 Skill。
@@ -409,14 +350,8 @@ func (s *SkillService) InstallSkillFromURL(sourceURL string, skillPath string) (
 		return SkillDTO{}, err
 	}
 
-	timeout := skillServiceInstallTimeout
-	if cfg := s.deps.Config; cfg != nil {
-		configured := time.Duration(cfg.Runtime.Skills.DownloadTimeoutMS) * time.Millisecond
-		if configured > timeout {
-			timeout = configured + 5*time.Second
-		}
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	// 单包安装与批量安装、更新共用超时规则，配置变更只需维护一个入口。
+	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
 	value, err := s.deps.Skills.InstallFromURL(ctx, sourceURL, skillPath)
@@ -656,17 +591,14 @@ func projectSkillAgents(values []agents.AgentInfo) []SkillAgentDTO {
 	return result
 }
 
-func buildSkillUsageMap(values []agents.AgentInfo) map[string][]SkillAgentDTO {
+// buildSkillUsageMap 复用 State 已规范化、按名称/ID 排序的 Agent 投影。
+// 同一 Agent 的重复引用只计一次；每个桶沿原有顺序追加，无需再次排序。
+// UsedByAgents 只包含身份，EnabledSkills 留空，避免复制整份 Agent 引用关系。
+func buildSkillUsageMap(values []SkillAgentDTO) map[string][]SkillAgentDTO {
 	result := make(map[string][]SkillAgentDTO)
 	for _, value := range values {
-		agentID := strings.TrimSpace(value.Agent.ID)
-		agentName := strings.TrimSpace(value.Agent.Name)
-		if agentID == "" {
-			continue
-		}
-
-		seen := make(map[string]struct{}, len(value.Agent.EnabledSkills))
-		for _, rawSkillName := range value.Agent.EnabledSkills {
+		seen := make(map[string]struct{}, len(value.EnabledSkills))
+		for _, rawSkillName := range value.EnabledSkills {
 			skillName := strings.TrimSpace(rawSkillName)
 			if skillName == "" {
 				continue
@@ -675,19 +607,8 @@ func buildSkillUsageMap(values []agents.AgentInfo) map[string][]SkillAgentDTO {
 				continue
 			}
 			seen[skillName] = struct{}{}
-			result[skillName] = append(result[skillName], SkillAgentDTO{ID: agentID, Name: agentName})
+			result[skillName] = append(result[skillName], SkillAgentDTO{ID: value.ID, Name: value.Name})
 		}
-	}
-
-	for skillName := range result {
-		sort.Slice(result[skillName], func(i, j int) bool {
-			left := result[skillName][i]
-			right := result[skillName][j]
-			if left.Name != right.Name {
-				return left.Name < right.Name
-			}
-			return left.ID < right.ID
-		})
 	}
 	return result
 }
@@ -792,34 +713,27 @@ func (s *SkillService) validate() error {
 }
 
 func projectSkillDTO(value skills.Info) SkillDTO {
-	updatedAt := ""
-	if !value.UpdatedAt.IsZero() {
-		updatedAt = value.UpdatedAt.UTC().Format(time.RFC3339Nano)
-	}
 	return SkillDTO{
-		Name:           value.Name,
-		Description:    value.Description,
-		SpecStatus:     string(value.SpecStatus),
-		SpecMessage:    value.SpecMessage,
-		License:        value.License,
-		Compatibility:  value.Compatibility,
-		Metadata:       cloneSkillStringMap(value.Metadata),
-		AllowedTools:   value.AllowedTools,
-		RuntimeStatus:  string(value.RuntimeStatus),
-		RuntimeMessage: value.RuntimeMessage,
+		SkillMetadataDTO: projectSkillMetadata(value),
+		DirectoryName:    value.DirectoryName, Valid: value.Valid, Error: value.Error,
+		HasReferences: value.HasReferences, HasScripts: value.HasScripts,
+	}
+}
+
+// projectSkillMetadata 是所有 Skill 公共展示字段的唯一转换入口。
+// 时间统一为 UTC RFC3339Nano，零值保持空字符串；集合转换仍保持 nil/空值语义。
+func projectSkillMetadata(value skills.Info) SkillMetadataDTO {
+	return SkillMetadataDTO{
+		Name: value.Name, Description: value.Description,
+		SpecStatus: string(value.SpecStatus), SpecMessage: value.SpecMessage,
+		License: value.License, Compatibility: value.Compatibility,
+		Metadata: cloneSkillStringMap(value.Metadata), AllowedTools: value.AllowedTools,
+		RuntimeStatus: string(value.RuntimeStatus), RuntimeMessage: value.RuntimeMessage,
 		Diagnostics:    projectSkillDiagnostics(value.Diagnostics),
 		ScriptRuntimes: projectSkillScriptRuntimes(value.ScriptRuntimes),
-		DirectoryName:  value.DirectoryName,
-		RootDir:        value.RootDir,
-		Identity:       value.Identity,
-		Valid:          value.Valid,
-		Error:          value.Error,
-		FileCount:      value.FileCount,
-		SizeBytes:      value.SizeBytes,
-		HasReferences:  value.HasReferences,
-		HasScripts:     value.HasScripts,
-		HasAssets:      value.HasAssets,
-		UpdatedAt:      updatedAt,
+		HasAssets:      value.HasAssets, RootDir: value.RootDir, Identity: value.Identity,
+		FileCount: value.FileCount, SizeBytes: value.SizeBytes,
+		UpdatedAt: formatSkillTime(value.UpdatedAt),
 	}
 }
 

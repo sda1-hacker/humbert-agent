@@ -1,14 +1,10 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -130,19 +126,11 @@ type SandboxSettingsRequest struct {
 	ShellEnabled         bool   `json:"shellEnabled"`
 }
 
-// SandboxDiagnosticCheckDTO 是一次安全自检的单项结果。
-type SandboxDiagnosticCheckDTO struct {
-	Key    string `json:"key"`
-	Label  string `json:"label"`
-	Status string `json:"status"`
-	Detail string `json:"detail"`
-}
+// SandboxDiagnosticCheckDTO 复用领域层自检结果，保持桌面 API 的字段名和 JSON 结构。
+type SandboxDiagnosticCheckDTO = sandbox.DiagnosticCheck
 
-// SandboxDiagnosticsDTO 汇总 PathGuard 与原生 Process Sandbox 的实测结果。
-type SandboxDiagnosticsDTO struct {
-	Summary string                      `json:"summary"`
-	Checks  []SandboxDiagnosticCheckDTO `json:"checks"`
-}
+// SandboxDiagnosticsDTO 是用户显式运行安全自检后的实测结果。
+type SandboxDiagnosticsDTO = sandbox.Diagnostics
 
 // CreateAgentRequest 是创建 Agent 的 Desktop DTO。
 type CreateAgentRequest struct {
@@ -206,10 +194,16 @@ func (s *AgentService) ListAgents() ([]AgentDTO, error) {
 	}
 
 	result := make([]AgentDTO, 0, len(values))
+	if len(values) == 0 {
+		return result, nil
+	}
+	// 工具目录和平台状态属于应用，不属于某个 Agent。一次列表请求只投影一次，
+	// 避免 Agent 越多越频繁读取、排序 Registry，也使这一批 DTO 使用一致的展示信息。
+	catalog, status := s.ListBuiltinTools(), s.GetSandboxStatus()
 
 	for _, value := range values {
 
-		dto, err := s.toDTO(value)
+		dto, err := s.toDTOWithCatalog(value, catalog, status)
 
 		if err != nil {
 			return nil, err
@@ -483,149 +477,7 @@ func (s *AgentService) UpdateSandboxSettings(request SandboxSettingsRequest) (Sa
 func (s *AgentService) RunSandboxDiagnostics() (SandboxDiagnosticsDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 	defer cancel()
-
-	root, err := os.MkdirTemp("", "humbert-sandbox-diagnostics-*")
-	if err != nil {
-		return SandboxDiagnosticsDTO{}, fmt.Errorf("创建 Sandbox 自检目录失败: %w", err)
-	}
-	defer os.RemoveAll(root)
-
-	workspaceRoot := filepath.Join(root, "workspace")
-	outsideRoot := filepath.Join(root, "outside")
-	if err := os.MkdirAll(workspaceRoot, 0o700); err != nil {
-		return SandboxDiagnosticsDTO{}, fmt.Errorf("创建自检 Workspace 失败: %w", err)
-	}
-	if err := os.MkdirAll(outsideRoot, 0o700); err != nil {
-		return SandboxDiagnosticsDTO{}, fmt.Errorf("创建自检外部目录失败: %w", err)
-	}
-
-	policy, err := s.deps.Sandbox.Resolve(ctx, workspaceRoot, sandbox.AgentPolicy{
-		// 使用 Standard 才能验证“普通 Home 可读，但敏感文件仍被硬保护”的真实产品语义。
-		Profile: sandbox.ProfileStandard, NetworkMode: sandbox.NetworkPublic, NativeMode: sandbox.NativeRequired,
-	})
-	if err != nil {
-		return SandboxDiagnosticsDTO{}, fmt.Errorf("构建自检 Sandbox Policy 失败: %w", err)
-	}
-
-	checks := make([]SandboxDiagnosticCheckDTO, 0, 7)
-	appendCheck := func(key, label, status, detail string) {
-		checks = append(checks, SandboxDiagnosticCheckDTO{Key: key, Label: label, Status: status, Detail: detail})
-	}
-
-	insidePath := filepath.Join(workspaceRoot, "inside.txt")
-	if decision, checkErr := policy.CheckPath(insidePath, sandbox.OpCreate); checkErr == nil && decision.Allowed {
-		appendCheck("pathguard_workspace", "工作目录写入", "pass", "工作目录内的创建操作已正确允许。")
-	} else {
-		appendCheck("pathguard_workspace", "工作目录写入", "fail", errorDetail(checkErr, "工作目录内的创建操作被错误拒绝。"))
-	}
-
-	outsidePath := filepath.Join(outsideRoot, "outside.txt")
-	if _, checkErr := policy.CheckPath(outsidePath, sandbox.OpCreate); checkErr != nil {
-		appendCheck("pathguard_outside", "工作目录外写入阻止", "pass", "工作目录外的创建操作已正确阻止。")
-	} else {
-		appendCheck("pathguard_outside", "工作目录外写入阻止", "fail", "工作目录外的创建操作被错误允许。")
-	}
-
-	protectedProbe := filepath.Join(s.deps.Config.Paths.SecretsDir, "diagnostic-probe")
-	if _, checkErr := policy.CheckPath(protectedProbe, sandbox.OpRead); checkErr != nil {
-		appendCheck("pathguard_protected", "敏感目录保护", "pass", "Humbert 的敏感数据目录已正确阻止访问。")
-	} else {
-		appendCheck("pathguard_protected", "敏感目录保护", "fail", "Humbert 的敏感数据目录被错误允许读取。")
-	}
-
-	protectedFileProbe := s.deps.Config.Paths.ConfigFile
-	if decision, checkErr := policy.CheckPath(protectedFileProbe, sandbox.OpRead); checkErr != nil && decision.Source == sandbox.RuleSourceProtectedFile {
-		appendCheck("pathguard_protected_file", "敏感文件保护", "pass", "Humbert 配置文件位于普通 Home 可读范围内，但已被单文件硬保护规则正确阻止。")
-	} else if checkErr != nil {
-		appendCheck("pathguard_protected_file", "敏感文件保护", "warning", "敏感文件读取被阻止，但未命中预期的单文件规则："+checkErr.Error())
-	} else {
-		appendCheck("pathguard_protected_file", "敏感文件保护", "fail", "Humbert 配置文件被错误允许读取。")
-	}
-
-	linkPath := filepath.Join(workspaceRoot, "escape-link")
-	if linkErr := os.Symlink(outsideRoot, linkPath); linkErr != nil {
-		appendCheck("pathguard_symlink", "符号链接逃逸保护", "warning", "当前平台无法创建用于自检的符号链接："+linkErr.Error())
-	} else if _, checkErr := policy.CheckPath(filepath.Join(linkPath, "escape.txt"), sandbox.OpCreate); checkErr != nil {
-		appendCheck("pathguard_symlink", "符号链接逃逸保护", "pass", "指向工作目录外的符号链接已正确阻止。")
-	} else {
-		appendCheck("pathguard_symlink", "符号链接逃逸保护", "fail", "符号链接错误地允许写出工作目录。")
-	}
-
-	capability := s.deps.Sandbox.Capability()
-	if !capability.Available {
-		appendCheck("native_filesystem", "本地程序文件隔离", "warning", "当前系统的本地程序隔离不可用："+capability.Reason)
-	} else if !capability.Filesystem {
-		detail := "当前平台不能可靠限制本地程序的文件系统访问。Humbert 已启用 fail-closed：标准/严格保护下不会静默启动未受文件隔离的 Python、Node、Skill 或 stdio MCP。"
-		if strings.TrimSpace(capability.Reason) != "" {
-			detail += " " + capability.Reason
-		}
-		appendCheck("native_filesystem", "本地程序文件隔离", "warning", detail)
-	} else {
-		touchPath, lookupErr := exec.LookPath("touch")
-		if lookupErr != nil {
-			appendCheck("native_filesystem", "本地程序文件隔离", "warning", "找不到系统 touch 命令，无法执行文件写入自检。")
-		} else {
-			touchPath, _ = filepath.Abs(touchPath)
-			insideNative := filepath.Join(workspaceRoot, "native-inside.txt")
-			var insideStderr bytes.Buffer
-			insideResult, runErr := s.deps.Sandbox.Runner().Run(ctx, policy, sandbox.ProcessSpec{
-				Executable: touchPath, Args: []string{insideNative}, Dir: workspaceRoot, Env: []string{},
-				Stdout: io.Discard, Stderr: &insideStderr,
-			})
-			if runErr != nil || insideResult.ExitCode != 0 {
-				detail := errorDetail(runErr, "受保护的本地程序无法在工作目录内创建测试文件。")
-				if runErr == nil && strings.TrimSpace(insideResult.TerminationDetail) != "" {
-					detail += " 进程终态：" + insideResult.TerminationReason + "（" + insideResult.TerminationDetail + "）"
-				}
-				if text := strings.TrimSpace(insideStderr.String()); text != "" {
-					detail += " " + text
-				}
-				appendCheck("native_filesystem", "本地程序文件隔离", "fail", detail)
-			} else {
-				outsideNative := filepath.Join(outsideRoot, "native-outside.txt")
-				var outsideStderr bytes.Buffer
-				outsideResult, outsideErr := s.deps.Sandbox.Runner().Run(ctx, policy, sandbox.ProcessSpec{
-					Executable: touchPath, Args: []string{outsideNative}, Dir: workspaceRoot, Env: []string{},
-					Stdout: io.Discard, Stderr: &outsideStderr,
-				})
-				_, statErr := os.Stat(outsideNative)
-				blocked := outsideErr == nil && outsideResult.ExitCode != 0 && errors.Is(statErr, os.ErrNotExist)
-				if blocked {
-					appendCheck("native_filesystem", "本地程序文件隔离", "pass", "本地程序可以写入工作目录，并且无法写入工作目录外。")
-				} else {
-					detail := "本地程序写入工作目录外的操作没有被可靠阻止。"
-					if outsideErr != nil {
-						detail = outsideErr.Error()
-					} else if strings.TrimSpace(outsideResult.TerminationDetail) != "" {
-						detail += " 进程终态：" + outsideResult.TerminationReason + "（" + outsideResult.TerminationDetail + "）"
-					}
-					if text := strings.TrimSpace(outsideStderr.String()); text != "" {
-						detail += " " + text
-					}
-					appendCheck("native_filesystem", "本地程序文件隔离", "fail", detail)
-				}
-			}
-		}
-	}
-
-	summary := "pass"
-	for _, check := range checks {
-		if check.Status == "fail" {
-			summary = "fail"
-			break
-		}
-		if check.Status == "warning" && summary == "pass" {
-			summary = "warning"
-		}
-	}
-	return SandboxDiagnosticsDTO{Summary: summary, Checks: checks}, nil
-}
-
-func errorDetail(err error, fallback string) string {
-	if err != nil {
-		return err.Error()
-	}
-	return fallback
+	return s.deps.Sandbox.Diagnose(ctx, s.deps.Config.Paths.SecretsDir, s.deps.Config.Paths.ConfigFile)
 }
 
 // UpdateAgentSecurity 显式替换 Agent Builtin Tool 与 Sandbox 配置。
@@ -649,9 +501,9 @@ func (s *AgentService) UpdateAgentSecurity(id string, request AgentSecurityReque
 	return s.toDTO(updated)
 }
 
-// SelectSandboxDirectory 打开原生目录选择器，用于 Additional Read/Write Path。
+// SelectSandboxDirectory 打开原生目录选择器，用于配置额外写入目录。
 func (s *AgentService) SelectSandboxDirectory(currentPath string) (string, error) {
-	return selectDirectory("选择 Sandbox 目录", currentPath)
+	return selectDirectory("选择 Sandbox 目录", currentPath, true)
 }
 
 // DeleteAgent 删除完整 Agent Aggregate。
@@ -675,15 +527,16 @@ func (s *AgentService) DeleteAgent(id string) error {
 //
 // 用户取消时返回空字符串。
 func (s *AgentService) SelectWorkspaceDirectory(currentPath string) (string, error) {
-	return selectDirectory("选择 Agent Workspace", currentPath)
+	return selectDirectory("选择 Agent Workspace", currentPath, true)
 }
 
-func selectDirectory(title, currentPath string) (string, error) {
+// selectDirectory 共用原生目录选择逻辑；是否允许新建目录仍由具体功能决定。
+func selectDirectory(title, currentPath string, canCreate bool) (string, error) {
 	app := application.Get()
 	if app == nil {
 		return "", errors.New("Wails Application 尚未初始化")
 	}
-	dialog := app.Dialog.OpenFile().SetTitle(title).CanChooseDirectories(true).CanChooseFiles(false).CanCreateDirectories(true)
+	dialog := app.Dialog.OpenFile().SetTitle(title).CanChooseDirectories(true).CanChooseFiles(false).CanCreateDirectories(canCreate)
 	currentPath = strings.TrimSpace(currentPath)
 	if currentPath != "" {
 		if info, err := os.Stat(currentPath); err == nil && info.IsDir() {
@@ -698,6 +551,12 @@ func selectDirectory(title, currentPath string) (string, error) {
 }
 
 func (s *AgentService) toDTO(value agents.AgentInfo) (AgentDTO, error) {
+	return s.toDTOWithCatalog(value, s.ListBuiltinTools(), s.GetSandboxStatus())
+}
+
+// toDTOWithCatalog 复用本次请求的展示快照，不缓存跨请求的平台策略。
+// 每个 DTO 仍复制可选择工具的切片，调用方修改一项不会影响列表中的其他 Agent。
+func (s *AgentService) toDTOWithCatalog(value agents.AgentInfo, catalog []BuiltinToolDTO, status SandboxStatusDTO) (AgentDTO, error) {
 	displayPath := value.Agent.WorkspacePath
 
 	if value.Agent.WorkspaceMode ==
@@ -733,9 +592,9 @@ func (s *AgentService) toDTO(value agents.AgentInfo) (AgentDTO, error) {
 
 		EnabledBuiltinTools:    value.Agent.EnabledBuiltinTools,
 		BuiltinToolsConfigured: value.Agent.EnabledBuiltinTools != nil,
-		AvailableBuiltinTools:  s.ListBuiltinTools(),
+		AvailableBuiltinTools:  append([]BuiltinToolDTO{}, catalog...),
 		Sandbox:                sandboxPolicyDTO(value.Agent.Sandbox),
-		SandboxStatus:          s.GetSandboxStatus(),
+		SandboxStatus:          status,
 
 		WorkspaceMode: string(value.Agent.WorkspaceMode),
 
@@ -780,7 +639,6 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 			known[descriptor.Name] = struct{}{}
 		}
 	}
-	seen := make(map[string]struct{})
 	for _, raw := range values {
 		name := strings.TrimSpace(raw)
 		if name == "" {
@@ -789,10 +647,6 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 		if _, ok := known[name]; !ok {
 			return fmt.Errorf("Builtin Tool 不存在或当前配置未启用: %s", name)
 		}
-		if _, duplicate := seen[name]; duplicate {
-			continue
-		}
-		seen[name] = struct{}{}
 	}
 	return nil
 }

@@ -24,7 +24,6 @@ import (
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/usecases"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
-	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 )
 
 // AgentDependencies 明确声明 AgentService 所需的依赖，入口不能再取得整个应用对象。
@@ -115,5 +114,5 @@ type TaskDependencies struct {
 // WorkspaceDependencies 明确声明 WorkspaceService 所需的依赖，入口不能再取得整个应用对象。
 type WorkspaceDependencies struct {
 	Search        *searchindex.Service
-	WorkspaceView *workspaceview.Service
+	WorkspaceView *usecases.WorkspaceQuery
 }

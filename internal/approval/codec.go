@@ -80,13 +80,13 @@ func DecodeInterruptState(raw string) (InterruptState, error) {
 	return state, nil
 }
 
-// EncodeResumeData 把批准/拒绝结果编码成可由 Tool ResumeContext 读取的 JSON 字符串。
-func EncodeResumeData(approved bool) (string, error) {
-	data, err := json.Marshal(ResumeData{Approved: approved})
-	if err != nil {
-		return "", fmt.Errorf("编码 Approval ResumeData 失败: %w", err)
+// EncodeResumeData 编码固定的布尔恢复协议，与原 JSON 字段和内容保持一致。
+// 输入没有动态字段，两个结果都可直接表示，因此调用方无需处理不存在的编码失败。
+func EncodeResumeData(approved bool) string {
+	if approved {
+		return `{"approved":true}`
 	}
-	return string(data), nil
+	return `{"approved":false}`
 }
 
 // DecodeResumeData 解析 Runtime 定向传入的审批结果。

@@ -6,9 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cloudwego/eino/components/embedding"
+	"github.com/cloudwego/eino/components/indexer"
 	"github.com/cloudwego/eino/schema"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/sda1-hacker/humbert-agent/internal/rag"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/embeddinginput"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
 func TestOutOfBoundsSourceRangeFailsBeforeEmbedding(t *testing.T) {
@@ -19,7 +22,7 @@ func TestOutOfBoundsSourceRangeFailsBeforeEmbedding(t *testing.T) {
 	p := newIndexerWithDatabase(db, cfg)
 	batch := testParentChildBatch()
 	batch.Children[0].EndRune = len([]rune(batch.Markdown)) + 1
-	if err := p.ReplaceDocument(context.Background(), batch); !errors.Is(err, ErrInvalidIngestionBatch) {
+	if err := storeBatch(p, context.Background(), batch); !errors.Is(err, rag.ErrInvalidIngestionBatch) {
 		t.Fatalf("%v", err)
 	}
 	if len(embedder.calls) > 0 || db.begun {
@@ -41,7 +44,7 @@ func TestCompleteSearchInputIsBudgetedBeforeEmbedding(t *testing.T) {
 		batch.Children[i].ContextHeader = ""
 		batch.Children[i].Content = "body"
 	}
-	if err := p.ReplaceDocument(context.Background(), batch); !errors.Is(err, embeddinginput.ErrInputBudget) {
+	if err := storeBatch(p, context.Background(), batch); !errors.Is(err, embeddinginput.ErrInputBudget) {
 		t.Fatalf("%v", err)
 	}
 	if len(embedder.calls) > 0 || db.begun {
@@ -49,25 +52,18 @@ func TestCompleteSearchInputIsBudgetedBeforeEmbedding(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsPartialAndParentChildAdapterInput(t *testing.T) {
-	embedder := &fakeEmbedder{dim: EmbeddingDimensions}
+// 完整文档的子块不能只传一部分，错误应在模型和事务调用前发现。
+func TestStoreRejectsPartialBatch(t *testing.T) {
 	db := &fakeDatabase{}
+	embedder := &fakeEmbedder{dim: EmbeddingDimensions}
 	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
 	cfg.Embedder = embedder
 	p := newIndexerWithDatabase(db, cfg)
-	for _, parent := range []bool{false, true} {
-		doc := validChunkDocument()
-		doc.MetaData[application.MetaSourceChunkCount] = 2
-		if parent {
-			doc.MetaData[metaChunkType] = application.ChunkTypeParentText
-		}
-		if _, err := p.Store(context.Background(), []*schema.Document{doc}); !errors.Is(err, ErrIncompleteSource) {
-			t.Fatalf("%v", err)
-		}
-	}
-	if len(embedder.calls) > 0 || db.begun {
-		t.Fatal("partial replacement reached storage")
+	batch := testParentChildBatch()
+	docs := rag.IndexDocuments(batch, searchcontent.DefaultBuilder())
+	_, err := p.Store(context.Background(), docs[:1], indexer.WithIndex(batch.CollectionID), rag.WithIngestionBatch(batch))
+	if !errors.Is(err, ErrIncompleteSource) || len(embedder.calls) > 0 || db.begun {
+		t.Fatalf("部分替换未提前拒绝: %v", err)
 	}
 }
 
@@ -91,7 +87,7 @@ func TestStaleAttemptDoesNotDeletePublishedChunks(t *testing.T) {
 	p := newIndexerWithDatabase(db, cfg)
 	batch := testParentChildBatch()
 	batch.Attempt = 2
-	if err := p.ReplaceDocument(context.Background(), batch); !errors.Is(err, ErrStaleIngestion) {
+	if err := storeBatch(p, context.Background(), batch); !errors.Is(err, ErrStaleIngestion) {
 		t.Fatalf("%v", err)
 	}
 	for _, call := range tx.calls {
@@ -119,21 +115,35 @@ func TestBackendVersionRequirements(t *testing.T) {
 
 func TestSameAttemptSnapshotIncludesChangedEmbeddingInputs(t *testing.T) {
 	batch := testParentChildBatch()
-	first, err := processSnapshot(batch, []string{"initial title and body"})
+	first, err := processSnapshot(batch, []string{"initial title and body"}, "index_input_hash")
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := processSnapshot(batch, []string{"initial title and body"})
+	again, err := processSnapshot(batch, []string{"initial title and body"}, "index_input_hash")
 	if err != nil || string(first) != string(again) {
 		t.Fatal("non-deterministic snapshot")
 	}
-	changed, err := processSnapshot(batch, []string{"changed title and body"})
+	changed, err := processSnapshot(batch, []string{"changed title and body"}, "index_input_hash")
 	if err != nil || string(first) == string(changed) {
 		t.Fatal("embedding input was not included in snapshot")
 	}
 	batch.Children[0].ContextHeader = "changed breadcrumb"
-	changed, err = processSnapshot(batch, []string{"initial title and body"})
+	changed, err = processSnapshot(batch, []string{"initial title and body"}, "index_input_hash")
 	if err != nil || string(first) == string(changed) {
 		t.Fatal("citation content was not included in snapshot")
+	}
+}
+
+func TestPinnedProfileRejectsEmbeddingOverridesBeforeModelOrDatabase(t *testing.T) {
+	for _, option := range []indexer.Option{indexer.WithEmbedding(&fakeEmbedder{dim: EmbeddingDimensions}), WithEmbeddingOptions(embedding.WithModel("other-model"))} {
+		db := &fakeDatabase{}
+		embedder := &fakeEmbedder{dim: EmbeddingDimensions}
+		cfg := DefaultConfig()
+		cfg.CollectionID, cfg.Embedder, cfg.ProfileID = "kb", embedder, "pinned-profile"
+		p := newIndexerWithDatabase(db, cfg)
+		_, err := p.Store(context.Background(), []*schema.Document{{ID: "doc", Content: "正文"}}, option)
+		if !errors.Is(err, ErrPinnedEmbedding) || db.begun || len(embedder.calls) != 0 {
+			t.Fatalf("固定模型被覆盖: %v", err)
+		}
 	}
 }

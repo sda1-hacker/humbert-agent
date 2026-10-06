@@ -37,7 +37,7 @@ export const Decision = {
  * Request 是 Runtime/Frontend 可观察的一次待审批请求。
  * 
  * Request 不保存 raw Tool Arguments；用户可见内容只能来自已经脱敏的 Presentation。
- * CheckpointID/InterruptID 是 Runtime 恢复所需的内部定位信息，对前端 JSON 隐藏。
+ * InterruptID 对前端 JSON 隐藏；checkpoint 由 Runtime 使用同一 RunID 定位。
  */
 export class Request {
     /**

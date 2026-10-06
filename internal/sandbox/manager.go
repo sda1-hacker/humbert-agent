@@ -16,7 +16,6 @@ import (
 type Manager struct {
 	mu                 sync.RWMutex
 	config             Config
-	homeDir            string
 	protectedRules     []PathRule
 	capability         Capability
 	runner             *Runner
@@ -39,7 +38,6 @@ func NewManager(config Config, homeDir string) (*Manager, error) {
 	capability := probeNativeCapability()
 	manager := &Manager{
 		config:         config,
-		homeDir:        filepath.Clean(absolute),
 		protectedRules: protected,
 		capability:     capability,
 	}
@@ -120,7 +118,7 @@ func (m *Manager) Resolve(ctx context.Context, workspaceRoot string, requested A
 			// Standard 允许读取用户 Home 下普通文件，但硬保护目录仍由 BLOCKED 规则覆盖。
 			if userHome, homeErr := os.UserHomeDir(); homeErr == nil {
 				if root, rootErr := CanonicalRoot(userHome); rootErr == nil {
-					pathRules = appendGrantRule(pathRules, PathRule{Root: root, Access: AccessReadOnly, Source: RuleSourceStandardHome})
+					pathRules = appendPathRule(pathRules, PathRule{Root: root, Access: AccessReadOnly, Source: RuleSourceStandardHome})
 				}
 			}
 		}
@@ -135,7 +133,7 @@ func (m *Manager) Resolve(ctx context.Context, workspaceRoot string, requested A
 			if err := rejectProtectedPath(root, m.protectedRules); err != nil {
 				return EffectivePolicy{}, fmt.Errorf("额外读写目录 %q 与受保护目录冲突: %w", raw, err)
 			}
-			pathRules = appendGrantRule(pathRules, PathRule{Root: root, Access: AccessReadWrite, Source: RuleSourceAdditionalWrite})
+			pathRules = appendPathRule(pathRules, PathRule{Root: root, Access: AccessReadWrite, Source: RuleSourceAdditionalWrite})
 		}
 	}
 

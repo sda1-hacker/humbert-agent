@@ -1,5 +1,7 @@
 package chunker
 
+import "slices"
+
 // 分块策略名称
 const (
 	// StrategyAuto 表示自动模式。
@@ -120,22 +122,13 @@ func DeriveParentChildConfigs(
 		childSize = DefaultChildChunkSize
 	}
 
-	parent = SplitterConfig{
-		ChunkSize:    parentSize,
-		ChunkOverlap: base.ChunkOverlap,
-		Separators:   cloneStrings(base.Separators),
-		Strategy:     base.Strategy,
-		Languages:    cloneStrings(base.Languages),
-	}
-
-	child = SplitterConfig{
-		ChunkSize:    childSize,
-		ChunkOverlap: childSize / 5, // overlap 使用：childSize / 5
-		Separators:   cloneStrings(base.Separators),
-		Strategy:     base.Strategy,
-		TokenLimit:   base.TokenLimit, // 使用TokenLimit，限制 Embedding输入的 token 大小
-		Languages:    cloneStrings(base.Languages),
-	}
+	parent = base.Clone()
+	parent.ChunkSize = parentSize
+	// 父块用于补充上下文，不受子块的模型输入预算约束。
+	parent.TokenLimit = 0
+	child = base.Clone()
+	child.ChunkSize = childSize
+	child.ChunkOverlap = childSize / 5
 	if base.ChunkOverlap == 0 {
 		child.ChunkOverlap = 0
 	}
@@ -143,15 +136,9 @@ func DeriveParentChildConfigs(
 	return parent, child
 }
 
-// cloneStrings 返回一个独立的字符串 slice。
-// strings本身不可变，但是[]string 是引用底层数组的，所以parent.Separators、child.Separators底层不要使用相同的数组
-func cloneStrings(src []string) []string {
-	if len(src) == 0 {
-		return nil
-	}
-
-	dst := make([]string, len(src))
-	copy(dst, src)
-
-	return dst
+// Clone 复制配置中的切片，避免父子配置或 Eino 调用选项共享可变数组。
+func (c SplitterConfig) Clone() SplitterConfig {
+	c.Separators = slices.Clone(c.Separators)
+	c.Languages = slices.Clone(c.Languages)
+	return c
 }

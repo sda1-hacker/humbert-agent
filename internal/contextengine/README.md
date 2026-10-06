@@ -1,6 +1,6 @@
 # ContextEngine：模型窗口与 Eino 摘要适配
 
-[总目录](../../docs/architecture/README.md) · [本次重构](../../docs/architecture/eino-integration.md) · [Runtime](../runtime/README.md)
+[总目录](../../docs/项目源码详解.md) · [上下文实现](../../docs/项目源码详解.md#context) · [Runtime](../runtime/README.md)
 
 `Transcript` 保存原始消息事实，`Engine.Build` 只构造模型可见窗口和预算。自动压缩与手动压缩共用 Eino `summarization.TypedMiddleware.Summarize`，不再维护独立 Planner、分块摘要、应急摘要、摘要修复或自动 Session Memory。
 
@@ -40,3 +40,5 @@ flowchart LR
 | `estimator.go`、`budget.go` | Token 估算、真实 usage 校准、固定开销预算 |
 
 Usage 是本地估算。校准使用中间件处理后的首次模型输入，不再拿压缩前的估算与压缩后的 Provider usage 比较。
+
+`EstimateMessageCosts` 只计算一次 `multimodal.AttachmentReplayMask`，与真实附件水合和模型能力判断共享回放窗口。近期图片仍预留固定成本且不按 Base64 字符数估算；近期文本按提取正文估算，旧附件使用同一占位函数。共享窗口只删除重复计算，没有放宽上下文硬预算。

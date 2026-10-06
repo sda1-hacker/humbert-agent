@@ -1,53 +1,15 @@
 package searchcontent
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/cloudwego/eino/schema"
 )
 
-// Builder 负责构造真正送给：
-//
-//	Embedding
-//	BM25
-//
-// 的检索文本。
-//
-// 我们始终保持两个世界分离：
-//
-//	schema.Document.Content
-//	    = 权威 Chunk 原文
-//
-//	SearchContent
-//	    = 为检索优化后的表示
-//
-// 当前基本结构：
-//
-//	title
-//
-//	context header
-//
-//	chunk body
-//
-// 例如：
-//
-//	员工差旅制度
-//
-//	# 差旅制度
-//	## 日本地区
-//	### 酒店标准
-//
-//	东京地区住宿标准为……
+// Builder 为向量、关键词和精排构造统一文本表示，原文范围由正文模型单独保存。
 type Builder struct {
-	// TitleKeys 按顺序寻找 Document title。
-	//
-	// 默认：
-	//
-	//     title
-	//     _title
-	//     file_name
-	//
-	// 前面的业务 title 优先级最高。
+	// TitleKeys 按顺序查找标题，默认使用 title、_title、file_name。
 	TitleKeys []string
 
 	// ContextHeaderKey 是 Chunk Transformer
@@ -67,63 +29,25 @@ func DefaultBuilder() Builder {
 	}
 }
 
-// Build 构造用于 Embedding / BM25 的 SearchContent。
-//
-// 注意这里会 TrimSpace。
-//
-// 这是安全的，因为 SearchContent 本来就是：
-//
-//	retrieval representation
-//
-// 不承担 Source Offset 映射职责。
-//
-// 真正原文仍然保存在：
-//
-//	schema.Document.Content
+// Build 拼接标题、标题路径与正文；返回值用于模型输入，不用于原文坐标映射。
 func (b Builder) Build(doc *schema.Document) string {
 	if doc == nil {
 		return ""
 	}
 
-	title := b.Title(doc)
-	header := b.ContextHeader(doc)
-	body := strings.TrimSpace(doc.Content)
+	return BuildText(b.Title(doc), b.ContextHeader(doc), doc.Content)
+}
 
+// BuildText 将标题、标题路径和正文拼成模型输入，只去除完全相同的部分。
+// 输出是检索表示，不用于计算原文坐标。
+func BuildText(title, header, body string) string {
 	parts := make([]string, 0, 3)
-
-	appendUnique := func(value string) {
+	for _, value := range []string{title, header, body} {
 		value = strings.TrimSpace(value)
-
-		if value == "" {
-			return
+		if value != "" && !slices.Contains(parts, value) {
+			parts = append(parts, value)
 		}
-
-		// 只做“完整部分完全相同”的去重。
-		//
-		// 不做模糊处理：
-		//
-		//     title = "产品手册"
-		//
-		//     header = "# 产品手册\n## 安装"
-		//
-		// 两者并不完全相同，
-		// 因此都会保留。
-		//
-		// 这种轻微 title reinforcement
-		// 对 retrieval 通常反而有帮助。
-		for _, existing := range parts {
-			if existing == value {
-				return
-			}
-		}
-
-		parts = append(parts, value)
 	}
-
-	appendUnique(title)
-	appendUnique(header)
-	appendUnique(body)
-
 	return strings.Join(parts, "\n\n")
 }
 
@@ -163,29 +87,11 @@ func (b Builder) ContextHeader(doc *schema.Document) string {
 	return metadataString(doc.MetaData, key)
 }
 
-// metadataString 只接受真正 string metadata。
-//
-// 不使用 fmt.Sprint 的原因是：
-//
-//	[]string{"a", "b"}
-//	map[string]any{...}
-//
-// 这种复杂对象不应该因为一个通用格式化操作
-// 意外进入 Embedding 文本。
+// metadataString 只接受字符串元数据，避免把复杂对象意外格式化成检索文本。
 func metadataString(metadata map[string]any, key string) string {
-	if len(metadata) == 0 || key == "" {
+	if key == "" {
 		return ""
 	}
-
-	value, ok := metadata[key]
-	if !ok {
-		return ""
-	}
-
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
-
+	text, _ := metadata[key].(string)
 	return strings.TrimSpace(text)
 }

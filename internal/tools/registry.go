@@ -65,7 +65,7 @@ func (r *Registry) Close() error {
 //
 // Revision 从 1 开始。
 //
-// 后续每一次真正改变 Registry Definition 的 Register/Unregister
+// 后续每一次真正改变 Registry Definition 的 Register
 // 都会递增 Revision。
 func NewRegistry(authorizer Authorizer, archivers ...ResultArchiver) (*Registry, error) {
 	if authorizer == nil {
@@ -100,7 +100,6 @@ func (r *Registry) Register(factory Factory) error {
 	descriptor := factory.Descriptor()
 
 	if err := descriptor.Validate(); err != nil {
-
 		return err
 	}
 
@@ -108,7 +107,6 @@ func (r *Registry) Register(factory Factory) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.factories[descriptor.Name]; exists {
-
 		return fmt.Errorf("%w: %s", ErrToolExists, descriptor.Name)
 	}
 
@@ -119,48 +117,39 @@ func (r *Registry) Register(factory Factory) error {
 	return nil
 }
 
-// Unregister 删除一个 Tool Definition。
-//
-// 已经创建出来的 RuntimeSnapshot 不受影响。
-func (r *Registry) Unregister(name string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.factories[name]; !exists {
-
-		return fmt.Errorf("%w: %s", ErrToolNotFound, name)
-	}
-
-	delete(r.factories, name)
-
-	r.revision++
-
-	return nil
-}
-
 // List 返回当前 Tool Descriptor Snapshot。
 //
 // 返回结果按 Tool Name 排序，保证 UI、日志和测试具有稳定顺序。
 func (r *Registry) List() []Descriptor {
-	r.mu.RLock()
-
-	result := make([]Descriptor, 0, len(r.factories))
-
-	for _, factory := range r.factories {
-
-		result = append(result, factory.Descriptor())
+	definitions, _ := r.definitions()
+	result := make([]Descriptor, 0, len(definitions))
+	for _, definition := range definitions {
+		result = append(result, definition.descriptor)
 	}
-
-	r.mu.RUnlock()
-
-	sort.Slice(
-		result,
-		func(i int, j int) bool {
-			return result[i].Name < result[j].Name
-		},
-	)
-
 	return result
+}
+
+// toolDefinition 只属于一次查询/解析，不是另一份常驻注册表。
+// Descriptor 每次快照只读取一次，使选择校验、排序和返回的工具身份一致。
+type toolDefinition struct {
+	factory    Factory
+	descriptor Descriptor
+}
+
+func (r *Registry) definitions() ([]toolDefinition, uint64) {
+	r.mu.RLock()
+	revision := r.revision
+	definitions := make([]toolDefinition, 0, len(r.factories))
+	for _, factory := range r.factories {
+		definitions = append(definitions, toolDefinition{factory: factory})
+	}
+	r.mu.RUnlock()
+	// 先冻结注册项和版本，再在锁外读取 Factory 元数据；不让扩展代码持有全局锁。
+	for index := range definitions {
+		definitions[index].descriptor = definitions[index].factory.Descriptor()
+	}
+	sort.Slice(definitions, func(i, j int) bool { return definitions[i].descriptor.Name < definitions[j].descriptor.Name })
+	return definitions, revision
 }
 
 // Resolve 为一个 RuntimeSnapshot 创建不可变 ToolSet。
@@ -185,25 +174,7 @@ func (r *Registry) Resolve(ctx context.Context, scope Scope) (ResolvedTools, err
 		return ResolvedTools{}, fmt.Errorf("Tool Scope 无效: %w", err)
 	}
 
-	r.mu.RLock()
-
-	revision := r.revision
-
-	factories := make([]Factory, 0, len(r.factories))
-
-	for _, factory := range r.factories {
-
-		factories = append(factories, factory)
-	}
-
-	r.mu.RUnlock()
-
-	sort.Slice(
-		factories,
-		func(i int, j int) bool {
-			return factories[i].Descriptor().Name < factories[j].Descriptor().Name
-		},
-	)
+	definitions, revision := r.definitions()
 
 	selected := map[string]struct{}{}
 	disabled := make(map[string]struct{}, len(scope.DisabledBuiltinTools))
@@ -211,9 +182,9 @@ func (r *Registry) Resolve(ctx context.Context, scope Scope) (ResolvedTools, err
 		disabled[name] = struct{}{}
 	}
 	if scope.EnabledBuiltinTools != nil {
-		known := make(map[string]struct{}, len(factories))
-		for _, factory := range factories {
-			known[factory.Descriptor().Name] = struct{}{}
+		known := make(map[string]struct{}, len(definitions))
+		for _, definition := range definitions {
+			known[definition.descriptor.Name] = struct{}{}
 		}
 		for _, name := range scope.EnabledBuiltinTools {
 			if _, ok := known[name]; !ok {
@@ -223,17 +194,16 @@ func (r *Registry) Resolve(ctx context.Context, scope Scope) (ResolvedTools, err
 		}
 	}
 
-	resolved := make([]einotool.BaseTool, 0, len(factories))
-	resolvedDescriptors := make([]Descriptor, 0, len(factories))
-	resolvedNames := make([]string, 0, len(factories))
+	resolved := make([]einotool.BaseTool, 0, len(definitions))
+	resolvedDescriptors := make([]Descriptor, 0, len(definitions))
+	resolvedNames := make([]string, 0, len(definitions))
 
-	for _, factory := range factories {
+	for _, definition := range definitions {
 
 		if err := ctx.Err(); err != nil {
 			return ResolvedTools{}, fmt.Errorf("解析 Tool Snapshot 被取消: %w", err)
 		}
-
-		descriptor := factory.Descriptor()
+		descriptor := definition.descriptor
 		if _, blocked := disabled[descriptor.Name]; blocked {
 			continue
 		}
@@ -243,7 +213,7 @@ func (r *Registry) Resolve(ctx context.Context, scope Scope) (ResolvedTools, err
 			}
 		}
 
-		instance, err := factory.Build(ctx, scope)
+		instance, err := definition.factory.Build(ctx, scope)
 
 		if err != nil {
 			return ResolvedTools{}, fmt.Errorf("构建 Tool %q 失败: %w", descriptor.Name, err)

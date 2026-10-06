@@ -1,6 +1,6 @@
 # Logging：结构化日志与脱敏
 
-[总目录](../../docs/architecture/README.md) · [App](../app/README.md)
+[总目录](../../docs/项目源码详解.md) · [App](../app/README.md)
 
 `NewBootstrap` 在配置加载前向 stderr 记启动错误；`New` 建立正式 `slog`，同时写 stderr 和 `logs/humbert.log`。`Debug/Info/Warn/Error` 附带操作名、SessionID、RequestID、TaskID 等结构化字段。字符串与 error 在进入 handler 前经 `RedactText` 处理，`SafeErrorText` 为界面和日志提供限长的错误摘要。
 

@@ -103,10 +103,7 @@ func TestApprovalResumePreservesToolBudget(t *testing.T) {
 			if tc.exhaustTokens {
 				snapshot.limitState.addTokens(1000)
 			}
-			data, err := approval.EncodeResumeData(tc.approved)
-			if err != nil {
-				t.Fatal(err)
-			}
+			data := approval.EncodeResumeData(tc.approved)
 			_, err = graph.Invoke(compose.ResumeWithData(ctx, interrupted.InterruptContexts[0].ID, data), input, compose.WithCheckPointID("approval"))
 			if tc.exhaustTokens {
 				if !errors.Is(err, ErrExecutionLimitExceeded) {
@@ -141,10 +138,7 @@ func TestParallelApprovalsDoNotRechargeWaitingSibling(t *testing.T) {
 		if !ok || interrupted == nil || len(interrupted.InterruptContexts) != pending {
 			t.Fatalf("want %d approvals, got %v", pending, err)
 		}
-		data, encodeErr := approval.EncodeResumeData(true)
-		if encodeErr != nil {
-			t.Fatal(encodeErr)
-		}
+		data := approval.EncodeResumeData(true)
 		// 每次只批准一个；另一个工具会被 Eino 再次调度并继续等待审批。
 		_, err = graph.Invoke(compose.ResumeWithData(ctx, interrupted.InterruptContexts[0].ID, data), input, compose.WithCheckPointID("parallel"))
 	}

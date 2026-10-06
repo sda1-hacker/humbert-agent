@@ -1,6 +1,6 @@
 # MCP：外部工具的配置与运行快照
 
-[总目录](../../docs/architecture/README.md) · [Eino 适配](einoadapter/README.md) · [工具](../tools/README.md)
+[总目录](../../docs/项目源码详解.md) · [Eino 适配](einoadapter/README.md) · [工具](../tools/README.md)
 
 ## 控制面与运行面
 
@@ -39,8 +39,9 @@ sequenceDiagram
 | --- | --- |
 | `types.go` | Server、Transport、ToolSelection、RuntimeSnapshot 验证。 |
 | `store.go` | 严格加载/保存服务器配置。 |
-| `manager.go` | 发现缓存、选择校验、Revision、快照生成与失效。 |
-| `naming.go`、`fingerprint.go`、`catalog.go` | 工具名、配置身份与工具目录。 |
+| `manager.go` | 配置/发现入口、选择预检、Revision、真实运行快照与连接失效。 |
+| `naming.go`、`fingerprint.go` | 工具命名与影响连接的配置身份。 |
+| `catalog.go` | 工具目录类型、缓存投影、深复制及只读 Schema 工具。 |
 | `einoadapter/` | 连接池、传输安全、凭据与工具适配。 |
 
 排查“设置页能看到工具但模型不能调用”时，依次看 Agent 的选择、Server Enabled、Catalog、Snapshot 的 `ToolNames`、模型工具能力、Permission 和真实连接状态。
@@ -54,3 +55,11 @@ sequenceDiagram
 排查顺序建议为：`Store.Get(ServerID)` → `DiscoverToolsFresh` → Agent Profile 选择 → `ResolveRuntimeSnapshot` → `Backend.Resolve` → `Adapter.BuildTools` → Guard/Permission → 远端响应。断开连接或改配置后，先确认 Revision/Fingerprint 变化，再看 SessionPool 是否使用新会话。
 
 显示名称和 Risk 更新不关闭连接。实际连接配置更新使用 `Retire`：新 Turn 不再复用旧配置，已经冻结的主/子工具按父 RequestID 持有旧连接；Runtime 结束或初始化失败通过 `ParentRunFinished` 释放，最后一个使用者退出后关闭旧连接。手动断开、停用和删除使用立即 `Invalidate`，包括已经 retired 的连接；不会自动将旧工具切换到新 Server 或重放调用。
+
+## 三个快照入口的共同与不同部分
+
+`runtimeRequest` 先规范化选择，取得当前 revision/backend，校验非空选择的 Scope，再按稳定顺序读取并过滤禁用 Server。Server 和选择成对保存，进入快照时使用复制后的选择。空选择不要求 Scope；禁用 Server 的原配置仍可保存，但不进入工具集合。
+
+严格入口一次调用 Backend 解析整组；真实聊天的 Available 入口逐 Server 解析，将连接失败记入 Failures，取消、Scope 错误与命名冲突仍直接失败。BestEffort 的实现位于 `catalog.go`：仅根据本地 Catalog 生成 BaseTool.Info，不连接 Server，也不执行工具。共用预检不代表这三种执行语义可以合并。
+
+审计投影只包含公开身份和连接指纹。严格入口在交给 Backend 之前冻结审计字段；只读投影沿原有空选择/空审计集合语义返回，不改变公开快照字段。

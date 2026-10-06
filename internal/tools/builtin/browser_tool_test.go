@@ -36,7 +36,7 @@ func TestBrowserNewTargetCannotBypassProxy(t *testing.T) {
 	defer local.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	session, err := startBrowser(ctx)
+	session, err := startBrowserWithMode(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestBrowserChromeSmoke(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	session, err := startBrowser(ctx)
+	session, err := startBrowserWithMode(ctx, false)
 	if err != nil {
 		t.Fatal(err)
 	}

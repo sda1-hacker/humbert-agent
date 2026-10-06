@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
+	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
@@ -180,7 +181,7 @@ func stringMessagePartExtra(extra map[string]any, key string) string {
 // Model，更早图片已经变为文本占位，不应继续要求视觉辅助。
 func requirementsFromMessages(messages []*schema.Message) turnInputRequirements {
 	var result turnInputRequirements
-	imageReplayMask := multimodal.ImageReplayMask(messages)
+	imageReplayMask := multimodal.AttachmentReplayMask(messages)
 	for index, message := range messages {
 		current := requirementsFromMessageWithImages(message, imageReplayMask[index])
 		result.Vision = result.Vision || current.Vision
@@ -210,4 +211,13 @@ func compactionModel(roles resolvedModelRoles) models.RuntimeSnapshot {
 		return roles.utility
 	}
 	return roles.chat
+}
+
+// 只有 Ollama 的当前协议明确支持把 thinking 作为历史 Assistant 字段回传。
+// OpenAI Chat Completions 与未知兼容端点默认只发送回答和工具事务。
+func reasoningReplayPolicyForProvider(provider models.ProviderType) contextengine.ReasoningReplayPolicy {
+	if provider == models.ProviderTypeOllama {
+		return contextengine.ReasoningReplayAuto
+	}
+	return contextengine.ReasoningReplayOmit
 }

@@ -5,6 +5,7 @@ import (
 	"math"
 )
 
+// Validate 检查候选数量、阈值、权重和 MMR 参数是否合法。
 func (c Config) Validate() error {
 	if c.TopK < 0 || c.MaxCandidates < 0 {
 		return fmt.Errorf("rag rerank: negative candidate limit")

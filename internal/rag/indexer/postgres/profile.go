@@ -13,8 +13,7 @@ import (
 var ErrEmbeddingProfileMismatch = errors.New("rag: collection embedding profile mismatch; rebuild into a new collection before switching models")
 var ErrUnboundLegacyIndex = errors.New("rag: existing vectors have no verified embedding profile; rebuild into a new collection")
 
-// EnsureCollectionProfile pins a collection's embedding space. It never
-// guesses the model used by legacy vectors, or deletes existing index data.
+// EnsureCollectionProfile 绑定知识库的向量空间，不推断历史向量模型，也不删除现有索引数据。
 func EnsureCollectionProfile(ctx context.Context, pool *pgxpool.Pool, collectionID, profileID, profileJSON string) error {
 	if pool == nil {
 		return errors.New("rag: nil profile database pool")
@@ -54,6 +53,7 @@ func EnsureCollectionProfile(ctx context.Context, pool *pgxpool.Pool, collection
 	return tx.Commit(ctx)
 }
 
+// ensureProfile 校验知识库绑定的向量空间档案，防止更换模型后继续使用旧索引。
 func (p *Indexer) ensureProfile(ctx context.Context, collectionID string) error {
 	if p.config.ProfileID == "" {
 		return nil

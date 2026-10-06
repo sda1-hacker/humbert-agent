@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+// 授权只能提高同一路径的访问级别，不能降级工作区；派生策略不能修改原快照。
+func TestWithPathAccessMergesGrantsWithoutMutatingOriginal(t *testing.T) {
+	root, outside := canonicalTempDir(t), canonicalTempDir(t)
+	original := WorkspaceOnlyPolicy(root)
+	derived, err := original.WithPathAccess(root, AccessReadOnly, RuleSourceMCPFilesystem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(file, []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if decision, err := derived.CheckPath(file, OpDelete); err != nil || decision.Access != AccessFull || decision.Source != RuleSourceWorkspace {
+		t.Fatalf("较弱 grant 覆盖了工作区权限: %#v err=%v", decision, err)
+	}
+	for _, access := range []AccessLevel{AccessReadOnly, AccessReadWrite, AccessReadOnly} {
+		derived, err = derived.WithPathAccess(outside, access, RuleSourceMCPFilesystem)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(outside, "new.txt")
+	if decision, err := derived.CheckPath(target, OpCreate); err != nil || decision.Access != AccessReadWrite {
+		t.Fatalf("重复 grant 应保留较高能力: %#v err=%v", decision, err)
+	}
+	if _, err := original.CheckPath(target, OpCreate); err == nil {
+		t.Fatal("派生授权污染了原冻结策略")
+	}
+}
+
 func TestWorkspaceOnlyPathGuardUsesOperationAccess(t *testing.T) {
 	workspace := canonicalTempDir(t)
 	outside := canonicalTempDir(t)

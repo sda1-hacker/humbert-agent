@@ -6,7 +6,7 @@ import (
 
 // Chunk 表示经过文档分块之后的一个文本块
 // 是整个 RAG 核心的数据结构
-// 无论使用 递归分块（Recursive Splitter）、标题分块（Heading Splitter）、启发式分块（Heuristic Splitter）、分子分块（Parent-Child Splitter）
+// 递归、标题、启发式以及父子分块统一使用这个结构。
 // 都会产生统一的Chunk
 type Chunk struct {
 	// 是当前 Chunk 的文本内容
@@ -24,7 +24,7 @@ type Chunk struct {
 
 	// 表示当前 Chunk 在“原始文档”中的结束位置。也是使用Unicode rune offset。
 	// 使用 [Start, End) 左闭右开区间。
-	// 理想状态下，End - Start == len(Content)
+	// 坐标对应解析后的原文；补充表头不占新的原文范围，正文长度可能与区间长度不同。
 	End int
 }
 

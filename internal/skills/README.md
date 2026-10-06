@@ -1,6 +1,6 @@
 # Skills：安装、验证与按需注入
 
-[总目录](../../docs/architecture/README.md) · [工具](../tools/README.md) · [Runtime](../runtime/README.md)
+[总目录](../../docs/项目源码详解.md) · [工具](../tools/README.md) · [Runtime](../runtime/README.md)
 
 ## 本地包与运行快照
 
@@ -21,7 +21,7 @@ flowchart LR
 
 ## 来源与更新
 
-`parser.go` 解析 Frontmatter 和正文；`browser.go`/`discovery.go` 扫描候选；`installer.go` 复制已验证包；`remote_installer.go`、`remote_source.go`、`source_providers.go` 处理远程来源和下载边界；`update.go` 检测身份变化并原子替换。坏包在列表中以 `Valid=false` 呈现，不让其它 Skill 完全不可见。第三方来源 Resolver 只规范化 URL，不能绕开最终下载和包验证。
+`parser.go` 解析 Frontmatter 和正文；`browser.go`/`discovery.go` 扫描候选；`installer.go` 复制已验证包；`remote_source.go`/`source_providers.go` 只解析来源 URL，`remote_installer.go` 编排获取与包选择，`remote_git.go`/`remote_archive.go` 执行获取和安全展开；`update.go` 检测身份变化并原子替换。坏包在列表中以 `Valid=false` 呈现，不让其它 Skill 完全不可见。第三方来源 Resolver 只规范化 URL，不能绕开最终下载和包验证。
 
 ```mermaid
 sequenceDiagram
@@ -39,7 +39,9 @@ sequenceDiagram
 | --- | --- |
 | `manager.go`、`types.go` | `List`、`Get`、`NormalizeAndValidateSelection` 与包元数据。 |
 | `snapshot.go` | 本轮冻结、渐进披露、资源路径验证。 |
-| `installer.go`、`remote_installer.go` | 本地/远程安装和 Stage。 |
+| `installer.go`、`remote_installer.go` | 本地提交、Stage 与远程准备/包选择编排。 |
+| `remote_git.go` | 系统 Git 定位、固定 fetch/ls-tree/archive 与候选路径选择。 |
+| `remote_archive.go` | HTTP 公网拨号、重定向、下载预算和 Git/HTTP 共用的 ZIP 展开。 |
 | `update.go`、`sources.go` | 更新身份与来源记录。 |
 
 调试 Skill 未出现：先看包 `Valid` 与 Agent enabled_skills，再看本轮 `RuntimeSnapshot.Names`、模型工具能力和 Skill middleware 的 List/Get。安装 Skill 不等于授予脚本执行权限。
@@ -54,4 +56,12 @@ Agent Profile：enabled_skills = [name]
 
 设置页 `Get` 展示磁盘包，运行时却读取 Snapshot 的内存副本。模型最初只看名称与描述；调用 Skill 工具后才读取正文，需要某个 `references/*.md` 时再指定相对资源路径。这个分层既减少无关 Skill 的 Token，也让运行期间的安装或删除不会改变当前 Turn。`snapshot.go` 的 `readAsset` 和 `normalizeAssetPath` 不能接受穿越包根的路径。
 
-安装与更新比“复制目录”多一道安全流程：先发现候选、验证 Frontmatter/文件树/来源，再 Stage 和提交。`remote_installer.go` 限制远程请求及归档内容；`update.go` 在提交前复核已安装包身份，避免更新准备期间另一操作的修改被覆盖。脚本执行由 `run_skill_script` 另行触发，需同时满足 Agent 工具选择、审批和 Sandbox；普通 Skill 加载不会自动运行 `scripts/`。
+安装与更新比“复制目录”多一道安全流程：先发现候选、验证 Frontmatter/文件树/来源，再 Stage 和提交。`remote_archive.go` 限制远程请求及归档内容；`update.go` 在提交前复核已安装包身份，避免更新准备期间另一操作的修改被覆盖。脚本执行由 `run_skill_script` 另行触发，需同时满足 Agent 工具选择、审批和 Sandbox；普通 Skill 加载不会自动运行 `scripts/`。
+
+## 远程准备仍只有一条提交链
+
+`prepareRemoteSkillPackage` 在 Manager 提交锁外解析来源、创建临时目录、获取归档、定位包并检查包身份，成功时返回 Package、SourceInfo 和 cleanup。失败由准备入口清理临时目录；成功由 Install/Update 的调用方在使用后清理。Git 和 Archive 都不直接覆盖安装目录。
+
+仓库来源优先由 `materializeGitSkillRepository` 获取，固定命令禁用仓库 hooks 与危险 protocol，再生成 ZIP；Git 不可用或获取失败时，编排层按既有规则尝试 HTTPS Archive。两条路径随后都进入 `extractRemoteArchive`，共享入口路径、符号链接、展开预算和包检查，扩展来源时无需再写一套安装器。
+
+`remote_source.go` 和 `source_providers.go` 保持纯地址解析；新的来源 Resolver 只返回规范化描述。新增 Git 获取行为放在 `remote_git.go`，修改下载/ZIP 边界放在 `remote_archive.go`，安装原子提交仍在 `installer.go`/`update.go`。哨兵错误已与领域类型合并到 `types.go`，原 `errors.go` 可手动删除。

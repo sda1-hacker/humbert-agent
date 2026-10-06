@@ -16,6 +16,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as sandbox$0 from "../sandbox/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
 /**
@@ -94,7 +98,7 @@ export function RunSandboxDiagnostics() {
 }
 
 /**
- * SelectSandboxDirectory 打开原生目录选择器，用于 Additional Read/Write Path。
+ * SelectSandboxDirectory 打开原生目录选择器，用于配置额外写入目录。
  * @param {string} currentPath
  * @returns {$CancellablePromise<string>}
  */
@@ -207,4 +211,4 @@ const $$createType1 = $models.SandboxStatusDTO.createFrom;
 const $$createType2 = $Create.Array($$createType0);
 const $$createType3 = $models.BuiltinToolDTO.createFrom;
 const $$createType4 = $Create.Array($$createType3);
-const $$createType5 = $models.SandboxDiagnosticsDTO.createFrom;
+const $$createType5 = sandbox$0.Diagnostics.createFrom;

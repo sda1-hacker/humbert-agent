@@ -2,14 +2,17 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	einoindexer "github.com/cloudwego/eino/components/indexer"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 	"strings"
 	"testing"
 
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/sda1-hacker/humbert-agent/internal/rag"
 )
 
-func TestReplaceDocumentEmbedsOnlyChildren(t *testing.T) {
+func TestStoreBatchEmbedsOnlyChildren(t *testing.T) {
 	tx := &fakeTransaction{}
 	db := &fakeDatabase{tx: tx}
 
@@ -24,7 +27,7 @@ func TestReplaceDocumentEmbedsOnlyChildren(t *testing.T) {
 
 	batch := testParentChildBatch()
 
-	if err := indexer.ReplaceDocument(context.Background(), batch); err != nil {
+	if err := storeBatch(indexer, context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,7 +51,7 @@ func TestReplaceDocumentEmbedsOnlyChildren(t *testing.T) {
 	}
 }
 
-func TestReplaceDocumentWritesParentsButDoesNotIndexThem(t *testing.T) {
+func TestStoreBatchWritesParentsButDoesNotIndexThem(t *testing.T) {
 	tx := &fakeTransaction{}
 	db := &fakeDatabase{tx: tx}
 
@@ -59,7 +62,7 @@ func TestReplaceDocumentWritesParentsButDoesNotIndexThem(t *testing.T) {
 
 	indexer := newIndexerWithDatabase(db, cfg)
 
-	if err := indexer.ReplaceDocument(context.Background(), testParentChildBatch()); err != nil {
+	if err := storeBatch(indexer, context.Background(), testParentChildBatch()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,7 +93,7 @@ func TestReplaceDocumentWritesParentsButDoesNotIndexThem(t *testing.T) {
 	}
 }
 
-func TestReplaceDocumentPersistsFullMarkdown(t *testing.T) {
+func TestStoreBatchPersistsFullMarkdown(t *testing.T) {
 	tx := &fakeTransaction{}
 	db := &fakeDatabase{tx: tx}
 
@@ -104,7 +107,7 @@ func TestReplaceDocumentPersistsFullMarkdown(t *testing.T) {
 	batch := testParentChildBatch()
 	batch.Markdown = "# 完整 Markdown\n\n这里是完整文档。" + strings.Repeat("文", 100)
 
-	if err := indexer.ReplaceDocument(context.Background(), batch); err != nil {
+	if err := storeBatch(indexer, context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,7 +138,7 @@ func TestReplaceDocumentPersistsFullMarkdown(t *testing.T) {
 	}
 }
 
-func TestReplaceDocumentWritesParentBeforeChild(t *testing.T) {
+func TestStoreBatchWritesParentBeforeChild(t *testing.T) {
 	tx := &fakeTransaction{}
 	db := &fakeDatabase{tx: tx}
 
@@ -146,7 +149,7 @@ func TestReplaceDocumentWritesParentBeforeChild(t *testing.T) {
 
 	indexer := newIndexerWithDatabase(db, cfg)
 
-	if err := indexer.ReplaceDocument(context.Background(), testParentChildBatch()); err != nil {
+	if err := storeBatch(indexer, context.Background(), testParentChildBatch()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,7 +175,7 @@ func TestReplaceDocumentWritesParentBeforeChild(t *testing.T) {
 	}
 }
 
-func TestReplaceDocumentRejectsUnknownParentBeforeEmbedding(t *testing.T) {
+func TestStoreBatchRejectsUnknownParentBeforeEmbedding(t *testing.T) {
 	db := &fakeDatabase{}
 
 	embedder := &fakeEmbedder{
@@ -187,9 +190,9 @@ func TestReplaceDocumentRejectsUnknownParentBeforeEmbedding(t *testing.T) {
 	batch := testParentChildBatch()
 	batch.Children[0].ParentChunkID = "missing-parent"
 
-	err := indexer.ReplaceDocument(context.Background(), batch)
+	err := storeBatch(indexer, context.Background(), batch)
 
-	if !errors.Is(err, ErrUnknownParentChunk) {
+	if !errors.Is(err, rag.ErrUnknownParentChunk) {
 		t.Fatalf("未知 Parent 应失败: %v", err)
 	}
 
@@ -202,7 +205,7 @@ func TestReplaceDocumentRejectsUnknownParentBeforeEmbedding(t *testing.T) {
 	}
 }
 
-func TestReplaceDocumentIsAtomicAtDatabaseLayer(t *testing.T) {
+func TestStoreBatchIsAtomicAtDatabaseLayer(t *testing.T) {
 	tx := &fakeTransaction{}
 	db := &fakeDatabase{tx: tx}
 
@@ -213,7 +216,7 @@ func TestReplaceDocumentIsAtomicAtDatabaseLayer(t *testing.T) {
 
 	indexer := newIndexerWithDatabase(db, cfg)
 
-	if err := indexer.ReplaceDocument(context.Background(), testParentChildBatch()); err != nil {
+	if err := storeBatch(indexer, context.Background(), testParentChildBatch()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -222,8 +225,39 @@ func TestReplaceDocumentIsAtomicAtDatabaseLayer(t *testing.T) {
 	}
 }
 
-func testParentChildBatch() application.IngestionBatch {
-	return application.IngestionBatch{
+func TestPublishDocumentDoesNotEmbedOrWriteSearchIndex(t *testing.T) {
+	tx := &fakeTransaction{}
+	db := &fakeDatabase{tx: tx}
+	cfg := DefaultConfig()
+	embedder := &fakeEmbedder{dim: EmbeddingDimensions}
+	cfg.Embedder = embedder
+	p := newIndexerWithDatabase(db, cfg)
+	batch := testParentChildBatch()
+	batch.Attempt = 1
+	if err := p.PublishDocument(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if !tx.committed || len(embedder.calls) != 0 {
+		t.Fatal("权威文档发布应只执行持久化事务")
+	}
+	for _, call := range tx.calls {
+		if strings.Contains(call.sql, "INSERT INTO documents") {
+			if !json.Valid([]byte(call.args[7].(string))) || call.args[6] == "" {
+				t.Fatal("独立发布缺少合法配置快照或原文指纹")
+			}
+		}
+		if strings.Contains(call.sql, "INSERT INTO retrieval_index") {
+			t.Fatal("分离索引模式仍写入了 PostgreSQL 检索索引")
+		}
+	}
+	tx.staleAttempt = true
+	if err := p.PublishDocument(context.Background(), batch); !errors.Is(err, ErrStaleIngestion) {
+		t.Fatalf("过期发布未被拒绝：%v", err)
+	}
+}
+
+func testParentChildBatch() rag.IngestionBatch {
+	return rag.IngestionBatch{
 		CollectionID: "kb-1",
 		DocumentID:   "doc-1",
 		Title:        "产品手册",
@@ -232,26 +266,26 @@ func testParentChildBatch() application.IngestionBatch {
 			"_title":    "产品手册",
 			"file_name": "manual.md",
 		},
-		Parents: []application.ChunkRecord{
+		Parents: []rag.ChunkRecord{
 			{
 				ID:            "doc-1#parent-000000",
 				DocumentID:    "doc-1",
-				ChunkType:     application.ChunkTypeParentText,
+				ChunkType:     rag.ChunkTypeParentText,
 				ChunkIndex:    0,
 				Content:       "完整 Parent Content",
 				ContextHeader: "# 产品手册",
 				StartRune:     0,
 				EndRune:       100,
 				Metadata: map[string]any{
-					"rag_chunk_type": application.ChunkTypeParentText,
+					"rag_chunk_type": rag.ChunkTypeParentText,
 				},
 			},
 		},
-		Children: []application.ChunkRecord{
+		Children: []rag.ChunkRecord{
 			{
 				ID:            "doc-1#chunk-000000",
 				DocumentID:    "doc-1",
-				ChunkType:     application.ChunkTypeText,
+				ChunkType:     rag.ChunkTypeText,
 				ChunkIndex:    0,
 				Content:       "Linux 安装正文。",
 				ContextHeader: "# 产品手册\n## Linux",
@@ -267,7 +301,7 @@ func testParentChildBatch() application.IngestionBatch {
 			{
 				ID:            "doc-1#chunk-000001",
 				DocumentID:    "doc-1",
-				ChunkType:     application.ChunkTypeText,
+				ChunkType:     rag.ChunkTypeText,
 				ChunkIndex:    1,
 				Content:       "Windows 安装正文。",
 				ContextHeader: "# 产品手册\n## Windows",
@@ -282,4 +316,10 @@ func testParentChildBatch() application.IngestionBatch {
 			},
 		},
 	}
+}
+
+// 测试助手只组装公开的 Eino 文档和选项，不直接调用内部持久化方法。
+func storeBatch(p *Indexer, ctx context.Context, batch rag.IngestionBatch) error {
+	_, err := p.Store(ctx, rag.IndexDocuments(batch, searchcontent.DefaultBuilder()), einoindexer.WithIndex(batch.CollectionID), rag.WithIngestionBatch(batch))
+	return err
 }

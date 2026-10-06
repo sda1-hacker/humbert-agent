@@ -1,6 +1,6 @@
 # DataBackup：离线归档、验证与恢复
 
-[总目录](../../docs/architecture/README.md) · [Credential](../credential/README.md)
+[总目录](../../docs/项目源码详解.md) · [Credential](../credential/README.md)
 
 `cmd/data` 是离线 CLI。`archive.go` 生成带清单的 ZIP、验证文件与路径、分阶段恢复并保留原目录回退副本；`encrypted.go` 以口令加密归档，备份时可纳入从系统凭据库导出的密钥，恢复后通过 Importer 回写。`schedule.go` 让桌面 UI 先记录“待备份/待恢复计划”，应用下次完整启动前执行，避免对正在运行的 Store 热替换。
 

@@ -11,40 +11,7 @@ const (
 	MatchHybrid  MatchType = "hybrid"
 )
 
-// SearchResult 是整个 RAG Retrieval Core 的统一结果模型。
-//
-// 生命周期:
-//
-//	Dense / BM25
-//	    ↓
-//	RRF
-//	    ↓
-//	Reranker
-//	    ↓
-//	Parent Context Expansion
-//	    ↓
-//	SearchResult
-//
-// 一个非常重要的原则:
-//
-//	Content
-//
-// 永远表示“真正被检索命中的 Chunk”。
-//
-// 即使后面扩展出了 Parent：
-//
-//	ContextContent
-//
-// 也绝对不覆盖 Content。
-//
-// 这样：
-//
-//	Citation
-//	Debug
-//	Rerank
-//	Retrieval Evaluation
-//
-// 始终知道究竟是哪个小块真正被检索命中。
+// SearchResult 保存召回子块、分数和最终上下文；原始证据与父块内容分别保留，便于引用和评测。
 type SearchResult struct {
 	CollectionID string `json:"collection_id,omitempty"`
 	ChunkID      string `json:"chunk_id"`
@@ -63,48 +30,16 @@ type SearchResult struct {
 	StartRune int `json:"start_rune"`
 	EndRune   int `json:"end_rune"`
 
-	// Score 是“当前 Pipeline 阶段最终用于排序”的分数。
-	//
-	// RRF 后：
-	//
-	//     Score = RRF Score
-	//
-	// Rerank 后：
-	//
-	//     Score = Composite Score
-	//
-	// 原始召回分会另外保存在 BaseScore。
+	// Score 是当前阶段的排序分数，召回融合后或精排后含义不同。
 	Score float64 `json:"score"`
 
-	// BaseScore 是进入 Reranker 前的 Retrieval Score。
-	//
-	// 对 Hybrid：
-	//
-	//     normalized RRF
-	//
-	// 对 Vector-only：
-	//
-	//     cosine similarity
-	//
-	// 对 Keyword-only：
-	//
-	//     normalized BM25
+	// BaseScore 保留进入精排前的召回分数，供诊断和评分融合使用。
 	BaseScore float64 `json:"base_score,omitempty"`
 
-	// ModelScore 是 Rerank Model 给出的 relevance score。
+	// ModelScore 是精排模型给出的相关性分数。
 	ModelScore float64 `json:"model_score,omitempty"`
 
-	// SourceWeight 是可选来源权重。
-	//
-	// 当前普通 Document 默认0。
-	//
-	// 未来如果加入：
-	//
-	//     FAQ priority
-	//     curated source
-	//     trusted source
-	//
-	// 可以由上层填入 [0,1] 的权重。
+	// SourceWeight 是可选的来源可信度权重，默认不提供额外加分。
 	SourceWeight float64 `json:"source_weight,omitempty"`
 
 	Reranked bool `json:"reranked,omitempty"`
@@ -117,38 +52,22 @@ type SearchResult struct {
 
 	MatchType MatchType `json:"match_type"`
 
-	// ContextChunkID 是最终给 LLM 阅读的上下文 Chunk。
-	//
-	// 普通模式：
-	//
-	//     ContextChunkID == ChunkID
-	//
-	// Parent-Child：
-	//
-	//     ContextChunkID == ParentChunkID
+	// ContextChunkID 是最终上下文对应的分块 ID，父块扩展时与命中子块 ID 不同。
 	ContextChunkID string `json:"context_chunk_id,omitempty"`
 
-	// ContextContent 是最终推荐给 LLM 的上下文文本。
-	//
-	// 普通 Chunk：
-	//
-	//     ContextContent = Content
-	//
-	// Parent-Child：
-	//
-	//     ContextContent = Parent.Content
+	// ContextContent 保存最终上下文文本，原始命中正文仍保存在 Content 中。
 	ContextContent      string `json:"context_content,omitempty"`
 	ContextStartRune    int    `json:"context_start_rune"`
 	ContextEndRune      int    `json:"context_end_rune"`
 	ContextSourceHeader string `json:"context_source_header,omitempty"`
 
-	// Evidence survives parent grouping, retaining the child ranges used for
-	// citations and evaluation rather than discarding all but one child.
+	// Evidence 保留父块分组前的全部子块范围，用于引用和评测。
 	Evidence []HitEvidence `json:"evidence,omitempty"`
 
 	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
+// HitEvidence 原始命中子块正文、分数与范围，父块分组后仍保留引用和评测依据。
 type HitEvidence struct {
 	ChunkID   string  `json:"chunk_id"`
 	StartRune int     `json:"start_rune"`
@@ -157,15 +76,7 @@ type HitEvidence struct {
 	Score     float64 `json:"score"`
 }
 
-// EffectiveContent 返回最终应该交给 LLM 阅读的文本。
-//
-// 如果 Pipeline 已经做 Parent Expansion：
-//
-//	ContextContent
-//
-// 优先。
-//
-// 否则直接使用命中的 Child Content。
+// EffectiveContent 优先返回扩展后的上下文，没有上下文时返回子块正文。
 func (r SearchResult) EffectiveContent() string {
 	if r.ContextContent != "" {
 		return r.ContextContent
@@ -183,8 +94,7 @@ func (r SearchResult) EffectiveChunkID() string {
 	return r.ChunkID
 }
 
-// IdentityKey prevents cross-collection/document collisions when results are
-// merged. Legacy standalone results with only a ChunkID retain their key.
+// IdentityKey 结合知识库、文档、版本和分块 ID 去重；仅有分块 ID 的独立结果仍可使用。
 func (r SearchResult) IdentityKey() string {
 	if r.CollectionID == "" && r.DocumentID == "" && r.DocumentRevision == 0 {
 		return r.ChunkID

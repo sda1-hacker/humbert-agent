@@ -23,12 +23,10 @@ import (
 // Executor goroutine 在运行，但 Session reservation 与 activeRun 必须继续保留；否则用户可
 // 在同一 Session 启动第二个 Turn，破坏 checkpoint 对应的 ActiveBranch。
 type activeRun struct {
-	RequestID       string
-	RunID           string
-	SessionID       string
+	// 运行身份只来自冻结快照，取消/审批/事件不会另存一份可漂移的 ID。
+	*Snapshot
 	ctx             context.Context
 	cancel          context.CancelFunc
-	snapshot        *Snapshot
 	checkpointStore *approval.CheckpointStore
 	startedAt       time.Time
 	phase           RunPhase
@@ -215,12 +213,9 @@ func (s *Service) StartTurn(ctx context.Context, input StartTurnInput) (StartTur
 		runCtx, cancel = context.WithCancel(s.rootCtx)
 	}
 	active := &activeRun{
-		RequestID:       requestID,
-		RunID:           runID,
-		SessionID:       sessionID,
 		ctx:             runCtx,
 		cancel:          cancel,
-		snapshot:        snapshot,
+		Snapshot:        snapshot,
 		checkpointStore: approval.NewCheckpointStore(),
 		startedAt:       time.Now(),
 		phase:           RunPhaseRunning,

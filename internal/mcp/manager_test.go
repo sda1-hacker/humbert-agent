@@ -104,15 +104,27 @@ func TestDisabledServerKeepsSelectionButSkipsRuntime(t *testing.T) {
 		t.Fatalf("unexpected normalized selection: %#v", normalized)
 	}
 
-	snapshot, err := manager.ResolveRuntimeSnapshot(ctx, selection, humberttools.Scope{
+	scope := humberttools.Scope{
 		AgentID:   "agent-1",
 		Workspace: workspace.Workspace{AgentID: "agent-1", RootDir: t.TempDir()},
-	})
-	if err != nil {
-		t.Fatalf("disabled server should be skipped before requiring runtime backend: %v", err)
 	}
-	if snapshot.Enabled() || len(snapshot.Servers) != 0 || len(snapshot.ToolNames) != 0 {
-		t.Fatalf("disabled server should not enter runtime snapshot: %#v", snapshot)
+	// 三个入口共用预检，但禁用配置仍需校验 Scope，空选择则不要求执行环境。
+	for _, resolve := range []func(context.Context, []ToolSelection, humberttools.Scope) (RuntimeSnapshot, error){
+		manager.ResolveRuntimeSnapshot, manager.ResolveRuntimeSnapshotAvailable, manager.ResolveRuntimeSnapshotBestEffort,
+	} {
+		snapshot, err := resolve(ctx, selection, scope)
+		if err != nil {
+			t.Fatalf("disabled server should be skipped before requiring runtime backend: %v", err)
+		}
+		if snapshot.Enabled() || len(snapshot.Servers) != 0 || len(snapshot.ToolNames) != 0 {
+			t.Fatalf("disabled server should not enter runtime snapshot: %#v", snapshot)
+		}
+		if _, err := resolve(ctx, selection, humberttools.Scope{}); err == nil {
+			t.Fatal("非空选择不能绕过 Scope 校验")
+		}
+		if _, err := resolve(ctx, nil, humberttools.Scope{}); err != nil {
+			t.Fatalf("空选择不应要求 Scope: %v", err)
+		}
 	}
 
 	status, err := manager.RuntimeStatus(ctx, server.ID)

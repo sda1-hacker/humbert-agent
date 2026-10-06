@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,24 +18,7 @@ var (
 	ErrEmptyQuery   = errors.New("rag search: empty query")
 )
 
-// RetrieveFunc 是 Search Pipeline 对 Retrieval 层的唯一依赖。
-//
-// 为什么不直接依赖：
-//
-//	postgres.HybridRetriever
-//
-// 因为 Final Search Pipeline 不应该知道：
-//
-//	PostgreSQL
-//	pgvector
-//	ParadeDB
-//	Eino
-//
-// 使用时只需要：
-//
-//	func(ctx, query) ([]SearchResult, error)
-//
-// 即可。
+// RetrieveFunc 是精排和引用处理的内部输入；外部 Eino 组件通过 NewEinoPipeline 接入。
 type RetrieveFunc func(ctx context.Context, query string) ([]retrieval.SearchResult, error)
 
 // ParentLoader 负责批量加载 Parent Chunk。
@@ -48,30 +32,24 @@ type ParentLoader interface {
 	LoadParents(ctx context.Context, parentChunkIDs []string) (map[string]retrieval.SearchResult, error)
 }
 
+// Config 控制检索超时、最终数量与父块扩展策略。
 type Config struct {
+	// Timeout 检索请求超时，零值由业务入口设置默认值。
 	Timeout time.Duration
-	// FinalTopK 是 Search Pipeline 最终最多返回多少条。
+	// FinalTopK 是父块扩展与分组后最多返回的结果数量。
 	FinalTopK int
 
-	// ExpandParents 开启 Parent-Child Context Expansion。
+	// ExpandParents 开启父块上下文扩展，命中子块证据仍独立保留。
 	ExpandParents bool
 
-	// CollapseSameParent 表示：
-	//
-	// 如果多个 Child 最终都指向同一个 Parent，
-	// 是否只保留得分最高的那个 Child Hit。
-	//
-	// 默认关闭。
-	//
-	// 原因是多个 Child 命中本身也是很有价值的 Retrieval Evidence。
-	// Prompt Assembly 阶段可以再根据 ContextChunkID 去重。
+	// CollapseSameParent 将同一父块的结果合并，保留所有命中子块证据，再限制最终数量。
 	CollapseSameParent bool
 
-	// AllowParentFallback keeps child evidence on a recoverable parent read
-	// failure. Cancellation and request deadlines always propagate.
+	// AllowParentFallback 允许父块读取的普通错误退回子块正文；取消和超时始终返回。
 	AllowParentFallback bool
 }
 
+// DefaultConfig 默认返回五条结果，并在提供父块读取器时扩展上下文。
 func DefaultConfig() Config {
 	return Config{
 		FinalTopK:     5,
@@ -92,11 +70,13 @@ type Response struct {
 	Diagnostics []Diagnostic       `json:"diagnostics,omitempty"`
 }
 
+// Diagnostic 流程阶段与可恢复问题的说明。
 type Diagnostic struct {
 	Stage   string `json:"stage"`
 	Message string `json:"message"`
 }
 
+// Pipeline 召回、可选精排与父块扩展组成的检索流程。
 type Pipeline struct {
 	retrieve            RetrieveFunc
 	retrieveDiagnostics func(context.Context, string) ([]retrieval.SearchResult, retrieval.Diagnostics, error)
@@ -105,6 +85,7 @@ type Pipeline struct {
 	config              Config
 }
 
+// NewPipeline 校验配置并组合检索函数、精排引擎与父块读取器。
 func NewPipeline(
 	retrieve RetrieveFunc,
 	reranker *rerank.Engine,
@@ -133,6 +114,7 @@ func NewPipeline(
 	}, nil
 }
 
+// Validate 拒绝负数结果数量和超时。
 func (c Config) Validate() error {
 	if c.FinalTopK < 0 || c.Timeout < 0 {
 		return fmt.Errorf("rag search: negative result limit or timeout")
@@ -140,6 +122,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// NewPipelineWithDiagnostics 接收带通道诊断的检索函数，保留失败降级信息。
 func NewPipelineWithDiagnostics(retrieve func(context.Context, string) ([]retrieval.SearchResult, retrieval.Diagnostics, error), reranker *rerank.Engine, parents ParentLoader, cfg Config) (*Pipeline, error) {
 	if retrieve == nil {
 		return nil, ErrNilRetriever
@@ -154,23 +137,7 @@ func NewPipelineWithDiagnostics(retrieve func(context.Context, string) ([]retrie
 	return p, err
 }
 
-// Search 是整个 RAG Core 最终的检索入口。
-//
-// 流程:
-//
-//	Query
-//	  ↓
-//	Retrieve
-//	  ↓
-//	RRF candidates
-//	  ↓
-//	Rerank
-//	  ↓
-//	MMR
-//	  ↓
-//	Parent Expansion
-//	  ↓
-//	Final SearchResult[]
+// Search 执行召回、可选精排、父块扩展与最终选择；当前统一流程不执行 MMR 或问题改写。
 func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 	timeout := p.config.Timeout
 	if timeout == 0 {
@@ -224,7 +191,7 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 		response.Results = reranked.Results
 		response.Rerank = reranked.Diagnostics
 	} else {
-		response.Results = cloneResults(candidates)
+		response.Results = slices.Clone(candidates)
 
 		response.Rerank = rerank.Diagnostics{
 			Applied:        false,
@@ -287,15 +254,7 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 
 		parent, ok := parents[parentID]
 		if !ok {
-			// Parent 不存在时不要把整个 SearchResult 丢掉。
-			//
-			// 这可能来自：
-			//
-			//     数据迁移
-			//     旧数据
-			//     Parent 被清理
-			//
-			// Child 自身仍然是一个合法 Retrieval Result。
+			// 父块缺失时保留合法子块证据，不丢弃整条召回结果。
 			continue
 		}
 
@@ -315,6 +274,7 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 	return p.finalize(response), nil
 }
 
+// finalize 按需合并父块并统一截断最终结果，保留子块命中证据。
 func (p *Pipeline) finalize(response Response) Response {
 	if p.config.CollapseSameParent {
 		response.Results = collapseSameContext(response.Results)
@@ -331,6 +291,7 @@ func (p *Pipeline) finalize(response Response) Response {
 	return response
 }
 
+// uniqueParentIDs 收集不重复的父块 ID，供批量读取。
 func uniqueParentIDs(results []retrieval.SearchResult) []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
@@ -351,17 +312,7 @@ func uniqueParentIDs(results []retrieval.SearchResult) []string {
 	return ids
 }
 
-// collapseSameContext 用于可选的 Parent Context 去重。
-//
-// 如果：
-//
-//	Child A → Parent P
-//	Child B → Parent P
-//
-// 最终只保留排名更靠前的 A。
-//
-// 由于输入本身已经按最终 Score 排序，
-// 第一次看到某个 ContextChunkID 就是最优结果。
+// collapseSameContext 按最终上下文身份分组，聚合全部命中子块的引用证据。
 func collapseSameContext(results []retrieval.SearchResult) []retrieval.SearchResult {
 	if len(results) <= 1 {
 		return results
@@ -390,15 +341,4 @@ func collapseSameContext(results []retrieval.SearchResult) []retrieval.SearchRes
 	}
 
 	return out
-}
-
-func cloneResults(src []retrieval.SearchResult) []retrieval.SearchResult {
-	if len(src) == 0 {
-		return nil
-	}
-
-	dst := make([]retrieval.SearchResult, len(src))
-	copy(dst, src)
-
-	return dst
 }

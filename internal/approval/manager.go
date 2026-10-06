@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -66,7 +65,6 @@ func (m *Manager) Register(
 	ctx context.Context,
 	info InterruptInfo,
 	interruptID string,
-	checkpointID string,
 ) (Request, error) {
 	if ctx == nil {
 		return Request{}, errors.New("注册 Approval 失败: context.Context 不能为空")
@@ -78,9 +76,8 @@ func (m *Manager) Register(
 		return Request{}, err
 	}
 	interruptID = strings.TrimSpace(interruptID)
-	checkpointID = strings.TrimSpace(checkpointID)
-	if interruptID == "" || checkpointID == "" {
-		return Request{}, errors.New("注册 Approval 失败: interruptID/checkpointID 不能为空")
+	if interruptID == "" {
+		return Request{}, errors.New("注册 Approval 失败: interruptID 不能为空")
 	}
 
 	m.mu.RLock()
@@ -101,7 +98,6 @@ func (m *Manager) Register(
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(timeout),
 		interruptID:  interruptID,
-		checkpointID: checkpointID,
 		identity:     info.Identity,
 	}
 
@@ -199,12 +195,6 @@ func (m *Manager) Resolve(ctx context.Context, approvalID string, decision Decis
 		}
 	}
 
-	resumeJSON, err := EncodeResumeData(approved)
-	if err != nil {
-		m.restorePending(approvalID)
-		return Resolution{}, err
-	}
-
 	m.logger.Info(
 		ctx,
 		"用户已处理 Tool Approval",
@@ -217,7 +207,7 @@ func (m *Manager) Resolve(ctx context.Context, approvalID string, decision Decis
 		"tool", request.ToolName,
 		"decision", decision,
 	)
-	return Resolution{Request: request, Approved: approved, ResumeJSON: resumeJSON}, nil
+	return Resolution{Request: request, Approved: approved, ResumeJSON: EncodeResumeData(approved)}, nil
 }
 
 // Complete 在 Runtime 完成用户主动 Resume（无论最终成功或失败）后把 Resolving 请求
@@ -267,23 +257,19 @@ func (m *Manager) Forget(approvalID string) {
 //
 // 超时不是简单取消整个 Turn：Runtime 会像“用户拒绝本次调用”一样恢复 Tool，让模型有机会
 // 解释未执行原因或选择只读替代方案。只有真正抢到 Pending 状态的超时任务会得到 ok=true。
-func (m *Manager) Expire(approvalID string) (resolution Resolution, ok bool, err error) {
+func (m *Manager) Expire(approvalID string) (Resolution, bool) {
 	approvalID = strings.TrimSpace(approvalID)
 	m.mu.Lock()
 	request, exists := m.requests[approvalID]
 	if !exists || request.Status != StatusPending {
 		m.mu.Unlock()
-		return Resolution{}, false, nil
+		return Resolution{}, false
 	}
 	request.Status = StatusExpired
 	m.requests[approvalID] = request
 	m.mu.Unlock()
 
-	resumeJSON, err := EncodeResumeData(false)
-	if err != nil {
-		return Resolution{}, false, err
-	}
-	return Resolution{Request: request, Approved: false, ResumeJSON: resumeJSON}, true, nil
+	return Resolution{Request: request, Approved: false, ResumeJSON: EncodeResumeData(false)}, true
 }
 
 // Get 返回安全的 Request Snapshot。
@@ -292,20 +278,6 @@ func (m *Manager) Get(approvalID string) (Request, bool) {
 	request, ok := m.requests[strings.TrimSpace(approvalID)]
 	m.mu.RUnlock()
 	return request, ok
-}
-
-// ListPending 返回设置/恢复 UI 可使用的待审批快照，按创建时间稳定排序。
-func (m *Manager) ListPending() []Request {
-	m.mu.RLock()
-	result := make([]Request, 0, len(m.requests))
-	for _, request := range m.requests {
-		if request.Status == StatusPending {
-			result = append(result, request)
-		}
-	}
-	m.mu.RUnlock()
-	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.Before(result[j].CreatedAt) })
-	return result
 }
 
 func (m *Manager) restorePending(approvalID string) {

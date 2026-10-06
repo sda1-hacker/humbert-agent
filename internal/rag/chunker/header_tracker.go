@@ -25,28 +25,10 @@ type headerTrackerHook struct {
 // markdownTableHookPriority 是 Markdown Table Header Hook 的优先级。
 const markdownTableHookPriority = 15
 
-// defaultHeaderHooks 定义当前默认的 Header Tracking 规则。
-// Markdown 表格：
-// | 城市 | 标准 |
-// | --- | --- |
-// 上面两行会成为：
-// active table header
-// 后续：
-// | 东京 | 12000 |
-// | 大阪 | 10000 |
-// 如果被切到新 Chunk，系统就可以自动把表头补回来。
+// 默认跟踪 Markdown 表头，跨块时自动补充列名和分隔行。
 var defaultHeaderHooks = []headerTrackerHook{
 	{
-		// 开始规则：
-		// Markdown Header Row + Separator Row
-		// 例如：
-		//	| 城市 | 标准 |
-		//	| --- | --- |
-		// (?si):
-		//	s = . 可以跨行
-		//	i = 忽略大小写
-		// ^...$ 表示整个 splitUnit 都应该是表头。
-		// -------------------------------------------------------------
+		// 表头必须同时包含列名行和 Markdown 分隔行。
 		startPattern: regexp.MustCompile(
 			`(?si)^\s*` +
 				`(?:\|[^|\n]*)+[\r\n]+` +
@@ -75,16 +57,7 @@ var tableRowPattern = regexp.MustCompile(
 	`(?m)^\s*(?:\|[^|\n]*)+\|\s*$`,
 )
 
-// headerTracker 保存当前 Chunk Merge 过程中正在生效的 Header。
-// 举例：
-// | 城市 | 标准 |
-// | --- | --- |
-// | 东京 | 12000 |
-// | 大阪 | 10000 |
-// 读到前两行之后：
-// activeHeaders[15] = "| 城市 | 标准 |\n| --- | --- |\n"
-// 后续 Chunk 如果从“大阪”开始，
-// 就知道应该把这个 active header 加到新 Chunk 前面。
+// headerTracker 跟踪当前有效的表头，在跨块时补充列名。
 type headerTracker struct {
 	// hooks 是所有 Header 规则。
 	hooks []headerTrackerHook
@@ -101,27 +74,10 @@ type headerTracker struct {
 	// 又马上被识别成同一个 Header
 	endedHeaders map[int]bool
 
-	// pendingExtend：
-	// 用于处理“空表头”。
-	// 某些转换器可能产生：
-	//	||
-	//	| --- | --- |
-	//	| 城市 | 标准 |
-	//	| 东京 | 12000 |
-	// 第一行没有列名。
-	// 这种情况下先标记 pending，
-	// 等第一条真实数据行到来后，
-	// 用它替换空表头。
+	// pendingExtend 表示空表头需要使用下一行的真实列名补全。
 	pendingExtend map[int]bool
 
-	// pendingTableBreak 表示：
-	// 当前某条 Table Row 以 paragraph break 结束。
-	// 例如：
-	//	| 东京 | 12000 |
-	//	| 产品 | 价格 |
-	// 中间的空行表示第一张表已经结束。
-	// 由于 Recursive Splitter 可能把空行包含在前一个 Unit 中，
-	// 所以需要延迟到“看到下一个 Unit”时再判断。
+	// pendingTableBreak 记录表格后的段落结束信号，由下一段决定是否清除旧表头。
 	pendingTableBreak bool
 
 	// headerEndedThisUnit 是给 mergeUnits 使用的信号。
@@ -144,43 +100,12 @@ func newHeaderTracker() *headerTracker {
 	}
 }
 
-// update 根据当前 splitUnit 的文本更新 Header 状态。
-//
-// 这个函数会在 mergeUnits 每处理一个 Unit 时调用一次。
-//
-// 处理顺序非常重要：
-//
-//  1. 处理上一 Unit 遗留的 table break
-//  2. 检测当前 Header 是否结束
-//  3. 检测 Table 列数是否变化
-//  4. 修复空 Table Header
-//  5. 检测新的 Header
-//  6. 清理 ended 状态
+// update 根据当前单元更新表头，返回是否开始新表。
 func (ht *headerTracker) update(split string) {
 	// 每个 Unit 开始时先重置。
 	ht.headerEndedThisUnit = false
 
-	// -----------------------------------------------------------------
-	// 1. 处理上一 Unit 遗留的 Table Break。
-	// -----------------------------------------------------------------
-	//
-	// 假设：
-	//
-	//	| 东京 | 12000 |\n\n
-	//
-	// 上一 Unit 最后已经出现 paragraph break。
-	//
-	// 如果当前 Unit 又是一个 Table Row：
-	//
-	//	| 产品 | 价格 |
-	//
-	// 那说明：
-	//
-	//	旧表已经结束
-	//	新表开始
-	//
-	// 必须清掉旧 Header。
-	// -----------------------------------------------------------------
+	// 上一段出现空行且当前是表格行时，结束旧表头，避免串入下一张表。
 	if ht.pendingTableBreak {
 		ht.pendingTableBreak = false
 
@@ -214,24 +139,7 @@ func (ht *headerTracker) update(split string) {
 		}
 	}
 
-	// -----------------------------------------------------------------
-	// 3. Markdown Table 特有处理。
-	// -----------------------------------------------------------------
-	//
-	// 表头可能仍然 active，
-	// 但是当前 Table Row 的列数已经变化。
-	//
-	// 例如：
-	//
-	//	旧表：
-	//	| A | B |
-	//
-	//	新表：
-	//	| X | Y | Z |
-	//
-	// 即便 Markdown 中间没有非常明显的空白，
-	// 列数变化也说明这大概率是另一张表。
-	// -----------------------------------------------------------------
+	// 当前表格行列数变化时结束旧表头。
 	if _, active :=
 		ht.activeHeaders[markdownTableHookPriority]; active {
 
@@ -247,30 +155,7 @@ func (ht *headerTracker) update(split string) {
 		}
 	}
 
-	// -----------------------------------------------------------------
-	// 4. 修复空 Table Header。
-	// -----------------------------------------------------------------
-	//
-	// 某些解析器可能产生：
-	//
-	//	||
-	//	| --- | --- |
-	//	| 城市 | 标准 |
-	//
-	// 此时：
-	//
-	//	"城市 | 标准"
-	//
-	// 才是真正有意义的列名。
-	//
-	// 当前 WeKnora 的处理方式：
-	//
-	//	使用第一条真实 Table Row
-	//	+
-	//	原来的 separator line
-	//
-	// 重建 Header。
-	// -----------------------------------------------------------------
+	// 空表头使用下一条真实表格行补齐列名，并保留原分隔行。
 	for priority := range ht.pendingExtend {
 		if _, active :=
 			ht.activeHeaders[priority]; active &&
@@ -315,17 +200,7 @@ func (ht *headerTracker) update(split string) {
 		}
 	}
 
-	// -----------------------------------------------------------------
-	// 6. 如果当前已经没有任何 active header，
-	// 就清空 endedHeaders。
-	//
-	// 为什么？
-	//
-	// 因为后面文档中可能还有第二张、第三张表。
-	//
-	// ended 只能阻止“当前 Unit 重新启动旧 Header”，
-	// 不能永远禁止未来表格。
-	// -----------------------------------------------------------------
+	// 已结束表头仅用于当前单元防止重复启动，不阻止后续表格。
 
 	if len(ht.activeHeaders) == 0 {
 		for priority := range ht.endedHeaders {
@@ -378,19 +253,7 @@ func (ht *headerTracker) getHeaders() string {
 	return strings.Join(parts, "\n")
 }
 
-// isEmptyTableHeaderRow 判断 Markdown 表头的第一行
-// 是否只有：
-//
-//	|
-//	空格
-//	Tab
-//
-// 例如：
-//
-//	||
-//	| |
-//
-// 都属于“没有真正列名”的表头。
+// isEmptyTableHeaderRow 判断表头是否没有有效列名。
 func isEmptyTableHeaderRow(
 	header string,
 ) bool {
@@ -436,20 +299,7 @@ func (ht *headerTracker) clearTableHeader() {
 	delete(ht.pendingExtend, markdownTableHookPriority)
 }
 
-// endTableHeaderOnColumnMismatch 检查：
-//
-//	当前 Table Row 列数
-//
-// 是否和：
-//
-//	Header 列数
-//
-// 不一致。
-//
-// 不一致通常表示：
-//
-//	旧表结束
-//	新表开始
+// endTableHeaderOnColumnMismatch 在当前行与表头列数不一致时结束旧表头。
 func (ht *headerTracker) endTableHeaderOnColumnMismatch(
 	split string,
 ) {
@@ -470,37 +320,13 @@ func (ht *headerTracker) endTableHeaderOnColumnMismatch(
 	}
 }
 
-// splitEndsWithParagraphBreak 判断当前文本是否以：
-//
-//	\n\n
-//
-// 或：
-//
-//	\r\n\r\n
-//
-// 结束。
+// splitEndsWithParagraphBreak 判断文本是否以空行结束。
 func splitEndsWithParagraphBreak(split string) bool {
 	trimmed := strings.TrimRight(split, " \t\r")
 	return strings.HasSuffix(trimmed, "\n\n") || strings.HasSuffix(trimmed, "\r\n\r\n")
 }
 
-// tableRowColumnCount 计算一条 Markdown Table Row
-// 有多少列。
-//
-// 例如：
-//
-//	| 东京 | 12000 |
-//
-// strings.Split:
-//
-//	""
-//	" 东京 "
-//	" 12000 "
-//	""
-//
-// 去掉头尾空项以后：
-//
-//	2 列
+// tableRowColumnCount 计算表格列数，忽略转义竖线和代码中的竖线。
 func tableRowColumnCount(line string) int {
 
 	line = strings.TrimSpace(line)
@@ -541,14 +367,7 @@ func firstTableRowColumnCount(text string) int {
 	return 0
 }
 
-// headerTableColumnCount 获取 Header 的真实列数。
-//
-// 会跳过：
-//
-//	空行
-//	separator row
-//
-// 只使用真正的列名行。
+// headerTableColumnCount 从表头中找到真实列数。
 func headerTableColumnCount(header string) int {
 	for _, line := range strings.Split(header, "\n") {
 		line = strings.TrimSpace(line)
@@ -563,15 +382,7 @@ func headerTableColumnCount(header string) int {
 	return 0
 }
 
-// headerColumnMismatch 判断：
-//
-// 当前 Active Header
-//
-// 和：
-//
-// nextUnit 的 Table Row
-//
-// 是否列数不同。
+// headerColumnMismatch 判断正文第一行的列数是否与待补充表头冲突。
 func headerColumnMismatch(headers string, nextUnit string) bool {
 	headerColumns := headerTableColumnCount(headers)
 	rowColumns := firstTableRowColumnCount(nextUnit)

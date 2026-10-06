@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cloudwego/eino/adk"
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
@@ -110,9 +111,9 @@ func TestCompletedTurnDoesNotGenerateAnotherSummary(t *testing.T) {
 	ctx, cancel := context.WithCancel(s.rootCtx)
 	defer cancel()
 	active := &activeRun{
-		RequestID: "request", RunID: "run", SessionID: "session", ctx: ctx, cancel: cancel,
+		ctx: ctx, cancel: cancel,
 		phase: RunPhaseRunning, startedAt: time.Now(), checkpointStore: approval.NewCheckpointStore(),
-		snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", Model: unusedModel{}, ContextWindow: 8192, MaxOutputTokens: 1024},
+		Snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", Model: unusedModel{}, ContextWindow: 8192, MaxOutputTokens: 1024},
 	}
 	s.activeByRequest["request"] = active
 	s.activeBySession["session"] = "request"
@@ -176,5 +177,51 @@ func TestCompletedToolResultSurvivesConcurrentCancellation(t *testing.T) {
 	stored, err := persistCompletedTool(ctx, &Snapshot{SessionID: "session", SessionWriter: writer}, message)
 	if err != nil || !writer.recorded || stored.Message != message {
 		t.Fatalf("completed result lost: %v", err)
+	}
+}
+
+// 共用流读取后仍需保留不同事实边界：Assistant 可恢复局部文本，Tool 不能宣称完成。
+func TestFailedStreamKeepsAssistantButDiscardsIncompleteTool(t *testing.T) {
+	failure := errors.New("stream disconnected")
+	for _, role := range []schema.RoleType{schema.Assistant, schema.Tool} {
+		t.Run(string(role), func(t *testing.T) {
+			stream, writer := schema.Pipe[*schema.Message](2)
+			writer.Send(&schema.Message{Role: role, Content: "partial"}, nil)
+			writer.Send(nil, failure)
+			writer.Close()
+			output := &adk.MessageVariant{IsStreaming: true, Role: role, MessageStream: stream}
+			var message *schema.Message
+			var err error
+			var delta string
+			if role == schema.Assistant {
+				message, err = materializeAssistantOutput(context.Background(), output, func(_ EventType, value string) { delta += value })
+			} else {
+				message, err = materializeMessageOutput(context.Background(), output)
+			}
+			if !errors.Is(err, failure) {
+				t.Fatalf("stream failure lost: %v", err)
+			}
+			if role == schema.Assistant {
+				if message == nil || message.Content != "partial" || delta != "partial" {
+					t.Fatalf("partial assistant lost: message=%+v delta=%q", message, delta)
+				}
+			} else if message != nil {
+				t.Fatalf("incomplete tool result returned: %+v", message)
+			}
+		})
+	}
+}
+
+func TestCancellationKeepsOnlyAlreadyEmittedAssistantText(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := schema.StreamReaderFromArray([]*schema.Message{
+		schema.AssistantMessage("first", nil),
+		schema.AssistantMessage("unread", nil),
+	})
+	message, err := materializeAssistantOutput(ctx, &adk.MessageVariant{IsStreaming: true, MessageStream: stream},
+		func(EventType, string) { cancel() })
+	if !errors.Is(err, context.Canceled) || message == nil || message.Content != "first" {
+		t.Fatalf("cancellation boundary changed: message=%+v err=%v", message, err)
 	}
 }

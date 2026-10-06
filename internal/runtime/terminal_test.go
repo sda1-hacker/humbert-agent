@@ -28,9 +28,9 @@ func TestTerminalEventFollowsReservationRelease(t *testing.T) {
 			defer service.rootCancel()
 			ctx, cancel := context.WithCancel(service.rootCtx)
 			active := &activeRun{
-				RequestID: "request", RunID: "run", SessionID: "session", ctx: ctx, cancel: cancel,
+				ctx: ctx, cancel: cancel,
 				phase: RunPhaseRunning, startedAt: time.Now(), checkpointStore: approval.NewCheckpointStore(),
-				snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", Model: unusedModel{}, ContextWindow: 8192, MaxOutputTokens: 1024},
+				Snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", Model: unusedModel{}, ContextWindow: 8192, MaxOutputTokens: 1024},
 			}
 			service.activeByRequest["request"] = active
 			service.activeBySession["session"] = "request"

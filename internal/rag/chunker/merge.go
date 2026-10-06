@@ -2,41 +2,10 @@ package chunker
 
 import "strings"
 
-// absoluteMaxChunkSize 是任何最终 Chunk 的防御性绝对上限。
-//
-// 当前与 WeKnora 对齐：
-//
-//	7500 rune
-//
-// ChunkSize 是：
-//
-//	“目标大小”
-//
-// 例如：
-//
-//	512
-//
-// 但某些 Protected 内容可能天然超过 512。
-//
-// absoluteMaxChunkSize 则是：
-//
-//	“绝对不能无限超过的兜底上限”。
+// absoluteMaxChunkSize 是保护区域等异常长内容的防御上限；目标块大小仍由配置决定。
 const absoluteMaxChunkSize = 7500
 
-// mergeUnits 将上一阶段产生的 splitUnit
-// 合并成最终 Chunk。
-//
-// 这是 Legacy Splitter 最核心的第二阶段。
-//
-// 它需要同时协调：
-//
-//	ChunkSize
-//	ChunkOverlap
-//	Table Header
-//	Absolute Max
-//	Source Position
-//
-// 这也是为什么 Merge 比 Split 本身更加复杂。
+// mergeUnits 按目标大小合并单元，并处理表头补充、重叠和原文范围。
 func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 	if len(units) == 0 {
@@ -57,19 +26,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 	for _, unit := range units {
 		unitLen := RuneLen(unit.text)
 
-		// =============================================================
-		// 1. 单个 Unit 自己就超过 absoluteMaxChunkSize。
-		// =============================================================
-		//
-		// 理论上上一阶段 buildUnitsWithProtection
-		// 已经会处理超大的 Protected Span。
-		//
-		// 但这里仍然做第二层防御。
-		//
-		// 防御性编程原则：
-		//
-		// Merge 不相信上游一定完美。
-		// =============================================================
+		// 合并阶段再次限制异常长单元，避免依赖上游完全正确。
 
 		if unitLen >
 			absoluteMaxChunkSize {
@@ -102,14 +59,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 				if end > len(runes) {
 					end = len(runes)
 				} else {
-					// -------------------------------------------------
-					// 尽量不要机械地正好切在第 7500 rune。
-					//
-					// 往前最多 200 rune 寻找：
-					//
-					//	换行
-					//	空格
-					// -------------------------------------------------
+					// 在硬边界前 200 字符内优先寻找换行或空格。
 
 					for i := end - 1; i > offset && i > end-200; i-- {
 						if runes[i] == '\n' || runes[i] == ' ' {
@@ -141,15 +91,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 		headerTracker.update(unit.text)
 
-		// -------------------------------------------------------------
-		// 如果 HeaderTracker 发现：
-		//
-		// 当前 Unit 开始了一张新表，
-		//
-		// 那么旧 current 不应该和新表混合。
-		//
-		// 先 flush。
-		// -------------------------------------------------------------
+		// 新表开始前输出当前块，避免混合两张表的表头。
 
 		if headerTracker.headerEndedThisUnit && len(current) > 0 {
 			chunks = append(
@@ -165,37 +107,14 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 		headersLen := RuneLen(headers)
 
-		// -------------------------------------------------------------
-		// Header 自己就比 ChunkSize 还大：
-		//
-		// 不补。
-		//
-		// 否则可能为了补一个 Header，
-		// 每个 Chunk 都超预算。
-		// -------------------------------------------------------------
+		// 表头自身超过目标大小时不补充，避免每块都被表头挤满。
 
 		if headersLen > chunkSize {
 			headers = ""
 			headersLen = 0
 		}
 
-		// =============================================================
-		// 3. 判断当前 Unit 是否还能放进 current。
-		// =============================================================
-		//
-		// 为什么公式是：
-		//
-		//	curLen + unitLen + headersLen
-		//
-		// 而不是：
-		//
-		//	curLen + unitLen
-		//
-		// 因为如果这里发生切 Chunk，
-		// 下一 Chunk 可能需要 prepend Table Header。
-		//
-		// 所以需要提前为 Header 预留空间。
-		// =============================================================
+		// 预算为可能补充的表头预留空间。
 
 		if curLen+unitLen+headersLen > chunkSize &&
 			len(current) > 0 {
@@ -221,22 +140,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 			if headers != "" && headersLen+unitLen <= chunkSize {
 
-				// -----------------------------------------------------
-				// overlap 自己也占空间。
-				//
-				// 如果：
-				//
-				//	Header
-				//	+
-				//	Overlap
-				//	+
-				//	NextUnit
-				//
-				// 超过 ChunkSize，
-				//
-				// 就从 overlap 开头继续删除，
-				// 给 Header 和 NextUnit 腾空间。
-				// -----------------------------------------------------
+				// 重叠部分需要为表头与下一单元让出空间。
 
 				for len(current) > 0 && curLen+unitLen+headersLen > chunkSize {
 					curLen -= RuneLen(current[0].text)
@@ -255,17 +159,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 				if !headerAlreadyPresent(headers, overlapText, unit.text) &&
 					!headerColumnMismatch(headers, unit.text) {
 
-					// -------------------------------------------------
-					// 这是一个 Synthetic Unit。
-					//
-					// text 是生成的 Header，
-					//
-					// 但：
-					//
-					//	start == end
-					//
-					// 表明它没有占用新的 source range。
-					// -------------------------------------------------
+					// 补充的表头不占新的原文范围，因此起止位置相同。
 
 					startPosition := unit.start
 
@@ -344,20 +238,7 @@ func buildChunk(units []splitUnit, seq int) Chunk {
 	}
 }
 
-// headerAlreadyPresent 判断 Active Header 是否已经存在于：
-//
-//	Overlap
-//
-// 或：
-//
-//	Next Unit
-//
-// 防止重复补：
-//
-//	| 城市 | 标准 |
-//	| --- | --- |
-//	| 城市 | 标准 |
-//	| --- | --- |
+// headerAlreadyPresent 判断正文或重叠部分是否已经包含表头，避免重复补充。
 func headerAlreadyPresent(headers string, overlapText string, unitText string) bool {
 
 	// 最快路径：
@@ -368,21 +249,7 @@ func headerAlreadyPresent(headers string, overlapText string, unitText string) b
 		return true
 	}
 
-	// -------------------------------------------------------------
-	// 有时候完整 Header 不一致，
-	// 但是列名行已经存在。
-	//
-	// 例如 Header：
-	//
-	//	| 城市 | 标准 |
-	//	| --- | --- |
-	//
-	// 如果 overlap 里已经有：
-	//
-	//	| 城市 | 标准 |
-	//
-	// 也不应该重复添加。
-	// -------------------------------------------------------------
+	// 即使完整表头不同，已有相同列名行时也不重复添加。
 
 	columnRow := headerColumnRow(headers)
 

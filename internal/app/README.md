@@ -1,8 +1,10 @@
 # App：依赖装配与生命周期
 
-[架构目录](../../docs/architecture/README.md) · [Services](../services/README.md)
+[架构目录](../../docs/项目源码详解.md) · [Services](../services/README.md)
 
 `application.go` 创建已有领域服务与应用用例，成功后返回 `Application`。`tools.go` 注册内置工厂；浏览器视觉模型选择已放到 `usecases.VisionInspector`。`runtime_event_reporter.go` 将运行事件发布到 EventBus。
+
+工作区看板使用已有 usecases 包中的 `WorkspaceQuery`。工具装配只接收一份 `sessions.Service`，从中取得历史、附件和完整结果归档；不再另建 ContextArtifactStore，也不重复保存 History/Artifacts 两份来源。Builtin 的最小接口仍在工具侧定义，真实构造通过编译期接口匹配，构建入口先拒绝缺失会话服务。
 
 `modules.go` 提供可选的静态模块装配：`Bootstrap(ctx, WithModules(installer))`。模块只获得通用平台依赖，继续拥有自己的数据、连接和 Agent 绑定；能力交给 Runtime，桌面服务由桌面装配点独立注册。最小示例见 [textstats.go](../../examples/modules/textstats.go)。
 

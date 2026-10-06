@@ -8,6 +8,7 @@ import (
 
 	"github.com/cloudwego/eino/adk"
 
+	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
@@ -40,7 +41,7 @@ func (s *Service) deltaEmitter(snapshot *Snapshot) DeltaEmitter {
 func (s *Service) finishRun(active *activeRun, result ExecutionResult, runErr error) {
 	active.finishOnce.Do(func() {
 		s.cleanupRun(active)
-		snapshot := active.snapshot
+		snapshot := active.Snapshot
 		eventType, operation, message := EventTurnCompleted, "runtime.turn.complete", "Agent Turn 已完成"
 		if errors.Is(runErr, context.Canceled) {
 			eventType, operation, message = EventTurnCancelled, "runtime.turn.cancelled", "Agent Turn 已取消"
@@ -159,7 +160,7 @@ func (s *Service) activeRunStatus(sessionID string) *ActiveRunStatus {
 		return nil
 	}
 	active, exists := s.activeByRequest[requestID]
-	if !exists || active == nil || active.snapshot == nil {
+	if !exists || active == nil || active.Snapshot == nil {
 		// reserveSession 与 activeByRequest 注册之间存在很短的初始化窗口。该窗口由
 		// StartTurn 调用方自己的 starting 状态表达，Overview 不伪造一个未冻结 Runtime。
 		s.mu.Unlock()
@@ -172,7 +173,7 @@ func (s *Service) activeRunStatus(sessionID string) *ActiveRunStatus {
 		Phase:             active.phase,
 		StartedAt:         active.startedAt.UTC().Format(time.RFC3339Nano),
 		WaitingApprovalID: active.waitingApprovalID,
-		Runtime:           cloneRuntimeManifest(active.snapshot.Manifest),
+		Runtime:           cloneRuntimeManifest(active.Snapshot.Manifest),
 	}
 	waitingApprovalID := active.waitingApprovalID
 	s.mu.Unlock()
@@ -226,4 +227,16 @@ func (s *Service) publishEvent(event Event) {
 	if elapsed := time.Since(started); elapsed >= 100*time.Millisecond {
 		s.logger.Warn(context.Background(), "Runtime Event 订阅处理较慢", "operation", "runtime.event.slow_delivery", "event_type", string(event.Type), "session_id", event.SessionID, "duration_ms", elapsed.Milliseconds())
 	}
+}
+
+// publishApprovalEvent 统一审批事件的父运行身份和时间投影。
+// Request 内仍可携带子 Agent 的审批身份；Event 保持父 Turn 身份，不能相互替换。
+func (s *Service) publishApprovalEvent(active *activeRun, kind EventType, request approval.Request, decision approval.Decision) {
+	s.publishEvent(Event{
+		Type: kind, RequestID: active.RequestID, RunID: active.RunID, SessionID: active.SessionID,
+		AgentID: active.AgentID, ModelID: active.ModelID,
+		ModelRevision: active.ModelRevision, ToolRevision: active.ToolRevision,
+		Approval: &request, ApprovalDecision: decision,
+		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }

@@ -3,9 +3,11 @@ package agents
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
@@ -79,6 +81,69 @@ func TestNarrowAgentCommandsPreserveUnrelatedConfiguration(t *testing.T) {
 		t.Fatalf("sandbox not updated: %#v", security.Agent.Sandbox)
 	}
 	assertAgentPreserved(t, security.Agent, beforeSecurity, "security", map[string]bool{"EnabledBuiltinTools": true, "Sandbox": true, "UpdatedAt": true})
+}
+
+// 完整表单和局部命令必须遵守同一边界，不能通过 UpdateProfile 绕过指令上限。
+// 中文名称按字符计数，与前端的 100 字符输入限制一致。
+func TestProfileValidationIsSharedByAllWriteCommands(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	transcripts, err := transcript.NewStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(ctx, root, transcripts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(store, nil, logging.NewBootstrap())
+	name := strings.Repeat("中", 100)
+	created, err := service.Create(ctx, CreateInput{Name: name, Instruction: "original"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.Agent.ID
+	if _, err := service.Update(ctx, id, UpdateInput{Name: name, Instruction: "original"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.UpdateProfile(ctx, id, name, "", "original"); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []struct{ name, instruction string }{
+		{strings.Repeat("中", 101), "original"},
+		{"Changed", strings.Repeat("x", maxInstructionLength+1)},
+	} {
+		operations := []func() error{
+			func() error {
+				_, err := service.Create(ctx, CreateInput{Name: input.name, Instruction: input.instruction})
+				return err
+			},
+			func() error {
+				_, err := service.Update(ctx, id, UpdateInput{Name: input.name, Instruction: input.instruction})
+				return err
+			},
+			func() error { _, err := service.UpdateProfile(ctx, id, input.name, "", input.instruction); return err },
+		}
+		for index, operation := range operations {
+			if err := operation(); err == nil {
+				t.Fatalf("write command %d accepted invalid input", index)
+			}
+			value, err := store.Get(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value.Agent.Name != name || value.Agent.Instruction != "original" {
+				t.Fatalf("failed validation modified persisted Profile: %#v", value.Agent)
+			}
+		}
+	}
+	values, err := store.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 1 {
+		t.Fatalf("failed creation left Profile behind: %d", len(values))
+	}
 }
 
 func assertAgentPreserved(t *testing.T, got, before Agent, operation string, allowed map[string]bool) {

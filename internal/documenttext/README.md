@@ -1,8 +1,8 @@
 # DocumentText：文档到 Markdown 的受限解析
 
-[总目录](../../docs/architecture/README.md) · [会话附件](../sessions/README.md) · [内置工具](../tools/builtin/README.md)
+[总目录](../../docs/项目源码详解.md) · [会话附件](../sessions/README.md) · [内置工具](../tools/builtin/README.md)
 
-`MIMEForName` 根据扩展名判定可支持类型；`Validate` 在写入附件前做格式/大小检查；`Extract` 把 PDF、DOCX、XLSX、PPTX 的可提取内容变成 Markdown。解析在受控 Worker 中进行，`boundedWriter` 截断过大的输出；Office ZIP 先经 `preflightOffice` 检查。不能解析的扫描 PDF 不会凭空产生 OCR 文本。
+`MIMEForName` 根据扩展名判定可支持类型；`Validate` 在写入附件前做格式/大小检查；`Extract` 把 PDF、DOCX、XLSX、PPTX 的可提取内容变成 Markdown。附件入口通过共享 `documentparse.ExtractFile` 在一次性 Worker 中解析；该包的 `boundedWriter` 限制进程输出。Office ZIP 在上传和快照解析前分别预检，防止校验后源文件替换。不能解析的扫描 PDF 不会凭空产生 OCR 文本。
 
 ```mermaid
 flowchart LR

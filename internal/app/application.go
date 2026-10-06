@@ -14,7 +14,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/component"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
-	"github.com/sda1-hacker/humbert-agent/internal/contextartifact"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/credential"
 	"github.com/sda1-hacker/humbert-agent/internal/eventbus"
@@ -37,7 +36,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/usecases"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
-	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 )
 
 const Version = "0.1.0"
@@ -80,8 +78,8 @@ type Application struct {
 	events           *eventbus.Bus
 	workspaces       *workspace.Manager
 	// workspaceView 是桌面工作区页面的只读查询层。
-	// 它不拥有新的文件生命周期，只投影 Agent 当前 Workspace 与 Session 工具事务。
-	workspaceView *workspaceview.Service
+	// 它不拥有新的文件生命周期，只查询 Agent 当前 Workspace 的文件系统状态。
+	workspaceView *usecases.WorkspaceQuery
 	sandbox       *sandbox.Manager
 	permissions   *permission.Engine
 	preferences   *preferences.Store
@@ -245,16 +243,12 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 	sessionService := sessions.NewService(sessionStore, agentService, workspaceManager, logger)
 	// 工作区页面与 Agent Runtime 共用同一个 WorkspaceManager。
 	// UI 只浏览当前文件系统，不再扫描 Session 推导产物，因此这里不依赖 SessionService。
-	workspaceViewService, err := workspaceview.NewService(agentService, workspaceManager)
+	workspaceViewService, err := usecases.NewWorkspaceQuery(agentService, workspaceManager)
 	if err != nil {
 		return nil, fmt.Errorf("初始化 Workspace View Service 失败: %w", err)
 	}
 	searchService := searchindex.NewService(cfg.Paths.CacheDir, agentService, sessionService, workspaceManager)
 	resources.add(closeResources, "Search", func(context.Context) error { return searchService.Close() })
-	contextArtifactStore, err := contextartifact.NewStore(sessionService)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Context Artifact Store 失败: %w", err)
-	}
 	// ToolRegistry 在 SessionService 之后创建，使内部 history/context_artifact Tool 能读取
 	// 当前 Session 的受控完整记录与大结果 sidecar。普通 Builtin 仍保持原有注册语义。
 	toolDeps := toolDependencies{
@@ -263,7 +257,7 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 			_, err := agentService.EnableSkillForAgent(callCtx, agentID, skillName)
 			return err
 		},
-		History: sessionService, Artifacts: contextArtifactStore,
+		Sessions: sessionService,
 		// Profile 位于 Cache，不把站点登录信息放进业务数据备份。
 		BrowserProfileRoot: filepath.Join(filepath.Dir(cfg.Paths.ConfigFile), "cache", "browser-profiles"),
 		BrowserVision:      usecases.NewVisionInspector(agentService, modelRegistry).Inspect,
@@ -445,7 +439,7 @@ func (a *Application) Workspaces() *workspace.Manager {
 // WorkspaceView 返回桌面工作区只读查询服务。
 //
 // 调用方只能通过它读取当前 Agent Workspace 的受控视图，不能取得任意物理路径读写能力。
-func (a *Application) WorkspaceView() *workspaceview.Service {
+func (a *Application) WorkspaceView() *usecases.WorkspaceQuery {
 	return a.workspaceView
 }
 

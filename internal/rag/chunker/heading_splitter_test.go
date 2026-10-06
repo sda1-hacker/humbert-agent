@@ -98,7 +98,7 @@ func TestSplitByHeadingsBasic(t *testing.T) {
 	cfg.ChunkSize = 300
 	cfg.ChunkOverlap = 0
 
-	chunks := splitByHeadingsImpl(text, cfg, nil)
+	chunks := splitByHeadings(text, cfg, nil)
 
 	if len(chunks) < 3 {
 		t.Fatalf("Heading Splitter 应得到多个章节 Chunk: got=%d", len(chunks))
@@ -132,7 +132,7 @@ func TestSplitByHeadingsFallsBackWithoutStructure(t *testing.T) {
 	cfg.ChunkSize = 200
 	cfg.ChunkOverlap = 0
 
-	got := splitByHeadingsImpl(text, cfg, nil)
+	got := splitByHeadings(text, cfg, nil)
 	want := SplitText(text, cfg)
 
 	if len(got) != len(want) {
@@ -158,7 +158,7 @@ func TestSplitByHeadingsPreservesSourcePosition(t *testing.T) {
 	cfg.ChunkSize = 200
 	cfg.ChunkOverlap = 0
 
-	chunks := splitByHeadingsImpl(text, cfg, nil)
+	chunks := splitByHeadings(text, cfg, nil)
 
 	source := []rune(text)
 
@@ -202,7 +202,7 @@ Embedding 表缺少列。
 	cfg.ChunkSize = 500
 	cfg.ChunkOverlap = 0
 
-	chunks := splitByHeadingsImpl(text, cfg, nil)
+	chunks := splitByHeadings(text, cfg, nil)
 
 	// 原始结构有 1 个 H1 + 4 个 H2，
 	// 如果完全不 Coalesce，很容易得到 5 个很小 Chunk。
@@ -256,7 +256,7 @@ func TestSplitByHeadingsDoesNotMergeDifferentTopLevelSections(t *testing.T) {
 	cfg.ChunkSize = 500
 	cfg.ChunkOverlap = 0
 
-	chunks := splitByHeadingsImpl(text, cfg, nil)
+	chunks := splitByHeadings(text, cfg, nil)
 
 	if len(chunks) != 3 {
 		t.Fatalf("不同 H1 不应该被合并: want=3 got=%d", len(chunks))
@@ -335,7 +335,7 @@ func TestSplitByHeadingsDeepBreadcrumbInsideLargeSection(t *testing.T) {
 	cfg.ChunkOverlap = 0
 	cfg.Separators = []string{"。", "\n"}
 
-	chunks := splitByHeadingsImpl(text, cfg, nil)
+	chunks := splitByHeadings(text, cfg, nil)
 
 	var markerChunk *Chunk
 

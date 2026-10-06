@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/cloudwego/eino/components/document"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/chunker"
 	tabulalib "github.com/tsawler/tabula"
 )
 
@@ -475,7 +476,7 @@ func TestLoaderRespectsCancelledContext(t *testing.T) {
 func TestNormalizeLineEndings(t *testing.T) {
 	input := "line1\r\nline2\rline3\n"
 
-	got := normalizeLineEndings(input)
+	got := chunker.NormalizeLineEndings(input)
 	want := "line1\nline2\nline3\n"
 
 	if got != want {

@@ -1,6 +1,6 @@
 # Sandbox：路径、网络与外部进程边界
 
-[总目录](../../docs/architecture/README.md) · [Workspace](../workspace/README.md) · [Permission](../permission/README.md)
+[总目录](../../docs/项目源码详解.md) · [Workspace](../workspace/README.md) · [Permission](../permission/README.md)
 
 ## 从请求策略到有效策略
 
@@ -19,13 +19,16 @@ flowchart LR
 
 Profile 决定基本访问范围；Standard 可按规则读取 Home 下普通文件，受保护目录仍是 Blocked；额外写目录必须规范化并检查冲突。网络模式独立于文件路径规则。平台原生隔离能力由 Capability 表示，不能因为配置写着 sandbox 就假定某个平台一定提供完全相同的进程隔离。Permission 的 Allow 只决定是否询问，不会扩大 `EffectivePolicy`。
 
+`access.go` 的 `appendPathRule` 统一合并默认策略、额外授权和 `WithPathAccess`：同一个根保留最高授权，BLOCKED 始终优先。授权入口先验证输入并拒绝覆盖硬保护；派生策略复制 PathRules 后再合并，不改写原快照。规则去除被父根覆盖的目录时复用 `coveredByAnyRoot`，路径规范化、符号链接检查和平台策略生成仍保留。
+
 ## 代码地图与边界测试
 
 | 文件 | 入口 | 说明 |
 | --- | --- | --- |
 | `manager.go` | `Resolve`、`PrepareExternalCommand` | 合成策略、受保护路径和原生命令准备。 |
 | `types.go`、`access.go`、`pathguard.go` | `EffectivePolicy`、`CheckPath` | 路径操作、优先规则及规范化。 |
-| `runner.go` | `Run` | 启动进程、控制工作目录/环境/生命周期。 |
+| `runner.go` | `Run`、`validateProcessIsolationPolicy` | 进程准入、工作目录/环境和生命周期。 |
+| `diagnostics.go` | `Manager.Diagnose` | 临时目录中的 PathGuard 与原生隔离自检。 |
 | 平台实现文件 | native capability | 不同系统的真实隔离能力。 |
 
 新增文件工具要在实际读写前使用 `CheckPath` 或受控 Workspace Handle；新增外部进程工具要经 Runner。重点测试符号链接、相对路径逃逸、受保护目录与命令取消。
@@ -41,3 +44,11 @@ Profile 决定基本访问范围；Standard 可按规则读取 Home 下普通文
 读 `manager.Resolve` 时关注受保护规则和 Agent 额外写目录的合并顺序；读 `pathguard.go` 时关注符号链接和缺失目标；读 `platform_*.go` 时确认某系统实际执行的限制。
 
 硬保护包含实际应用数据根下的 `cache/`：会话/文档 SQLite 搜索正文、WAL/SHM 和各 Agent 浏览器 Profile 与原始会话同样敏感，不能因可重建而开放。受信 UI/索引/浏览器服务使用自身接口访问，不通过 Agent 通用文件工具读取底层缓存。
+
+## 显式安全自检
+
+桌面 `AgentService.RunSandboxDiagnostics` 只创建十秒 Context 并传入配置中的敏感目录/文件路径；实际逻辑在 `Manager.Diagnose`。自检创建独立临时工作区和外部目录，验证工作区写入、外部写入拒绝、敏感目录/配置文件规则和符号链接逃逸。已有 Context 取消会在创建临时目录前返回，退出时清理本次全部探针。
+
+原生能力不可用或没有文件隔离能力时报告 warning。能力具备时，通过同一 Runner 执行系统 touch：先检查工作区内写入，再验证工作区外非零退出且没有生成文件；仅进程失败不能直接视为隔离成功。报告汇总 fail 优先于 warning，所有单项通过才为 pass，返回类型在 `types.go`，桌面 DTO 使用类型别名保持 JSON 字段。
+
+进程准入函数已并入 `runner.go`，`PrepareExternalCommand` 继续复用同一规则；原 `process_policy.go` 仅保留 package 声明，可手动删除。原生能力、NetworkNone 和 NativeOff 的安全语义没有改变。

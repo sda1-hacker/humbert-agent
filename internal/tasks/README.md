@@ -1,6 +1,6 @@
 # Tasks：计划任务、运行状态与普通 Runtime 复用
 
-[总目录](../../docs/architecture/README.md) · [Runtime](../runtime/README.md) · [主动助手](../proactive/README.md)
+[总目录](../../docs/项目源码详解.md) · [Runtime](../runtime/README.md) · [主动助手](../proactive/README.md)
 
 ## 两个聚合与存储
 

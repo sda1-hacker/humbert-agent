@@ -417,10 +417,6 @@ func chromePath() string {
 	}
 }
 
-func startBrowser(ctx context.Context) (*browserSession, error) {
-	return startBrowserWithMode(ctx, false)
-}
-
 func startBrowserWithMode(ctx context.Context, visible bool) (*browserSession, error) {
 	profile, err := os.MkdirTemp("", "humbert-browser-*")
 	if err != nil {

@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	officialmcpsession "github.com/cloudwego/eino-ext/components/tool/mcp/officialmcp/session"
 	"golang.org/x/net/http/httpguts"
 
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
+	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 )
 
 const mcpHTTPMaxRedirects = 10
@@ -317,4 +319,48 @@ func resolveCredentialHeaders(
 		headers.Set(item.Name, value)
 	}
 	return headers, nil
+}
+
+// connectHTTP 只建立 transport；连接复用、退避和旧快照保留仍由 Backend 协调。
+func (b *Backend) connectHTTP(ctx context.Context, server humbertmcp.Server, policy *sandbox.EffectivePolicy) (*officialmcpsession.Session, error) {
+	if server.HTTP == nil {
+		return nil, errors.New("Streamable HTTP MCP Server 缺少连接配置")
+	}
+
+	headers, err := resolveCredentialHeaders(ctx, b.credentials, server)
+	if err != nil {
+		return nil, err
+	}
+	var httpClient *http.Client
+	if policy == nil {
+		httpClient, err = newStreamableHTTPClient(server.HTTP.Endpoint, headers)
+	} else {
+		allowLocal := policy.NetworkMode == sandbox.NetworkAll
+		allowPrivate := policy.NetworkMode == sandbox.NetworkAll
+		httpClient, err = newStreamableHTTPClientWithAccess(server.HTTP.Endpoint, headers, allowLocal, allowPrivate)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("创建 Streamable HTTP Client 失败: %w", err)
+	}
+
+	connectCtx := ctx
+	cancel := func() {}
+	if b.cfg.ConnectTimeoutMS > 0 {
+		connectCtx, cancel = context.WithTimeout(ctx, time.Duration(b.cfg.ConnectTimeoutMS)*time.Millisecond)
+	}
+	defer cancel()
+
+	session, err := officialmcpsession.Connect(connectCtx, officialmcpsession.ServerConfig{
+		Name: server.Name,
+		Transport: officialmcpsession.TransportConfig{
+			Type:       officialmcpsession.TransportStreamableHTTP,
+			URL:        server.HTTP.Endpoint,
+			HTTPClient: httpClient,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("连接 Streamable HTTP MCP Server %q 失败: %w", server.Name, err)
+	}
+	b.logger.Info(ctx, "Streamable HTTP MCP Server 已连接", "operation", "mcp.connect", "server_id", server.ID, "server_key", server.Key)
+	return session, nil
 }

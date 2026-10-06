@@ -127,10 +127,10 @@ func (e *ApproxEstimator) EstimateText(text string) int {
 
 // EstimateMessage 估算一条 Eino Message 的协议占用。
 func (e *ApproxEstimator) EstimateMessage(message *schema.Message) int {
-	return e.estimateMessageWithAttachments(message, true, true)
+	return e.estimateMessageWithAttachments(message, true)
 }
 
-func (e *ApproxEstimator) estimateMessageWithAttachments(message *schema.Message, includeImages bool, includeFiles bool) int {
+func (e *ApproxEstimator) estimateMessageWithAttachments(message *schema.Message, includeAttachments bool) int {
 	if message == nil {
 		return 0
 	}
@@ -156,7 +156,7 @@ func (e *ApproxEstimator) estimateMessageWithAttachments(message *schema.Message
 				tokens += e.EstimateText(part.Text)
 			}
 		case schema.ChatMessagePartTypeImageURL:
-			if includeImages {
+			if includeAttachments {
 				// Vision tokenization varies by provider. Reserve a conservative fixed budget
 				// without ever counting Base64 characters as prompt text.
 				tokens += 1024
@@ -164,11 +164,11 @@ func (e *ApproxEstimator) estimateMessageWithAttachments(message *schema.Message
 				tokens += e.EstimateText(multimodal.HistoricalImagePlaceholder(part))
 			}
 		case schema.ChatMessagePartTypeFileURL:
-			if !includeFiles {
+			if !includeAttachments {
 				tokens += e.EstimateText(multimodal.HistoricalFilePlaceholder(part))
 				break
 			}
-			// 近期文本附件仍按真实提取正文估算；更早附件由 FileReplayMask 转为元数据占位。
+			// 近期文本附件仍按真实提取正文估算；更早附件由 AttachmentReplayMask 转为元数据占位。
 			if extracted := extraStringValue(part.Extra, "extracted_text"); extracted != "" {
 				tokens += 12 + e.EstimateText(extracted)
 			} else {
@@ -215,10 +215,9 @@ func (e *ApproxEstimator) EstimateMessages(messages []*schema.Message) int {
 // so a compaction planner can select a boundary from the actual prompt costs.
 func (e *ApproxEstimator) EstimateMessageCosts(messages []*schema.Message) []int {
 	costs := make([]int, len(messages))
-	imageReplayMask := multimodal.ImageReplayMask(messages)
-	fileReplayMask := multimodal.FileReplayMask(messages)
+	replayMask := multimodal.AttachmentReplayMask(messages)
 	for index, message := range messages {
-		costs[index] = e.estimateMessageWithAttachments(message, imageReplayMask[index], fileReplayMask[index])
+		costs[index] = e.estimateMessageWithAttachments(message, replayMask[index])
 	}
 	return costs
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -547,4 +548,77 @@ func (s *Store) advanceLocationLocked(path string, before, after os.FileInfo, en
 		return
 	}
 	idx.SidecarBytes += int64(len(encoded))
+}
+
+// messageEntryPageFromIndex 复用活动分支的消息位置，分页时向前扩展到完整 ToolCall 事务。
+func messageEntryPageFromIndex(
+	activeBranch []Entry,
+	messageIndexes []int,
+	messagePositions map[string]int,
+	beforeEntryID string,
+	limit int,
+) (MessageEntryPage, error) {
+	end := len(messageIndexes)
+	if beforeEntryID != "" {
+		position, exists := messagePositions[beforeEntryID]
+		if !exists {
+			return MessageEntryPage{}, fmt.Errorf("%w: %s", ErrMessageCursorNotFound, beforeEntryID)
+		}
+		end = position
+	}
+
+	start := 0
+	if limit > 0 && end > limit {
+		start = end - limit
+		// 保持 Assistant ToolCall -> ToolResult(s) -> 最终 Assistant 的事务边界。
+		for start > 0 {
+			current := activeBranch[messageIndexes[start]].Message
+			if current == nil {
+				break
+			}
+			if current.Role == RoleToolResult {
+				start--
+				continue
+			}
+			previous := activeBranch[messageIndexes[start-1]].Message
+			if current.Role == RoleAssistant && previous != nil && previous.Role == RoleToolResult {
+				start--
+				continue
+			}
+			break
+		}
+	}
+
+	entries := make([]Entry, 0, end-start)
+	for _, branchIndex := range messageIndexes[start:end] {
+		entries = append(entries, cloneEntry(activeBranch[branchIndex]))
+	}
+	nextBeforeID := ""
+	if start > 0 && len(entries) > 0 {
+		nextBeforeID = entries[0].ID
+	}
+	return MessageEntryPage{
+		Entries: entries, StartIndex: start, HasMore: start > 0, NextBeforeID: nextBeforeID,
+	}, nil
+}
+
+// contextWindowIndex 推导可重建的压缩窗口，JSONL 节点仍是唯一事实来源。
+func contextWindowIndex(branch []Entry) ContextWindowIndex {
+	result := ContextWindowIndex{Valid: true, LatestCompactionIndex: -1}
+	positions := make(map[string]int, len(branch))
+	for index, entry := range branch {
+		positions[entry.ID] = index
+		if entry.Type != EntryCompaction {
+			continue
+		}
+		result.Generation++
+		result.LatestCompactionIndex = index
+		firstKeptIndex, found := positions[entry.FirstKeptEntryID]
+		if !found || firstKeptIndex >= index {
+			result.FirstKeptIndex = -1
+		} else {
+			result.FirstKeptIndex = firstKeptIndex
+		}
+	}
+	return result
 }

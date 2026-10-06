@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,17 +15,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-)
-
-const (
-	sessionDirectoryName      = "sessions"
-	sessionTranscriptFileName = "session.jsonl"
-
-	// maxEntryBytes 是单条 JSONL Entry 的硬上限。
-	//
-	// Tool 自身还应执行更小的输出预算；这里是最后一道 Storage Boundary，防止损坏
-	// 文件或异常 Tool Result 让加载 Session 时无限占用内存。
-	maxEntryBytes = 8 * 1024 * 1024
 )
 
 // Store 持久化 Humbert Session JSONL v3。
@@ -258,17 +246,11 @@ func (s *Store) LoadSession(
 	agentID string,
 	sessionID string,
 ) (Document, error) {
-	path, err := s.sessionPath(agentID, sessionID)
+	path, unlock, err := s.lockExistingSession(agentID, sessionID)
 	if err != nil {
 		return Document{}, err
 	}
-
-	unlock := s.locks.lock(path)
 	defer unlock()
-
-	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
-		return Document{}, err
-	}
 
 	document, _, repair, err := s.documentForReadLocked(ctx, path, sessionID)
 	if err != nil {
@@ -289,15 +271,11 @@ func (s *Store) LoadContextSession(
 	agentID string,
 	sessionID string,
 ) (Document, error) {
-	path, err := s.sessionPath(agentID, sessionID)
+	path, unlock, err := s.lockExistingSession(agentID, sessionID)
 	if err != nil {
 		return Document{}, err
 	}
-	unlock := s.locks.lock(path)
 	defer unlock()
-	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
-		return Document{}, err
-	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return Document{}, err
@@ -333,15 +311,11 @@ func (s *Store) LoadMessagePage(
 	beforeEntryID string,
 	limit int,
 ) (MessageEntryPage, error) {
-	path, err := s.sessionPath(agentID, sessionID)
+	path, unlock, err := s.lockExistingSession(agentID, sessionID)
 	if err != nil {
 		return MessageEntryPage{}, err
 	}
-	unlock := s.locks.lock(path)
 	defer unlock()
-	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
-		return MessageEntryPage{}, err
-	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return MessageEntryPage{}, err
@@ -360,6 +334,21 @@ func (s *Store) LoadMessagePage(
 	}
 	indexes, positions := indexMessages(document.ActiveBranch)
 	return messageEntryPageFromIndex(document.ActiveBranch, indexes, positions, beforeEntryID, limit)
+}
+
+// lockExistingSession 为读取/修复取得同一 Session 的锁并检查真实文件。
+// 成功后由调用方 defer unlock；校验失败在此归还锁，不能让不存在或不安全的路径泄漏锁项。
+func (s *Store) lockExistingSession(agentID, sessionID string) (string, func(), error) {
+	path, err := s.sessionPath(agentID, sessionID)
+	if err != nil {
+		return "", nil, err
+	}
+	unlock := s.locks.lock(path)
+	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
+		unlock()
+		return "", nil, err
+	}
+	return path, unlock, nil
 }
 
 func (s *Store) documentForReadLocked(
@@ -563,17 +552,13 @@ func (s *Store) RepairSession(
 	agentID string,
 	sessionID string,
 ) (RepairResult, error) {
-	path, err := s.sessionPath(agentID, sessionID)
+	path, unlock, err := s.lockExistingSession(agentID, sessionID)
 	if err != nil {
 		return RepairResult{}, err
 	}
 
-	unlock := s.locks.lock(path)
 	defer unlock()
 
-	if err := s.validateExistingSessionPath(agentID, sessionID, path); err != nil {
-		return RepairResult{}, err
-	}
 	result, err := repairTailLocked(ctx, path)
 	if result.Repaired {
 		s.cache.invalidate(path)
@@ -704,57 +689,6 @@ func (s *Store) appendEntry(
 	return entry, nil
 }
 
-func messageEntryPageFromIndex(
-	activeBranch []Entry,
-	messageIndexes []int,
-	messagePositions map[string]int,
-	beforeEntryID string,
-	limit int,
-) (MessageEntryPage, error) {
-	end := len(messageIndexes)
-	if beforeEntryID != "" {
-		position, exists := messagePositions[beforeEntryID]
-		if !exists {
-			return MessageEntryPage{}, fmt.Errorf("%w: %s", ErrMessageCursorNotFound, beforeEntryID)
-		}
-		end = position
-	}
-
-	start := 0
-	if limit > 0 && end > limit {
-		start = end - limit
-		// 保持 Assistant ToolCall -> ToolResult(s) -> 最终 Assistant 的事务边界。
-		for start > 0 {
-			current := activeBranch[messageIndexes[start]].Message
-			if current == nil {
-				break
-			}
-			if current.Role == RoleToolResult {
-				start--
-				continue
-			}
-			previous := activeBranch[messageIndexes[start-1]].Message
-			if current.Role == RoleAssistant && previous != nil && previous.Role == RoleToolResult {
-				start--
-				continue
-			}
-			break
-		}
-	}
-
-	entries := make([]Entry, 0, end-start)
-	for _, branchIndex := range messageIndexes[start:end] {
-		entries = append(entries, cloneEntry(activeBranch[branchIndex]))
-	}
-	nextBeforeID := ""
-	if start > 0 && len(entries) > 0 {
-		nextBeforeID = entries[0].ID
-	}
-	return MessageEntryPage{
-		Entries: entries, StartIndex: start, HasMore: start > 0, NextBeforeID: nextBeforeID,
-	}, nil
-}
-
 // validateCompactionAgainstDocument 在真正 append 前验证压缩切点仍然属于当前分支。
 //
 // 摘要生成是外部模型 IO，期间 Session 理论上可能因为 Retry/Fork 或其他控制面操作改变
@@ -784,662 +718,12 @@ func validateCompactionAgainstDocument(entry Entry, document Document) error {
 	return nil
 }
 
-func (s *Store) sessionPath(agentID string, sessionID string) (string, error) {
-	directory, err := s.sessionDirectory(agentID, sessionID)
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(directory, sessionTranscriptFileName)
-	if !pathWithinRoot(s.agentsRoot, path) {
-		return "", ErrInvalidIdentifier
-	}
-	return path, nil
-}
-
-func (s *Store) agentSessionsDirectory(agentID string) (string, error) {
-	if err := validateIdentifier(agentID); err != nil {
-		return "", fmt.Errorf("Agent ID 无效: %w", err)
-	}
-	directory := filepath.Join(s.agentsRoot, agentID, sessionDirectoryName)
-	if !pathWithinRoot(s.agentsRoot, directory) {
-		return "", ErrInvalidIdentifier
-	}
-	return directory, nil
-}
-
-func (s *Store) sessionDirectory(agentID string, sessionID string) (string, error) {
-	if err := validateIdentifier(sessionID); err != nil {
-		return "", fmt.Errorf("Session ID 无效: %w", err)
-	}
-	root, err := s.agentSessionsDirectory(agentID)
-	if err != nil {
-		return "", err
-	}
-	directory := filepath.Join(root, sessionID)
-	if !pathWithinRoot(s.agentsRoot, directory) {
-		return "", ErrInvalidIdentifier
-	}
-	return directory, nil
-}
-
-func (s *Store) ensureSessionDirectory(agentID string, sessionID string) error {
-	agentDirectory := filepath.Join(s.agentsRoot, agentID)
-	if !pathWithinRoot(s.agentsRoot, agentDirectory) {
-		return ErrInvalidIdentifier
-	}
-	if err := ensureRealDirectory(agentDirectory); err != nil {
-		return fmt.Errorf("准备 Agent Transcript 目录失败: %w", err)
-	}
-
-	root, err := s.agentSessionsDirectory(agentID)
-	if err != nil {
-		return err
-	}
-	if err := ensureRealDirectory(root); err != nil {
-		return fmt.Errorf("准备 Agent Session Root 失败: %w", err)
-	}
-
-	directory, err := s.sessionDirectory(agentID, sessionID)
-	if err != nil {
-		return err
-	}
-	if err := ensureRealDirectory(directory); err != nil {
-		return fmt.Errorf("准备 Session 数据目录失败: %w", err)
-	}
-	return nil
-}
-
-func (s *Store) validateExistingSessionPath(agentID string, sessionID string, path string) error {
-	root, err := s.agentSessionsDirectory(agentID)
-	if err != nil {
-		return err
-	}
-	if err := validateRealDirectory(root); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ErrSessionNotFound
-		}
-		return fmt.Errorf("验证 Agent Session Root 失败: %w", err)
-	}
-
-	directory, err := s.sessionDirectory(agentID, sessionID)
-	if err != nil {
-		return err
-	}
-	if err := validateRealDirectory(directory); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ErrSessionNotFound
-		}
-		return fmt.Errorf("验证 Session 数据目录失败: %w", err)
-	}
-
-	info, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return ErrSessionNotFound
-		}
-		return fmt.Errorf("读取 Session Transcript 状态失败: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("Session Transcript 不能是符号链接")
-	}
-	if !info.Mode().IsRegular() {
-		return errors.New("Session Transcript 不是普通文件")
-	}
-	return nil
-}
-
-func ensureRealDirectory(path string) error {
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	return validateRealDirectory(path)
-}
-
-func validateRealDirectory(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("目录不能是符号链接: %s", path)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("路径不是目录: %s", path)
-	}
-	return nil
-}
-
-func validateIdentifier(value string) error {
-	value = strings.TrimSpace(value)
-	if value == "" || value == "." || value == ".." {
-		return ErrInvalidIdentifier
-	}
-	if strings.ContainsRune(value, '\x00') || filepath.IsAbs(value) {
-		return ErrInvalidIdentifier
-	}
-	if strings.ContainsAny(value, `/\\`) || filepath.Base(value) != value {
-		return ErrInvalidIdentifier
-	}
-	return nil
-}
-
-func pathWithinRoot(root string, candidate string) bool {
-	relative, err := filepath.Rel(root, candidate)
-	if err != nil {
-		return false
-	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
-}
-
-func validateAgentMessage(message AgentMessage) error {
-	if message.Timestamp <= 0 {
-		return errors.New("AgentMessage timestamp 必须大于 0")
-	}
-	if len(message.Content) == 0 {
-		return errors.New("AgentMessage content 不能为空")
-	}
-
-	for index, block := range message.Content {
-		if err := validateContentBlock(block); err != nil {
-			return fmt.Errorf("AgentMessage content[%d] 无效: %w", index, err)
-		}
-	}
-
-	switch message.Role {
-	case RoleUser:
-		for _, block := range message.Content {
-			if block.Type != ContentText && block.Type != ContentImage && block.Type != ContentFile {
-				return errors.New("UserMessage 只允许 text/image/file ContentBlock")
-			}
-		}
-
-	case RoleAssistant:
-		if strings.TrimSpace(message.Model) == "" {
-			return errors.New("AssistantMessage model 不能为空")
-		}
-		if strings.TrimSpace(message.Provider) == "" {
-			return errors.New("AssistantMessage provider 不能为空")
-		}
-		if !validStopReason(message.StopReason) {
-			return fmt.Errorf("AssistantMessage stopReason 无效: %q", message.StopReason)
-		}
-
-	case RoleToolResult:
-		if strings.TrimSpace(message.ToolCallID) == "" {
-			return errors.New("ToolResultMessage toolCallId 不能为空")
-		}
-		if strings.TrimSpace(message.ToolName) == "" {
-			return errors.New("ToolResultMessage toolName 不能为空")
-		}
-		for _, block := range message.Content {
-			if block.Type != ContentText {
-				return errors.New("ToolResultMessage 当前只允许 text ContentBlock")
-			}
-		}
-
-	default:
-		return fmt.Errorf("AgentMessage role 不支持: %q", message.Role)
-	}
-
-	return nil
-}
-
-func validateContentBlock(block ContentBlock) error {
-	switch block.Type {
-	case ContentText:
-		if block.Text == "" {
-			return errors.New("text block 内容不能为空")
-		}
-
-	case ContentImage, ContentFile:
-		if strings.TrimSpace(block.AttachmentID) == "" {
-			return errors.New("attachmentId 不能为空")
-		}
-		if strings.ContainsAny(block.AttachmentID, `/\`) {
-			return errors.New("attachmentId 非法")
-		}
-		if strings.TrimSpace(block.Name) == "" {
-			return errors.New("attachment name 不能为空")
-		}
-		if strings.TrimSpace(block.MIMEType) == "" {
-			return errors.New("attachment mimeType 不能为空")
-		}
-		if block.SizeBytes < 0 {
-			return errors.New("attachment sizeBytes 非法")
-		}
-		if block.Type == ContentFile && strings.TrimSpace(block.ExtractedText) == "" && !block.DocumentOnDemand {
-			return errors.New("file attachment 缺少 extractedText")
-		}
-		if block.DocumentOnDemand && (block.Type != ContentFile || block.ExtractedText != "") {
-			return errors.New("documentOnDemand 只能用于未提取的文件附件")
-		}
-		if block.Type == ContentImage && block.ExtractedText != "" {
-			return errors.New("image attachment 不允许 extractedText")
-		}
-
-	case ContentThinking:
-		if block.Thinking == "" && !block.Redacted {
-			return errors.New("thinking block 内容不能为空")
-		}
-
-	case ContentToolCall:
-		if strings.TrimSpace(block.ID) == "" {
-			return errors.New("toolCall id 不能为空")
-		}
-		if strings.TrimSpace(block.Name) == "" {
-			return errors.New("toolCall name 不能为空")
-		}
-		if len(block.Arguments) == 0 || !json.Valid(block.Arguments) {
-			return errors.New("toolCall arguments 必须是合法 JSON")
-		}
-		trimmed := bytes.TrimSpace(block.Arguments)
-		if len(trimmed) == 0 || trimmed[0] != '{' {
-			return errors.New("toolCall arguments 必须是 JSON Object")
-		}
-
-	default:
-		return fmt.Errorf("ContentBlock type 不支持: %q", block.Type)
-	}
-	return nil
-}
-
-func validStopReason(reason StopReason) bool {
-	switch reason {
-	case StopReasonStop,
-		StopReasonLength,
-		StopReasonToolUse,
-		StopReasonError,
-		StopReasonAborted,
-		StopReasonDeferred:
-		return true
-	default:
-		return false
-	}
-}
-
-func validateEntryPayload(entry Entry) error {
-	if strings.TrimSpace(entry.ID) == "" {
-		return errors.New("Session Entry id 不能为空")
-	}
-	if _, err := parseTime(entry.Timestamp); err != nil {
-		return fmt.Errorf("Session Entry timestamp 无效: %w", err)
-	}
-
-	switch entry.Type {
-	case EntryMessage:
-		if entry.Message == nil {
-			return errors.New("message Entry 缺少 message")
-		}
-		return validateAgentMessage(*entry.Message)
-
-	case EntryModelChange:
-		if strings.TrimSpace(entry.Provider) == "" || strings.TrimSpace(entry.ModelID) == "" {
-			return errors.New("model_change provider/modelId 不能为空")
-		}
-		return nil
-
-	case EntryThinkingLevelChange:
-		if strings.TrimSpace(entry.ThinkingLevel) == "" {
-			return errors.New("thinking_level_change thinkingLevel 不能为空")
-		}
-		return nil
-
-	case EntryCompaction:
-		if strings.TrimSpace(entry.Summary) == "" {
-			return errors.New("compaction summary 不能为空")
-		}
-		if strings.TrimSpace(entry.FirstKeptEntryID) == "" {
-			return errors.New("compaction firstKeptEntryId 不能为空")
-		}
-		if entry.TokensBefore <= 0 {
-			return errors.New("compaction tokensBefore 必须大于 0")
-		}
-		if entry.TokensAfter < 0 {
-			return errors.New("compaction tokensAfter 不能小于 0")
-		}
-		if entry.Details == nil || strings.TrimSpace(entry.Details.Reason) == "" {
-			return errors.New("compaction details.reason 不能为空")
-		}
-		return nil
-
-	case EntryBranchSummary,
-		EntryCustom,
-		EntryCustomMessage,
-		EntryLabel:
-		return nil
-
-	default:
-		return fmt.Errorf("未知 Session Entry Type: %q", entry.Type)
-	}
-}
-
 func validateContext(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("context.Context 不能为空")
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("Session Transcript 操作被取消: %w", err)
-	}
-	return nil
-}
-
-func encodeJSONLine(value any) ([]byte, error) {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxEntryBytes {
-		return nil, fmt.Errorf("单条 JSONL Entry 超过 %d bytes", maxEntryBytes)
-	}
-	return append(data, '\n'), nil
-}
-
-func repairTailLocked(ctx context.Context, path string) (RepairResult, error) {
-	if err := validateContext(ctx); err != nil {
-		return RepairResult{}, err
-	}
-
-	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
-	if err != nil {
-		return RepairResult{}, fmt.Errorf("打开 Transcript Repair 文件失败: %w", err)
-	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return RepairResult{}, fmt.Errorf("读取 Transcript 文件状态失败: %w", err)
-	}
-	if info.Size() == 0 {
-		return RepairResult{}, &CorruptionError{Line: 1, Offset: 0, Reason: "缺少 Session Header"}
-	}
-
-	// 正常关闭的每条 JSONL 写入都以换行结束。绝大多数读取/追加无需为了确认“没有 crash
-	// tail”先完整扫描一次；后续 loadLocked 仍会逐行严格校验全部 JSON 和 Tree 关系，因此
-	// 这里的 O(1) 快路径不会掩盖中间损坏。只有末字节不是换行时才进入下面的修复扫描。
-	lastByte := []byte{0}
-	if _, err := file.ReadAt(lastByte, info.Size()-1); err != nil {
-		return RepairResult{}, fmt.Errorf("读取 Transcript 尾字节失败: %w", err)
-	}
-	if lastByte[0] == '\n' {
-		return RepairResult{}, nil
-	}
-
-	reader := bufio.NewReaderSize(file, 64*1024)
-	var offset int64
-	var lastGoodOffset int64
-	lineNumber := 0
-
-	for {
-		if err := validateContext(ctx); err != nil {
-			return RepairResult{}, err
-		}
-
-		line, readErr := reader.ReadBytes('\n')
-		if len(line) == 0 && errors.Is(readErr, io.EOF) {
-			break
-		}
-		if len(line) == 0 && readErr != nil {
-			return RepairResult{}, fmt.Errorf("读取 Transcript Repair 数据失败: %w", readErr)
-		}
-
-		lineNumber++
-		hasNewline := line[len(line)-1] == '\n'
-		payload := line
-		if hasNewline {
-			payload = line[:len(line)-1]
-		}
-		if len(payload) > maxEntryBytes {
-			return RepairResult{}, &CorruptionError{Line: lineNumber, Offset: offset, Reason: "单行 Entry 超过最大限制"}
-		}
-
-		if !json.Valid(payload) {
-			if errors.Is(readErr, io.EOF) && !hasNewline && lastGoodOffset > 0 {
-				truncated := info.Size() - lastGoodOffset
-				if err := file.Truncate(lastGoodOffset); err != nil {
-					return RepairResult{}, fmt.Errorf("截断损坏 Transcript Tail 失败: %w", err)
-				}
-				if err := file.Sync(); err != nil {
-					return RepairResult{}, fmt.Errorf("同步 Transcript Tail Repair 失败: %w", err)
-				}
-				return RepairResult{Repaired: true, TruncatedBytes: truncated}, nil
-			}
-			reason := "存在非尾部无效 JSON"
-			if lineNumber == 1 {
-				reason = "Session Header 不完整"
-			}
-			return RepairResult{}, &CorruptionError{Line: lineNumber, Offset: offset, Reason: reason}
-		}
-
-		offset += int64(len(line))
-		lastGoodOffset = offset
-
-		if errors.Is(readErr, io.EOF) {
-			if hasNewline {
-				break
-			}
-			if _, err := file.Seek(0, io.SeekEnd); err != nil {
-				return RepairResult{}, fmt.Errorf("定位 Transcript 尾部失败: %w", err)
-			}
-			if err := writeFull(file, []byte{'\n'}); err != nil {
-				return RepairResult{}, fmt.Errorf("补写 Transcript 尾部换行失败: %w", err)
-			}
-			if err := file.Sync(); err != nil {
-				return RepairResult{}, fmt.Errorf("同步 Transcript 尾部换行失败: %w", err)
-			}
-			return RepairResult{Repaired: true, AddedFinalNewline: true}, nil
-		}
-		if readErr != nil {
-			return RepairResult{}, fmt.Errorf("读取 Transcript Repair 数据失败: %w", readErr)
-		}
-	}
-
-	return RepairResult{}, nil
-}
-
-func loadLocked(ctx context.Context, path string, sessionID string) (Document, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Document{}, fmt.Errorf("%w: session_id=%s", ErrSessionNotFound, sessionID)
-		}
-		return Document{}, fmt.Errorf("打开 Session Transcript 失败: %w", err)
-	}
-	defer file.Close()
-
-	reader := bufio.NewReaderSize(file, 64*1024)
-	lineNumber := 0
-	var offset int64
-
-	var header SessionHeader
-	entries := make([]Entry, 0, 64)
-	entryByID := make(map[string]Entry)
-	leafID := ""
-
-	for {
-		if err := validateContext(ctx); err != nil {
-			return Document{}, err
-		}
-
-		line, readErr := reader.ReadBytes('\n')
-		if len(line) == 0 && errors.Is(readErr, io.EOF) {
-			break
-		}
-		if len(line) == 0 && readErr != nil {
-			return Document{}, fmt.Errorf("读取 Session Transcript 失败: %w", readErr)
-		}
-
-		lineNumber++
-		if len(line) > maxEntryBytes+1 {
-			return Document{}, &CorruptionError{Line: lineNumber, Offset: offset, Reason: "单行 Entry 超过最大限制"}
-		}
-
-		payload := bytes.TrimSuffix(line, []byte{'\n'})
-		if lineNumber == 1 {
-			if err := decodeStrictJSON(payload, &header); err != nil {
-				return Document{}, &CorruptionError{Line: 1, Offset: 0, Reason: "Session Header JSON 无法解析"}
-			}
-			if err := validateHeader(header, sessionID); err != nil {
-				return Document{}, &CorruptionError{Line: 1, Offset: 0, Reason: err.Error()}
-			}
-		} else {
-			var entry Entry
-			if err := decodeStrictJSON(payload, &entry); err != nil {
-				return Document{}, &CorruptionError{Line: lineNumber, Offset: offset, Reason: "Session Entry JSON 无法解析"}
-			}
-			if err := validateEntryPayload(entry); err != nil {
-				return Document{}, &CorruptionError{Line: lineNumber, Offset: offset, Reason: err.Error()}
-			}
-			if _, exists := entryByID[entry.ID]; exists {
-				return Document{}, &CorruptionError{Line: lineNumber, Offset: offset, Reason: "Session Entry id 重复"}
-			}
-			if entry.ParentID != nil {
-				if _, exists := entryByID[*entry.ParentID]; !exists {
-					return Document{}, &CorruptionError{Line: lineNumber, Offset: offset, Reason: "parentId 指向不存在或尚未出现的 Entry"}
-				}
-			}
-
-			entryByID[entry.ID] = entry
-			entries = append(entries, entry)
-			leafID = entry.ID
-		}
-
-		offset += int64(len(line))
-		if errors.Is(readErr, io.EOF) {
-			break
-		}
-		if readErr != nil {
-			return Document{}, fmt.Errorf("读取 Session Transcript 失败: %w", readErr)
-		}
-	}
-
-	if lineNumber == 0 {
-		return Document{}, &CorruptionError{Line: 1, Offset: 0, Reason: "缺少 Session Header"}
-	}
-
-	activeBranch, err := buildActiveBranch(entryByID, leafID)
-	if err != nil {
-		return Document{}, err
-	}
-
-	return Document{
-		Header:        header,
-		Entries:       entries,
-		ActiveBranch:  activeBranch,
-		LeafID:        leafID,
-		ContextWindow: contextWindowIndex(activeBranch),
-	}, nil
-}
-
-func contextWindowIndex(branch []Entry) ContextWindowIndex {
-	result := ContextWindowIndex{Valid: true, LatestCompactionIndex: -1}
-	positions := make(map[string]int, len(branch))
-	for index, entry := range branch {
-		positions[entry.ID] = index
-		if entry.Type != EntryCompaction {
-			continue
-		}
-		result.Generation++
-		result.LatestCompactionIndex = index
-		firstKeptIndex, found := positions[entry.FirstKeptEntryID]
-		if !found || firstKeptIndex >= index {
-			result.FirstKeptIndex = -1
-		} else {
-			result.FirstKeptIndex = firstKeptIndex
-		}
-	}
-	return result
-}
-
-func validateHeader(header SessionHeader, expectedSessionID string) error {
-	if header.Type != "session" {
-		return errors.New("第一行不是 Session Header")
-	}
-	if header.Version != CurrentVersion {
-		return fmt.Errorf("只支持 Session JSONL v%d，实际为 v%d", CurrentVersion, header.Version)
-	}
-	if header.ID != expectedSessionID {
-		return errors.New("Session Header id 与文件名不一致")
-	}
-	if _, err := parseTime(header.Timestamp); err != nil {
-		return errors.New("Session Header timestamp 无效")
-	}
-	return nil
-}
-
-func buildActiveBranch(entryByID map[string]Entry, leafID string) ([]Entry, error) {
-	if leafID == "" {
-		return []Entry{}, nil
-	}
-
-	reversed := make([]Entry, 0, len(entryByID))
-	visited := make(map[string]struct{}, len(entryByID))
-	currentID := leafID
-
-	for currentID != "" {
-		if _, exists := visited[currentID]; exists {
-			return nil, fmt.Errorf("%w: Session Tree 存在 parent cycle", ErrCorrupted)
-		}
-		visited[currentID] = struct{}{}
-
-		entry, exists := entryByID[currentID]
-		if !exists {
-			return nil, fmt.Errorf("%w: Active Branch Entry %s 不存在", ErrCorrupted, currentID)
-		}
-		reversed = append(reversed, entry)
-
-		if entry.ParentID == nil {
-			break
-		}
-		currentID = *entry.ParentID
-	}
-
-	result := make([]Entry, len(reversed))
-	for index := range reversed {
-		result[len(reversed)-1-index] = reversed[index]
-	}
-	return result, nil
-}
-
-func decodeStrictJSON(data []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("JSON 包含多余值")
-		}
-		return fmt.Errorf("JSON 尾部无效: %w", err)
-	}
-	return nil
-}
-
-func formatTime(value time.Time) string {
-	return value.UTC().Format(time.RFC3339Nano)
-}
-
-func parseTime(value string) (time.Time, error) {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return parsed.UTC(), nil
-}
-
-func writeFull(writer io.Writer, data []byte) error {
-	for len(data) > 0 {
-		written, err := writer.Write(data)
-		if err != nil {
-			return err
-		}
-		if written <= 0 {
-			return io.ErrShortWrite
-		}
-		data = data[written:]
 	}
 	return nil
 }

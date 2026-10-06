@@ -33,33 +33,7 @@ var (
 
 var _ rerank.Scorer = (*Client)(nil)
 
-// Config 描述一个 Jina/Cohere-compatible Rerank Endpoint。
-//
-// 当前推荐直接传完整 URL，例如：
-//
-// vLLM:
-//
-//	http://127.0.0.1:8002/v1/rerank
-//
-// Jina:
-//
-//	https://api.jina.ai/v1/rerank
-//
-// Cohere:
-//
-//	https://api.cohere.com/v2/rerank
-//
-// 请求核心字段均为：
-//
-//	model
-//	query
-//	documents
-//	top_n
-//
-// 响应核心字段均为：
-//
-//	results[].index
-//	results[].relevance_score
+// Config 描述兼容 Jina 或 Cohere 协议的精排服务，Endpoint 必须是完整请求地址。
 type Config struct {
 	Endpoint string
 	APIKey   string
@@ -76,12 +50,14 @@ type Config struct {
 	Headers map[string]string
 }
 
+// DefaultConfig 返回精排服务的默认请求超时。
 func DefaultConfig() Config {
 	return Config{
 		Timeout: defaultTimeout,
 	}
 }
 
+// Validate 检查服务地址、模型与请求超时。
 func (c Config) Validate() error {
 	endpoint := strings.TrimSpace(c.Endpoint)
 
@@ -113,6 +89,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
+// Client 精排 HTTP 客户端，按输入顺序还原服务返回的相关性分数。
 type Client struct {
 	endpoint string
 	apiKey   string
@@ -121,6 +98,7 @@ type Client struct {
 	headers  map[string]string
 }
 
+// NewClient 校验配置并创建精排客户端，优先使用调用方提供的 HTTPClient。
 func NewClient(cfg Config) (*Client, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -171,29 +149,7 @@ type rerankResult struct {
 	RelevanceScore float64 `json:"relevance_score"`
 }
 
-// Score 实现 rerank.Scorer。
-//
-// 一个很重要的行为：
-//
-// Provider 返回 results 通常已经按照 relevance_score DESC 排序。
-//
-// 但我们的 rerank.Engine 要求：
-//
-//	scores[i]
-//
-// 必须对应：
-//
-//	passages[i]
-//
-// 所以这里不能直接：
-//
-//	append(response.Results[i].RelevanceScore)
-//
-// 而必须根据：
-//
-//	result.Index
-//
-// 把 score 放回原输入位置。
+// Score 请求精排分数，并按响应中的 index 对齐输入顺序；不能直接使用服务返回的排序。
 func (c *Client) Score(ctx context.Context, query string, passages []string) ([]float64, error) {
 	query = strings.TrimSpace(query)
 

@@ -14,10 +14,7 @@ const maxProtectedUnitSize = 7500
 // 表示强制拆分超大 Protected Span 时，会在目标位置前最多回看多少 rune。尝试寻找更自然的换行，空格。
 const protectedSplitLookback = 200
 
-// splitUnit 是 Chunker 内部使用的中间数据结构。
-// 它不是最终 Chunk， 可以理解为“带原文位置的小文本单元”。
-// 后面的 mergeUnits() 会把多个 splitUnit
-// 合并成真正的 Chunk。
+// splitUnit 保存切分中间单元；范围使用原文字符坐标，合成表头的起止位置相同。
 type splitUnit struct {
 	// text 是这个 Unit 的真实文本。
 	text string
@@ -30,38 +27,7 @@ type splitUnit struct {
 	end   int
 }
 
-// buildUnitsWithProtection 把整篇文档转换成 splitUnit。
-// 整体算法：
-//
-//	   原始文本
-//	      ↓
-//	Protected Span
-//	      ↓
-//
-// ┌──────┴──────┐
-// │             │
-// 普通区域      Protected
-// │             │
-// Recursive     保持原子
-// Split         │
-// │             │
-// └──────┬──────┘
-//
-//	      ↓
-//	[]splitUnit
-//
-// -----------------------------------------------------------------------------
-// protected 里的 span 使用的是：
-//
-//	byte offset
-//
-// 因为它来自 regexp。
-// 最终生成的 splitUnit 使用：
-//
-//	rune offset
-//
-// 这是这个函数最重要的职责之一。
-// -----------------------------------------------------------------------------
+// buildUnitsWithProtection 递归切分普通区域，保留保护区域，并转换成字符坐标。
 func buildUnitsWithProtection(
 	text string,
 	protected []span,
@@ -148,15 +114,7 @@ func buildUnitsWithProtection(
 			)
 
 		} else {
-			// ---------------------------------------------------------
-			// 异常大的 Protected Span。
-			// 即使它是：
-			//     代码
-			//     表格
-			//     公式
-			// 也不能无限大。
-			// 所以强制拆。
-			// ---------------------------------------------------------
+			// 异常长的保护区域仍须拆分，避免无界块大小。
 			runes := []rune(protectedText)
 			offset := 0
 			for offset < len(runes) {
@@ -167,14 +125,7 @@ func buildUnitsWithProtection(
 				if chunkEnd > len(runes) {
 					chunkEnd = len(runes)
 				} else {
-					// -------------------------------------------------
-					// 不希望机械地正好在 7500 处切。
-					// 往前最多找 200 rune：
-					//     \n
-					// 或：
-					//     空格
-					// 尽量找一个更自然的位置。
-					// -------------------------------------------------
+					// 硬拆分前最多回看 200 字符，优先在换行或空格处切开。
 					minSearch := chunkEnd - protectedSplitLookback
 
 					if minSearch < offset {

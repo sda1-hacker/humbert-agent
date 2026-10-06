@@ -49,19 +49,8 @@ func (s *Service) CancelTurn(requestID string) error {
 
 	s.approvals.Cancel(waitingApprovalID)
 	request, _ := s.approvals.Get(waitingApprovalID)
-	s.publishEvent(Event{
-		Type:             EventApprovalResolved,
-		RequestID:        active.RequestID,
-		RunID:            active.RunID,
-		SessionID:        active.SessionID,
-		AgentID:          active.snapshot.AgentID,
-		ModelID:          active.snapshot.ModelID,
-		ModelRevision:    active.snapshot.ModelRevision,
-		ToolRevision:     active.snapshot.ToolRevision,
-		Approval:         &request,
-		ApprovalDecision: approval.DecisionDeny,
-		OccurredAt:       time.Now().UTC().Format(time.RFC3339Nano),
-	})
+	s.publishApprovalEvent(active, EventApprovalResolved, request, approval.DecisionDeny)
+
 	s.approvals.Forget(waitingApprovalID)
 	s.finishRun(active, ExecutionResult{}, context.Canceled)
 	return nil
@@ -71,7 +60,7 @@ func (s *Service) CancelTurn(requestID string) error {
 func (s *Service) executeTurn(active *activeRun) {
 	defer s.wg.Done()
 
-	snapshot := active.snapshot
+	snapshot := active.Snapshot
 	runtimeManifest := snapshot.Manifest
 	s.publishEvent(Event{
 		Type:                 EventTurnStarted,
@@ -106,11 +95,11 @@ func (s *Service) resumeTurn(active *activeRun, resolution approval.Resolution) 
 
 	result, err := s.executor.Resume(
 		active.ctx,
-		active.snapshot,
+		active.Snapshot,
 		active.checkpointStore,
 		resolution.Request.InterruptID(),
 		resolution.ResumeJSON,
-		s.deltaEmitter(active.snapshot),
+		s.deltaEmitter(active.Snapshot),
 	)
 	// 用户主动 Resolve 会从 Resolving 进入 Resolved；超时请求保持 Expired。
 	s.approvals.Complete(resolution.Request.ID)
@@ -139,7 +128,7 @@ func (s *Service) handleExecutionOutcome(active *activeRun, result ExecutionResu
 }
 
 func (s *Service) completeTurn(active *activeRun, result ExecutionResult) {
-	snapshot := active.snapshot
+	snapshot := active.Snapshot
 	s.mu.Lock()
 	if active.phase != RunPhaseCancelling {
 		active.phase = RunPhaseMaintaining

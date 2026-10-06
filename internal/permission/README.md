@@ -1,6 +1,6 @@
 # Permission：能力授权规则
 
-[总目录](../../docs/architecture/README.md) · [审批](../approval/README.md) · [沙箱](../sandbox/README.md)
+[总目录](../../docs/项目源码详解.md) · [审批](../approval/README.md) · [沙箱](../sandbox/README.md)
 
 ## 决策不是执行边界的全部
 

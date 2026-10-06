@@ -9,8 +9,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
+	officialmcpsession "github.com/cloudwego/eino-ext/components/tool/mcp/officialmcp/session"
+
+	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
+	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 )
 
 // resolveStdioEnvironment 返回交给 Eino officialmcp/session 的环境覆盖项。
@@ -237,4 +242,118 @@ func ensureResolvedStdioCommandOnPath(environment map[string]string, resolvedCom
 	if len(result) > 0 {
 		environment["PATH"] = strings.Join(result, string(os.PathListSeparator))
 	}
+}
+
+// connectStdio 将隔离环境和 Sandbox 启动配置接入官方 Session。
+// 失败在本入口清理已准备的资源；成功后 cleanup 随连接交给 Backend，不能提前释放。
+func (b *Backend) connectStdio(ctx context.Context, server humbertmcp.Server, policy *sandbox.EffectivePolicy) (*officialmcpsession.Session, func(), error) {
+	if server.Stdio == nil {
+		return nil, nil, errors.New("stdio MCP Server 缺少启动配置")
+	}
+	environment, err := resolveStdioEnvironment(ctx, b.credentials, server)
+	if err != nil {
+		return nil, nil, err
+	}
+	command := strings.TrimSpace(server.Stdio.Command)
+	args := append([]string(nil), server.Stdio.Args...)
+	workingDirectory := strings.TrimSpace(server.Stdio.WorkingDirectory)
+	if policy != nil {
+		if workingDirectory == "" {
+			workingDirectory = policy.WorkspaceRoot
+		} else {
+			decision, resolveErr := policy.CheckPath(workingDirectory, sandbox.OpList)
+			if resolveErr != nil {
+				return nil, nil, fmt.Errorf("stdio MCP WorkingDirectory 被 Agent Sandbox 拒绝: %w", resolveErr)
+			}
+			workingDirectory = decision.CanonicalPath
+		}
+	}
+
+	resolvedCommand, err := validateStdioLaunch(server, workingDirectory)
+	if err != nil {
+		return nil, nil, fmt.Errorf("连接 stdio MCP Server %q 失败: %w", server.Name, err)
+	}
+	command = resolvedCommand
+	ensureResolvedStdioCommandOnPath(environment, command)
+	applySandboxedStdioLauncherDefaults(
+		environment,
+		server,
+		command,
+		policy != nil && policy.Profile != sandbox.ProfileFullAccess,
+	)
+
+	cleanups := make([]func(), 0, 2)
+	cleanup := func() {
+		for index := len(cleanups) - 1; index >= 0; index-- {
+			if cleanups[index] != nil {
+				cleanups[index]()
+			}
+		}
+	}
+	connected := false
+	defer func() {
+		if !connected {
+			cleanup()
+		}
+	}()
+
+	if policy != nil {
+		effectivePolicy, policyErr := expandKnownStdioSandboxPolicy(*policy, server, workingDirectory)
+		if policyErr != nil {
+			return nil, nil, policyErr
+		}
+		effectivePolicy, policyErr = expandStdioLauncherSandboxPolicy(effectivePolicy, command)
+		if policyErr != nil {
+			return nil, nil, policyErr
+		}
+		wrappedCommand, wrappedArgs, wrappedCleanup, nativeUsed, wrapErr := b.sandbox.PrepareExternalCommand(effectivePolicy, command, args, workingDirectory)
+		if wrapErr != nil {
+			return nil, nil, fmt.Errorf("准备 stdio MCP Sandbox 失败: %w", wrapErr)
+		}
+		command, args = wrappedCommand, wrappedArgs
+		if wrappedCleanup != nil {
+			// Seatbelt profile / bwrap 辅助资源必须保留到 Session 真正关闭。officialmcp
+			// 可能使用原 command/args 做透明重连；连接建立后立即删除 profile 会让后续
+			// reconnect 直接失败。
+			cleanups = append(cleanups, wrappedCleanup)
+		}
+		b.logger.Info(ctx, "stdio MCP Sandbox 已准备", "operation", "mcp.sandbox.prepare", "server_id", server.ID, "backend", policy.Capability.Backend, "native_used", nativeUsed)
+	}
+
+	wrappedCommand, wrappedArgs, stderrCapture, captureErr := prepareStdioStderrCapture(command, args)
+	if captureErr != nil {
+		return nil, nil, captureErr
+	}
+	command, args = wrappedCommand, wrappedArgs
+	if stderrCapture != nil {
+		cleanups = append(cleanups, stderrCapture.Cleanup)
+	}
+
+	connectCtx := ctx
+	cancel := func() {}
+	if b.cfg.ConnectTimeoutMS > 0 {
+		connectCtx, cancel = context.WithTimeout(ctx, time.Duration(b.cfg.ConnectTimeoutMS)*time.Millisecond)
+	}
+	defer cancel()
+
+	session, err := officialmcpsession.Connect(connectCtx, officialmcpsession.ServerConfig{
+		Name: server.Name,
+		Transport: officialmcpsession.TransportConfig{
+			Type:    officialmcpsession.TransportStdio,
+			Command: command,
+			Args:    args,
+			CWD:     workingDirectory,
+			Env:     environment,
+		},
+	})
+	if err != nil {
+		childStderr := ""
+		if stderrCapture != nil {
+			childStderr = logging.RedactText(stderrCapture.Read(4096), 2048)
+		}
+		return nil, nil, enrichStdioConnectError(server, err, policy != nil, childStderr)
+	}
+	connected = true
+	b.logger.Info(ctx, "stdio MCP Server 已连接", "operation", "mcp.connect", "server_id", server.ID, "server_key", server.Key)
+	return session, cleanup, nil
 }

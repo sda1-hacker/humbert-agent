@@ -2,14 +2,12 @@ package postgres
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"sort"
-	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/indexer"
@@ -17,729 +15,179 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
-
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/sda1-hacker/humbert-agent/internal/rag"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/embeddinginput"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
-// 编译期检查。
 var _ indexer.Indexer = (*Indexer)(nil)
 
-const (
-	DefaultEmbeddingBatchSize = 64
-
-	metaSourceDocumentID = "rag_source_document_id"
-	metaChunkIndex       = "rag_chunk_index"
-	metaChunkStart       = "rag_chunk_start"
-	metaChunkEnd         = "rag_chunk_end"
-	metaContextHeader    = "rag_context_header"
-
-	// 下面两个 key 当前 Chunk Transformer 还没有写，
-	// 但数据库模型已经为 Parent-Child 持久化预留。
-	metaChunkType     = "rag_chunk_type"
-	metaParentChunkID = "rag_parent_chunk_id"
-)
+const DefaultEmbeddingBatchSize = 64
 
 var (
-	ErrMissingCollectionID     = errors.New("postgres indexer: missing collection id")
-	ErrMissingEmbedder         = errors.New("postgres indexer: missing embedder")
-	ErrMissingChunkID          = errors.New("postgres indexer: missing chunk document id")
-	ErrMissingSourceDocumentID = errors.New("postgres indexer: missing source document id")
-	ErrEmptySearchContent      = errors.New("postgres indexer: empty search content")
-	ErrSubIndexesUnsupported   = errors.New("postgres indexer: sub indexes are not supported")
-	ErrInvalidEmbedding        = errors.New("postgres indexer: invalid embedding")
-	ErrIncompleteSource        = errors.New("postgres indexer: Store requires a complete source envelope and all flat chunks; use ReplaceDocument for parent-child ingestion")
+	ErrMissingCollectionID   = errors.New("postgres indexer: missing collection id")
+	ErrMissingEmbedder       = errors.New("postgres indexer: missing embedder")
+	ErrMissingChunkID        = errors.New("postgres indexer: missing document id")
+	ErrEmptySearchContent    = errors.New("postgres indexer: empty search content")
+	ErrSubIndexesUnsupported = errors.New("postgres indexer: sub indexes are not supported")
+	ErrInvalidEmbedding      = errors.New("postgres indexer: invalid embedding")
+	ErrIncompleteSource      = errors.New("postgres indexer: chunked documents require WithIngestionBatch with the complete source")
+	ErrPinnedEmbedding       = errors.New("postgres indexer: embedding options cannot override a pinned collection profile")
 )
 
-// Config 是 PostgreSQL Indexer 的长期默认配置。
-//
-// CollectionID:
-//
-//	默认 collection。
-//
-//	Eino Store 调用时可以通过：
-//
-//	    indexer.WithIndex("another-collection")
-//
-//	临时覆盖。
-//
-// Embedder:
-//
-//	默认 Embedding 组件。
-//
-//	也可以通过：
-//
-//	    indexer.WithEmbedding(...)
-//
-//	调用级覆盖。
-//
-// EmbeddingBatchSize:
-//
-//	单次 EmbedStrings 发送多少 SearchContent。
-//
-// SearchBuilder:
-//
-//	决定最终向量化/BM25 使用什么文本。
+// Config 只包含 PostgreSQL 实现所需的设置，检索文本在应用层统一构造。
 type Config struct {
-	ProfileID          string
-	ProfileJSON        string
+	// ProfileID 知识库绑定的向量空间 ID 与配置快照。
+	ProfileID, ProfileJSON string
+	// VersionedDocuments 要求通过预留版本发布，防止旧任务覆盖新文档。
 	VersionedDocuments bool
-	CollectionID       string
-	Embedder           embedding.Embedder
+	// CollectionID 原生组件的默认知识库范围，可由 WithIndex 指定。
+	CollectionID string
+	// Embedder 用于索引的 Eino 向量模型。
+	Embedder embedding.Embedder
+	// EmbeddingBatchSize 单次请求最多处理的文本条数。
 	EmbeddingBatchSize int
-	InputBudget        embeddinginput.Budget
-	SearchBuilder      searchcontent.Builder
+	// InputBudget 完整检索文本的单条和单批 token 预算。
+	InputBudget embeddinginput.Budget
 }
 
-// DefaultConfig 返回 PostgreSQL Indexer 推荐默认值。
-func DefaultConfig() Config {
-	return Config{
-		EmbeddingBatchSize: DefaultEmbeddingBatchSize,
-		SearchBuilder:      searchcontent.DefaultBuilder(),
-	}
-}
+// DefaultConfig 返回默认向量请求批次大小。
+func DefaultConfig() Config { return Config{EmbeddingBatchSize: DefaultEmbeddingBatchSize} }
 
-// storeOptions 是 PGIndexer 自己的调用级配置。
-//
-// Eino 公共 Indexer Option 已经负责：
-//
-//	WithIndex
-//	WithEmbedding
-//	WithSubIndexes
-//
-// 我们这里只补一个 Eino 公共接口没有提供的能力：
-//
-//	embedding.Option
-//
-// 例如某些 Embedder 支持：
-//
-//	embedding.WithModel(...)
-type storeOptions struct {
-	embeddingOptions []embedding.Option
-}
+type storeOptions struct{ embeddingOptions []embedding.Option }
 
-// WithEmbeddingOptions 把 Embedding call options
-// 传递给真正的 EmbedStrings。
+// WithEmbeddingOptions 使用 Eino 实现专属 Option 向模型转发调用参数。
 func WithEmbeddingOptions(opts ...embedding.Option) indexer.Option {
 	copied := append([]embedding.Option(nil), opts...)
-
-	return indexer.WrapImplSpecificOptFn(func(options *storeOptions) {
-		options.embeddingOptions = copied
-	})
+	return indexer.WrapImplSpecificOptFn(func(o *storeOptions) { o.embeddingOptions = copied })
 }
 
-// transaction 是 Indexer 真正需要的最小事务能力。
-//
-// 不直接让业务逻辑依赖完整 pgx.Tx 接口，
-// 方便单元测试使用 lightweight fake。
+// 这些内部接口用于测试事务，不是新增的检索库接口。
 type transaction interface {
-	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
-	Commit(ctx context.Context) error
-	Rollback(ctx context.Context) error
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	Commit(context.Context) error
+	Rollback(context.Context) error
 }
-
-// database 同理，只要求 Begin。
 type database interface {
-	Begin(ctx context.Context) (transaction, error)
+	Begin(context.Context) (transaction, error)
 }
+type poolDatabase struct{ pool *pgxpool.Pool }
 
-// poolDatabase 把 pgxpool.Pool 适配成上面的最小 database。
-type poolDatabase struct {
-	pool *pgxpool.Pool
-}
+// Begin 将连接池事务适配到内部测试接口。
+func (d poolDatabase) Begin(ctx context.Context) (transaction, error) { return d.pool.Begin(ctx) }
 
-func (d poolDatabase) Begin(ctx context.Context) (transaction, error) {
-	tx, err := d.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return tx, nil
-}
-
-// Indexer 实现 Eino indexer.Indexer。
-//
-// Store 的语义是：
-//
-//	“替换这些 source document 的完整 Chunk 集合”
-//
-// 而不是：
-//
-//	“向已有文档随便 append 一些 Chunk”。
-//
-// 为什么？
-//
-// 假设第一次：
-//
-//	Chunk 0
-//	Chunk 1
-//	Chunk 2
-//	Chunk 3
-//
-// 后来调整 ChunkSize，重新 ingest：
-//
-//	Chunk 0
-//	Chunk 1
-//
-// 如果只是 UPSERT 新 Chunk：
-//
-//	老 Chunk 2
-//	老 Chunk 3
-//
-// 会永久残留在检索索引里。
-//
-// 所以当前 PGIndexer 会：
-//
-//	upsert document
-//	delete old chunks of this document
-//	insert complete new chunk set
-//
-// 整个过程在事务中完成。
+// Indexer Eino 原生索引器，在 PostgreSQL 中保存完整文档和检索索引。
 type Indexer struct {
 	db     database
 	config Config
 }
 
-// NewIndexer 创建正式使用 pgxpool 的 PGIndexer。
-func NewIndexer(pool *pgxpool.Pool, config Config) (*Indexer, error) {
-	if err := config.InputBudget.Validate(); err != nil {
+// NewIndexer 校验配置并绑定连接池，连接池的关闭由组装层负责。
+func NewIndexer(pool *pgxpool.Pool, cfg Config) (*Indexer, error) {
+	if err := cfg.InputBudget.Validate(); err != nil {
 		return nil, err
 	}
-	if config.EmbeddingBatchSize < 0 {
+	if cfg.EmbeddingBatchSize < 0 {
 		return nil, errors.New("postgres indexer: negative embedding batch size")
 	}
 	if pool == nil {
-		return nil, fmt.Errorf("postgres indexer: nil pool")
+		return nil, errors.New("postgres indexer: nil pool")
 	}
-
-	return newIndexerWithDatabase(poolDatabase{pool: pool}, config), nil
+	return newIndexerWithDatabase(poolDatabase{pool}, cfg), nil
+}
+func newIndexerWithDatabase(db database, cfg Config) *Indexer {
+	if cfg.EmbeddingBatchSize == 0 {
+		cfg.EmbeddingBatchSize = DefaultEmbeddingBatchSize
+	}
+	return &Indexer{db: db, config: cfg}
 }
 
-// newIndexerWithDatabase 主要用于单元测试。
-func newIndexerWithDatabase(db database, config Config) *Indexer {
-	if config.EmbeddingBatchSize <= 0 {
-		config.EmbeddingBatchSize = DefaultEmbeddingBatchSize
-	}
-
-	if len(config.SearchBuilder.TitleKeys) == 0 &&
-		config.SearchBuilder.ContextHeaderKey == "" {
-
-		config.SearchBuilder = searchcontent.DefaultBuilder()
-	}
-
-	config.SearchBuilder.TitleKeys = append([]string(nil), config.SearchBuilder.TitleKeys...)
-	return &Indexer{
-		db:     db,
-		config: config,
-	}
-}
-
-// Store 实现 Eino Indexer。
-//
-// 整体流程：
-//
-//	Chunk Documents
-//	     ↓
-//	Build SearchContent
-//	     ↓
-//	Embed in batches
-//	     ↓
-//	validate 1024 dimensions
-//	     ↓
-//	BEGIN
-//	     ↓
-//	upsert documents
-//	     ↓
-//	delete stale chunks
-//	     ↓
-//	insert chunks
-//	     ↓
-//	insert retrieval_index
-//	     ↓
-//	COMMIT
-//
-// Embedding 故意发生在事务外。
-//
-// 原因：
-//
-// Embedding 是网络 / 模型调用，可能耗时几百毫秒甚至几秒。
-//
-// 如果先 BEGIN 再等模型：
-//
-//	PostgreSQL transaction
-//
-// 会被白白占用很长时间。
-func (p *Indexer) Store(
-	ctx context.Context,
-	docs []*schema.Document,
-	opts ...indexer.Option,
-) ([]string, error) {
+// Store 是唯一索引入口。普通 Eino 文档以“一份原文、一个分块”保存；应用层切分的
+// 文档通过 WithIngestionBatch 附带完整原文和父块，每个文档版本在一个事务内替换。
+// 模型调用放在事务前，避免等待网络时占用数据库事务。
+func (p *Indexer) Store(ctx context.Context, docs []*schema.Document, opts ...indexer.Option) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	if len(docs) == 0 {
-		return nil, nil
-	}
-
-	collectionID := strings.TrimSpace(p.config.CollectionID)
-
-	baseOptions := &indexer.Options{
-		Embedding: p.config.Embedder,
-	}
-
-	if collectionID != "" {
-		baseOptions.Index = &collectionID
-	}
-
-	common := indexer.GetCommonOptions(baseOptions, opts...)
-	specific := indexer.GetImplSpecificOptions(&storeOptions{}, opts...)
-
+	collection := strings.TrimSpace(p.config.CollectionID)
+	common := indexer.GetCommonOptions(&indexer.Options{Index: &collection, Embedding: p.config.Embedder}, opts...)
 	if common.Index == nil || strings.TrimSpace(*common.Index) == "" {
 		return nil, ErrMissingCollectionID
 	}
-
-	collectionID = strings.TrimSpace(*common.Index)
-
+	collection = strings.TrimSpace(*common.Index)
 	if len(common.SubIndexes) > 0 {
 		return nil, ErrSubIndexesUnsupported
 	}
-
-	if common.Embedding == nil {
+	specific := indexer.GetImplSpecificOptions(&storeOptions{}, opts...)
+	if p.config.ProfileID != "" && (indexer.GetCommonOptions(nil, opts...).Embedding != nil || len(specific.embeddingOptions) > 0) {
+		// 配置签名不能继续声明旧模型，却实际使用调用方临时替换的模型。
+		return nil, ErrPinnedEmbedding
+	}
+	source := indexer.GetImplSpecificOptions(&rag.IngestionOptions{}, opts...).Batch
+	if len(docs) == 0 && source == nil {
+		return nil, nil
+	}
+	if common.Embedding == nil && len(docs) > 0 {
 		return nil, ErrMissingEmbedder
 	}
-
-	if p.config.VersionedDocuments {
-		return nil, errors.New("rag: versioned collections require application.Ingest or ReplaceDocument")
-	}
-	if err := p.ensureProfile(ctx, collectionID); err != nil {
-		return nil, err
-	}
-	prepared, documents, texts, ids, err := p.prepareDocuments(docs)
-	if err != nil {
-		return nil, err
-	}
-
-	vectors, err := embedTexts(
-		ctx,
-		common.Embedding,
-		texts,
-		p.config.EmbeddingBatchSize,
-		specific.embeddingOptions,
-		p.config.InputBudget,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if len(vectors) != len(prepared) {
-		return nil, fmt.Errorf(
-			"%w: expected %d vectors, got %d",
-			ErrInvalidEmbedding,
-			len(prepared),
-			len(vectors),
-		)
-	}
-
-	for i, vector := range vectors {
-		half, err := makeHalfVector(vector)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"chunk %q: %w",
-				prepared[i].chunkID,
-				err,
-			)
+	ids := make([]string, len(docs))
+	seen := make(map[string]bool, len(docs))
+	for i, d := range docs {
+		if d == nil || strings.TrimSpace(d.ID) == "" {
+			return nil, ErrMissingChunkID
 		}
-
-		prepared[i].embedding = half
-	}
-
-	tx, err := p.db.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin postgres index transaction: %w", err)
-	}
-
-	defer func() {
-		// pgx 明确允许 Commit 后继续调用 Rollback；
-		// 它只会返回 transaction closed。
-		//
-		// 因此 defer Rollback 是安全模式。
-		_ = tx.Rollback(ctx)
-	}()
-
-	// map 遍历顺序不稳定。
-	//
-	// 排序以后：
-	//
-	//     测试
-	//     SQL trace
-	//     Debug
-	//
-	// 都更确定。
-	documentIDs := make([]string, 0, len(documents))
-
-	for id := range documents {
-		documentIDs = append(documentIDs, id)
-	}
-
-	sort.Strings(documentIDs)
-
-	for _, documentID := range documentIDs {
-		doc := documents[documentID]
-
-		tag, err := tx.Exec(
-			ctx,
-			upsertDocumentSQL,
-			collectionID,
-			doc.documentID,
-			doc.title,
-			doc.markdown,
-			doc.metadataJSON,
-			int64(0),
-			fmt.Sprintf("%x", sha256.Sum256([]byte(doc.markdown))),
-			"{}",
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"upsert document %q: %w",
-				doc.documentID,
-				err,
-			)
+		if seen[d.ID] {
+			return nil, fmt.Errorf("postgres indexer: duplicate id %q", d.ID)
 		}
-
-		if tag.RowsAffected() != 1 {
-			return nil, ErrStaleIngestion
+		seen[d.ID] = true
+		if strings.TrimSpace(d.Content) == "" {
+			return nil, ErrEmptySearchContent
 		}
-
-		// chunks → retrieval_index 使用 ON DELETE CASCADE。
-		//
-		// 删除旧 chunks 就会自动删除旧 retrieval rows。
-		if _, err := tx.Exec(
-			ctx,
-			deleteDocumentChunksSQL,
-			collectionID,
-			doc.documentID,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"delete stale chunks for document %q: %w",
-				doc.documentID,
-				err,
-			)
+		ids[i] = d.ID
+	}
+	if source != nil {
+		batch := *source
+		if batch.CollectionID != collection || len(docs) != len(batch.Children) {
+			return nil, ErrIncompleteSource
+		}
+		texts := make([]string, len(docs))
+		for i, d := range docs {
+			raw, ok := d.MetaData[retrieval.MetaRawContent].(string)
+			if d.ID != batch.Children[i].ID || !ok || raw != batch.Children[i].Content {
+				return nil, ErrIncompleteSource
+			}
+			texts[i] = d.Content
+		}
+		if err := p.storeDocument(ctx, batch, texts, common.Embedding, specific.embeddingOptions); err != nil {
+			return nil, err
+		}
+		return ids, nil
+	}
+	// 有分块身份的输入不能被误当作完整原文，否则一次部分更新会删掉其他分块。
+	for _, d := range docs {
+		if d.MetaData[retrieval.MetaSourceDocumentID] != nil || d.MetaData[retrieval.MetaDocumentID] != nil {
+			return nil, ErrIncompleteSource
 		}
 	}
-
-	for _, chunk := range prepared {
-		if _, err := tx.Exec(
-			ctx,
-			insertChunkSQL,
-			collectionID,
-			chunk.chunkID,
-			chunk.documentID,
-			chunk.chunkIndex,
-			chunk.chunkType,
-			chunk.content,
-			chunk.contextHeader,
-			chunk.startRune,
-			chunk.endRune,
-			nullableString(chunk.parentChunkID),
-			chunk.metadataJSON,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"insert chunk %q: %w",
-				chunk.chunkID,
-				err,
-			)
+	for _, d := range docs {
+		batch := rag.IngestionBatch{CollectionID: collection, DocumentID: d.ID, Title: searchcontent.DefaultBuilder().Title(d), Markdown: d.Content, Metadata: d.MetaData,
+			Children: []rag.ChunkRecord{{ID: d.ID, DocumentID: d.ID, ChunkType: rag.ChunkTypeText, Content: d.Content, EndRune: utf8.RuneCountInString(d.Content), Metadata: d.MetaData}}}
+		if p.config.VersionedDocuments {
+			revision, err := p.ReserveDocument(ctx, collection, d.ID)
+			if err != nil {
+				return nil, err
+			}
+			batch.Attempt = revision
 		}
-
-		if _, err := tx.Exec(
-			ctx,
-			insertRetrievalSQL,
-			collectionID,
-			chunk.chunkID,
-			chunk.documentID,
-			chunk.searchContent,
-			chunk.embedding,
-			chunk.metadataJSON,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"insert retrieval index for chunk %q: %w",
-				chunk.chunkID,
-				err,
-			)
+		if err := p.storeDocument(ctx, batch, []string{d.Content}, common.Embedding, specific.embeddingOptions); err != nil {
+			return nil, err
 		}
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit postgres index transaction: %w", err)
-	}
-
 	return ids, nil
 }
 
-type preparedDocument struct {
-	documentID     string
-	title          string
-	markdown       string
-	expectedChunks int
-	metadataJSON   string
-}
-
-type preparedChunk struct {
-	chunkID       string
-	documentID    string
-	chunkIndex    int
-	chunkType     string
-	content       string
-	contextHeader string
-	startRune     int
-	endRune       int
-	parentChunkID string
-	searchContent string
-	metadataJSON  string
-	embedding     pgvector.HalfVector
-}
-
-// prepareDocuments 做数据库写入之前的纯数据校验和转换。
-func (p *Indexer) prepareDocuments(
-	docs []*schema.Document,
-) (
-	[]preparedChunk,
-	map[string]preparedDocument,
-	[]string,
-	[]string,
-	error,
-) {
-	prepared := make([]preparedChunk, 0, len(docs))
-	documents := make(map[string]preparedDocument)
-	texts := make([]string, 0, len(docs))
-	ids := make([]string, 0, len(docs))
-
-	chunkIDs := make(map[string]struct{}, len(docs))
-	documentChunkIndexes := make(map[string]map[int]struct{})
-
-	for i, doc := range docs {
-		if doc == nil {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"postgres indexer: docs[%d] is nil",
-				i,
-			)
-		}
-
-		chunkID := strings.TrimSpace(doc.ID)
-
-		if chunkID == "" {
-			return nil, nil, nil, nil, ErrMissingChunkID
-		}
-
-		if _, exists := chunkIDs[chunkID]; exists {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"postgres indexer: duplicate chunk id %q",
-				chunkID,
-			)
-		}
-
-		chunkIDs[chunkID] = struct{}{}
-
-		documentID := metadataString(
-			doc.MetaData,
-			metaSourceDocumentID,
-		)
-
-		if documentID == "" {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"%w for chunk %q",
-				ErrMissingSourceDocumentID,
-				chunkID,
-			)
-		}
-		chunkType := metadataString(doc.MetaData, metaChunkType)
-		if chunkType != "" && chunkType != application.ChunkTypeText || metadataString(doc.MetaData, metaParentChunkID) != "" {
-			return nil, nil, nil, nil, ErrIncompleteSource
-		}
-		chunkType = application.ChunkTypeText
-
-		chunkIndex, err := metadataInt(
-			doc.MetaData,
-			metaChunkIndex,
-		)
-
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"chunk %q: %w",
-				chunkID,
-				err,
-			)
-		}
-
-		startRune, err := metadataInt(
-			doc.MetaData,
-			metaChunkStart,
-		)
-
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"chunk %q: %w",
-				chunkID,
-				err,
-			)
-		}
-
-		endRune, err := metadataInt(
-			doc.MetaData,
-			metaChunkEnd,
-		)
-
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"chunk %q: %w",
-				chunkID,
-				err,
-			)
-		}
-
-		if chunkIndex < 0 {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"chunk %q: negative chunk index %d",
-				chunkID,
-				chunkIndex,
-			)
-		}
-
-		if startRune < 0 || endRune < startRune {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"chunk %q: invalid rune range [%d,%d)",
-				chunkID,
-				startRune,
-				endRune,
-			)
-		}
-
-		if _, ok := documentChunkIndexes[documentID]; !ok {
-			documentChunkIndexes[documentID] = make(map[int]struct{})
-		}
-
-		if _, exists := documentChunkIndexes[documentID][chunkIndex]; exists {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"postgres indexer: duplicate chunk index %d for document %q",
-				chunkIndex,
-				documentID,
-			)
-		}
-
-		documentChunkIndexes[documentID][chunkIndex] = struct{}{}
-
-		searchText := p.config.SearchBuilder.Build(doc)
-
-		if strings.TrimSpace(searchText) == "" {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"%w for chunk %q",
-				ErrEmptySearchContent,
-				chunkID,
-			)
-		}
-
-		chunkMetadataJSON, err := marshalMetadata(withoutAdapterEnvelope(doc.MetaData))
-
-		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf(
-				"marshal metadata for chunk %q: %w",
-				chunkID,
-				err,
-			)
-		}
-
-		contextHeader := metadataString(
-			doc.MetaData,
-			metaContextHeader,
-		)
-
-		parentChunkID := metadataString(
-			doc.MetaData,
-			metaParentChunkID,
-		)
-
-		prepared = append(prepared, preparedChunk{
-			chunkID:       chunkID,
-			documentID:    documentID,
-			chunkIndex:    chunkIndex,
-			chunkType:     chunkType,
-			content:       doc.Content,
-			contextHeader: contextHeader,
-			startRune:     startRune,
-			endRune:       endRune,
-			parentChunkID: parentChunkID,
-			searchContent: searchText,
-			metadataJSON:  chunkMetadataJSON,
-		})
-
-		texts = append(texts, searchText)
-		ids = append(ids, chunkID)
-
-		if _, exists := documents[documentID]; !exists {
-			markdown, ok := doc.MetaData[application.MetaSourceMarkdown].(string)
-			expected, err := metadataInt(doc.MetaData, application.MetaSourceChunkCount)
-			if !ok || strings.TrimSpace(markdown) == "" || err != nil || expected <= 0 {
-				return nil, nil, nil, nil, ErrIncompleteSource
-			}
-			documentMetadata := stripChunkMetadata(doc.MetaData)
-
-			documentMetadataJSON, err := marshalMetadata(documentMetadata)
-			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf(
-					"marshal metadata for document %q: %w",
-					documentID,
-					err,
-				)
-			}
-
-			title := p.config.SearchBuilder.Title(doc)
-
-			if title == "" {
-				title = documentID
-			}
-
-			documents[documentID] = preparedDocument{
-				documentID:     documentID,
-				title:          title,
-				markdown:       markdown,
-				expectedChunks: expected,
-				metadataJSON:   documentMetadataJSON,
-			}
-		}
-		original := documents[documentID]
-		markdown, _ := doc.MetaData[application.MetaSourceMarkdown].(string)
-		expected, err := metadataInt(doc.MetaData, application.MetaSourceChunkCount)
-		if err != nil || expected != original.expectedChunks || markdown != original.markdown || endRune > len([]rune(original.markdown)) {
-			return nil, nil, nil, nil, ErrIncompleteSource
-		}
-	}
-	for id, doc := range documents {
-		if len(documentChunkIndexes[id]) != doc.expectedChunks {
-			return nil, nil, nil, nil, ErrIncompleteSource
-		}
-		for i := 0; i < doc.expectedChunks; i++ {
-			if _, ok := documentChunkIndexes[id][i]; !ok {
-				return nil, nil, nil, nil, ErrIncompleteSource
-			}
-		}
-	}
-
-	return prepared, documents, texts, ids, nil
-}
-
-// embedTexts 按 batch 调用 Eino Embedder。
-//
-// Eino 保证：
-//
-//	embeddings[i]
-//
-// 对应：
-//
-//	texts[i]
-//
-// 所以只需要保持 batch append 顺序即可。
+// embedTexts 按输入预算分批生成向量，校验数量、维度和半精度有效范围。
 func embedTexts(
 	ctx context.Context,
 	embedder embedding.Embedder,
@@ -845,8 +293,7 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 		}
 
 		values[i] = float32(value)
-		// Values below half precision's smallest representable subnormal
-		// round to zero. Such a vector cannot participate in cosine search.
+		// 半精度转换后归零的向量不能用于余弦检索，需要提前拒绝。
 		if math.Abs(float64(values[i])) > math.Ldexp(1, -25) {
 			nonzero = true
 		}
@@ -858,92 +305,7 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 	return pgvector.NewHalfVector(values), nil
 }
 
-func metadataString(metadata map[string]any, key string) string {
-	if len(metadata) == 0 {
-		return ""
-	}
-
-	value, ok := metadata[key]
-	if !ok {
-		return ""
-	}
-
-	text, ok := value.(string)
-	if !ok {
-		return ""
-	}
-
-	return strings.TrimSpace(text)
-}
-
-// metadataInt 同时兼容：
-//
-//	int
-//	int32
-//	int64
-//	float64
-//	string
-//
-// 为什么需要 float64？
-//
-// schema.Document metadata 如果未来经过 JSON：
-//
-//	marshal
-//	unmarshal
-//
-// JSON number 默认会变成 float64。
-func metadataInt(metadata map[string]any, key string) (int, error) {
-	if len(metadata) == 0 {
-		return 0, fmt.Errorf("missing metadata %q", key)
-	}
-
-	value, ok := metadata[key]
-	if !ok {
-		return 0, fmt.Errorf("missing metadata %q", key)
-	}
-
-	switch typed := value.(type) {
-	case int:
-		return typed, nil
-
-	case int32:
-		return int(typed), nil
-
-	case int64:
-		return int(typed), nil
-
-	case float64:
-		if math.Trunc(typed) != typed {
-			return 0, fmt.Errorf(
-				"metadata %q is not an integer: %v",
-				key,
-				typed,
-			)
-		}
-
-		return int(typed), nil
-
-	case string:
-		parsed, err := strconv.Atoi(strings.TrimSpace(typed))
-		if err != nil {
-			return 0, fmt.Errorf(
-				"metadata %q is not an integer: %q",
-				key,
-				typed,
-			)
-		}
-
-		return parsed, nil
-
-	default:
-		return 0, fmt.Errorf(
-			"metadata %q has unsupported type %T",
-			key,
-			value,
-		)
-	}
-}
-
+// marshalMetadata 将元数据编码为 JSON，空元数据仍保存为对象。
 func marshalMetadata(metadata map[string]any) (string, error) {
 	if metadata == nil {
 		return "{}", nil
@@ -957,49 +319,7 @@ func marshalMetadata(metadata map[string]any) (string, error) {
 	return string(data), nil
 }
 
-// stripChunkMetadata 构造 document-level metadata。
-//
-// Chunk-specific 信息不应该写进 documents.metadata，
-//
-// 否则 documents 表会出现这种奇怪数据：
-//
-//	rag_chunk_index = 0
-//	rag_chunk_start = 0
-//
-// 好像整个 Document 只代表第一个 Chunk。
-func stripChunkMetadata(metadata map[string]any) map[string]any {
-	if len(metadata) == 0 {
-		return nil
-	}
-
-	result := make(map[string]any, len(metadata))
-
-	for key, value := range metadata {
-		result[key] = value
-	}
-
-	delete(result, metaChunkIndex)
-	delete(result, metaChunkStart)
-	delete(result, metaChunkEnd)
-	delete(result, metaContextHeader)
-	delete(result, metaChunkType)
-	delete(result, metaParentChunkID)
-	delete(result, application.MetaSourceMarkdown)
-	delete(result, application.MetaSourceChunkCount)
-
-	return result
-}
-
-func withoutAdapterEnvelope(metadata map[string]any) map[string]any {
-	copy := make(map[string]any, len(metadata))
-	for key, value := range metadata {
-		copy[key] = value
-	}
-	delete(copy, application.MetaSourceMarkdown)
-	delete(copy, application.MetaSourceChunkCount)
-	return copy
-}
-
+// nullableString 将空字符串映射为数据库 NULL。
 func nullableString(value string) any {
 	value = strings.TrimSpace(value)
 
@@ -1009,8 +329,6 @@ func nullableString(value string) any {
 
 	return value
 }
-
-const upsertDocumentSQL = upsertIngestionDocumentSQL
 
 const deleteDocumentChunksSQL = `
 DELETE FROM chunks

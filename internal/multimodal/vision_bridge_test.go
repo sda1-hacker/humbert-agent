@@ -3,12 +3,31 @@ package multimodal
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
+
+// 纯文本追问也消耗回放窗口，Assistant、工具和 nil 消息不消耗用户轮次。
+func TestAttachmentReplayWindowFollowsUserTurns(t *testing.T) {
+	messages := []*schema.Message{
+		{Role: schema.User, Content: "较早的图片/文件"},
+		{Role: schema.Assistant, Content: "已观察"},
+		nil,
+		{Role: schema.User, Content: "上一轮附件"},
+		{Role: schema.Tool, Content: "工具结果"},
+		{Role: schema.User, Content: "纯文本追问"},
+	}
+	if got, want := AttachmentReplayMask(messages), []bool{false, false, false, true, false, true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("附件窗口错误: got=%v want=%v", got, want)
+	}
+	if got := AttachmentReplayMask(nil); got == nil || len(got) != 0 {
+		t.Fatalf("空上下文应返回空窗口: %v", got)
+	}
+}
 
 type visionModelStub struct {
 	messages []*schema.Message

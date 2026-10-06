@@ -13,17 +13,20 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/components/embedding"
+	einoindexer "github.com/cloudwego/eino/components/indexer"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	core "github.com/sda1-hacker/humbert-agent/internal/rag/retriever"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/sda1-hacker/humbert-agent/internal/rag"
 	indexpg "github.com/sda1-hacker/humbert-agent/internal/rag/indexer/postgres"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 	retrievepg "github.com/sda1-hacker/humbert-agent/internal/rag/retriever/postgres"
 )
 
-// These tests create and drop only their own randomly named schema. The DSN
-// must point at a dedicated test database with extensions already installed.
+// 这些测试只创建和删除随机命名的测试 schema；连接必须指向已安装扩展的专用测试数据库。
 func integrationPool(t *testing.T) (context.Context, *pgxpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("HUMBERT_RAG_TEST_DATABASE_URL")
@@ -126,19 +129,19 @@ func versionedIndexer(t *testing.T, pool *pgxpool.Pool, e *integrationEmbedder) 
 	return p
 }
 
-func flatBatch(collection, doc, content string, attempt int64) application.IngestionBatch {
-	return application.IngestionBatch{CollectionID: collection, DocumentID: doc, Attempt: attempt, Title: "SQL test", Markdown: content,
-		Children: []application.ChunkRecord{{ID: doc + "-child", DocumentID: doc, ChunkType: application.ChunkTypeText, Content: content, EndRune: len([]rune(content))}}}
+func flatBatch(collection, doc, content string, attempt int64) rag.IngestionBatch {
+	return rag.IngestionBatch{CollectionID: collection, DocumentID: doc, Attempt: attempt, Title: "SQL test", Markdown: content,
+		Children: []rag.ChunkRecord{{ID: doc + "-child", DocumentID: doc, ChunkType: rag.ChunkTypeText, Content: content, EndRune: len([]rune(content))}}}
 }
 
-func publish(t *testing.T, ctx context.Context, p *indexpg.Indexer, collection, doc, content string) application.IngestionBatch {
+func publish(t *testing.T, ctx context.Context, p *indexpg.Indexer, collection, doc, content string) rag.IngestionBatch {
 	t.Helper()
 	attempt, err := p.ReserveDocument(ctx, collection, doc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	batch := flatBatch(collection, doc, content, attempt)
-	if err = p.ReplaceDocument(ctx, batch); err != nil {
+	if err = storeBatch(p, ctx, batch); err != nil {
 		t.Fatal(err)
 	}
 	return batch
@@ -149,30 +152,37 @@ func TestIntegrationLifecycleSearchAndIsolation(t *testing.T) {
 	e := &integrationEmbedder{}
 	p := versionedIndexer(t, pool, e)
 	a := publish(t, ctx, p, "a", "same-id", "alphaonly installation 初始版本")
-	if err := p.ReplaceDocument(ctx, a); err != nil {
+	if err := storeBatch(p, ctx, a); err != nil {
 		t.Fatalf("identical attempt retry failed: %v", err)
 	}
 	changedTitle := a
 	changedTitle.Title = "changed embedding title"
-	if err := p.ReplaceDocument(ctx, changedTitle); !errors.Is(err, indexpg.ErrStaleIngestion) {
+	if err := storeBatch(p, ctx, changedTitle); !errors.Is(err, indexpg.ErrStaleIngestion) {
 		t.Fatalf("same revision accepted changed embedding input: %v", err)
 	}
 	publish(t, ctx, p, "b", "same-id", "betaonly configuration 另一个知识库")
 	for _, mode := range []string{"semantic", "keyword", "hybrid"} {
 		t.Run(mode, func(t *testing.T) {
-			cfg := retrievepg.DefaultHybridConfig()
-			cfg.CollectionID = "a"
-			cfg.Embedder = e
-			cfg.VectorThreshold = 0
-			factory, err := retrievepg.NewPipelineFactory(pool, retrievepg.PipelineFactoryConfig{Hybrid: cfg})
+			vectorCfg := retrievepg.DefaultVectorConfig()
+			vectorCfg.Embedder = e
+			vectorCfg.ScoreThreshold = 0
+			vector, err := retrievepg.NewVectorRetriever(pool, vectorCfg)
 			if err != nil {
 				t.Fatal(err)
 			}
-			engine, err := factory.ForRequest(application.SearchRequest{CollectionID: "a", Mode: mode, Limit: 10})
+			keyword, err := retrievepg.NewBM25Retriever(pool, retrievepg.DefaultBM25Config())
 			if err != nil {
 				t.Fatal(err)
 			}
-			r, err := engine.Search(ctx, "alphaonly")
+			hybrid, err := core.NewHybrid(vector, keyword, core.DefaultHybridConfig())
+			if err != nil {
+				t.Fatal(err)
+			}
+			service, err := rag.New(ctx, rag.Dependencies{Config: rag.Config{Retriever: hybrid, VectorRetriever: vector, KeywordRetriever: keyword}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, err := service.Search(ctx, rag.SearchRequest{CollectionID: "a", Mode: mode, Limit: 10, Query: "alphaonly"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -182,20 +192,20 @@ func TestIntegrationLifecycleSearchAndIsolation(t *testing.T) {
 		})
 	}
 	newer := publish(t, ctx, p, "a", "same-id", "replacementonly installation 新版本")
-	if err := p.ReplaceDocument(ctx, a); !errors.Is(err, indexpg.ErrStaleIngestion) {
+	if err := storeBatch(p, ctx, a); !errors.Is(err, indexpg.ErrStaleIngestion) {
 		t.Fatalf("old attempt accepted: %v", err)
 	}
 	if err := p.InvalidateDocument(ctx, "a", "same-id"); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.ReplaceDocument(ctx, newer); !errors.Is(err, indexpg.ErrStaleIngestion) {
+	if err := storeBatch(p, ctx, newer); !errors.Is(err, indexpg.ErrStaleIngestion) {
 		t.Fatalf("canceled attempt accepted: %v", err)
 	}
 	latest := publish(t, ctx, p, "a", "same-id", "latestonly installation 可用版本")
 	if err := p.DeleteDocument(ctx, "a", "same-id"); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.ReplaceDocument(ctx, latest); !errors.Is(err, indexpg.ErrStaleIngestion) {
+	if err := storeBatch(p, ctx, latest); !errors.Is(err, indexpg.ErrStaleIngestion) {
 		t.Fatalf("deleted document resurrected: %v", err)
 	}
 	var count int
@@ -215,15 +225,60 @@ func TestIntegrationLifecycleSearchAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results, err := vector.Search(ctx, "betaonly"); err != nil || len(results) != 0 {
+	if results, err := vector.Retrieve(ctx, "betaonly"); err != nil || len(results) != 0 {
 		t.Fatalf("disabled vector returned: %+v %v", results, err)
 	}
 	keyword, err := retrievepg.NewBM25Retriever(pool, retrievepg.BM25Config{CollectionID: "b"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results, err := keyword.Search(ctx, "betaonly"); err != nil || len(results) != 0 {
+	if results, err := keyword.Retrieve(ctx, "betaonly"); err != nil || len(results) != 0 {
 		t.Fatalf("disabled keyword returned: %+v %v", results, err)
+	}
+}
+
+// 验证权威库可以独立于 PostgreSQL 的向量/BM25 索引发布并读取内容。
+func TestIntegrationPublishedChunksForExternalIndexes(t *testing.T) {
+	ctx, pool := migratedPool(t)
+	p, err := indexpg.NewIndexer(pool, indexpg.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := p.ReserveDocument(ctx, "external", "doc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := flatBatch("external", "doc", "来自权威文档的正文", revision)
+	if err := p.PublishDocument(ctx, batch); err != nil {
+		t.Fatal(err)
+	}
+	chunks, err := p.ListChunks(ctx, "external", "doc")
+	if err != nil || len(chunks) != 1 || chunks[0].Content != batch.Markdown {
+		t.Fatalf("%+v %v", chunks, err)
+	}
+	var indexCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM retrieval_index WHERE collection_id='external'`).Scan(&indexCount); err != nil || indexCount != 0 {
+		t.Fatalf("权威库发布写入了检索索引：%d %v", indexCount, err)
+	}
+	base := retrieval.SearchResult{CollectionID: "external", DocumentID: "doc", DocumentRevision: revision, ChunkID: chunks[0].ID, Score: .8, Content: "外部索引中的旧副本"}
+	unpublished, wrongCollection, wrongDocument := base, base, base
+	unpublished.DocumentRevision++
+	wrongCollection.CollectionID = "other"
+	wrongDocument.DocumentID = "other"
+	resolved, err := p.ResolveChunks(ctx, "external", []retrieval.SearchResult{unpublished, wrongCollection, wrongDocument, base})
+	if err != nil || len(resolved) != 1 || resolved[0].Content != batch.Markdown || resolved[0].Score != .8 {
+		t.Fatalf("版本过滤或正文回查错误：%+v %v", resolved, err)
+	}
+	cutoff, err := p.TombstoneDocument(ctx, "external", "doc")
+	if err != nil || cutoff <= revision {
+		t.Fatalf("%d %v", cutoff, err)
+	}
+	resolved, err = p.ResolveChunks(ctx, "external", []retrieval.SearchResult{base})
+	if err != nil || len(resolved) != 0 {
+		t.Fatalf("删除后返回旧分块：%+v %v", resolved, err)
+	}
+	if err := p.PublishDocument(ctx, batch); !errors.Is(err, indexpg.ErrStaleIngestion) {
+		t.Fatalf("删除后旧任务复活：%v", err)
 	}
 }
 
@@ -232,14 +287,14 @@ func TestIntegrationParentForeignKeyAndAtomicRollback(t *testing.T) {
 	e := &integrationEmbedder{}
 	p := versionedIndexer(t, pool, e)
 	batch := publish(t, ctx, p, "kb", "parent-doc", "tabletoken one two three")
-	batch.Parents = []application.ChunkRecord{{ID: "parent", DocumentID: batch.DocumentID, ChunkType: application.ChunkTypeParentText, Content: batch.Markdown, EndRune: len([]rune(batch.Markdown))}}
+	batch.Parents = []rag.ChunkRecord{{ID: "parent", DocumentID: batch.DocumentID, ChunkType: rag.ChunkTypeParentText, Content: batch.Markdown, EndRune: len([]rune(batch.Markdown))}}
 	batch.Children[0].ParentChunkID = "parent"
 	var err error
 	batch.Attempt, err = p.ReserveDocument(ctx, "kb", "parent-doc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.ReplaceDocument(ctx, batch); err != nil {
+	if err := storeBatch(p, ctx, batch); err != nil {
 		t.Fatal(err)
 	}
 	var chunks, indexes int
@@ -276,11 +331,11 @@ func TestIntegrationParentForeignKeyAndAtomicRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := flatBatch("kb", "rollback-doc", "force_fail new generation", attempt)
-	if err = p.ReplaceDocument(ctx, bad); err == nil {
+	if err = storeBatch(p, ctx, bad); err == nil {
 		t.Fatal("injected SQL failure ignored")
 	}
 	e.fail = true
-	if err = p.ReplaceDocument(ctx, bad); err == nil {
+	if err = storeBatch(p, ctx, bad); err == nil {
 		t.Fatal("injected embedding failure ignored")
 	}
 	e.fail = false
@@ -296,8 +351,7 @@ func TestIntegrationParentForeignKeyAndAtomicRollback(t *testing.T) {
 
 func TestIntegrationLegacySchemaUpgrade(t *testing.T) {
 	ctx, pool := integrationPool(t)
-	// Known pre-parent-child schema: no markdown/type/header/parent columns,
-	// and no independent ParadeDB ID. Adoption must retain the existing row.
+	// 旧版表结构没有完整原文、类型、标题、父块及独立检索 ID；迁移必须保留已有数据。
 	for _, sql := range []string{
 		`CREATE TABLE documents(collection_id TEXT NOT NULL,id TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',metadata JSONB NOT NULL DEFAULT '{}',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(collection_id,id))`,
 		`CREATE TABLE chunks(collection_id TEXT NOT NULL,id TEXT NOT NULL,document_id TEXT NOT NULL,chunk_index INTEGER NOT NULL,content TEXT NOT NULL,start_rune INTEGER NOT NULL,end_rune INTEGER NOT NULL,metadata JSONB NOT NULL DEFAULT '{}',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(collection_id,id),UNIQUE(collection_id,document_id,chunk_index),FOREIGN KEY(collection_id,document_id) REFERENCES documents(collection_id,id) ON DELETE CASCADE)`,
@@ -320,7 +374,7 @@ func TestIntegrationLegacySchemaUpgrade(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT c.content,d.revision FROM chunks c JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id`).Scan(&content, &revision); err != nil || content != "legacytoken" || revision != 0 {
 		t.Fatalf("legacy data lost: %q %d %v", content, revision, err)
 	}
-	// Unknown historical vectors must not silently acquire a new model label.
+	// 模型身份未知的历史向量不能被静默标记为新模型。
 	e := &integrationEmbedder{}
 	cfg := indexpg.DefaultConfig()
 	cfg.Embedder = e
@@ -328,7 +382,7 @@ func TestIntegrationLegacySchemaUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = p.ReplaceDocument(ctx, flatBatch("legacy", "doc", "legacytoken", 0)); err != nil {
+	if err = storeBatch(p, ctx, flatBatch("legacy", "doc", "legacytoken", 0)); err != nil {
 		t.Fatal(err)
 	}
 	if err = indexpg.EnsureCollectionProfile(ctx, pool, "legacy", "unverified-model", `{}`); !errors.Is(err, indexpg.ErrUnboundLegacyIndex) {
@@ -371,7 +425,7 @@ func TestIntegrationConcurrentAttempts(t *testing.T) {
 	for _, attempt := range attempts {
 		go func(attempt int64) {
 			batch := flatBatch("kb", "concurrent", fmt.Sprintf("attempt %d source", attempt), attempt)
-			completed <- completion{attempt, p.ReplaceDocument(ctx, batch)}
+			completed <- completion{attempt, storeBatch(p, ctx, batch)}
 		}(attempt)
 	}
 	for range 4 {
@@ -388,4 +442,9 @@ func TestIntegrationConcurrentAttempts(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT revision FROM documents WHERE collection_id='kb' AND id='concurrent'`).Scan(&revision); err != nil || revision != latest {
 		t.Fatalf("published wrong revision: %d %v", revision, err)
 	}
+}
+
+func storeBatch(p *indexpg.Indexer, ctx context.Context, batch rag.IngestionBatch) error {
+	_, err := p.Store(ctx, rag.IndexDocuments(batch, searchcontent.DefaultBuilder()), einoindexer.WithIndex(batch.CollectionID), rag.WithIngestionBatch(batch))
+	return err
 }

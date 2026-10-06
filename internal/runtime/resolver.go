@@ -4,16 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
-	einotool "github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
-	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
@@ -21,7 +17,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/preferences"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
-	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
@@ -33,126 +28,22 @@ type modelSnapshotResolver interface {
 	MultimediaConfig(ctx context.Context) (models.MultimediaConfig, error)
 }
 
-// BuildChildAgent 为 run_agent 构建一次性的独立 Eino Runtime。
-//
-// 子 Agent 不读取父 Session Transcript，也不创建 Humbert Session；输入只有父 Agent
-// 明确写入 task 的内容。它使用自己的模型、指令和能力选择，但 Workspace/Sandbox 与
-// Permission 身份受父 Runtime 上限制约，不能借协作越权。
-func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.BuildAgentInput) (collaboration.BuiltAgent, error) {
-	if ctx == nil {
-		return collaboration.BuiltAgent{}, errors.New("构建子 Agent 失败: context.Context 不能为空")
-	}
-	childInfo, err := r.agents.Get(ctx, strings.TrimSpace(input.ChildAgentID))
-	if err != nil {
-		return collaboration.BuiltAgent{}, fmt.Errorf("读取子 Agent Profile 失败: %w", err)
-	}
-	if !childInfo.Agent.SubagentEnabled {
-		return collaboration.BuiltAgent{}, errors.New("目标 Agent 未启用“允许作为子 Agent 调用”")
-	}
-	roles, err := r.resolveModelRoles(ctx, childInfo.Agent, turnInputRequirements{})
-	if err != nil {
-		return collaboration.BuiltAgent{}, err
-	}
-	modelSnapshot := roles.chat
-
-	// 能力来自子 Agent Profile；文件、网络和审批身份受父 Scope 约束。
-	capabilities, err := r.capabilities.resolve(ctx, childInfo.Agent, humberttools.Scope{
-		RequestID: input.ParentScope.RequestID, RunID: input.ParentScope.RunID, SessionID: input.ParentScope.SessionID,
-		AgentID: input.ParentScope.AgentID, Workspace: input.ParentScope.Workspace, Sandbox: input.ParentScope.Sandbox,
-		DisabledBuiltinTools: []string{collaboration.ListAgentsToolName, collaboration.RunAgentToolName, "session_history", "install_skill", "schedule_task"},
-		ToolResultMaxChars:   toolResultMaxCharsForContext(modelSnapshot.ContextWindow),
-	}, false)
-	if err != nil {
-		return collaboration.BuiltAgent{}, err
-	}
-	resolvedTools, skillSnapshot := capabilities.tools, capabilities.skills
-	descriptors, toolScope := capabilities.descriptors, capabilities.scope
-	exposedNames := make([]string, 0, len(descriptors))
-	for _, descriptor := range descriptors {
-		exposedNames = append(exposedNames, descriptor.Name)
-	}
-	if err := validateToolCapability(modelSnapshot, modelRoleChat, exposedNames); err != nil {
-		return collaboration.BuiltAgent{}, err
-	}
-
-	instruction := buildRuntimeInstruction(childInfo.Agent.Name, childInfo.Agent.Instruction, input.ParentScope.Workspace, descriptors, time.Now())
-	instruction, err = r.withPersonalMemory(ctx, instruction)
-	if err != nil {
-		return collaboration.BuiltAgent{}, err
-	}
-	instruction, err = r.withResponseLanguage(ctx, instruction)
-	if err != nil {
-		return collaboration.BuiltAgent{}, err
-	}
-	instruction = strings.TrimSpace(instruction + `
-
-## 子 Agent 协作约束
-你正在作为主 Agent 调用的一次性专业子 Agent 运行。你看不到父会话历史；当前用户消息就是完整任务。
-独立完成调查或操作后，返回清晰、可核验的结果给主 Agent。不要假装直接向最终用户说话，也不要继续委派其它 Agent。`)
-	if skillSnapshot.Enabled() {
-		instruction = strings.TrimSpace(instruction + "\n\n" + skillSnapshot.Instruction)
-	}
-
-	childTools, estimateTools := capabilities.executable, capabilities.schemas
-	toolTokens, err := r.contextEngine.EstimateTools(ctx, estimateTools)
-	if err != nil {
-		return collaboration.BuiltAgent{}, fmt.Errorf("估算子 Agent Tool Context 占用失败: %w", err)
-	}
-	budget, err := r.contextEngine.BudgetForModel(modelSnapshot.ContextWindow, modelSnapshot.MaxOutputTokens)
-	if err != nil {
-		return collaboration.BuiltAgent{}, fmt.Errorf("计算子 Agent Context Budget 失败: %w", err)
-	}
-	budget = contextengine.ResolveBudgetForFixedContext(budget, toolTokens+r.contextEngine.EstimateMessages([]*schema.Message{schema.SystemMessage(instruction)}), 0)
-	eventSnapshot := &Snapshot{
-		RequestID: input.ParentScope.RequestID, RunID: input.ParentScope.RunID,
-		SessionID: input.ParentScope.SessionID, AgentID: childInfo.Agent.ID, AgentName: childInfo.Agent.Name,
-		ModelID: modelSnapshot.ModelConfigID, ModelRevision: modelSnapshot.Revision,
-		ToolRevision: resolvedTools.Revision, EventReporter: r.eventReporter,
-		ModelRole: modelRoleChat, limitState: limitStateFromContext(ctx),
-	}
-	eventSnapshot.Model = modelSnapshot.Instance
-	eventSnapshot.Instruction = instruction
-	eventSnapshot.Tools = childTools
-	eventSnapshot.MaxIterations = r.maxIterations
-	handlers, _, err := r.buildAgentHandlers(ctx, eventSnapshot, roles, skillSnapshot, toolScope,
-		exposedNames, budget, toolTokens,
-		input.ParentScope.SessionID+"/subagent/"+childInfo.Agent.ID, instruction, modelSnapshot.ProviderType)
-	if err != nil {
-		return collaboration.BuiltAgent{}, err
-	}
-	eventSnapshot.AgentHandlers = handlers
-	child, err := buildChatModelAgent(ctx, eventSnapshot, "专业子 Agent："+strings.TrimSpace(childInfo.Agent.Instruction))
-	if err != nil {
-		return collaboration.BuiltAgent{}, fmt.Errorf("创建子 Eino ChatModelAgent 失败: %w", err)
-	}
-	return collaboration.BuiltAgent{Agent: child, AgentID: childInfo.Agent.ID, AgentName: childInfo.Agent.Name}, nil
-}
-
 // resolvedContextBase 保存构建 Context 所需但尚未投影 Session Transcript 的依赖。
 //
 // 它只在 Resolver 单次调用内存在，不是持久化对象。把 Agent/Model/Workspace/Tools 的解析
 // 收口到一个私有结构，可以让 StartTurn、ContextStatus 与 ManualCompact 使用完全相同的
 // Model/Tool 预算语义，避免 UI 显示的 Context Usage 与真正发给模型的请求不一致。
 type resolvedContextBase struct {
-	capabilities capabilitySet
-	session      sessions.Session
-	agentInfo    agents.AgentInfo
-	model        models.RuntimeSnapshot
-	modelRoles   resolvedModelRoles
-	workspace    workspace.Workspace
-	sandbox      sandbox.EffectivePolicy
-	tools        humberttools.ResolvedTools
-
-	// skills 是当前 Agent 在本 Turn 冻结的 Skill Snapshot。它与 Tool Snapshot 一样
-	// 在 Resolve 后保持不变，避免用户在 Settings 中修改 Skill 时让正在执行的 Turn 漂移。
-	skills skills.RuntimeSnapshot
-
-	// mcp 是当前 Agent 的 MCP Tool Snapshot。MCP-01 在没有选择时为空；MCP-02 注入
-	// RuntimeBackend 后会在这里冻结真正的 Eino MCP Tools。
-	mcp               humbertmcp.RuntimeSnapshot
+	// 能力与授权 Scope 只保存一份，由 capabilityAssembler 冻结。
+	// 嵌入已有集合后，Context 查询、Manifest 和执行都读取同一份 tools/skills/mcp，
+	// 不再同时维护一组内容相同、后续可能漏同步的平行字段。
+	capabilitySet
+	session           sessions.Session
+	agentInfo         agents.AgentInfo
+	model             models.RuntimeSnapshot
+	modelRoles        resolvedModelRoles
 	baseInstruction   string
 	toolTokenEstimate int
-	scope             humberttools.Scope
 }
 
 // Resolver 创建不可变 Runtime Snapshot，并协调 Context 与 Compaction。
@@ -166,7 +57,6 @@ type Resolver struct {
 	models         modelSnapshotResolver
 	workspaces     *workspace.Manager
 	sandbox        *sandbox.Manager
-	tools          *humberttools.Registry
 	capabilities   *capabilityAssembler
 	contextEngine  *contextengine.Engine
 	personalMemory *preferences.Store
@@ -199,7 +89,6 @@ func NewResolver(
 		models:         modelResolver,
 		workspaces:     workspaceManager,
 		sandbox:        sandboxManager,
-		tools:          toolRegistry,
 		capabilities:   &capabilityAssembler{tools: toolRegistry, skills: skillManager, mcp: mcpManager},
 		contextEngine:  contextEngine,
 		personalMemory: personalMemory,
@@ -332,10 +221,10 @@ func (r *Resolver) ResolveTurn(
 		ContextAssembly:   contextSnapshot.Assembly,
 		ContextHandler:    contextHandler,
 		AgentHandlers:     handlers,
-		Tools:             base.capabilities.executable,
+		Tools:             base.executable,
 		Messages:          providerMessages,
-		Workspace:         base.workspace,
-		Sandbox:           base.sandbox,
+		Workspace:         base.scope.Workspace,
+		Sandbox:           base.scope.Sandbox,
 		SessionWriter:     r.sessions,
 		EventReporter:     r.eventReporter,
 	}, nil
@@ -522,18 +411,14 @@ func (r *Resolver) resolveContextBase(
 	if err != nil {
 		return resolvedContextBase{}, err
 	}
-	resolvedTools, skillSnapshot, mcpSnapshot := capabilities.tools, capabilities.skills, capabilities.mcp
-	descriptors, estimateTools, toolScope := capabilities.descriptors, capabilities.schemas, capabilities.scope
+	skillSnapshot, mcpSnapshot := capabilities.skills, capabilities.mcp
+	descriptors, estimateTools := capabilities.descriptors, capabilities.schemas
 	toolTokens, err := r.contextEngine.EstimateTools(ctx, estimateTools)
 	if err != nil {
 		return resolvedContextBase{}, fmt.Errorf("估算 Tool/Skill Schema Context 占用失败: %w", err)
 	}
 	instruction := buildRuntimeInstruction(agentInfo.Agent.Name, agentInfo.Agent.Instruction, agentWorkspace, descriptors, time.Now())
-	instruction, err = r.withPersonalMemory(ctx, instruction)
-	if err != nil {
-		return resolvedContextBase{}, err
-	}
-	instruction, err = r.withResponseLanguage(ctx, instruction)
+	instruction, err = r.withUserPreferences(ctx, instruction)
 	if err != nil {
 		return resolvedContextBase{}, err
 	}
@@ -548,37 +433,20 @@ func (r *Resolver) resolveContextBase(
 		instruction = strings.TrimSpace(instruction + "\n\n" + skillSnapshot.Instruction)
 	}
 	return resolvedContextBase{
-		capabilities:      capabilities,
+		capabilitySet:     capabilities,
 		session:           session,
 		agentInfo:         agentInfo,
 		model:             modelSnapshot,
 		modelRoles:        modelRoles,
-		workspace:         agentWorkspace,
-		sandbox:           sandboxPolicy,
-		tools:             resolvedTools,
-		skills:            skillSnapshot,
-		mcp:               mcpSnapshot,
 		baseInstruction:   instruction,
 		toolTokenEstimate: toolTokens,
-		scope:             toolScope,
 	}, nil
 }
 
 func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
-	exposed := make([]string, 0, len(base.tools.ToolNames)+len(base.mcp.ToolNames)+1)
-	exposed = append(exposed, base.tools.ToolNames...)
-	exposed = append(exposed, base.mcp.ToolNames...)
-	if base.skills.Enabled() {
-		exposed = append(exposed, skills.SkillToolName)
-	}
-	for _, summary := range base.capabilities.summaries {
-		exposed = append(exposed, summary.ToolNames...)
-	}
-	exposed = uniqueSortedStrings(exposed)
-
 	imageModelID := base.modelRoles.imageModelID
 	return RuntimeManifest{
-		Extensions:        base.capabilities.summaries,
+		Extensions:        base.summaries,
 		AgentID:           base.agentInfo.Agent.ID,
 		AgentName:         base.agentInfo.Agent.Name,
 		ModelID:           base.model.ModelConfigID,
@@ -602,138 +470,19 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 		MCPUnavailable:   append([]humbertmcp.RuntimeServerFailure(nil), base.mcp.Failures...),
 		MCPTools:         append([]humbertmcp.RuntimeToolSnapshot(nil), base.mcp.AuditTools...),
 		MCPToolNames:     append([]string(nil), base.mcp.ToolNames...),
-		ExposedToolNames: exposed,
+		ExposedToolNames: base.toolNames(),
 		Workspace: RuntimeWorkspaceManifest{
-			Mode:    string(base.workspace.Mode),
-			RootDir: base.workspace.RootDir,
+			Mode:    string(base.scope.Workspace.Mode),
+			RootDir: base.scope.Workspace.RootDir,
 		},
 		Sandbox: RuntimeSandboxManifest{
-			Profile:       string(base.sandbox.Profile),
-			NetworkMode:   string(base.sandbox.NetworkMode),
-			NativeMode:    string(base.sandbox.NativeMode),
-			NativeBackend: base.sandbox.Capability.Backend,
-			NativeReady:   base.sandbox.Capability.Available,
+			Profile:       string(base.scope.Sandbox.Profile),
+			NetworkMode:   string(base.scope.Sandbox.NetworkMode),
+			NativeMode:    string(base.scope.Sandbox.NativeMode),
+			NativeBackend: base.scope.Sandbox.Capability.Backend,
+			NativeReady:   base.scope.Sandbox.Capability.Available,
 		},
 	}
-}
-
-func uniqueSortedStrings(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	result := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		result = append(result, value)
-	}
-	sort.Strings(result)
-	return result
-}
-
-// withPersonalMemory 只注入用户明确保存的短事实。每轮读取一次并冻结在 Snapshot 中；
-// 单条和总条数由 Store 控制，避免无界长期记忆挤占 Context。
-func (r *Resolver) withPersonalMemory(ctx context.Context, instruction string) (string, error) {
-	if r.personalMemory == nil {
-		return "", errors.New("个人记忆 Store 未初始化")
-	}
-	items, err := r.personalMemory.ListMemories(ctx)
-	if err != nil {
-		return "", fmt.Errorf("读取跨会话个人记忆失败: %w", err)
-	}
-	if len(items) == 0 {
-		return instruction, nil
-	}
-	var builder strings.Builder
-	builder.WriteString(instruction)
-	builder.WriteString("\n\n<user_managed_memory>\n以下是用户明确保存、可在设置中修订或删除的跨会话事实。它们可能过时；与当前用户陈述冲突时以当前陈述为准。\n")
-	for _, item := range items {
-		builder.WriteString("- ")
-		builder.WriteString(escapePromptText(item.Text))
-		builder.WriteByte('\n')
-	}
-	builder.WriteString("</user_managed_memory>")
-	return builder.String(), nil
-}
-
-// withResponseLanguage 只约束面向用户的正文；Provider 的 reasoning_content 属于原始模型数据，
-// 不能假装系统设置已经翻译或改写了它。
-func (r *Resolver) withResponseLanguage(ctx context.Context, instruction string) (string, error) {
-	if r.personalMemory == nil {
-		return "", errors.New("Preferences Store 未初始化")
-	}
-	profile, err := r.personalMemory.Get(ctx)
-	if err != nil {
-		return "", fmt.Errorf("读取回复语言失败: %w", err)
-	}
-	name := map[string]string{"zh-CN": "Simplified Chinese", "en-US": "English", "ja-JP": "Japanese", "ko-KR": "Korean"}[profile.Language]
-	if name == "" {
-		name = "Simplified Chinese"
-	}
-	return instruction + "\n\n<response_language>\nReply to the user in " + name + " (" + profile.Language + ") unless the user explicitly requests another language. Keep code, paths, URLs, and quoted source text unchanged. Do not reveal internal reasoning.\n</response_language>", nil
-}
-
-func cloneOptionalStrings(values []string) []string {
-	if values == nil {
-		return nil
-	}
-	return append([]string{}, values...)
-}
-
-func mcpSelectionMap(values []humbertmcp.ToolSelection) map[string][]string {
-	result := make(map[string][]string, len(values))
-	for _, selection := range values {
-		result[selection.ServerID] = append([]string(nil), selection.Tools...)
-	}
-	return result
-}
-
-// mergeRuntimeDescriptors 合并不同 Tool Source 的模型侧名称，并在任何碰撞时 fail-closed。
-// MCP Tool 使用 mcp_<serverKey>_ 前缀，但仍不依赖命名约定来假设“永远不会冲突”。
-func mergeRuntimeDescriptors(base []humberttools.Descriptor, extra []humberttools.Descriptor) ([]humberttools.Descriptor, error) {
-	result := make([]humberttools.Descriptor, 0, len(base)+len(extra))
-	seen := make(map[string]struct{}, len(base)+len(extra))
-	for _, values := range [][]humberttools.Descriptor{base, extra} {
-		for _, descriptor := range values {
-			if _, exists := seen[descriptor.Name]; exists {
-				return nil, fmt.Errorf("Runtime Tool Name 冲突: %s", descriptor.Name)
-			}
-			seen[descriptor.Name] = struct{}{}
-			result = append(result, descriptor)
-		}
-	}
-	return result, nil
-}
-
-// mergeRuntimeTools 生成新的 Tool slice，避免把 MCP Tool append 到 Registry Snapshot 的
-// backing array。当前 Turn 创建后两个来源都保持冻结。
-func mergeRuntimeTools(base []einotool.BaseTool, extra []einotool.BaseTool) []einotool.BaseTool {
-	result := make([]einotool.BaseTool, 0, len(base)+len(extra))
-	result = append(result, base...)
-	result = append(result, extra...)
-	return result
-}
-
-// toolResultMaxCharsForContext 给单个 ToolResult 设置与模型窗口相关的直接注入上限。
-// 完整结果会由 Context Artifact Store 保存，因此这里可以保守限制而不丢失可恢复性。
-func toolResultMaxCharsForContext(contextWindow int) int {
-	if contextWindow <= 0 {
-		return 16000
-	}
-	// 近似允许单结果占 8% 上下文，按中英文混合保守使用约 2 chars/token；
-	// 同时限制在 8K-64K 字符，避免极端大窗口让一次 ToolResult 重新成为上下文炸弹。
-	limit := contextWindow * 2 / 12
-	if limit < 8192 {
-		limit = 8192
-	}
-	if limit > 65536 {
-		limit = 65536
-	}
-	return limit
 }
 
 // OperationTimeout 返回 Context 单次维护任务的最长执行时间。
@@ -764,9 +513,6 @@ func (r *Resolver) Validate() error {
 	}
 	if r.sandbox == nil {
 		return errors.New("RuntimeResolver SandboxManager 不能为空")
-	}
-	if r.tools == nil {
-		return errors.New("RuntimeResolver ToolRegistry 不能为空")
 	}
 	if err := r.capabilities.validate(); err != nil {
 		return err

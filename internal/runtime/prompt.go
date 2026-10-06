@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	goruntime "runtime"
 	"sort"
@@ -170,4 +172,39 @@ func escapePromptText(value string) string {
 		">", "&gt;",
 	)
 	return replacer.Replace(strings.TrimSpace(value))
+}
+
+// withUserPreferences 在主/子 Agent 的指令构建入口统一加入用户保存的偏好。
+// 记忆正文经过转义，不能闭合提示词标签；原件及数量/长度限制仍由 Preferences Store 管理。
+// 两份配置每次构建各读取一次，结果随本次指令冻结，不在模型循环中重复读取。
+func (r *Resolver) withUserPreferences(ctx context.Context, instruction string) (string, error) {
+	if r.personalMemory == nil {
+		return "", errors.New("Preferences Store 未初始化")
+	}
+	items, err := r.personalMemory.ListMemories(ctx)
+	if err != nil {
+		return "", fmt.Errorf("读取跨会话个人记忆失败: %w", err)
+	}
+	var builder strings.Builder
+	builder.WriteString(instruction)
+	if len(items) > 0 {
+		builder.WriteString("\n\n<user_managed_memory>\n以下是用户明确保存、可在设置中修订或删除的跨会话事实。它们可能过时；与当前用户陈述冲突时以当前陈述为准。\n")
+		for _, item := range items {
+			builder.WriteString("- ")
+			builder.WriteString(escapePromptText(item.Text))
+			builder.WriteByte('\n')
+		}
+		builder.WriteString("</user_managed_memory>")
+	}
+	profile, err := r.personalMemory.Get(ctx)
+	if err != nil {
+		return "", fmt.Errorf("读取回复语言失败: %w", err)
+	}
+	name := map[string]string{"zh-CN": "Simplified Chinese", "en-US": "English", "ja-JP": "Japanese", "ko-KR": "Korean"}[profile.Language]
+	if name == "" {
+		name = "Simplified Chinese"
+	}
+	// 只约束面向用户的回答，Provider reasoning_content 保持原始数据。
+	builder.WriteString("\n\n<response_language>\nReply to the user in " + name + " (" + profile.Language + ") unless the user explicitly requests another language. Keep code, paths, URLs, and quoted source text unchanged. Do not reveal internal reasoning.\n</response_language>")
+	return builder.String(), nil
 }

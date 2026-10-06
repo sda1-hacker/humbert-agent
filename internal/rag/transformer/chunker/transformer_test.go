@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/cloudwego/eino/schema"
-
 	corechunker "github.com/sda1-hacker/humbert-agent/internal/rag/chunker"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
 // TestTransformerImplementsEinoContract
@@ -145,7 +145,7 @@ func TestTransformerDoesNotMutateSourceMetadata(t *testing.T) {
 		t.Fatalf("预期一个 Chunk: got=%d", len(docs))
 	}
 
-	if _, exists := source.MetaData[MetaChunkIndex]; exists {
+	if _, exists := source.MetaData[retrieval.MetaChunkIndex]; exists {
 		t.Fatal("Transformer 不应该修改 source.MetaData")
 	}
 
@@ -223,40 +223,40 @@ func TestTransformerAddsChunkMetadata(t *testing.T) {
 
 	doc := docs[0]
 
-	if doc.MetaData[MetaSourceDocumentID] != "document-42" {
+	if doc.MetaData[retrieval.MetaSourceDocumentID] != "document-42" {
 		t.Fatalf(
 			"Source Document ID 错误: want=%q got=%v",
 			"document-42",
-			doc.MetaData[MetaSourceDocumentID],
+			doc.MetaData[retrieval.MetaSourceDocumentID],
 		)
 	}
 
-	if doc.MetaData[MetaSourceDocumentIndex] != 0 {
+	if doc.MetaData[retrieval.MetaSourceDocumentIndex] != 0 {
 		t.Fatalf(
 			"Source Document Index 错误: want=0 got=%v",
-			doc.MetaData[MetaSourceDocumentIndex],
+			doc.MetaData[retrieval.MetaSourceDocumentIndex],
 		)
 	}
 
-	if doc.MetaData[MetaChunkIndex] != 0 {
+	if doc.MetaData[retrieval.MetaChunkIndex] != 0 {
 		t.Fatalf(
 			"Chunk Index 错误: want=0 got=%v",
-			doc.MetaData[MetaChunkIndex],
+			doc.MetaData[retrieval.MetaChunkIndex],
 		)
 	}
 
-	if doc.MetaData[MetaChunkStart] != 0 {
+	if doc.MetaData[retrieval.MetaChunkStart] != 0 {
 		t.Fatalf(
 			"Chunk Start 错误: want=0 got=%v",
-			doc.MetaData[MetaChunkStart],
+			doc.MetaData[retrieval.MetaChunkStart],
 		)
 	}
 
-	if doc.MetaData[MetaChunkEnd] != corechunker.RuneLen(source.Content) {
+	if doc.MetaData[retrieval.MetaChunkEnd] != corechunker.RuneLen(source.Content) {
 		t.Fatalf(
 			"Chunk End 错误: want=%d got=%v",
 			corechunker.RuneLen(source.Content),
-			doc.MetaData[MetaChunkEnd],
+			doc.MetaData[retrieval.MetaChunkEnd],
 		)
 	}
 }
@@ -290,14 +290,14 @@ func TestTransformerPreservesRuneOffsets(t *testing.T) {
 	sourceRunes := []rune(source.Content)
 
 	for i, doc := range docs {
-		start, ok := doc.MetaData[MetaChunkStart].(int)
+		start, ok := doc.MetaData[retrieval.MetaChunkStart].(int)
 		if !ok {
-			t.Fatalf("Chunk[%d] start 不是 int: %T", i, doc.MetaData[MetaChunkStart])
+			t.Fatalf("Chunk[%d] start 不是 int: %T", i, doc.MetaData[retrieval.MetaChunkStart])
 		}
 
-		end, ok := doc.MetaData[MetaChunkEnd].(int)
+		end, ok := doc.MetaData[retrieval.MetaChunkEnd].(int)
 		if !ok {
-			t.Fatalf("Chunk[%d] end 不是 int: %T", i, doc.MetaData[MetaChunkEnd])
+			t.Fatalf("Chunk[%d] end 不是 int: %T", i, doc.MetaData[retrieval.MetaChunkEnd])
 		}
 
 		if start < 0 || end < start || end > len(sourceRunes) {
@@ -346,12 +346,12 @@ func TestTransformerMapsContextHeader(t *testing.T) {
 	foundInstall := false
 
 	for _, doc := range docs {
-		header, ok := doc.MetaData[MetaContextHeader].(string)
+		header, ok := doc.MetaData[retrieval.MetaContextHeader].(string)
 		if !ok {
 			t.Fatalf(
 				"ContextHeader metadata 类型错误: got=%T value=%v",
-				doc.MetaData[MetaContextHeader],
-				doc.MetaData[MetaContextHeader],
+				doc.MetaData[retrieval.MetaContextHeader],
+				doc.MetaData[retrieval.MetaContextHeader],
 			)
 		}
 
@@ -423,7 +423,7 @@ func TestTransformerDoesNotPutEmbeddingContentIntoContent(t *testing.T) {
 	}
 
 	for _, doc := range docs {
-		header, _ := doc.MetaData[MetaContextHeader].(string)
+		header, _ := doc.MetaData[retrieval.MetaContextHeader].(string)
 
 		if header == "" {
 			continue
@@ -649,7 +649,7 @@ func TestTransformerSkipsNilAndEmptyDocuments(t *testing.T) {
 		t.Fatalf("应该只输出有效 Document 的 Chunk: got=%d", len(docs))
 	}
 
-	if docs[0].MetaData[MetaSourceDocumentID] != "valid" {
+	if docs[0].MetaData[retrieval.MetaSourceDocumentID] != "valid" {
 		t.Fatalf("输出来源错误: %v", docs[0].MetaData)
 	}
 }
@@ -714,11 +714,11 @@ func TestTransformerProcessesMultipleSourceDocumentsInOrder(t *testing.T) {
 		t.Fatalf("预期两个 Chunk: got=%d", len(docs))
 	}
 
-	if docs[0].MetaData[MetaSourceDocumentID] != "a" {
+	if docs[0].MetaData[retrieval.MetaSourceDocumentID] != "a" {
 		t.Fatalf("第一个输出应来自 source a: %v", docs[0].MetaData)
 	}
 
-	if docs[1].MetaData[MetaSourceDocumentID] != "b" {
+	if docs[1].MetaData[retrieval.MetaSourceDocumentID] != "b" {
 		t.Fatalf("第二个输出应来自 source b: %v", docs[1].MetaData)
 	}
 }
@@ -751,7 +751,7 @@ func TestTransformerContextHeaderReflectsHeadingCoalesce(t *testing.T) {
 			continue
 		}
 
-		header, _ := doc.MetaData[MetaContextHeader].(string)
+		header, _ := doc.MetaData[retrieval.MetaContextHeader].(string)
 
 		// H1 小块和“安装”块发生 Tiny Coalesce 后，
 		// 两者共同有效的 Heading 只有：

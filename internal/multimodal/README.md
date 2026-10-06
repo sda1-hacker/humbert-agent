@@ -1,8 +1,10 @@
 # Multimodal：图片回放与视觉辅助路由
 
-[总目录](../../docs/architecture/README.md) · [会话附件](../sessions/README.md) · [模型](../models/README.md)
+[总目录](../../docs/项目源码详解.md) · [会话附件](../sessions/README.md) · [模型](../models/README.md)
 
-会话 JSONL 保存附件引用，Provider 调用前由 Sessions 恢复近期图片。`ImageReplayMask`/`FileReplayMask` 决定哪些历史附件还要传二进制；更老的附件由 `HistoricalImagePlaceholder`/`HistoricalFilePlaceholder` 保留名称与 ID，而不是每轮重复上传。
+会话 JSONL 保存附件引用，Provider 调用前由 Sessions 恢复近期图片和文本。`AttachmentReplayMask` 统一决定图片二进制、文本附件正文是否仍需完整回放；更老的附件由 `HistoricalImagePlaceholder`/`HistoricalFilePlaceholder` 保留名称与 ID，而不是每轮重复上传。
+
+窗口从后向前按 User Message 计数，保留最新用户输入和紧邻的一次用户输入。纯文本追问也推进窗口；Assistant、Tool 和 nil 不计数。Sessions 水合、ContextEstimator 估算和 Runtime 模型能力判断使用同一个函数，避免三处各自定义“近期”。PDF/Office 仍只带按需提取标记，由 `extract_document` 读取，未改成每轮加载全文。
 
 ```mermaid
 flowchart TD

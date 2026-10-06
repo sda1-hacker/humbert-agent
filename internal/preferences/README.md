@@ -1,6 +1,6 @@
 # Preferences：用户资料与确认过的个人记忆
 
-[总目录](../../docs/architecture/README.md) · [Context](../contextengine/README.md)
+[总目录](../../docs/项目源码详解.md) · [Context](../contextengine/README.md)
 
 `store.go` 保存用户显示名与头像到 `config/preferences.json`；`avatar.NormalizeDataURL` 验证头像格式和大小。`memory.go` 另存 `config/personal-memory.json`：只有用户明确保存的短事实才进入这份跨会话记忆，支持添加、修改、删除和从指定消息保存时记录来源。`runtime.Resolver.withPersonalMemory` 每轮读取并冻结在基础指令中。
 

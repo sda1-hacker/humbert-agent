@@ -1,6 +1,6 @@
 # 离线数据 CLI
 
-[架构手册](../../docs/architecture/README.md) · [DataBackup](../../internal/databackup/README.md)
+[架构手册](../../docs/项目源码详解.md) · [DataBackup](../../internal/databackup/README.md)
 
 `main.go` 接受 backup、verify、restore 命令，把路径与口令文件传给 `internal/databackup`。它用于应用完全退出后的离线操作；备份与恢复可处理加密 `.age` 归档，旧 ZIP 路径用于兼容读取。
 

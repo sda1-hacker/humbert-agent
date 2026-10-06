@@ -13,12 +13,14 @@ type rowQueryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
+// BackendStatus 数据库与扩展版本，用于启动检查。
 type BackendStatus struct {
 	Postgres int
 	Vector   string
 	PGSearch string
 }
 
+// CheckExtensions 检查 PostgreSQL、pgvector 和 ParadeDB 是否满足当前 SQL 的要求。
 func CheckExtensions(ctx context.Context, db rowQueryer) error {
 	var status BackendStatus
 	err := db.QueryRow(ctx, `SELECT current_setting('server_version_num')::int,
@@ -30,6 +32,7 @@ COALESCE((SELECT extversion FROM pg_extension WHERE extname='pg_search'),'')`).S
 	return status.Validate()
 }
 
+// Validate 校验数据库与扩展的最低支持版本。
 func (s BackendStatus) Validate() error {
 	if s.Postgres < 150000 {
 		return fmt.Errorf("rag backend: PostgreSQL 15+ required for column-specific ON DELETE SET NULL")
@@ -43,6 +46,7 @@ func (s BackendStatus) Validate() error {
 	return nil
 }
 
+// versionAtLeast 比较三段数字版本；无法识别的版本视为不满足要求。
 func versionAtLeast(version string, major, minor, patch int) bool {
 	parts := strings.Split(version, ".")
 	if len(parts) != 3 {
@@ -65,6 +69,7 @@ func versionAtLeast(version string, major, minor, patch int) bool {
 	return true
 }
 
+// CheckSchema 检查数据库是否完成当前版本的 RAG 迁移。
 func CheckSchema(ctx context.Context, db rowQueryer) error {
 	var version, count int
 	if err := db.QueryRow(ctx, `SELECT COALESCE(MAX(version),0),COUNT(*) FROM rag_schema_migrations`).Scan(&version, &count); err != nil {

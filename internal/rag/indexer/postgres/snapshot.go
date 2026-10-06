@@ -5,16 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/sda1-hacker/humbert-agent/internal/rag"
 )
 
-// A same-attempt retry is idempotent only when all published evidence and
-// embedding inputs match. Markdown alone misses title/header/chunk changes.
-func processSnapshot(batch application.IngestionBatch, texts []string) (json.RawMessage, error) {
+// 固定当前版本的实际输入，拒绝同一版本用不同分块或检索文本重试。
+func processSnapshot(batch rag.IngestionBatch, texts []string, hashKey string) (json.RawMessage, error) {
 	input, err := json.Marshal(struct {
 		Title             string
 		Metadata          map[string]any
-		Parents, Children []application.ChunkRecord
+		Parents, Children []rag.ChunkRecord
 		SearchContent     []string
 	}{batch.Title, batch.Metadata, batch.Parents, batch.Children, texts})
 	if err != nil {
@@ -22,13 +21,13 @@ func processSnapshot(batch application.IngestionBatch, texts []string) (json.Raw
 	}
 	config := make(map[string]json.RawMessage)
 	if len(batch.ProcessConfig) > 0 {
-		if err = json.Unmarshal(batch.ProcessConfig, &config); err != nil {
+		if err := json.Unmarshal(batch.ProcessConfig, &config); err != nil {
 			return nil, err
 		}
 	}
 	if config == nil {
-		return nil, fmt.Errorf("%w: process config must be an object", ErrInvalidIngestionBatch)
+		return nil, fmt.Errorf("%w: process config must be an object", rag.ErrInvalidIngestionBatch)
 	}
-	config["index_input_hash"], _ = json.Marshal(fmt.Sprintf("%x", sha256.Sum256(input)))
+	config[hashKey], _ = json.Marshal(fmt.Sprintf("%x", sha256.Sum256(input)))
 	return json.Marshal(config)
 }

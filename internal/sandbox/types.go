@@ -68,6 +68,21 @@ type Capability struct {
 	Network     bool `json:"network"`
 }
 
+// DiagnosticCheck 描述一项实测结果；Status 使用 pass、warning 或 fail。
+// 平台缺少隔离能力属于 warning，不应伪装成已经验证了原生隔离。
+type DiagnosticCheck struct {
+	Key    string `json:"key"`
+	Label  string `json:"label"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+// Diagnostics 汇总自检结果，fail 优先于 warning，全部检查通过才为 pass。
+type Diagnostics struct {
+	Summary string            `json:"summary"`
+	Checks  []DiagnosticCheck `json:"checks"`
+}
+
 // EffectivePolicy 是一次 Runtime Turn 冻结后的安全边界。
 // PathRules 是文件系统权限的唯一事实来源；OS Sandbox 需要的 RO/RW roots 必须通过
 // NativeFilesystem() 临时编译，禁止再保存第二份目录权限状态。

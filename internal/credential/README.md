@@ -1,6 +1,6 @@
 # Credential：模型和备份密钥的存取边界
 
-[总目录](../../docs/architecture/README.md) · [Models](../models/README.md) · [备份](../databackup/README.md)
+[总目录](../../docs/项目源码详解.md) · [Models](../models/README.md) · [备份](../databackup/README.md)
 
 桌面生产入口 `NewSystem` 使用系统凭据库，Provider JSON 仅保存 `credential_id`。`secrets/keyring-index.json` 保存可枚举 ID，供加密备份导出；API Key 值不进入普通配置。`New` 保留旧文件存储以兼容迁移和测试，不能在系统凭据库不可用时悄悄回退明文。
 

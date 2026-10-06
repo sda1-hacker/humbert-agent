@@ -1,7 +1,11 @@
 package transcript
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -391,4 +395,274 @@ type ContextWindowIndex struct {
 	LatestCompactionIndex int
 	FirstKeptIndex        int
 	Generation            int
+}
+
+var (
+	// ErrInvalidIdentifier 表示 AgentID / SessionID 不能安全地作为 Humbert 内部
+	// Transcript 路径的一部分。
+	ErrInvalidIdentifier = errors.New("Transcript 标识无效")
+
+	// ErrSessionExists 表示目标 Session Transcript 已存在。
+	ErrSessionExists = errors.New("Session Transcript 已存在")
+
+	// ErrSessionNotFound 表示目标 Session Transcript 不存在。
+	ErrSessionNotFound = errors.New("Session Transcript 不存在")
+
+	// ErrMessageCursorNotFound 表示分页游标不属于当前 Active Branch 的 Message 序列。
+	ErrMessageCursorNotFound = errors.New("Transcript Message 分页游标不存在")
+
+	// ErrCompactionStale 表示 Compaction 摘要生成期间 ActiveBranch 已经发生变化。
+	// 调用方必须丢弃旧摘要并基于新的分支重新准备，不能把过期切点强行写入 JSONL。
+	ErrCompactionStale = errors.New("Session Compaction 已过期")
+
+	// ErrCorrupted 表示 Transcript 存在无法安全自动恢复的数据损坏。
+	//
+	// 当前只自动修复文件尾部因进程异常退出产生的残缺 JSON；中间损坏绝不会被静默
+	// 删除或跳过。
+	ErrCorrupted = errors.New("Session Transcript 已损坏")
+)
+
+// CorruptionError 描述 Transcript 中无法安全恢复的具体损坏位置。
+//
+// Reason 只描述结构问题，不包含原始 JSON。原始内容可能包含用户消息、Tool 参数或
+// Tool Result，不允许进入普通日志。
+type CorruptionError struct {
+	Line int
+
+	Offset int64
+
+	Reason string
+}
+
+// Error 返回 Transcript 损坏的结构化描述。
+func (e *CorruptionError) Error() string {
+	if e == nil {
+		return ErrCorrupted.Error()
+	}
+
+	return fmt.Sprintf(
+		"%s: line=%d offset=%d reason=%s",
+		ErrCorrupted.Error(),
+		e.Line,
+		e.Offset,
+		e.Reason,
+	)
+}
+
+// Unwrap 允许调用方使用 errors.Is(err, transcript.ErrCorrupted)。
+func (e *CorruptionError) Unwrap() error {
+	return ErrCorrupted
+}
+
+// 以下校验属于持久协议：写入与重放共用，避免读写接受不同的消息形态。
+func validateAgentMessage(message AgentMessage) error {
+	if message.Timestamp <= 0 {
+		return errors.New("AgentMessage timestamp 必须大于 0")
+	}
+	if len(message.Content) == 0 {
+		return errors.New("AgentMessage content 不能为空")
+	}
+
+	for index, block := range message.Content {
+		if err := validateContentBlock(block); err != nil {
+			return fmt.Errorf("AgentMessage content[%d] 无效: %w", index, err)
+		}
+	}
+
+	switch message.Role {
+	case RoleUser:
+		for _, block := range message.Content {
+			if block.Type != ContentText && block.Type != ContentImage && block.Type != ContentFile {
+				return errors.New("UserMessage 只允许 text/image/file ContentBlock")
+			}
+		}
+
+	case RoleAssistant:
+		if strings.TrimSpace(message.Model) == "" {
+			return errors.New("AssistantMessage model 不能为空")
+		}
+		if strings.TrimSpace(message.Provider) == "" {
+			return errors.New("AssistantMessage provider 不能为空")
+		}
+		if !validStopReason(message.StopReason) {
+			return fmt.Errorf("AssistantMessage stopReason 无效: %q", message.StopReason)
+		}
+
+	case RoleToolResult:
+		if strings.TrimSpace(message.ToolCallID) == "" {
+			return errors.New("ToolResultMessage toolCallId 不能为空")
+		}
+		if strings.TrimSpace(message.ToolName) == "" {
+			return errors.New("ToolResultMessage toolName 不能为空")
+		}
+		for _, block := range message.Content {
+			if block.Type != ContentText {
+				return errors.New("ToolResultMessage 当前只允许 text ContentBlock")
+			}
+		}
+
+	default:
+		return fmt.Errorf("AgentMessage role 不支持: %q", message.Role)
+	}
+
+	return nil
+}
+
+// 按内容块类型检查必需字段；Tool 参数必须是 JSON Object，附件必须包含稳定引用。
+func validateContentBlock(block ContentBlock) error {
+	switch block.Type {
+	case ContentText:
+		if block.Text == "" {
+			return errors.New("text block 内容不能为空")
+		}
+
+	case ContentImage, ContentFile:
+		if strings.TrimSpace(block.AttachmentID) == "" {
+			return errors.New("attachmentId 不能为空")
+		}
+		if strings.ContainsAny(block.AttachmentID, `/\`) {
+			return errors.New("attachmentId 非法")
+		}
+		if strings.TrimSpace(block.Name) == "" {
+			return errors.New("attachment name 不能为空")
+		}
+		if strings.TrimSpace(block.MIMEType) == "" {
+			return errors.New("attachment mimeType 不能为空")
+		}
+		if block.SizeBytes < 0 {
+			return errors.New("attachment sizeBytes 非法")
+		}
+		if block.Type == ContentFile && strings.TrimSpace(block.ExtractedText) == "" && !block.DocumentOnDemand {
+			return errors.New("file attachment 缺少 extractedText")
+		}
+		if block.DocumentOnDemand && (block.Type != ContentFile || block.ExtractedText != "") {
+			return errors.New("documentOnDemand 只能用于未提取的文件附件")
+		}
+		if block.Type == ContentImage && block.ExtractedText != "" {
+			return errors.New("image attachment 不允许 extractedText")
+		}
+
+	case ContentThinking:
+		if block.Thinking == "" && !block.Redacted {
+			return errors.New("thinking block 内容不能为空")
+		}
+
+	case ContentToolCall:
+		if strings.TrimSpace(block.ID) == "" {
+			return errors.New("toolCall id 不能为空")
+		}
+		if strings.TrimSpace(block.Name) == "" {
+			return errors.New("toolCall name 不能为空")
+		}
+		if len(block.Arguments) == 0 || !json.Valid(block.Arguments) {
+			return errors.New("toolCall arguments 必须是合法 JSON")
+		}
+		trimmed := bytes.TrimSpace(block.Arguments)
+		if len(trimmed) == 0 || trimmed[0] != '{' {
+			return errors.New("toolCall arguments 必须是 JSON Object")
+		}
+
+	default:
+		return fmt.Errorf("ContentBlock type 不支持: %q", block.Type)
+	}
+	return nil
+}
+
+func validStopReason(reason StopReason) bool {
+	switch reason {
+	case StopReasonStop,
+		StopReasonLength,
+		StopReasonToolUse,
+		StopReasonError,
+		StopReasonAborted,
+		StopReasonDeferred:
+		return true
+	default:
+		return false
+	}
+}
+
+// 此处验证节点自身；父子关系和当前分支约束由日志重放或 Store 的锁内提交验证。
+func validateEntryPayload(entry Entry) error {
+	if strings.TrimSpace(entry.ID) == "" {
+		return errors.New("Session Entry id 不能为空")
+	}
+	if _, err := parseTime(entry.Timestamp); err != nil {
+		return fmt.Errorf("Session Entry timestamp 无效: %w", err)
+	}
+
+	switch entry.Type {
+	case EntryMessage:
+		if entry.Message == nil {
+			return errors.New("message Entry 缺少 message")
+		}
+		return validateAgentMessage(*entry.Message)
+
+	case EntryModelChange:
+		if strings.TrimSpace(entry.Provider) == "" || strings.TrimSpace(entry.ModelID) == "" {
+			return errors.New("model_change provider/modelId 不能为空")
+		}
+		return nil
+
+	case EntryThinkingLevelChange:
+		if strings.TrimSpace(entry.ThinkingLevel) == "" {
+			return errors.New("thinking_level_change thinkingLevel 不能为空")
+		}
+		return nil
+
+	case EntryCompaction:
+		if strings.TrimSpace(entry.Summary) == "" {
+			return errors.New("compaction summary 不能为空")
+		}
+		if strings.TrimSpace(entry.FirstKeptEntryID) == "" {
+			return errors.New("compaction firstKeptEntryId 不能为空")
+		}
+		if entry.TokensBefore <= 0 {
+			return errors.New("compaction tokensBefore 必须大于 0")
+		}
+		if entry.TokensAfter < 0 {
+			return errors.New("compaction tokensAfter 不能小于 0")
+		}
+		if entry.Details == nil || strings.TrimSpace(entry.Details.Reason) == "" {
+			return errors.New("compaction details.reason 不能为空")
+		}
+		return nil
+
+	case EntryBranchSummary,
+		EntryCustom,
+		EntryCustomMessage,
+		EntryLabel:
+		return nil
+
+	default:
+		return fmt.Errorf("未知 Session Entry Type: %q", entry.Type)
+	}
+}
+
+func validateHeader(header SessionHeader, expectedSessionID string) error {
+	if header.Type != "session" {
+		return errors.New("第一行不是 Session Header")
+	}
+	if header.Version != CurrentVersion {
+		return fmt.Errorf("只支持 Session JSONL v%d，实际为 v%d", CurrentVersion, header.Version)
+	}
+	if header.ID != expectedSessionID {
+		return errors.New("Session Header id 与文件名不一致")
+	}
+	if _, err := parseTime(header.Timestamp); err != nil {
+		return errors.New("Session Header timestamp 无效")
+	}
+	return nil
+}
+
+func formatTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func parseTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
 }

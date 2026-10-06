@@ -1,6 +1,6 @@
 # Notifications：统一通知协议
 
-[总目录](../../docs/architecture/README.md) · [Tasks](../tasks/README.md) · [Proactive](../proactive/README.md)
+[总目录](../../docs/项目源码详解.md) · [Tasks](../tasks/README.md) · [Proactive](../proactive/README.md)
 
 `Notification` 保存等级、标题、正文和可跳转的 Agent/Session/Task/Run ID。`Service.Send` 规范化内容、分配 ID/时间，将最近 100 条放进进程内缓存，再发给已注册 Provider。`EventProvider` 把通知发布到 EventBus；桌面 Service 再投影为 Wails 事件、系统通知或 Toast。Core 不直接绑定某个操作系统 SDK。
 

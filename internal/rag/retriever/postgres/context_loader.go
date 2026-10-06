@@ -11,20 +11,13 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
-// ParentLoader 批量读取 Parent Chunk。
-//
-// 它在创建时绑定一个 CollectionID。
-//
-// 因此 Search Pipeline 不需要知道 PostgreSQL 的：
-//
-//	collection_id
-//
-// 也不需要把 CollectionID 再塞进 Retrieval Core Model。
+// ParentLoader 绑定知识库范围，批量读取已发布父块用于上下文扩展。
 type ParentLoader struct {
 	db           queryer
 	collectionID string
 }
 
+// NewParentLoader 校验连接池和知识库 ID，创建父块读取器。
 func NewParentLoader(
 	pool *pgxpool.Pool,
 	collectionID string,
@@ -57,20 +50,7 @@ func newParentLoader(
 	}
 }
 
-// LoadParents 一次性批量读取 Parent。
-//
-// 为什么不能：
-//
-//	for each child:
-//	    SELECT parent
-//
-// 因为那会制造典型：
-//
-//	N+1 Query
-//
-// 一个 Search Top5 就可能额外打5次数据库。
-//
-// 这里始终只执行一次 SQL。
+// LoadParents 使用一次查询读取所有父块，避免逐条子块查询数据库。
 func (l *ParentLoader) LoadParents(
 	ctx context.Context,
 	parentChunkIDs []string,
@@ -145,7 +125,7 @@ func (l *ParentLoader) LoadParents(
 		}
 
 		parent.CollectionID = l.collectionID
-		parent.DocumentRevision, err = documentRevision(parent.Metadata)
+		parent.DocumentRevision, err = retrieval.Revision(parent.Metadata)
 		if err != nil {
 			return nil, err
 		}
@@ -172,6 +152,7 @@ JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
 WHERE c.collection_id = $1 AND c.id = ANY($2::text[]) AND c.chunk_type='parent_text'
 `
 
+// uniqueStrings 去除空值与重复 ID，保留首次出现顺序。
 func uniqueStrings(values []string) []string {
 	seen := make(map[string]struct{}, len(values))
 	result := make([]string, 0, len(values))

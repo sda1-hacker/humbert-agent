@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/adk"
-	einotool "github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
@@ -266,163 +264,69 @@ func isRecoverableToolErrorResult(content string) bool {
 	return strings.HasPrefix(content, recoverableToolErrorPrefix)
 }
 
-// buildToolLifecycleMiddleware 负责实时 Tool 生命周期，并把可恢复的 Tool 失败转换成标准
-// ToolResult 交回模型。只有 Interrupt 与整个 Turn 的 context 取消继续向 Eino 上抛。
-//
-// 这种语义让 web_fetch 网络超时、远程服务失败、模型参数错误等局部能力故障不会直接
-// 杀死 Agent Turn；模型仍能读取失败原因并选择 install_skill、web_search 或其它替代策略。
-func buildToolLifecycleMiddleware(snapshot *Snapshot) compose.InvokableToolMiddleware {
-	return func(next compose.InvokableToolEndpoint) compose.InvokableToolEndpoint {
-		return func(ctx context.Context, input *compose.ToolInput) (*compose.ToolOutput, error) {
-			if input == nil {
-				return next(ctx, input)
-			}
-			if snapshot != nil && snapshot.limitState != nil {
-				// Eino 按执行地址识别恢复调用，包括等待兄弟工具审批而再次暂停的调用。
-				// 这些调用已在首次进入时预留预算；恢复只检查 Token 上限，不重复扣次数。
-				wasInterrupted, _, _ := einotool.GetInterruptState[any](ctx)
-				err := snapshot.limitState.checkTokens()
-				if !wasInterrupted {
-					err = snapshot.limitState.beforeToolCall()
-				}
-				if err != nil {
-					return nil, err
-				}
-			}
-
-			startedAt := time.Now()
-			// Tool Arguments 属于不可信且可能包含密钥/文件正文的模型生成数据。实时事件只用于
-			// UI Trace，不参与真正 Tool 执行，因此在离开 Runtime 边界前统一脱敏并限制长度；
-			// checkpoint 与 guarded Tool 仍持有原始参数，审批恢复不会使用这里的展示字符串。
-			reportToolLifecycleEvent(ctx, snapshot, Event{
-				Type:          EventToolStarted,
-				ToolCallID:    input.CallID,
-				ToolName:      input.Name,
-				ToolArguments: logging.RedactText(input.Arguments, 4096),
-				OccurredAt:    startedAt.UTC().Format(time.RFC3339Nano),
-			})
-
-			// 将 ToolCall 身份放进 context。run_agent 会用它生成稳定的子运行 ID；
-			// Eino 从审批 checkpoint 恢复时仍使用同一个 CallID，因此不会重复创建子运行。
-			callCtx := ctx
-			// 子 Agent 经由工具创建，沿调用上下文继承同一预算，审批恢复也复用原状态。
-			if snapshot != nil {
-				callCtx = context.WithValue(ctx, executionSnapshotContextKey{}, snapshot)
-			}
-			output, err := next(callCtx, input)
-			duration := time.Since(startedAt).Milliseconds()
-			if err != nil {
-				// Eino Interrupt 是正常的 Human-in-the-loop 暂停信号，不是 Tool 失败。
-				// 必须原样上抛，让 Runner 保存 checkpoint 并由 RuntimeService 发布审批事件。
-				var interruptSignal *adk.InterruptSignal
-				if errors.As(err, &interruptSignal) {
-					return nil, err
-				}
-
-				// 整个 Turn 已经被取消/超时属于 Runtime 终止条件，不能伪装成普通 ToolResult。
-				// 反过来，web_fetch 自己的 HTTP Client timeout、远程安装失败、模型参数错误等
-				// 都只是“某个能力本次调用失败”，应该把错误交还给模型，让 ReAct 循环有机会
-				// 调整策略，而不是因为一个外部网站超时直接终止整次聊天。
-				if ctxErr := ctx.Err(); ctxErr != nil {
-					return nil, err
-				}
-				if errors.Is(err, ErrExecutionLimitExceeded) {
-					return nil, err
-				}
-
-				reportToolLifecycleEvent(context.WithoutCancel(ctx), snapshot, Event{
-					Type:       EventToolFailed,
-					ToolCallID: input.CallID,
-					ToolName:   input.Name,
-					DurationMS: duration,
-					Error:      logging.SafeErrorText(err, 2048),
-					OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
-				})
-
-				// ToolOutput 以成功的 Eino transport 结果返回，但正文明确标记失败。这样 Eino
-				// 会生成标准 Tool Message 并继续下一轮模型推理；持久化层通过固定前缀把它
-				// 标记成 IsError=true，不会把失败误记为成功。
-				return &compose.ToolOutput{Result: formatRecoverableToolError(err)}, nil
-			}
-
-			reportToolLifecycleEvent(ctx, snapshot, Event{
-				Type:       EventToolCompleted,
-				ToolCallID: input.CallID,
-				ToolName:   input.Name,
-				DurationMS: duration,
-				OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
-			})
-			return output, nil
-		}
-	}
-}
-
-func reportToolLifecycleEvent(ctx context.Context, snapshot *Snapshot, event Event) {
-	if snapshot == nil || snapshot.EventReporter == nil {
-		return
-	}
-
-	event.RequestID = snapshot.RequestID
-	event.RunID = snapshot.RunID
-	event.SessionID = snapshot.SessionID
-	event.AgentID = snapshot.AgentID
-	event.ModelID = snapshot.ModelID
-	event.ModelRevision = snapshot.ModelRevision
-	event.ToolRevision = snapshot.ToolRevision
-	snapshot.EventReporter.Report(ctx, event)
-}
-
-// materializeAssistantOutput 消费一个 Assistant MessageVariant。
-//
-// Streaming 时每个 Chunk 立即向 UI 发送 reasoning/text delta，但磁盘只保存 Step
-// 结束后由 schema.ConcatMessages 合并得到的一条完整 schema.Message。
+// materializeAssistantOutput 发送实时正文/思考增量，返回本步骤的合并消息。
+// 读取失败时保留已经生成的文本，是否允许写入由 consumeEvents 的取消/审核规则决定。
 func materializeAssistantOutput(ctx context.Context, output *adk.MessageVariant, emit DeltaEmitter) (*schema.Message, error) {
+	message, err := materializeOutput(ctx, output, func(chunk *schema.Message) { emitAssistantDeltas(chunk, emit) })
+	if err != nil {
+		return message, fmt.Errorf("消费 Assistant 输出失败: %w", classifyProviderError(err))
+	}
+	return message, nil
+}
+
+// materializeMessageOutput 只返回完整消息，失败时丢弃未完成 ToolResult。
+// Assistant 的局部文本可以用于失败恢复，半截工具输出不能被误记为已完成的副作用。
+func materializeMessageOutput(ctx context.Context, output *adk.MessageVariant) (*schema.Message, error) {
+	message, err := materializeOutput(ctx, output, nil)
+	if err != nil {
+		return nil, err
+	}
+	return message, nil
+}
+
+// materializeOutput 是消息流唯一的读取与关闭入口，不决定消息是否持久化。
+// 非流式和流式输出都经过 visit；回调仅用于实时 UI，不把 delta 当作 JSONL 事实。
+// 返回局部消息与原始错误，让上层明确选择保留 Assistant 或拒绝不完整 ToolResult。
+func materializeOutput(ctx context.Context, output *adk.MessageVariant, visit func(*schema.Message)) (*schema.Message, error) {
 	if output == nil {
 		return nil, nil
 	}
-
 	if !output.IsStreaming {
-		if output.Message == nil {
-			return nil, nil
+		if output.Message != nil && visit != nil {
+			visit(output.Message)
 		}
-		emitAssistantDeltas(output.Message, emit)
 		return output.Message, nil
 	}
-
 	stream := output.MessageStream
 	if stream == nil {
-		return nil, errors.New("Assistant Event 标记为 Streaming，但 MessageStream 为空")
+		return nil, errors.New("Streaming 输出缺少 MessageStream")
 	}
 	defer stream.Close()
-
 	chunks := make([]*schema.Message, 0, 16)
 	for {
 		if err := ctx.Err(); err != nil {
-			return concatMessagesBestEffort(chunks), fmt.Errorf("消费 Assistant Stream 被取消: %w", err)
+			return concatMessagesBestEffort(chunks), fmt.Errorf("消费消息流被取消: %w", err)
 		}
-
 		message, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return concatMessagesBestEffort(chunks), fmt.Errorf("读取 Assistant Stream 失败: %w", classifyProviderError(err))
+			return concatMessagesBestEffort(chunks), fmt.Errorf("读取消息流失败: %w", err)
 		}
-		if message == nil {
-			continue
+		if message != nil {
+			chunks = append(chunks, message)
+			if visit != nil {
+				visit(message)
+			}
 		}
-
-		chunks = append(chunks, message)
-		emitAssistantDeltas(message, emit)
 	}
-
 	if len(chunks) == 0 {
 		return nil, nil
 	}
-
 	merged, err := schema.ConcatMessages(chunks)
 	if err != nil {
-		return nil, fmt.Errorf("合并 Assistant Stream Message 失败: %w", err)
+		return nil, fmt.Errorf("合并消息流失败: %w", err)
 	}
 	return merged, nil
 }
@@ -438,49 +342,6 @@ func emitAssistantDeltas(message *schema.Message, emit DeltaEmitter) {
 	if text := assistantText(message); text != "" {
 		emit(EventAssistantDelta, text)
 	}
-}
-
-// materializeMessageOutput 消费一个普通 MessageVariant 并合并 Streaming Chunk。
-func materializeMessageOutput(ctx context.Context, output *adk.MessageVariant) (*schema.Message, error) {
-	if output == nil {
-		return nil, nil
-	}
-	if !output.IsStreaming {
-		return output.Message, nil
-	}
-
-	stream := output.MessageStream
-	if stream == nil {
-		return nil, errors.New("Agent Event 标记为 Streaming，但 MessageStream 为空")
-	}
-	defer stream.Close()
-
-	chunks := make([]*schema.Message, 0, 8)
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("消费 Agent Stream 被取消: %w", err)
-		}
-
-		message, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("读取 Agent Stream 失败: %w", err)
-		}
-		if message != nil {
-			chunks = append(chunks, message)
-		}
-	}
-
-	if len(chunks) == 0 {
-		return nil, nil
-	}
-	merged, err := schema.ConcatMessages(chunks)
-	if err != nil {
-		return nil, fmt.Errorf("合并 Agent Stream Message 失败: %w", err)
-	}
-	return merged, nil
 }
 
 // concatMessagesBestEffort 在 Streaming 被取消/中断时尽量保留已经生成的用户可见内容。

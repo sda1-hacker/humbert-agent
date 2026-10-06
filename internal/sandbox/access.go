@@ -188,7 +188,7 @@ func (p EffectivePolicy) WithPathAccess(root string, access AccessLevel, source 
 
 	result := p
 	result.PathRules = append([]PathRule(nil), p.PathRules...)
-	result.PathRules = appendGrantRule(result.PathRules, PathRule{Root: root, Access: access, Source: source})
+	result.PathRules = appendPathRule(result.PathRules, PathRule{Root: root, Access: access, Source: source})
 	result.PathRules = sortedPathRules(result.PathRules)
 	if err := result.Validate(); err != nil {
 		return EffectivePolicy{}, err
@@ -250,25 +250,8 @@ func pathRuleMatches(rule PathRule, path string) bool {
 	return pathWithin(path, rule.Root)
 }
 
-// appendGrantRule 合并同一 Root 上的授权规则。Agent 配置中的额外路径是“授予能力”，
-// 不是“降级能力”，因此同 Root 上保留更高权限。BLOCKED 规则永远不会由这里覆盖。
-func appendGrantRule(rules []PathRule, incoming PathRule) []PathRule {
-	incoming.Root = filepath.Clean(incoming.Root)
-	for i := range rules {
-		if !pathEqual(rules[i].Root, incoming.Root) {
-			continue
-		}
-		if rules[i].Access == AccessBlocked {
-			return rules
-		}
-		if incoming.Access > rules[i].Access {
-			rules[i] = incoming
-		}
-		return rules
-	}
-	return append(rules, incoming)
-}
-
+// appendPathRule 是路径规则合并的唯一入口：同 Root 的授权取较高能力，BLOCKED 始终优先。
+// Manager 的默认/额外授权和 WithPathAccess 都先验证输入，不允许以 grant 覆盖硬保护。
 func appendPathRule(rules []PathRule, incoming PathRule) []PathRule {
 	incoming.Root = filepath.Clean(incoming.Root)
 	for i := range rules {
@@ -341,14 +324,7 @@ func coveredByAnyRoot(path string, roots []string) bool {
 func collapseCoveredRoots(values []string) []string {
 	result := make([]string, 0, len(values))
 	for _, candidate := range values {
-		covered := false
-		for _, existing := range result {
-			if pathWithin(candidate, existing) {
-				covered = true
-				break
-			}
-		}
-		if !covered {
+		if !coveredByAnyRoot(candidate, result) {
 			result = append(result, candidate)
 		}
 	}

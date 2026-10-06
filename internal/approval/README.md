@@ -1,6 +1,6 @@
 # Approval：人类审批与 Eino 中断恢复
 
-[总目录](../../docs/architecture/README.md) · [Permission](../permission/README.md) · [Runtime](../runtime/README.md)
+[总目录](../../docs/项目源码详解.md) · [Permission](../permission/README.md) · [Runtime](../runtime/README.md)
 
 ## 一次 Ask 的生命周期
 
@@ -22,11 +22,17 @@ sequenceDiagram
 
 `checkpoint_store.go` 是进程内的 Eino CheckPointStore。应用重启后不会自动重放未完成工具调用，以免重复外部副作用。`codec.go` 把中断信息、工具状态和批准布尔值转换成 Eino 可恢复的数据；前端不重新传原始参数。审批等待期间 Runtime 的活动运行不能释放。
 
+`EncodeResumeData` 只有固定布尔输入，直接返回与原协议完全相同的 `{"approved":true}` 或 `{"approved":false}`，无需不存在的编码失败分支。`Expire` 返回 Resolution 与是否取得 Pending 状态；规则保存和 checkpoint 恢复仍可能失败，相应恢复 Pending、唤醒等待者和清理流程保留。
+
+checkpoint 由 Runtime 的 RunID 唯一定位，Manager 不再复制 checkpointID；Request 的私有 interruptID 用于恢复，私有 CapabilityIdentity 用于规则授权，均不向前端暴露。界面待审批状态来自 Runtime 活动状态、Manager.Get 和事件，无调用的 ListPending、CheckpointID/Identity getter 已移除；审批动作和 JSON 字段保持原样。
+
 | 文件 | 阅读入口 |
 | --- | --- |
 | `manager.go` | `Register`、`Resolve`、`Expire` 和状态清理。 |
-| `types.go` | `Request`、`Decision`、`Resolution`。 |
+| `types.go` | `Request`、`Decision`、`Resolution` 和哨兵错误。 |
 | `codec.go` | `EncodeInterrupt`、`EncodeResumeData`，查看恢复协议。 |
 | `checkpoint_store.go` | checkpoint 的获取、保存与删除。 |
 
 排查审批卡卡住时同时检查 `approval.Request.ID`、Eino `interruptID`、Runtime `RequestID` 与 Session reservation；四者用途不同。
+
+原 `errors.go` 的定义已并入 `types.go`，只保留 package 声明，可手动删除。

@@ -2,12 +2,49 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 )
+
+// 自检在缺少原生能力时仍验证 PathGuard，并明确报告 warning，避免把未验证误报为通过。
+func TestDiagnoseChecksPathBoundariesWithoutNativeBackend(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "secrets"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{filepath.Join(home, "config.yaml"), filepath.Join(home, "secrets", "diagnostic-probe")} {
+		if err := os.WriteFile(path, []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := newTestManager(t, home)
+	manager.capability = Capability{Platform: "test", Reason: "测试环境无原生隔离"}
+	result, err := manager.Diagnose(context.Background(), filepath.Join(home, "secrets"), filepath.Join(home, "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Summary != "warning" || len(result.Checks) != 6 {
+		t.Fatalf("自检结果不完整: %#v", result)
+	}
+	for _, check := range result.Checks {
+		want := "pass"
+		if check.Key == "native_filesystem" {
+			want = "warning"
+		}
+		if check.Status != want {
+			t.Fatalf("%s: status=%s detail=%s", check.Key, check.Status, check.Detail)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := manager.Diagnose(ctx, "", ""); !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消自检必须返回取消错误: %v", err)
+	}
+}
 
 func newTestManager(t *testing.T, home string) *Manager {
 	t.Helper()

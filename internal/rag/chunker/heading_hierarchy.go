@@ -2,35 +2,7 @@ package chunker
 
 import "strings"
 
-// HeadingHierarchy 用来维护当前 Markdown 标题上下文。
-//
-// Markdown 最多支持 H1 ~ H6，所以这里固定维护 6 个槽位。
-//
-// 例如文档:
-//
-//	# 产品手册
-//	## 安装
-//	### Linux
-//
-// 内部状态大致是:
-//
-//	levels[0] = "产品手册"
-//	levels[1] = "安装"
-//	levels[2] = "Linux"
-//
-// deepest = 3
-//
-// 当后面遇到:
-//
-//	## 配置
-//
-// H2 被替换，同时所有更深层级都必须失效:
-//
-//	levels[0] = "产品手册"
-//	levels[1] = "配置"
-//	levels[2] = ""
-//
-// deepest = 2
+// HeadingHierarchy 按层级保存当前 Markdown 标题路径。
 type HeadingHierarchy struct {
 	levels  [6]string
 	deepest int
@@ -41,28 +13,7 @@ func NewHeadingHierarchy() *HeadingHierarchy {
 	return &HeadingHierarchy{}
 }
 
-// Observe 尝试把一行 Markdown 当成 Heading 处理。
-//
-// 如果识别成功:
-//
-//	返回 level 和去掉 # 后的标题正文。
-//
-// 例如:
-//
-//	## Installation
-//
-// 返回:
-//
-//	level = 2
-//	title = "Installation"
-//
-// 如果不是 Heading:
-//
-//	返回 0, ""。
-//
-// 注意:
-// 这个函数自己不知道 fenced code 的状态。
-// 调用方必须保证不要把代码块里的 "# xxx" 传进来。
+// Observe 读取一个标题，同时清除已经失效的更深层标题。
 func (h *HeadingHierarchy) Observe(line string) (int, string) {
 	match := MarkdownHeadingPattern.FindStringSubmatch(line)
 	if match == nil {
@@ -95,17 +46,7 @@ func (h *HeadingHierarchy) Observe(line string) (int, string) {
 	return level, title
 }
 
-// Breadcrumb 返回人类更容易阅读的标题路径。
-//
-// 例如:
-//
-//	Chapter 1 > Installation > Linux
-//
-// 这个形式主要适合:
-//
-//	日志
-//	Debug
-//	Preview UI
+// Breadcrumb 返回以分隔符连接的标题路径，供展示使用。
 func (h *HeadingHierarchy) Breadcrumb() string {
 	if h.deepest == 0 {
 		return ""
@@ -122,15 +63,7 @@ func (h *HeadingHierarchy) Breadcrumb() string {
 	return strings.Join(parts, " > ")
 }
 
-// BreadcrumbWithHashes 返回适合 RAG ContextHeader 使用的 Markdown 标题路径。
-//
-// 例如:
-//
-//	# 产品手册
-//	## 安装
-//	### Linux
-//
-// 我们的 Chunk.ContextHeader 就使用这种形式。
+// BreadcrumbWithHashes 返回保留标题层级标记的路径，供检索补充上下文。
 func (h *HeadingHierarchy) BreadcrumbWithHashes() string {
 	if h.deepest == 0 {
 		return ""

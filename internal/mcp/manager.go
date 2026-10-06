@@ -9,8 +9,6 @@ import (
 	"sync"
 	"time"
 
-	einotool "github.com/cloudwego/eino/components/tool"
-	"github.com/cloudwego/eino/schema"
 	"github.com/google/uuid"
 
 	"github.com/sda1-hacker/humbert-agent/internal/config"
@@ -441,6 +439,55 @@ func (m *Manager) NormalizeAndValidateSelection(ctx context.Context, values []To
 	return result, nil
 }
 
+// runtimeRequest 冻结配置版本、Backend 与启用的 Server 选择，不连接任何外部服务。
+// 三种快照入口共用该预检：空选择不要求 Scope，禁用 Server 保留配置但不进入本轮。
+// Servers 与 Selections 按相同顺序追加，后续按 Server 降级时仍能找到原选择。
+func (m *Manager) runtimeRequest(ctx context.Context, values []ToolSelection, scope humberttools.Scope) (ResolveRequest, RuntimeBackend, error) {
+	normalized, err := m.NormalizeAndValidateSelection(ctx, values)
+	if err != nil {
+		return ResolveRequest{}, nil, err
+	}
+	m.mu.RLock()
+	revision, backend := m.revision, m.backend
+	m.mu.RUnlock()
+	request := ResolveRequest{Revision: revision, Scope: scope}
+	if len(normalized) == 0 {
+		return request, backend, nil
+	}
+	if err := scope.Validate(); err != nil {
+		return ResolveRequest{}, nil, fmt.Errorf("MCP Runtime Tool Scope 无效: %w", err)
+	}
+	request.Servers = make([]Server, 0, len(normalized))
+	request.Selections = make([]ToolSelection, 0, len(normalized))
+	for _, selection := range normalized {
+		server, err := m.store.Get(ctx, selection.ServerID)
+		if err != nil {
+			return ResolveRequest{}, nil, err
+		}
+		if !server.Enabled {
+			continue
+		}
+		request.Servers = append(request.Servers, server)
+		request.Selections = append(request.Selections, selection)
+	}
+	request.Selections = cloneSelections(request.Selections)
+	return request, backend, nil
+}
+
+// runtimeServerSnapshot 只投影已选 Server 的公开审计身份，不包含凭据或启动参数。
+func runtimeServerSnapshot(server Server) RuntimeServerSnapshot {
+	return RuntimeServerSnapshot{ServerID: server.ID, ServerKey: server.Key, ServerName: server.Name,
+		Fingerprint: ServerFingerprint(server), Transport: string(server.Transport)}
+}
+
+func runtimeServerSnapshots(servers []Server) []RuntimeServerSnapshot {
+	result := make([]RuntimeServerSnapshot, 0, len(servers))
+	for _, server := range servers {
+		result = append(result, runtimeServerSnapshot(server))
+	}
+	return result
+}
+
 // ResolveRuntimeSnapshot 为当前 Turn 冻结 MCP ToolSet。
 //
 // 空选择永远成功，因此 MCP-01 引入后不会改变现有 Agent 行为。非空选择在 MCP-02 的
@@ -459,71 +506,44 @@ func (m *Manager) ResolveRuntimeSnapshot(ctx context.Context, values []ToolSelec
 // ctx 取消/超时也必须立即返回，不能伪装成 MCP 能力降级。严格诊断和设置页测试仍可继续
 // 使用 ResolveRuntimeSnapshot。
 func (m *Manager) ResolveRuntimeSnapshotAvailable(ctx context.Context, values []ToolSelection, scope humberttools.Scope) (RuntimeSnapshot, error) {
-	normalized, err := m.NormalizeAndValidateSelection(ctx, values)
+	request, backend, err := m.runtimeRequest(ctx, values, scope)
 	if err != nil {
 		return RuntimeSnapshot{}, err
 	}
-	m.mu.RLock()
-	revision := m.revision
-	backend := m.backend
-	m.mu.RUnlock()
-	if len(normalized) == 0 {
-		return RuntimeSnapshot{Revision: revision}, nil
+	if len(request.Servers) == 0 {
+		return RuntimeSnapshot{Revision: request.Revision}, nil
 	}
-	if err := scope.Validate(); err != nil {
-		return RuntimeSnapshot{}, fmt.Errorf("MCP Runtime Tool Scope 无效: %w", err)
-	}
-
-	type activeServerSelection struct {
-		server    Server
-		selection ToolSelection
-	}
-	active := make([]activeServerSelection, 0, len(normalized))
-	for _, selection := range normalized {
-		server, err := m.store.Get(ctx, selection.ServerID)
-		if err != nil {
-			return RuntimeSnapshot{}, err
-		}
-		if !server.Enabled {
-			continue
-		}
-		active = append(active, activeServerSelection{server: server, selection: selection})
-	}
-	if len(active) == 0 {
-		return RuntimeSnapshot{Revision: revision}, nil
-	}
-
-	result := RuntimeSnapshot{Revision: revision}
+	result := RuntimeSnapshot{Revision: request.Revision}
 	if backend == nil {
-		for _, item := range active {
-			result.Failures = append(result.Failures, runtimeServerFailure(item.server, ErrRuntimeUnavailable))
+		for _, server := range request.Servers {
+			result.Failures = append(result.Failures, runtimeServerFailure(server, ErrRuntimeUnavailable))
 		}
 		return result, nil
 	}
 
 	seenExposed := make(map[string]struct{})
-	auditServers := make([]RuntimeServerSnapshot, 0, len(active))
-	for _, item := range active {
+	auditServers := make([]RuntimeServerSnapshot, 0, len(request.Servers))
+	for index, server := range request.Servers {
 		part, resolveErr := backend.Resolve(ctx, ResolveRequest{
-			Revision:   revision,
-			Servers:    []Server{item.server},
-			Selections: cloneSelections([]ToolSelection{item.selection}),
+			Revision:   request.Revision,
+			Servers:    []Server{server},
+			Selections: cloneSelections([]ToolSelection{request.Selections[index]}),
 			Scope:      scope,
 		})
 		if resolveErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return RuntimeSnapshot{}, ctxErr
 			}
-			failure := runtimeServerFailure(item.server, resolveErr)
+			failure := runtimeServerFailure(server, resolveErr)
 			result.Failures = append(result.Failures, failure)
 			if !errors.Is(resolveErr, ErrRuntimeRetryBackoff) {
 				m.logger.Warn(
 					ctx,
 					"MCP Server 当前不可用，本 Turn 将跳过该 Server",
 					"operation", "mcp.runtime.server.skipped",
-					"server_id", item.server.ID,
-					"server_name", item.server.Name,
-					"transport", item.server.Transport,
+					"server_id", server.ID,
+					"server_name", server.Name,
+					"transport", server.Transport,
 					"error", failure.Error,
 				)
 			}
@@ -539,16 +559,10 @@ func (m *Manager) ResolveRuntimeSnapshotAvailable(ctx context.Context, values []
 		result.Tools = append(result.Tools, part.Tools...)
 		result.Descriptors = append(result.Descriptors, part.Descriptors...)
 		result.ToolNames = append(result.ToolNames, part.ToolNames...)
-		auditServers = append(auditServers, RuntimeServerSnapshot{
-			ServerID:    item.server.ID,
-			ServerKey:   item.server.Key,
-			ServerName:  item.server.Name,
-			Fingerprint: ServerFingerprint(item.server),
-			Transport:   string(item.server.Transport),
-		})
+		auditServers = append(auditServers, runtimeServerSnapshot(server))
 	}
 
-	return finalizeRuntimeSnapshot(result, revision, auditServers)
+	return finalizeRuntimeSnapshot(result, request.Revision, auditServers)
 }
 
 func runtimeServerFailure(server Server, err error) RuntimeServerFailure {
@@ -578,177 +592,24 @@ func (m *Manager) ResolveRuntimeSnapshotBestEffort(ctx context.Context, values [
 	return m.resolveRuntimeProjection(ctx, values, scope)
 }
 
-func (m *Manager) resolveRuntimeSnapshot(
-	ctx context.Context,
-	values []ToolSelection,
-	scope humberttools.Scope,
-) (RuntimeSnapshot, error) {
-	normalized, err := m.NormalizeAndValidateSelection(ctx, values)
+func (m *Manager) resolveRuntimeSnapshot(ctx context.Context, values []ToolSelection, scope humberttools.Scope) (RuntimeSnapshot, error) {
+	request, backend, err := m.runtimeRequest(ctx, values, scope)
 	if err != nil {
 		return RuntimeSnapshot{}, err
 	}
-	m.mu.RLock()
-	revision := m.revision
-	backend := m.backend
-	m.mu.RUnlock()
-	if len(normalized) == 0 {
-		return RuntimeSnapshot{Revision: revision}, nil
-	}
-	if err := scope.Validate(); err != nil {
-		return RuntimeSnapshot{}, fmt.Errorf("MCP Runtime Tool Scope 无效: %w", err)
-	}
-	servers := make([]Server, 0, len(normalized))
-	activeSelections := make([]ToolSelection, 0, len(normalized))
-	auditServers := make([]RuntimeServerSnapshot, 0, len(normalized))
-	for _, selection := range normalized {
-		server, err := m.store.Get(ctx, selection.ServerID)
-		if err != nil {
-			return RuntimeSnapshot{}, err
-		}
-		// Disabled Server 的 Agent Tool Selection 被保留，但当前 Turn 不加载这些 Tool。
-		if !server.Enabled {
-			continue
-		}
-		servers = append(servers, server)
-		activeSelections = append(activeSelections, selection)
-		auditServers = append(auditServers, RuntimeServerSnapshot{
-			ServerID:    server.ID,
-			ServerKey:   server.Key,
-			ServerName:  server.Name,
-			Fingerprint: ServerFingerprint(server),
-			Transport:   string(server.Transport),
-		})
-	}
-	if len(activeSelections) == 0 {
-		return RuntimeSnapshot{Revision: revision}, nil
+	if len(request.Servers) == 0 {
+		return RuntimeSnapshot{Revision: request.Revision}, nil
 	}
 	if backend == nil {
 		return RuntimeSnapshot{}, ErrRuntimeUnavailable
 	}
-	result, err := backend.Resolve(ctx, ResolveRequest{
-		Revision:   revision,
-		Servers:    servers,
-		Selections: cloneSelections(activeSelections),
-		Scope:      scope,
-	})
+	auditServers := runtimeServerSnapshots(request.Servers)
+	result, err := backend.Resolve(ctx, request)
 	if err != nil {
 		return RuntimeSnapshot{}, err
 	}
-	return finalizeRuntimeSnapshot(result, revision, auditServers)
+	return finalizeRuntimeSnapshot(result, request.Revision, auditServers)
 }
-
-// resolveRuntimeProjection 构造不执行外部 IO 的 MCP Schema 投影。返回的 Tools 只实现
-// BaseTool.Info，用于 ContextEngine 的 Token 估算；绝不能用于真实 Turn 执行。
-func (m *Manager) resolveRuntimeProjection(
-	ctx context.Context,
-	values []ToolSelection,
-	scope humberttools.Scope,
-) (RuntimeSnapshot, error) {
-	normalized, err := m.NormalizeAndValidateSelection(ctx, values)
-	if err != nil {
-		return RuntimeSnapshot{}, err
-	}
-	m.mu.RLock()
-	revision := m.revision
-	m.mu.RUnlock()
-	if len(normalized) == 0 {
-		return RuntimeSnapshot{Revision: revision}, nil
-	}
-	if err := scope.Validate(); err != nil {
-		return RuntimeSnapshot{}, fmt.Errorf("MCP Runtime Tool Scope 无效: %w", err)
-	}
-
-	result := RuntimeSnapshot{Revision: revision}
-	auditServers := make([]RuntimeServerSnapshot, 0, len(normalized))
-	seenExposed := make(map[string]struct{})
-	for _, selection := range normalized {
-		server, err := m.store.Get(ctx, selection.ServerID)
-		if err != nil {
-			return RuntimeSnapshot{}, err
-		}
-		if !server.Enabled {
-			continue
-		}
-
-		auditServers = append(auditServers, RuntimeServerSnapshot{
-			ServerID:    server.ID,
-			ServerKey:   server.Key,
-			ServerName:  server.Name,
-			Fingerprint: ServerFingerprint(server),
-			Transport:   string(server.Transport),
-		})
-		catalog := m.cachedCatalogForProjection(server)
-		for _, rawName := range selection.Tools {
-			exposedName, err := NameExposedTool(server.Key, rawName)
-			if err != nil {
-				return RuntimeSnapshot{}, err
-			}
-			if _, exists := seenExposed[exposedName]; exists {
-				return RuntimeSnapshot{}, fmt.Errorf("MCP Tool exposed name 冲突: %s", exposedName)
-			}
-			seenExposed[exposedName] = struct{}{}
-
-			description := ""
-			var inputSchema map[string]any
-			if cached, ok := catalog[rawName]; ok {
-				description = cached.Description
-				inputSchema = cloneJSONMap(cached.InputSchema)
-			}
-			descriptor := humberttools.Descriptor{
-				Name: exposedName,
-				Risk: ToolRisk(server, rawName),
-				MCPOrigin: &humberttools.MCPOrigin{
-					ServerID:          server.ID,
-					ServerName:        server.Name,
-					ServerFingerprint: ServerFingerprint(server),
-					RawToolName:       rawName,
-				},
-			}
-			result.Tools = append(result.Tools, projectedMCPTool{
-				name:        exposedName,
-				description: description,
-				inputSchema: inputSchema,
-			})
-			result.Descriptors = append(result.Descriptors, descriptor)
-			result.ToolNames = append(result.ToolNames, exposedName)
-		}
-	}
-	return finalizeRuntimeSnapshot(result, revision, auditServers)
-}
-
-func (m *Manager) cachedCatalogForProjection(server Server) map[string]ToolCatalogItem {
-	fingerprint := ServerFingerprint(server)
-	m.mu.RLock()
-	entry, ok := m.catalogCache[server.ID]
-	m.mu.RUnlock()
-	if !ok || entry.fingerprint != fingerprint {
-		return nil
-	}
-	result := make(map[string]ToolCatalogItem, len(entry.items))
-	for _, item := range entry.items {
-		result[item.RawName] = item
-	}
-	return result
-}
-
-// projectedMCPTool 是 Context Usage 专用的 schema-only BaseTool。InputSchema 放在 Extra
-// 中是为了让 ApproxEstimator 的 JSON 投影仍然能估算其体积；真实 Runtime Tool 继续由
-// Eino officialmcp 构建，不会经过这个类型。
-type projectedMCPTool struct {
-	name        string
-	description string
-	inputSchema map[string]any
-}
-
-func (t projectedMCPTool) Info(context.Context) (*schema.ToolInfo, error) {
-	info := &schema.ToolInfo{Name: t.name, Desc: t.description}
-	if len(t.inputSchema) > 0 {
-		info.Extra = map[string]any{"mcp_input_schema": cloneJSONMap(t.inputSchema)}
-	}
-	return info, nil
-}
-
-var _ einotool.BaseTool = projectedMCPTool{}
 
 func finalizeRuntimeSnapshot(result RuntimeSnapshot, revision uint64, auditServers []RuntimeServerSnapshot) (RuntimeSnapshot, error) {
 	result.Revision = revision
@@ -811,57 +672,11 @@ func cloneHTTP(value *HTTPConfig) *HTTPConfig {
 	return &result
 }
 
-func (m *Manager) invalidateCatalog(serverID string) {
-	m.mu.Lock()
-	delete(m.catalogCache, strings.TrimSpace(serverID))
-	m.mu.Unlock()
-}
-
 func (m *Manager) invalidateRuntimeSession(serverID string) {
 	m.mu.RLock()
 	backend := m.backend
 	m.mu.RUnlock()
 	if control, ok := backend.(RuntimeControlBackend); ok && control != nil {
 		control.Invalidate(serverID)
-	}
-}
-
-func cloneCatalog(values []ToolCatalogItem) []ToolCatalogItem {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make([]ToolCatalogItem, 0, len(values))
-	for _, value := range values {
-		copyValue := value
-		copyValue.InputSchema = cloneJSONMap(value.InputSchema)
-		copyValue.Annotations = cloneJSONMap(value.Annotations)
-		result = append(result, copyValue)
-	}
-	return result
-}
-
-func cloneJSONMap(value map[string]any) map[string]any {
-	if value == nil {
-		return nil
-	}
-	result := make(map[string]any, len(value))
-	for key, item := range value {
-		result[key] = cloneJSONValue(item)
-	}
-	return result
-}
-
-func cloneJSONValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		return cloneJSONMap(typed)
-	case []any:
-		result := make([]any, len(typed))
-		for index, item := range typed {
-			result[index] = cloneJSONValue(item)
-		}
-		return result
-	default:
-		return typed
 	}
 }

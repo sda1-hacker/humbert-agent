@@ -93,19 +93,7 @@ func (s *Service) resolveApproval(ctx context.Context, approvalID string, decisi
 
 	resolvedRequest := resolution.Request
 	resolvedRequest.Status = approval.StatusResolving
-	s.publishEvent(Event{
-		Type:             EventApprovalResolved,
-		RequestID:        active.RequestID,
-		RunID:            active.RunID,
-		SessionID:        active.SessionID,
-		AgentID:          active.snapshot.AgentID,
-		ModelID:          active.snapshot.ModelID,
-		ModelRevision:    active.snapshot.ModelRevision,
-		ToolRevision:     active.snapshot.ToolRevision,
-		Approval:         &resolvedRequest,
-		ApprovalDecision: decision,
-		OccurredAt:       time.Now().UTC().Format(time.RFC3339Nano),
-	})
+	s.publishApprovalEvent(active, EventApprovalResolved, resolvedRequest, decision)
 
 	go s.resumeTurn(active, resolution)
 	return ResolveApprovalResult{Approval: resolvedRequest}, nil
@@ -133,7 +121,7 @@ func (s *Service) registerInterruptedRun(active *activeRun, interrupted *Interru
 		return errors.New("Eino 返回了 Approval Interrupt，但 Runtime Checkpoint 不存在")
 	}
 
-	request, err := s.approvals.Register(active.ctx, info, interrupted.InterruptID, active.RunID)
+	request, err := s.approvals.Register(active.ctx, info, interrupted.InterruptID)
 	if err != nil {
 		return err
 	}
@@ -154,18 +142,7 @@ func (s *Service) registerInterruptedRun(active *activeRun, interrupted *Interru
 	active.phase = RunPhaseWaitingApproval
 	s.wg.Add(1)
 	s.mu.Unlock()
-	s.publishEvent(Event{
-		Type:          EventApprovalRequested,
-		RequestID:     active.RequestID,
-		RunID:         active.RunID,
-		SessionID:     active.SessionID,
-		AgentID:       active.snapshot.AgentID,
-		ModelID:       active.snapshot.ModelID,
-		ModelRevision: active.snapshot.ModelRevision,
-		ToolRevision:  active.snapshot.ToolRevision,
-		Approval:      &request,
-		OccurredAt:    time.Now().UTC().Format(time.RFC3339Nano),
-	})
+	s.publishApprovalEvent(active, EventApprovalRequested, request, "")
 
 	go s.awaitApproval(active, request, done, retry)
 	return nil
@@ -202,23 +179,7 @@ func (s *Service) awaitApproval(active *activeRun, request approval.Request, don
 		}
 
 		var expired bool
-		var err error
-		resolution, expired, err = s.approvals.Expire(request.ID)
-		if err != nil {
-			s.logger.Error(
-				context.Background(),
-				"生成 Approval 超时恢复参数失败",
-				"operation", "approval.expire",
-				"request_id", active.RequestID,
-				"run_id", active.RunID,
-				"session_id", active.SessionID,
-				"approval_id", request.ID,
-				"error", err,
-			)
-			active.cancel()
-			s.finalizeWaitingCancellation(active, request.ID)
-			return
-		}
+		resolution, expired = s.approvals.Expire(request.ID)
 		if expired {
 			break
 		}
@@ -258,27 +219,16 @@ func (s *Service) awaitApproval(active *activeRun, request approval.Request, don
 	s.mu.Unlock()
 
 	expiredRequest, _ := s.approvals.Get(request.ID)
-	s.publishEvent(Event{
-		Type:          EventApprovalExpired,
-		RequestID:     active.RequestID,
-		RunID:         active.RunID,
-		SessionID:     active.SessionID,
-		AgentID:       active.snapshot.AgentID,
-		ModelID:       active.snapshot.ModelID,
-		ModelRevision: active.snapshot.ModelRevision,
-		ToolRevision:  active.snapshot.ToolRevision,
-		Approval:      &expiredRequest,
-		OccurredAt:    time.Now().UTC().Format(time.RFC3339Nano),
-	})
+	s.publishApprovalEvent(active, EventApprovalExpired, expiredRequest, "")
 
 	// 当前 timeout worker 继续承担 Resume 工作，不再创建额外 goroutine。
 	result, runErr := s.executor.Resume(
 		active.ctx,
-		active.snapshot,
+		active.Snapshot,
 		active.checkpointStore,
 		resolution.Request.InterruptID(),
 		resolution.ResumeJSON,
-		s.deltaEmitter(active.snapshot),
+		s.deltaEmitter(active.Snapshot),
 	)
 	s.handleExecutionOutcome(active, result, runErr, request.ID)
 }

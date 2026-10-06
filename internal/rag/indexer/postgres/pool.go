@@ -10,36 +10,7 @@ import (
 	pgxvec "github.com/pgvector/pgvector-go/pgx"
 )
 
-// EnsureExtensions 使用“普通 pgx connection”确保数据库扩展存在。
-//
-// 为什么不能直接使用我们的正式 pgxpool？
-//
-// 正式 Pool 的 AfterConnect 会执行：
-//
-//	pgxvec.RegisterTypes()
-//
-// RegisterTypes 会先查询：
-//
-//	vector
-//	halfvec
-//	sparsevec
-//
-// 的 PostgreSQL OID。
-//
-// 如果 vector extension 还没有安装，RegisterTypes 会直接失败。
-//
-// 所以全新数据库启动顺序必须是：
-//
-//	普通 pgx.Connect
-//	    ↓
-//	CREATE EXTENSION vector
-//	CREATE EXTENSION pg_search
-//	    ↓
-//	Close
-//	    ↓
-//	NewPool
-//	    ↓
-//	RegisterTypes
+// EnsureExtensions 使用普通连接安装 pgvector 与 ParadeDB，再创建注册向量类型的连接池。
 func EnsureExtensions(ctx context.Context, dsn string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -68,19 +39,7 @@ func EnsureExtensions(ctx context.Context, dsn string) error {
 	return CheckExtensions(ctx, conn)
 }
 
-// NewPool 创建已经注册 pgvector Codec 的正式连接池。
-//
-// 前提：
-//
-//	vector extension 已经存在。
-//
-// 开发环境可以：
-//
-//	EnsureExtensions(ctx, dsn)
-//	NewPool(ctx, dsn)
-//
-// 生产环境通常由 DBA / Migration 系统提前安装 Extension，
-// 然后直接 NewPool 即可。
+// NewPool 创建连接池，并为每条连接注册 pgvector 编解码器；数据库扩展须先安装。
 func NewPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

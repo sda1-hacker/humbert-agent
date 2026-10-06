@@ -1,6 +1,6 @@
 # Collaboration：把 Agent 作为工具调用
 
-[总目录](../../docs/architecture/README.md) · [Agents](../agents/README.md) · [Runtime](../runtime/README.md)
+[总目录](../../docs/项目源码详解.md) · [Agents](../agents/README.md) · [Runtime](../runtime/README.md)
 
 `list_agents` 只列出允许被调用的 Agent；`run_agent` 把一个自包含任务交给目标 Agent，在父 Turn 内同步等待。`Manager.RunAgent` 校验目标，调用 `AgentBuilder`（由 Runtime Resolver 实现）构建子运行，并把最终文本结果作为父工具结果返回。子运行不创建侧栏 Session，也不是后台 Task；父 Session 自然保留这次 ToolCall 与 ToolResult。
 

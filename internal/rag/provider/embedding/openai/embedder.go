@@ -20,75 +20,34 @@ var (
 	ErrInvalidTimeout    = errors.New("openai embedding: invalid timeout")
 )
 
-// Config 描述一个 OpenAI-compatible Embedding Endpoint。
-//
-// 这个 Adapter 不只可以连接 OpenAI 官方服务。
-//
-// 只要服务兼容：
-//
-//	POST /v1/embeddings
-//
-// 就可以使用，例如：
-//
-//	OpenAI
-//	vLLM
-//	LocalAI
-//	一些企业内部 OpenAI-compatible gateway
-//
-// 对于 vLLM:
-//
-//	BaseURL = "http://127.0.0.1:8001/v1"
-//	APIKey  = "EMPTY"
-//	Model   = "BAAI/bge-m3"
+// Config 描述兼容 OpenAI 协议的向量服务及请求设置。
 type Config struct {
 	InputBudget embeddinginput.Budget
 	APIKey      string
 
-	// BaseURL 必须是 OpenAI API Base。
-	//
-	// vLLM 通常：
-	//
-	//     http://127.0.0.1:8001/v1
-	//
-	// 不是：
-	//
-	//     http://127.0.0.1:8001/v1/embeddings
+	// BaseURL 是服务的 API 基础地址；完整 embeddings 路径由底层客户端拼接。
 	BaseURL string
 
 	Model         string
 	ModelRevision string
 
-	// Dimensions <= 0 表示不向 Provider 显式传 dimensions。
-	//
-	// 我们当前 PostgreSQL 固定：
-	//
-	//     halfvec(1024)
-	//
-	// 因此 Composition Root 默认会设置：
-	//
-	//     1024
+	// Dimensions 大于零时向模型请求指定维度，否则使用服务默认维度。
 	Dimensions int
 
 	Timeout time.Duration
 
-	// HTTPClient 非 nil 时优先使用。
-	//
-	// 这允许：
-	//
-	//     自定义 Transport
-	//     Proxy
-	//     TLS
-	//     Trace
-	//     测试 httptest.Server
+	// HTTPClient 非空时使用调用方客户端，否则按 Timeout 创建客户端。
 	HTTPClient *http.Client
 }
 
+// DefaultConfig 返回请求超时等默认设置，模型与凭据由调用方提供。
 func DefaultConfig() Config {
 	return Config{
 		Timeout: 30 * time.Second,
 	}
 }
 
+// Validate 检查模型、地址、维度与请求超时。
 func (c Config) Validate() error {
 	if strings.TrimSpace(c.BaseURL) != "" {
 		u, err := url.Parse(strings.TrimSpace(c.BaseURL))
@@ -114,18 +73,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// New 创建 Eino embedding.Embedder。
-//
-// 这里没有自己重写 /v1/embeddings HTTP Client，
-// 而是直接复用 Eino 官方 eino-ext OpenAI Embedder。
-//
-// 这样可以继续获得：
-//
-//	Eino callback
-//	embedding.WithModel()
-//	OpenAI-compatible protocol
-//
-// 等能力。
+// New 校验配置并创建 Eino 原生 Embedder，复用 eino-ext 的协议与回调实现。
 func New(ctx context.Context, cfg Config) (embedding.Embedder, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err

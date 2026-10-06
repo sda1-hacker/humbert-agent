@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	"github.com/cloudwego/eino/components/embedding"
 	einoretriever "github.com/cloudwego/eino/components/retriever"
@@ -16,7 +15,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgvector "github.com/pgvector/pgvector-go"
 
-	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
@@ -26,19 +24,6 @@ const (
 	DefaultVectorThreshold  = 0.15
 	DefaultKeywordThreshold = 0.30
 	DefaultDimensions       = 1024
-
-	MetaDocumentID    = "rag_document_id"
-	MetaParentChunkID = "rag_parent_chunk_id"
-	MetaChunkIndex    = "rag_chunk_index"
-	MetaChunkStart    = "rag_chunk_start"
-	MetaChunkEnd      = "rag_chunk_end"
-	MetaContextHeader = "rag_context_header"
-
-	MetaMatchType    = "rag_match_type"
-	MetaVectorScore  = "rag_vector_score"
-	MetaKeywordScore = "rag_keyword_score"
-	MetaVectorRank   = "rag_vector_rank"
-	MetaKeywordRank  = "rag_keyword_rank"
 )
 
 var (
@@ -55,11 +40,8 @@ var (
 // 编译期接口检查。
 var _ einoretriever.Retriever = (*VectorRetriever)(nil)
 var _ einoretriever.Retriever = (*BM25Retriever)(nil)
-var _ einoretriever.Retriever = (*HybridRetriever)(nil)
 
-// -----------------------------------------------------------------------------
-// Database abstraction
-// -----------------------------------------------------------------------------
+// 数据库访问接口。
 
 // rows 是 Retriever 真正需要的最小 RowSet 接口。
 //
@@ -85,6 +67,7 @@ type poolQueryer struct {
 	pool *pgxpool.Pool
 }
 
+// Query 将连接池查询适配到内部行读取接口。
 func (p poolQueryer) Query(
 	ctx context.Context,
 	sql string,
@@ -93,17 +76,17 @@ func (p poolQueryer) Query(
 	return p.pool.Query(ctx, sql, args...)
 }
 
-// -----------------------------------------------------------------------------
-// Vector Retriever
-// -----------------------------------------------------------------------------
+// 向量召回器。
 
 // VectorConfig 配置 Dense Retriever。
 type VectorConfig struct {
+	// CollectionID 组件默认知识库范围，原生调用可通过 WithIndex 覆盖。
 	CollectionID string
 
 	// Embedder 必须与 Indexing 阶段使用完全相同的模型。
 	Embedder embedding.Embedder
 
+	// TopK 召回候选数量，调用时可通过 WithTopK 覆盖。
 	TopK int
 
 	// cosine similarity 最小值。
@@ -117,6 +100,7 @@ type VectorConfig struct {
 	Dimensions int
 }
 
+// DefaultVectorConfig 返回向量召回的候选数量、维度与默认阈值。
 func DefaultVectorConfig() VectorConfig {
 	return VectorConfig{
 		TopK:           DefaultTopK,
@@ -125,17 +109,13 @@ func DefaultVectorConfig() VectorConfig {
 	}
 }
 
-// VectorRetriever 使用：
-//
-//	pgvector
-//	halfvec
-//	HNSW
-//	cosine
+// VectorRetriever 使用 pgvector 的半精度向量与 HNSW 索引进行余弦相似度召回。
 type VectorRetriever struct {
 	db     queryer
 	config VectorConfig
 }
 
+// NewVectorRetriever 校验模型和数据库配置，创建 Eino 向量检索器。
 func NewVectorRetriever(
 	pool *pgxpool.Pool,
 	cfg VectorConfig,
@@ -171,16 +151,16 @@ func (r *VectorRetriever) Retrieve(
 	query string,
 	opts ...einoretriever.Option,
 ) ([]*schema.Document, error) {
-	results, err := r.Search(ctx, query, opts...)
+	results, err := r.searchResults(ctx, query, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return searchResultsToDocuments(results), nil
+	return retrieval.Documents(results), nil
 }
 
-// Search 返回与 Eino 解耦的 Retrieval Core SearchResult。
-func (r *VectorRetriever) Search(
+// searchResults 是适配器内部的查询与结果转换，不对外定义另一套检索接口。
+func (r *VectorRetriever) searchResults(
 	ctx context.Context,
 	query string,
 	opts ...einoretriever.Option,
@@ -288,26 +268,21 @@ func (r *VectorRetriever) search(
 		return nil, err
 	}
 
-	// ScoreThreshold 是 relevance filter。
-	//
-	// 对 pgvector 来说：
-	//
-	//     Score = 1 - cosine_distance
-	//
-	// 越大越好。
+	// 向量相关性分数等于一减余弦距离。
 	for i := range results {
 		results[i].CollectionID = collectionID
 	}
 	return filterByScore(results, threshold, topK), nil
 }
 
-// -----------------------------------------------------------------------------
-// BM25 Retriever
-// -----------------------------------------------------------------------------
+// 关键词召回器。
 
+// BM25Config 控制关键词召回的知识库范围、数量与原始分数阈值。
 type BM25Config struct {
+	// CollectionID 组件默认知识库范围，原生调用可通过 WithIndex 覆盖。
 	CollectionID string
-	TopK         int
+	// TopK 召回候选数量，调用时可通过 WithTopK 覆盖。
+	TopK int
 
 	// 这是 raw BM25 score threshold。
 	//
@@ -315,6 +290,7 @@ type BM25Config struct {
 	ScoreThreshold float64
 }
 
+// DefaultBM25Config 返回关键词召回的默认候选数量。
 func DefaultBM25Config() BM25Config {
 	return BM25Config{
 		TopK:           DefaultTopK,
@@ -322,11 +298,13 @@ func DefaultBM25Config() BM25Config {
 	}
 }
 
+// BM25Retriever 通过 ParadeDB 进行关键词召回的 Eino 检索器。
 type BM25Retriever struct {
 	db     queryer
 	config BM25Config
 }
 
+// NewBM25Retriever 校验配置并绑定 PostgreSQL 连接池。
 func NewBM25Retriever(
 	pool *pgxpool.Pool,
 	cfg BM25Config,
@@ -357,15 +335,15 @@ func (r *BM25Retriever) Retrieve(
 	query string,
 	opts ...einoretriever.Option,
 ) ([]*schema.Document, error) {
-	results, err := r.Search(ctx, query, opts...)
+	results, err := r.searchResults(ctx, query, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	return searchResultsToDocuments(results), nil
+	return retrieval.Documents(results), nil
 }
 
-func (r *BM25Retriever) Search(
+func (r *BM25Retriever) searchResults(
 	ctx context.Context,
 	query string,
 	opts ...einoretriever.Option,
@@ -447,406 +425,10 @@ func (r *BM25Retriever) search(
 }
 
 // -----------------------------------------------------------------------------
-// Hybrid Retriever
-// -----------------------------------------------------------------------------
-
-// HybridConfig 同时配置两个 Recall Channel。
-type HybridConfig struct {
-	Timeout        time.Duration
-	ChannelTimeout time.Duration
-	FailurePolicy  string
-	CollectionID   string
-
-	Embedder embedding.Embedder
-
-	// 最终 Hybrid 返回数量。
-	TopK int
-
-	// 每一路 Retriever 的候选池深度。
-	//
-	// 当前默认与 WeKnora 的 EmbeddingTopK 一样取50。
-	ChannelTopK int
-
-	VectorThreshold  float64
-	KeywordThreshold float64
-
-	Dimensions int
-
-	RRF retrieval.RRFConfig
-}
-
-const FailureStrict = "strict"
-const FailureAllowPartial = "allow_partial"
-
-func DefaultHybridConfig() HybridConfig {
-	return HybridConfig{
-		TopK:             DefaultTopK,
-		ChannelTopK:      DefaultTopK,
-		VectorThreshold:  DefaultVectorThreshold,
-		KeywordThreshold: DefaultKeywordThreshold,
-		Dimensions:       DefaultDimensions,
-		RRF:              retrieval.DefaultRRFConfig(),
-	}
-}
-
-// hybridOptions 是 Hybrid 特有的调用级参数。
-//
-// Eino 标准 WithScoreThreshold 表示：
-//
-//	最终 fused score threshold
-//
-// 两个 Retriever 自己的 threshold 则通过下面两个 Option 控制。
-type hybridOptions struct {
-	ChannelTopK      *int
-	VectorThreshold  *float64
-	KeywordThreshold *float64
-}
-
-// WithChannelTopK 临时修改两路 Recall Pool。
-func WithChannelTopK(topK int) einoretriever.Option {
-	return einoretriever.WrapImplSpecificOptFn(
-		func(options *hybridOptions) {
-			options.ChannelTopK = &topK
-		},
-	)
-}
-
-// WithVectorThreshold 临时修改 Dense threshold。
-func WithVectorThreshold(
-	threshold float64,
-) einoretriever.Option {
-	return einoretriever.WrapImplSpecificOptFn(
-		func(options *hybridOptions) {
-			options.VectorThreshold = &threshold
-		},
-	)
-}
-
-// WithKeywordThreshold 临时修改 raw BM25 threshold。
-func WithKeywordThreshold(
-	threshold float64,
-) einoretriever.Option {
-	return einoretriever.WrapImplSpecificOptFn(
-		func(options *hybridOptions) {
-			options.KeywordThreshold = &threshold
-		},
-	)
-}
-
-type vectorSearcher interface {
-	search(
-		ctx context.Context,
-		query string,
-		collectionID string,
-		topK int,
-		threshold float64,
-		embedder embedding.Embedder,
-	) ([]retrieval.SearchResult, error)
-}
-
-type keywordSearcher interface {
-	search(
-		ctx context.Context,
-		query string,
-		collectionID string,
-		topK int,
-		threshold float64,
-	) ([]retrieval.SearchResult, error)
-}
-
-type HybridRetriever struct {
-	vector  vectorSearcher
-	keyword keywordSearcher
-	config  HybridConfig
-}
-
-func NewHybridRetriever(
-	pool *pgxpool.Pool,
-	cfg HybridConfig,
-) (*HybridRetriever, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	if pool == nil {
-		return nil, fmt.Errorf("postgres hybrid retriever: nil pool")
-	}
-
-	vectorCfg := DefaultVectorConfig()
-	vectorCfg.CollectionID = cfg.CollectionID
-	vectorCfg.Embedder = cfg.Embedder
-	vectorCfg.TopK = cfg.ChannelTopK
-	vectorCfg.ScoreThreshold = cfg.VectorThreshold
-	vectorCfg.Dimensions = cfg.Dimensions
-
-	keywordCfg := DefaultBM25Config()
-	keywordCfg.CollectionID = cfg.CollectionID
-	keywordCfg.TopK = cfg.ChannelTopK
-	keywordCfg.ScoreThreshold = cfg.KeywordThreshold
-
-	queryDB := poolQueryer{pool: pool}
-
-	return newHybridRetriever(
-		newVectorRetriever(queryDB, vectorCfg),
-		newBM25Retriever(queryDB, keywordCfg),
-		cfg,
-	), nil
-}
-
-func newHybridRetriever(
-	vector vectorSearcher,
-	keyword keywordSearcher,
-	cfg HybridConfig,
-) *HybridRetriever {
-	defaults := DefaultHybridConfig()
-
-	if cfg.TopK <= 0 {
-		cfg.TopK = defaults.TopK
-	}
-
-	if cfg.ChannelTopK <= 0 {
-		cfg.ChannelTopK = defaults.ChannelTopK
-	}
-
-	if cfg.Dimensions <= 0 {
-		cfg.Dimensions = defaults.Dimensions
-	}
-
-	cfg.RRF = cfg.RRF.Effective()
-
-	return &HybridRetriever{
-		vector:  vector,
-		keyword: keyword,
-		config:  cfg,
-	}
-}
-
-func (r *HybridRetriever) Retrieve(
-	ctx context.Context,
-	query string,
-	opts ...einoretriever.Option,
-) ([]*schema.Document, error) {
-	results, err := r.Search(ctx, query, opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	return searchResultsToDocuments(results), nil
-}
-
-// Search 并发执行 Dense + BM25，然后做 Weighted RRF。
-func (r *HybridRetriever) Search(ctx context.Context, query string, opts ...einoretriever.Option) ([]retrieval.SearchResult, error) {
-	results, _, err := r.SearchWithDiagnostics(ctx, query, opts...)
-	return results, err
-}
-
-func (r *HybridRetriever) SearchWithDiagnostics(
-	ctx context.Context,
-	query string,
-	opts ...einoretriever.Option,
-) ([]retrieval.SearchResult, retrieval.Diagnostics, error) {
-	diag := retrieval.Diagnostics{ModeUsed: retrieval.MatchHybrid}
-	if err := r.config.Validate(); err != nil {
-		return nil, diag, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, diag, err
-	}
-	timeout := r.config.Timeout
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	query = strings.TrimSpace(query)
-
-	if query == "" {
-		return nil, diag, ErrEmptyQuery
-	}
-
-	collectionID := r.config.CollectionID
-	topK := r.config.TopK
-
-	// Hybrid 最终默认不过滤 RRF。
-	//
-	// 调用方如果需要可以：
-	//
-	//     retriever.WithScoreThreshold(...)
-	finalThreshold := 0.0
-
-	common := einoretriever.GetCommonOptions(
-		&einoretriever.Options{
-			Index:          &collectionID,
-			TopK:           &topK,
-			ScoreThreshold: &finalThreshold,
-			Embedding:      r.config.Embedder,
-		},
-		opts...,
-	)
-
-	if err := validateCommonOptions(common); err != nil {
-		return nil, diag, err
-	}
-
-	if common.Embedding == nil && r.config.RRF.VectorWeight > 0 {
-		return nil, diag, ErrMissingEmbedder
-	}
-
-	if *common.ScoreThreshold < 0 ||
-		*common.ScoreThreshold > 1 {
-
-		return nil, diag, ErrInvalidThreshold
-	}
-
-	specific := einoretriever.GetImplSpecificOptions(
-		&hybridOptions{},
-		opts...,
-	)
-
-	channelTopK := r.config.ChannelTopK
-	vectorThreshold := r.config.VectorThreshold
-	keywordThreshold := r.config.KeywordThreshold
-
-	if specific.ChannelTopK != nil {
-		channelTopK = *specific.ChannelTopK
-	}
-
-	if specific.VectorThreshold != nil {
-		vectorThreshold = *specific.VectorThreshold
-	}
-
-	if specific.KeywordThreshold != nil {
-		keywordThreshold = *specific.KeywordThreshold
-	}
-
-	if err := validateTopK(channelTopK); err != nil {
-		return nil, diag, err
-	}
-
-	if !finite(vectorThreshold) || vectorThreshold < 0 || vectorThreshold > 1 {
-		return nil, diag, ErrInvalidThreshold
-	}
-
-	if !finite(keywordThreshold) || keywordThreshold < 0 {
-		return nil, diag, ErrInvalidThreshold
-	}
-
-	type response struct {
-		results []retrieval.SearchResult
-		err     error
-	}
-
-	vectorCh := make(chan response, 1)
-	keywordCh := make(chan response, 1)
-	vectorOut, keywordOut := vectorCh, keywordCh
-
-	go func() {
-		channelCtx := ctx
-		cancelChannel := func() {}
-		if r.config.ChannelTimeout > 0 {
-			channelCtx, cancelChannel = context.WithTimeout(ctx, r.config.ChannelTimeout)
-		}
-		defer cancelChannel()
-		if r.config.RRF.VectorWeight == 0 {
-			vectorOut <- response{}
-			return
-		}
-		results, err := r.vector.search(channelCtx, query, strings.TrimSpace(*common.Index), channelTopK, vectorThreshold, common.Embedding)
-		vectorOut <- response{results: results, err: err}
-	}()
-	go func() {
-		channelCtx := ctx
-		cancelChannel := func() {}
-		if r.config.ChannelTimeout > 0 {
-			channelCtx, cancelChannel = context.WithTimeout(ctx, r.config.ChannelTimeout)
-		}
-		defer cancelChannel()
-		if r.config.RRF.KeywordWeight == 0 {
-			keywordOut <- response{}
-			return
-		}
-		results, err := r.keyword.search(channelCtx, query, strings.TrimSpace(*common.Index), channelTopK, keywordThreshold)
-		keywordOut <- response{results: results, err: err}
-	}()
-	var vectorResponse, keywordResponse response
-	for i := 0; i < 2; i++ {
-		var received response
-		var channel retrieval.MatchType
-		select {
-		case received = <-vectorCh:
-			vectorResponse = received
-			vectorCh = nil
-			channel = retrieval.MatchVector
-		case received = <-keywordCh:
-			keywordResponse = received
-			keywordCh = nil
-			channel = retrieval.MatchKeyword
-		case <-ctx.Done():
-			return nil, diag, ctx.Err()
-		}
-		if received.err != nil {
-			if ctx.Err() != nil {
-				return nil, diag, ctx.Err()
-			}
-			if errors.Is(received.err, context.Canceled) || r.config.FailurePolicy != FailureAllowPartial {
-				return nil, diag, fmt.Errorf("hybrid %s channel: %w", channel, received.err)
-			}
-			diag.Degraded = true
-			diag.Channels = append(diag.Channels, retrieval.ChannelDiagnostic{Channel: channel, Error: logging.SafeErrorText(received.err, 2048)})
-		}
-	}
-	if ctx.Err() != nil {
-		return nil, diag, ctx.Err()
-	}
-	if (vectorResponse.err != nil || r.config.RRF.VectorWeight == 0) && (keywordResponse.err != nil || r.config.RRF.KeywordWeight == 0) {
-		return nil, diag, errors.Join(vectorResponse.err, keywordResponse.err)
-	}
-	if vectorResponse.err != nil || r.config.RRF.VectorWeight == 0 {
-		diag.ModeUsed = retrieval.MatchKeyword
-	}
-	if keywordResponse.err != nil || r.config.RRF.KeywordWeight == 0 {
-		diag.ModeUsed = retrieval.MatchVector
-	}
-	// A failed channel never contributes partially returned rows.
-	if vectorResponse.err != nil {
-		vectorResponse.results = nil
-	}
-	if keywordResponse.err != nil {
-		keywordResponse.results = nil
-	}
-
-	fused := retrieval.FuseRRF(
-		vectorResponse.results,
-		keywordResponse.results,
-		r.config.RRF,
-	)
-
-	fused = filterByScore(
-		fused,
-		*common.ScoreThreshold,
-		*common.TopK,
-	)
-
-	return fused, diag, nil
-}
-
-// -----------------------------------------------------------------------------
 // SQL
 // -----------------------------------------------------------------------------
 
-// vectorSearchSQL:
-//
-//	<=> = cosine distance
-//
-//	1 - distance = cosine similarity
-//
-// 注意内部 CTE：
-//
-// HNSW 要使用索引，核心形状应该保持：
-//
-//	ORDER BY embedding <=> query
-//	LIMIT N
-//
-// 不把复杂 Join 排序直接压在 ANN 查询上。
+// 向量相似度为一减余弦距离；先在子查询中按距离取候选，保留 HNSW 可使用的查询形状。
 const vectorSearchSQL = `
 WITH nearest AS MATERIALIZED (
     SELECT
@@ -878,15 +460,7 @@ JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
 ORDER BY score DESC, c.id ASC
 `
 
-// bm25SearchSQL:
-//
-//	|||
-//	    ParadeDB Match Any / OR semantics
-//
-//	pdb.score(id)
-//	    BM25 relevance
-//
-// retrieval_index.id 是 ParadeDB 的 unique key_field。
+// 关键词查询使用 ParadeDB 的匹配与相关性评分，id 是检索表的唯一索引键。
 const bm25SearchSQL = `
 SELECT
     c.id,
@@ -911,10 +485,9 @@ ORDER BY pdb.score(ri.id) DESC, ri.id ASC
 LIMIT $3
 `
 
-// -----------------------------------------------------------------------------
-// Row mapping
-// -----------------------------------------------------------------------------
+// 数据库行映射。
 
+// scanSearchResults 将数据库行映射为统一召回结果，保留原始通道分数。
 func scanSearchResults(
 	resultRows rows,
 	matchType retrieval.MatchType,
@@ -964,7 +537,7 @@ func scanSearchResults(
 			}
 		}
 
-		revision, err := documentRevision(result.Metadata)
+		revision, err := retrieval.Revision(result.Metadata)
 		if err != nil {
 			return nil, err
 		}
@@ -992,68 +565,11 @@ func scanSearchResults(
 	return results, nil
 }
 
-// -----------------------------------------------------------------------------
-// Eino mapping
-// -----------------------------------------------------------------------------
+// Eino 文档映射。
 
-func searchResultsToDocuments(
-	results []retrieval.SearchResult,
-) []*schema.Document {
-	docs := make([]*schema.Document, 0, len(results))
+// 配置校验与辅助函数。
 
-	for _, result := range results {
-		metadata := cloneMetadata(result.Metadata)
-
-		metadata[MetaDocumentID] = result.DocumentID
-		metadata[MetaChunkIndex] = result.ChunkIndex
-		metadata[MetaChunkStart] = result.StartRune
-		metadata[MetaChunkEnd] = result.EndRune
-		metadata[MetaContextHeader] = result.ContextHeader
-		metadata[MetaMatchType] = string(result.MatchType)
-
-		if result.ParentChunkID != "" {
-			metadata[MetaParentChunkID] = result.ParentChunkID
-		}
-
-		if result.VectorRank > 0 {
-			metadata[MetaVectorRank] = result.VectorRank
-			metadata[MetaVectorScore] = result.VectorScore
-		}
-
-		if result.KeywordRank > 0 {
-			metadata[MetaKeywordRank] = result.KeywordRank
-			metadata[MetaKeywordScore] = result.KeywordScore
-		}
-
-		// Vector/BM25 direct Retriever 还没有经过 RRF，
-		// 但 raw score 仍应该写进相应 metadata。
-		if result.MatchType == retrieval.MatchVector {
-			metadata[MetaVectorScore] = result.VectorScore
-		}
-
-		if result.MatchType == retrieval.MatchKeyword {
-			metadata[MetaKeywordScore] = result.KeywordScore
-		}
-
-		doc := &schema.Document{
-			ID:       result.ChunkID,
-			Content:  result.Content,
-			MetaData: metadata,
-		}
-
-		// Eino 官方 relevance score。
-		doc.WithScore(result.Score)
-
-		docs = append(docs, doc)
-	}
-
-	return docs
-}
-
-// -----------------------------------------------------------------------------
-// Validation / utilities
-// -----------------------------------------------------------------------------
-
+// validateCommonOptions 校验 Eino 通用选项，拒绝不支持的子索引和查询表达式。
 func validateCommonOptions(
 	options *einoretriever.Options,
 ) error {
@@ -1087,6 +603,7 @@ func validateCommonOptions(
 	return nil
 }
 
+// validateTopK 限制数据库请求的候选数量，防止无界召回。
 func validateTopK(topK int) error {
 	if topK <= 0 || topK > MaxTopK {
 		return fmt.Errorf(
@@ -1100,6 +617,7 @@ func validateTopK(topK int) error {
 	return nil
 }
 
+// filterByScore 保留达到原始通道阈值的结果并限制数量，保持数据库排序。
 func filterByScore(
 	results []retrieval.SearchResult,
 	threshold float64,
@@ -1128,6 +646,7 @@ func filterByScore(
 	return filtered
 }
 
+// toHalfVector 校验维度、有限值、半精度范围和非零向量，再转换为数据库向量类型。
 func toHalfVector(
 	vector []float64,
 	dimensions int,
@@ -1173,22 +692,6 @@ func toHalfVector(
 		return pgvector.HalfVector{}, fmt.Errorf("%w: zero vector after half precision conversion", ErrInvalidEmbedding)
 	}
 	return pgvector.NewHalfVector(values), nil
-}
-
-func cloneMetadata(
-	src map[string]any,
-) map[string]any {
-	if len(src) == 0 {
-		return make(map[string]any)
-	}
-
-	dst := make(map[string]any, len(src)+10)
-
-	for key, value := range src {
-		dst[key] = value
-	}
-
-	return dst
 }
 
 // 确保 poolQueryer 编译时确实能返回 pgx.Rows。

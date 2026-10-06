@@ -109,9 +109,7 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 | internal/searchindex/、internal/databackup/ | SQLite 搜索投影与加密备份 |
 | frontend/ | Vue 3 桌面界面与 Wails bindings |
 
-第一次阅读代码可从 [架构手册](docs/architecture/README.md) 进入各包的详细说明，并用 [代码阅读导引](docs/architecture/code-reading-guide.md) 跟踪一次聊天；设计约束见 [领域边界文档](docs/architecture/domain-boundaries.md)。
-
-基于当前实现的逐模块剖析见 [源码实现文档](docs/source-analysis/README.md)：覆盖全部非 RAG 内部模块、前端和桌面接口，解释调用流程、持久化、并发、失败处理与可选优化，并附文件、服务接口和工具参数索引。
+完整的代码学习说明集中在 [项目源码详解](docs/项目源码详解.md)：根据当前源码解读全部非 RAG 后端、前端、桌面入口和数据命令，覆盖设计、调用流程、持久化、并发、权限及失败处理，并附桌面接口、数据字段、函数和测试索引。首次阅读可按其中的 [学习路线](docs/项目源码详解.md#reading) 跟踪一次真实聊天。
 
 ### 默认数据目录
 
@@ -184,7 +182,6 @@ go run ./cmd/data restore -archive /path/to/humbert-backup.age -passphrase-file 
 ~~~bash
 cd frontend
 npm ci
-npm test
 npm run build
 cd ..
 go test ./...
@@ -197,4 +194,4 @@ frontend/dist/.gitkeep 让未构建前端的干净检出也能通过 Go 的嵌�
 wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings
 ~~~
 
-工程约束见 [DEVELOPMENT.md](DEVELOPMENT.md)；目前的核心边界见 [领域边界文档](docs/architecture/domain-boundaries.md)。
+工程约束见 [DEVELOPMENT.md](DEVELOPMENT.md)；目前的实现与核心边界见 [项目源码详解](docs/项目源码详解.md)。

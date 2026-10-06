@@ -71,7 +71,6 @@ export {
     ProactiveStatusDTO,
     ProviderDTO,
     ResolveApprovalRequest,
-    SandboxDiagnosticCheckDTO,
     SandboxDiagnosticsDTO,
     SandboxPolicyDTO,
     SandboxSettingsRequest,

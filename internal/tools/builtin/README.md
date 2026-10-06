@@ -1,6 +1,6 @@
 # Builtin Tools：具体动作实现
 
-[总目录](../../../docs/architecture/README.md) · [Tool Registry](../README.md)
+[总目录](../../../docs/项目源码详解.md) · [Tool Registry](../README.md)
 
 本目录负责具体的文件、网页、系统与会话动作。每个 Factory 的 `Descriptor` 告诉 Registry 如何暴露；`Build(ctx, scope)` 固定本轮依赖；`run` 对模型输入做校验并执行。工具可被 Agent 选择，但真正调用还会经过 Registry 的 Guard、Permission 和各自的 Sandbox/Workspace 校验。
 

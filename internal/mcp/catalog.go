@@ -2,7 +2,12 @@ package mcp
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
+
+	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/schema"
 
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
@@ -52,4 +57,142 @@ type RuntimeControlBackend interface {
 	RuntimeStatus(server Server) RuntimeStatus
 	Invalidate(serverID string)
 	Close() error
+}
+
+// resolveRuntimeProjection 构造不执行外部 IO 的 MCP Schema 投影。返回的 Tools 只实现
+// BaseTool.Info，用于 ContextEngine 的 Token 估算；绝不能用于真实 Turn 执行。
+func (m *Manager) resolveRuntimeProjection(
+	ctx context.Context,
+	values []ToolSelection,
+	scope humberttools.Scope,
+) (RuntimeSnapshot, error) {
+	request, _, err := m.runtimeRequest(ctx, values, scope)
+	if err != nil {
+		return RuntimeSnapshot{}, err
+	}
+	if request.Servers == nil {
+		return RuntimeSnapshot{Revision: request.Revision}, nil
+	}
+	result := RuntimeSnapshot{Revision: request.Revision}
+	auditServers := runtimeServerSnapshots(request.Servers)
+	seenExposed := make(map[string]struct{})
+	for index, server := range request.Servers {
+		selection := request.Selections[index]
+		catalog := m.cachedCatalogForProjection(server)
+		for _, rawName := range selection.Tools {
+			exposedName, err := NameExposedTool(server.Key, rawName)
+			if err != nil {
+				return RuntimeSnapshot{}, err
+			}
+			if _, exists := seenExposed[exposedName]; exists {
+				return RuntimeSnapshot{}, fmt.Errorf("MCP Tool exposed name 冲突: %s", exposedName)
+			}
+			seenExposed[exposedName] = struct{}{}
+
+			description := ""
+			var inputSchema map[string]any
+			if cached, ok := catalog[rawName]; ok {
+				description = cached.Description
+				inputSchema = cloneJSONMap(cached.InputSchema)
+			}
+			descriptor := humberttools.Descriptor{
+				Name: exposedName,
+				Risk: ToolRisk(server, rawName),
+				MCPOrigin: &humberttools.MCPOrigin{
+					ServerID:          server.ID,
+					ServerName:        server.Name,
+					ServerFingerprint: ServerFingerprint(server),
+					RawToolName:       rawName,
+				},
+			}
+			result.Tools = append(result.Tools, projectedMCPTool{
+				name:        exposedName,
+				description: description,
+				inputSchema: inputSchema,
+			})
+			result.Descriptors = append(result.Descriptors, descriptor)
+			result.ToolNames = append(result.ToolNames, exposedName)
+		}
+	}
+	return finalizeRuntimeSnapshot(result, request.Revision, auditServers)
+}
+
+func (m *Manager) cachedCatalogForProjection(server Server) map[string]ToolCatalogItem {
+	fingerprint := ServerFingerprint(server)
+	m.mu.RLock()
+	entry, ok := m.catalogCache[server.ID]
+	m.mu.RUnlock()
+	if !ok || entry.fingerprint != fingerprint {
+		return nil
+	}
+	result := make(map[string]ToolCatalogItem, len(entry.items))
+	for _, item := range entry.items {
+		result[item.RawName] = item
+	}
+	return result
+}
+
+// projectedMCPTool 是 Context Usage 专用的 schema-only BaseTool。InputSchema 放在 Extra
+// 中是为了让 ApproxEstimator 的 JSON 投影仍然能估算其体积；真实 Runtime Tool 继续由
+// Eino officialmcp 构建，不会经过这个类型。
+type projectedMCPTool struct {
+	name        string
+	description string
+	inputSchema map[string]any
+}
+
+func (t projectedMCPTool) Info(context.Context) (*schema.ToolInfo, error) {
+	info := &schema.ToolInfo{Name: t.name, Desc: t.description}
+	if len(t.inputSchema) > 0 {
+		info.Extra = map[string]any{"mcp_input_schema": cloneJSONMap(t.inputSchema)}
+	}
+	return info, nil
+}
+
+var _ einotool.BaseTool = projectedMCPTool{}
+
+func (m *Manager) invalidateCatalog(serverID string) {
+	m.mu.Lock()
+	delete(m.catalogCache, strings.TrimSpace(serverID))
+	m.mu.Unlock()
+}
+
+func cloneCatalog(values []ToolCatalogItem) []ToolCatalogItem {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]ToolCatalogItem, 0, len(values))
+	for _, value := range values {
+		copyValue := value
+		copyValue.InputSchema = cloneJSONMap(value.InputSchema)
+		copyValue.Annotations = cloneJSONMap(value.Annotations)
+		result = append(result, copyValue)
+	}
+	return result
+}
+
+func cloneJSONMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	result := make(map[string]any, len(value))
+	for key, item := range value {
+		result[key] = cloneJSONValue(item)
+	}
+	return result
+}
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(typed)
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = cloneJSONValue(item)
+		}
+		return result
+	default:
+		return typed
+	}
 }

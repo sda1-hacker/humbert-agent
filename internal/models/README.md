@@ -1,6 +1,6 @@
 # Models：Provider、模型能力与实例解析
 
-[总目录](../../docs/architecture/README.md) · [Agent](../agents/README.md) · [Runtime](../runtime/README.md)
+[总目录](../../docs/项目源码详解.md) · [Agent](../agents/README.md) · [Runtime](../runtime/README.md)
 
 `Store` 在 `config/providers.json`、`config/models.json` 保存非密钥 Provider/Model 配置；系统凭据由 `credential.Store` 管理。模型记录包含上下文窗口、输出上限和工具/视觉等能力配置。`Registry.Resolve` 根据模型 ID、Provider 配置与凭据构造本轮可用实例；`TestModel` 是显式连接测试。模型角色由 Agent 指定，图片辅助模型由全局 MultimediaConfig 指定。
 

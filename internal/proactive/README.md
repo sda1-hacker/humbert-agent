@@ -1,6 +1,6 @@
 # Proactive：主动事件收件箱与决策
 
-[总目录](../../docs/architecture/README.md) · [Tasks](../tasks/README.md) · [通知](../notifications/README.md)
+[总目录](../../docs/项目源码详解.md) · [Tasks](../tasks/README.md) · [通知](../notifications/README.md)
 
 `Store` 把设置、待处理 Inbox、处理记录、工作区快照和 Heartbeat 状态保存在 `config/proactive.json`。`Manager` 订阅 Task/Runtime 事件、周期检查工作区变化，把事件先写 Inbox 再唤醒消费者。`RuleDecisionEngine` 根据设置、事件种类与近期记录决定忽略、通知或运行 Agent；`Manager.executeRecord` 在执行时重新按当前规则决策，并按 Quiet Hours 延后需执行的动作。Agent 路径通过 `Task Manager.RunAutomation`，不另建弱化的执行器。
 

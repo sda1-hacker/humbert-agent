@@ -1,6 +1,6 @@
 # Transcript：会话消息事实与索引
 
-[总目录](../../docs/architecture/README.md) · [会话](../sessions/README.md) · [上下文](../contextengine/README.md)
+[总目录](../../docs/项目源码详解.md) · [会话](../sessions/README.md) · [上下文](../contextengine/README.md)
 
 ## 职责与数据模型
 
@@ -46,8 +46,9 @@ sequenceDiagram
 
 | 文件 | 阅读重点 |
 | --- | --- |
-| `types.go` | `Entry`、`AgentMessage`、`Document`、`ContextWindowIndex` 的磁盘/内存边界。 |
-| `store.go` | 创建、追加、严格校验、ActiveBranch 和尾部修复。 |
+| `types.go` | Wire 字段/枚举、哨兵错误、`CorruptionError` 和消息/节点/Header 校验。 |
+| `store.go` | 公开会话 API、文件锁、提交顺序及缓存/索引协调。 |
+| `journal.go` | 真实路径检查、JSONL 编解码、严格重放、活动分支构造和断尾恢复。 |
 | `codec.go` | thinking、工具调用、工具结果、附件引用如何往返 Eino。 |
 | `location_index.go`、`cache.go` | 长会话按字节定位与小会话 LRU；索引失效重建。 |
 | `history_index.go` | `session_history` 所需的逆序遍历与局部范围读取。 |
@@ -67,4 +68,14 @@ u1 → a1 → u2 → a2 → c1(compaction, firstKeptEntryId=u2) → u3
 
 `buildActiveBranch` 只沿当前 Leaf 的 parent 链取节点，因此另一分支的 `a1-retry` 不会进入 Context。`ContextWindowIndex` 可直接指向 `c1` 与 `u2`；`projectActiveBranch` 再把 `c1.Summary + u2/a2/u3` 投影为模型消息。`history_index.go` 仍能按 Entry ID 找旧节点。若新增 Entry 导致 Leaf 改变，旧的压缩计划在 `validateCompactionAgainstDocument` 阶段被拒绝。
 
-修改 Wire 字段时应按 `types.go → codec.go → store.go 校验 → location_index.go` 的顺序检查；索引字段可以重建，JSONL 字段却必须兼容旧用户数据。有关读取成本，看 `ReadStats.BytesRead` 和 `IndexRebuilt`，不要只看会话文件总大小。
+修改 Wire 字段时应按 `types.go 字段/校验 → codec.go → journal.go 重放 → location_index.go` 的顺序检查；索引字段可以重建，JSONL 字段却必须兼容旧用户数据。有关读取成本，看 `ReadStats.BytesRead` 和 `IndexRebuilt`，不要只看会话文件总大小。
+
+## 修改与扩展的归属
+
+Store 持有每个日志路径的锁。`lockExistingSession` 统一完整历史、Context、分页及显式 Repair 的路径生成、加锁和既有文件检查；检查失败立即释放锁，成功后由入口 defer 释放。创建、删除和只读 Header 查询仍使用各自的流程，避免把所有文件操作硬套成同一种锁策略。
+
+`journal.go` 不持有另一套 Manager、缓存或索引。`repairTailLocked`、`loadLocked` 接收已加锁的路径；写入单行后 `Sync` 和 `Close` 仍在 Store 的提交过程中完成。协议自身的合法性在 `types.go` 校验，当前 Leaf 与压缩切点是否仍属于活动分支则在 Store 锁内校验，两类检查不能互相替代。
+
+`location_index.go` 同时提供 `messageEntryPageFromIndex` 与 `contextWindowIndex`，内存缓存和磁盘位置索引共用这些推导规则。分页会向前扩展到完整的 ToolCall/ToolResult 事务；大文件不会为了复用代码改为每页全量重放。
+
+原 `errors.go` 的定义已迁入 `types.go`；旧文件仅保留 package 声明，可手动删除。

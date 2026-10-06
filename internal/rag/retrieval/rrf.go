@@ -6,25 +6,7 @@ import (
 	"sort"
 )
 
-// RRFConfig 控制 Reciprocal Rank Fusion。
-//
-// 公式：
-//
-//	score(d)
-//	  = vectorWeight  / (k + vectorRank)
-//	  + keywordWeight / (k + keywordRank)
-//
-// 当前默认值对齐 WeKnora main：
-//
-//	k              = 60
-//	vector weight  = 0.7
-//	keyword weight = 0.3
-//
-// 最后再除以理论最大值：
-//
-//	(vectorWeight + keywordWeight) / (k + 1)
-//
-// 将分数归一化到大约 [0,1]。
+// RRFConfig 控制两路召回权重与排名平滑常数；融合分数按理论最大值归一化。
 type RRFConfig struct {
 	K             int
 	VectorWeight  float64
@@ -40,37 +22,10 @@ func DefaultRRFConfig() RRFConfig {
 	}
 }
 
-// FuseRRF 将 Dense 和 Keyword 两路结果融合。
-//
-// 它同时正确处理三种情况：
-//
-//	vector + keyword
-//	    → Weighted RRF
-//
-//	vector only
-//	    → 保留 cosine similarity
-//
-//	keyword only
-//	    → BM25 按当前结果集最大值归一化
-//
-// -----------------------------------------------------------------------------
-// 一个非常重要的规则：
-//
-// RRF 使用的是“rank”，不是 Retriever 返回 slice 的偶然位置。
-//
-// 所以在计算 rank 前一定会：
-//
-//  1. 按 ChunkID 去重
-//  2. 保留最高 score
-//  3. 按 score DESC 排序
-//
-// 这样即使未来两个 Retriever 并发执行，
-// 或多个结果列表合并顺序发生变化，rank 仍然正确。
-func FuseRRF(
-	vectorResults []SearchResult,
-	keywordResults []SearchResult,
-	cfg RRFConfig,
-) []SearchResult {
+// FuseRRF 按 Eino 返回的相关性顺序计算加权排名融合。
+// 两路分数不需要统一量纲；缺省分数也不影响双路排名。
+// 单路召回保留向量分数或归一化 BM25 分数，同时保留原始分数。
+func FuseRRF(vectorResults, keywordResults []SearchResult, cfg RRFConfig) []SearchResult {
 	if cfg.Validate() != nil {
 		return nil
 	}
@@ -82,8 +37,8 @@ func FuseRRF(
 		keywordResults = nil
 	}
 
-	vectorResults = prepareChannel(vectorResults, MatchVector)
-	keywordResults = prepareChannel(keywordResults, MatchKeyword)
+	vectorResults = prepareRankedChannel(vectorResults, MatchVector)
+	keywordResults = prepareRankedChannel(keywordResults, MatchKeyword)
 
 	if len(vectorResults) == 0 {
 		return keywordOnlyResults(keywordResults)
@@ -179,45 +134,6 @@ func FuseRRF(
 	return result
 }
 
-// prepareChannel 对某一路 Retriever 的结果：
-//
-//	去掉非法 score
-//	ChunkID 去重
-//	保留最高 score
-//	score DESC 排序
-//
-// 注意：RRF 的 rank 必须来源于这个排序后的列表。
-func prepareChannel(results []SearchResult, matchType MatchType) []SearchResult {
-	best := make(map[string]SearchResult, len(results))
-
-	for _, item := range results {
-		if item.ChunkID == "" {
-			continue
-		}
-
-		if math.IsNaN(item.Score) || math.IsInf(item.Score, 0) {
-			continue
-		}
-
-		existing, exists := best[item.IdentityKey()]
-
-		if !exists || item.Score > existing.Score {
-			item.MatchType = matchType
-			best[item.IdentityKey()] = item
-		}
-	}
-
-	result := make([]SearchResult, 0, len(best))
-
-	for _, item := range best {
-		result = append(result, item)
-	}
-
-	sortResults(result)
-
-	return result
-}
-
 // vectorOnlyResults 保留 cosine similarity 本身。
 //
 // Dense similarity 本来就是一个具有实际意义的分数，
@@ -235,22 +151,7 @@ func vectorOnlyResults(results []SearchResult) []SearchResult {
 	return out
 }
 
-// keywordOnlyResults 将 BM25 score 映射到 [0,1] 附近。
-//
-// BM25 分数本身没有统一上界：
-//
-//	2.3
-//	7.8
-//	14.6
-//
-// 都可能出现。
-//
-// 对外统一 SearchResult.Score 时，如果最高分 > 1，
-// 就让当前列表的最好结果等于1，其余按比例缩放。
-//
-// 原始 BM25 仍然完整保留在：
-//
-//	KeywordScore
+// keywordOnlyResults 保留关键词召回顺序，并按当前结果最大分数归一化，不改写原始关键词分数。
 func keywordOnlyResults(results []SearchResult) []SearchResult {
 	if len(results) == 0 {
 		return nil
@@ -300,8 +201,10 @@ func normalizeRRFConfig(cfg RRFConfig) RRFConfig {
 	return cfg
 }
 
+// Effective 补齐排名平滑常数和默认权重。
 func (c RRFConfig) Effective() RRFConfig { return normalizeRRFConfig(c) }
 
+// Validate 检查排名常数与权重，拒绝负数和非有限值。
 func (c RRFConfig) Validate() error {
 	if c == (RRFConfig{}) {
 		return nil
@@ -313,12 +216,7 @@ func (c RRFConfig) Validate() error {
 	return nil
 }
 
-// sortResults 统一保证：
-//
-//	Score DESC
-//	ChunkID ASC
-//
-// 第二排序键保证同分情况下结果稳定。
+// 按分数降序排列，同分按分块 ID 升序，保证结果稳定。
 func sortResults(results []SearchResult) {
 	sort.SliceStable(results, func(i, j int) bool {
 		if results[i].Score != results[j].Score {
@@ -327,4 +225,19 @@ func sortResults(results []SearchResult) {
 
 		return results[i].IdentityKey() < results[j].IdentityKey()
 	})
+}
+
+// 同一路重复命中保留第一个，即排名最高的结果。
+func prepareRankedChannel(results []SearchResult, kind MatchType) []SearchResult {
+	seen := make(map[string]bool, len(results))
+	out := make([]SearchResult, 0, len(results))
+	for _, r := range results {
+		if r.ChunkID == "" || seen[r.IdentityKey()] || math.IsNaN(r.Score) || math.IsInf(r.Score, 0) {
+			continue
+		}
+		seen[r.IdentityKey()] = true
+		r.MatchType = kind
+		out = append(out, r)
+	}
+	return out
 }

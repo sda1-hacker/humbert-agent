@@ -1,6 +1,6 @@
 # Config：启动配置、路径与热更新写入
 
-[总目录](../../docs/architecture/README.md) · [App](../app/README.md)
+[总目录](../../docs/项目源码详解.md) · [App](../app/README.md)
 
 `Load` 用 Viper 读取 `~/.humbert-agent/config.yaml`，设置默认值并解析受控数据目录；缺失时生成默认配置和目录。`HUMBERT_*` 环境变量可覆盖启动选项。`Config` 包含 Runtime、Context、MCP、Skills、Logging、Security 与工具参数；Provider/Model、Agent、Task 等动态状态各在对应 Store，不要全部塞进 YAML。
 

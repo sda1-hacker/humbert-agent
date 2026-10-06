@@ -6,44 +6,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// EmbeddingDimensions 是当前 Dense Embedding 固定维度。
-//
-// 当前第一版使用：
-//
-//	BGE-M3
-//	1024 dimensions
-//
-// 后面如果需要支持多 embedding dimension，
-// 不建议直接把这个值改成动态列；更适合做：
-//
-//	collection -> embedding profile
-//
-// 或独立 retrieval partition。
+// EmbeddingDimensions 是当前 halfvec 列的固定维度，必须与知识库绑定的模型档案一致。
 const EmbeddingDimensions = 1024
 
-// schemaStatements 定义当前 RAG PostgreSQL Schema。
-//
-// documents:
-//
-//	文档级身份、完整 Markdown、metadata。
-//
-// chunks:
-//
-//	Parent + Child / 普通 Chunk。
-//
-// retrieval_index:
-//
-//	只保存真正参与检索的 Chunk。
-//
-// Parent Chunk:
-//
-//	存 chunks
-//	不进入 retrieval_index
-//
-// Child Chunk:
-//
-//	存 chunks
-//	进入 retrieval_index
+// 文档表保存完整原文，分块表保存父子关系，检索表仅保存可召回子块。
 var schemaStatements = []string{
 	`
 CREATE EXTENSION IF NOT EXISTS vector
@@ -110,20 +76,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 )
 `,
 
-	// -------------------------------------------------------------------------
-	// 兼容我们前几个阶段已经创建过的开发数据库。
-	//
-	// 旧约束：
-	//
-	//     UNIQUE(collection_id, document_id, chunk_index)
-	//
-	// 在 Parent-Child 中会冲突：
-	//
-	//     parent index = 0
-	//     child  index = 0
-	//
-	// 所以删除旧约束。
-	// -------------------------------------------------------------------------
+	// 旧分块序号约束未区分父子类型，需要在迁移中调整以允许各自从零编号。
 	`
 ALTER TABLE chunks
 DROP CONSTRAINT IF EXISTS chunks_collection_id_document_id_chunk_index_key
@@ -207,9 +160,7 @@ ON retrieval_index (
 )
 `,
 
-	// -------------------------------------------------------------------------
-	// Dense Retrieval
-	// -------------------------------------------------------------------------
+	// 向量检索索引。
 	`
 CREATE INDEX IF NOT EXISTS retrieval_index_embedding_hnsw_idx
 ON retrieval_index
@@ -222,9 +173,7 @@ WITH (
 )
 `,
 
-	// -------------------------------------------------------------------------
-	// ParadeDB BM25
-	// -------------------------------------------------------------------------
+	// ParadeDB 关键词检索索引。
 	`
 CREATE INDEX IF NOT EXISTS retrieval_index_search_idx
 ON retrieval_index
@@ -242,5 +191,5 @@ WITH (
 `,
 }
 
-// EnsureSchema is the development convenience alias for versioned migrations.
+// EnsureSchema 为开发环境执行版本化迁移。
 func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error { return Migrate(ctx, pool) }

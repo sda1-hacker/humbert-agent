@@ -1,258 +1,54 @@
 <script setup>
-import {
-  computed,
-  nextTick,
-  ref,
-  watch,
-} from "vue";
-
+import { computed, nextTick, ref, watch } from "vue";
+import { IconArrowUp, IconPlus, IconStop } from "@arco-design/web-vue/es/icon";
 import { Message } from "../../utils/uiMessage.js";
-import { useMenuTooltip } from "../../utils/menuTooltip.js";
-
-import {
-  IconArrowUp,
-  IconPlus,
-  IconStop,
-} from "@arco-design/web-vue/es/icon";
-
-import {
-  useAgentStore,
-} from "../../stores/agents.js";
-
-import {
-  useModelStore,
-} from "../../stores/models.js";
-
-import {
-  useRuntimeStore,
-} from "../../stores/runtime.js";
-
-import {
-  useSessionStore,
-} from "../../stores/sessions.js";
-
-import ImagePreviewDialog
-  from "../ui/ImagePreviewDialog.vue";
-import ApprovalModeSelect from "./ApprovalModeSelect.vue";
-import SkillComposerInput from "./SkillComposerInput.vue";
-import SkillReference from "./SkillReference.vue";
+import { useAgentStore } from "../../stores/agents.js";
+import { useModelStore } from "../../stores/models.js";
+import { useRuntimeStore } from "../../stores/runtime.js";
+import { useSessionStore } from "../../stores/sessions.js";
 import { useSkillStore } from "../../stores/skills.js";
 import { t } from "../../i18n/index.js";
 import { parseSkillCommand, matchingEnabledSkills, insertSkillReference } from "../../utils/skillCommand.js";
+import {
+  MAX_ATTACHMENTS, isImageAttachment, readComposerAttachments, validateComposerAttachments,
+  attachmentCapabilityError as checkAttachmentCapabilities,
+} from "../../utils/composerAttachments.js";
+import ImagePreviewDialog from "../ui/ImagePreviewDialog.vue";
+import ApprovalModeSelect from "./ApprovalModeSelect.vue";
+import SkillComposerInput from "./SkillComposerInput.vue";
+import SkillReference from "./SkillReference.vue";
+import ComposerContextMenu from "./ComposerContextMenu.vue";
 
-
-const {
-  tooltipVisible: contextTooltipVisible,
-  onTooltipVisibleChange: onContextTooltipVisibleChange,
-  dismissTooltip: dismissContextTooltip,
-  onMenuVisibleChange: onContextMenuVisibleChange,
-  onTriggerLeave: onContextTriggerLeave,
-} = useMenuTooltip();
-
-const fileInput =
-    ref(null);
-
-const imagePreview =
-    ref({visible: false, src: "", name: ""});
-
-const MAX_ATTACHMENTS = 8;
-const MAX_ATTACHMENT_BYTES = 12 * 1024 * 1024;
-const MAX_ATTACHMENT_TOTAL_BYTES = 24 * 1024 * 1024;
-const MAX_TEXT_ATTACHMENT_BYTES = 512 * 1024;
-
-const TEXT_ATTACHMENT_MIME_TYPES = new Set([
-  "application/json", "application/ld+json", "application/xml", "application/javascript",
-  "application/x-javascript", "application/yaml", "application/x-yaml", "application/toml",
-  "application/sql", "application/graphql",
-]);
-
-const TEXT_ATTACHMENT_EXTENSIONS = new Set([
-  ".txt", ".md", ".markdown", ".json", ".jsonl", ".yaml", ".yml", ".xml", ".csv", ".tsv",
-  ".go", ".js", ".jsx", ".ts", ".tsx", ".vue", ".py", ".rb", ".rs", ".java", ".kt",
-  ".c", ".h", ".cc", ".cpp", ".cs", ".swift", ".sh", ".zsh", ".fish", ".ps1", ".sql",
-  ".html", ".css", ".scss", ".less", ".toml", ".ini", ".conf", ".env", ".graphql",
-]);
-
-const IMAGE_ATTACHMENT_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-const DOCUMENT_ATTACHMENT_EXTENSIONS = new Set([".pdf", ".docx", ".xlsx", ".pptx"]);
-
-const sending =
-    ref(false);
-
-const switchingModel =
-    ref(false);
-
-const agentStore =
-    useAgentStore();
-
-const modelStore =
-    useModelStore();
-
-const runtimeStore =
-    useRuntimeStore();
-
-const sessionStore =
-    useSessionStore();
-
-const attachmentDrafts =
-    ref({});
-
-const draft =
-    computed({
-      get() {
-        return sessionStore
-            .draftForSession(
-                sessionStore.selectedID,
-            );
-      },
-      set(value) {
-        sessionStore.setDraft(
-            sessionStore.selectedID,
-            value,
-        );
-      },
-    });
-
-const attachments =
-    computed({
-      get() {
-        return attachmentDrafts
-            .value[
-            sessionStore.selectedID
-            ] ?? [];
-      },
-      set(value) {
-        const sessionID =
-            sessionStore.selectedID;
-        if (!sessionID) {
-          return;
-        }
-        attachmentDrafts.value = {
-          ...attachmentDrafts.value,
-          [sessionID]: Array.isArray(value)
-              ? value
-              : [],
-        };
-      },
-    });
-
-const running =
-    computed(() => (
-        runtimeStore
-            .isSessionRunning(
-                sessionStore.selectedID,
-            )
-    ));
-
-const selectedModelID =
-    computed(() => (
-        agentStore
-            .selectedAgent
-            ?.modelID ?? ""
-    ));
-
-const selectedAgentName =
-    computed(() => (
-        agentStore.selectedAgent?.name || "Humbert"
-    ));
-
-const contextUsage =
-    computed(() => (
-        runtimeStore.contextUsage(
-            sessionStore.selectedID,
-        )
-    ));
-
-const contextManifest =
-    computed(() => {
-      const sessionID = sessionStore.selectedID;
-      const active = runtimeStore.runState(sessionID);
-
-      // Turn 正在执行时优先展示它已经冻结的 Runtime。这样某个 MCP Server 在
-      // StartTurn 阶段被降级后，Context 面板不会马上被“下一 Turn 的本地投影”覆盖。
-      return active?.runtime || runtimeStore.contextManifest(sessionID);
-    });
-
-const contextAssembly =
-    computed(() => (
-        runtimeStore.contextAssembly(
-            sessionStore.selectedID,
-        )
-    ));
-
-const activeRunState =
-    computed(() => (
-        runtimeStore.runState(
-            sessionStore.selectedID,
-        )
-    ));
-
-
-const contextLoading =
-    computed(() => (
-        runtimeStore.isContextLoading(
-            sessionStore.selectedID,
-        )
-    ));
-
-const contextCompacting =
-    computed(() => (
-        runtimeStore.isContextCompacting(
-            sessionStore.selectedID,
-        )
-    ));
-
-const contextError =
-    computed(() => (
-        runtimeStore.contextError(
-            sessionStore.selectedID,
-        )
-    ));
-
-const contextPercent =
-    computed(() => {
-      const value =
-          Number(
-              contextUsage.value
-                  ?.percent ?? 0,
-          );
-
-      if (!Number.isFinite(value)) {
-        return 0;
-      }
-
-      return Math.min(
-          100,
-          Math.max(0, value),
-      );
-    });
-
-const contextRingOffset =
-    computed(() => {
-      const circumference =
-          2 * Math.PI * 8;
-
-      return circumference * (
-          1 -
-          contextPercent.value / 100
-      );
-    });
-
-const canSend =
-    computed(() => (
-        // Agent 切换的 watcher 尚未完成时，也要校验会话归属，不能只检查旧 selectedID 非空。
-        sessionStore.agentID === agentStore.selectedID &&
-        !sessionStore.loading &&
-        Boolean(
-            sessionStore.selectedSession,
-        ) &&
-        Boolean(
-            selectedModelID.value,
-        ) &&
-        (draft.value.trim() !== "" || attachments.value.length > 0) &&
-        !running.value &&
-        !sending.value
-    ));
+const agentStore = useAgentStore();
+const modelStore = useModelStore();
+const runtimeStore = useRuntimeStore();
+const sessionStore = useSessionStore();
+const fileInput = ref(null);
+const imagePreview = ref({ visible: false, src: "", name: "" });
+const sending = ref(false);
+const switchingModel = ref(false);
+// 文本草稿归 Session Store；附件原件仅保存在输入区内存，发送成功前不当成会话事实。
+const attachmentDrafts = ref({});
+// 清空/发送会使此前的读取失效；切换会话不失效，读取完成后仍回到它原来的会话草稿。
+const attachmentResets = new Map();
+const draft = computed({
+  get: () => sessionStore.draftForSession(sessionStore.selectedID),
+  set: value => sessionStore.setDraft(sessionStore.selectedID, value),
+});
+const attachments = computed({
+  get: () => attachmentDrafts.value[sessionStore.selectedID] || [],
+  set: value => {
+    if (sessionStore.selectedID) setAttachmentDraft(sessionStore.selectedID, value);
+  },
+});
+const running = computed(() => runtimeStore.isSessionRunning(sessionStore.selectedID));
+const selectedModelID = computed(() => agentStore.selectedAgent?.modelID || "");
+const selectedAgentName = computed(() => agentStore.selectedAgent?.name || "Humbert");
+const canSend = computed(() =>
+  // Agent 切换尚未加载完会话时，不允许使用上一个 Agent 的选中会话发送。
+  sessionStore.agentID === agentStore.selectedID && !sessionStore.loading &&
+  Boolean(sessionStore.selectedSession) && Boolean(selectedModelID.value) &&
+  (draft.value.trim() !== "" || attachments.value.length > 0) && !running.value && !sending.value);
 
 const skillStore = useSkillStore();
 const composerInput = ref(null);
@@ -314,273 +110,37 @@ watch(() => [sessionStore.selectedID, agentStore.selectedID], () => {
   if (agentStore.selectedAgent && !skillStore.loaded && !skillStore.loading) void skillStore.load().catch(() => {});
 }, { immediate: true });
 
-/**
- * 把 Token 数转换为 Composer 中短而稳定的显示文本。
- *
- * Context 提示更适合使用 k 单位；这里保留整数 token 在小值时的可读性，
- * 并避免前端用模型名称猜测 Context Window。所有数值都来自后端 ContextEngine Usage。
- */
-function formatTokens(value) {
-  const tokens =
-      Number(value);
-
-  if (
-      !Number.isFinite(tokens) ||
-      tokens < 0
-  ) {
-    return "--";
+/** 模型切换只提交 Agent 配置；上下文菜单监听共享模型变化，负责刷新自己的预算展示。 */
+async function switchModel(modelID) {
+  if (!modelID || modelID === selectedModelID.value) return;
+  const model = modelStore.modelByID(modelID);
+  switchingModel.value = true;
+  try {
+    await agentStore.switchSelectedModel(modelID);
+    Message.success(`已切换到 ${model?.displayName || modelID}`);
+  } catch (error) {
+    Message.error(error?.message || String(error));
+  } finally {
+    switchingModel.value = false;
   }
-
-  if (tokens >= 1000) {
-    return `${Math.round(tokens / 1000)}k`;
-  }
-
-  return String(
-      Math.round(tokens),
-  );
-}
-
-function formatRuntimeModel(manifest) {
-  return (
-      manifest?.modelDisplayName ||
-      manifest?.modelID ||
-      "未配置"
-  );
-}
-
-function formatRuntimeModelRole(manifest) {
-  const role = manifest?.modelRole || manifest?.modelRoles?.activeRole || "chat";
-  return role === "image" ? "图片" : "Chat";
-}
-
-function formatModelCapabilities(capabilities) {
-  if (!capabilities) return "--";
-  const labels = [
-    ["tools", "Tools"], ["vision", "Vision"], ["files", "Files"],
-    ["reasoning", "Reasoning"], ["json", "JSON"], ["audio", "Audio"],
-  ].filter(([key]) => Boolean(capabilities[key])).map(([, label]) => label);
-  return labels.length ? labels.join(" · ") : "无已声明能力";
 }
 
 function attachmentCapabilityError(items) {
-  if (!Array.isArray(items) || items.length === 0) return "";
-  const agent = agentStore.selectedAgent;
-  const chat = modelStore.modelByID(agent?.modelID ?? "");
-  if (!chat) return ""; // Runtime 仍会做最终校验。
-
-  const needsVision = items.some((item) => isImageAttachment(item));
-  // 文本类文件由后端确定性提取后作为普通 text part 发送，不依赖 Provider 的原生 Files 能力。
-  const supports = (model) => Boolean(model) && (!needsVision || model.capabilities?.vision);
-  if (supports(chat)) return "";
-
-  const imageID = modelStore.multimedia.imageModelID || "";
-  const imageModel = modelStore.modelByID(imageID);
-  if (supports(imageModel)) return "";
-
-  const missing = [];
-  if (needsVision) missing.push("Vision");
-  return `当前 Chat 模型无法处理所选附件（需要 ${missing.join(" + ")}），且没有可用的视觉辅助模型。请先在“设置 → 多媒体”中配置。`;
+  return checkAttachmentCapabilities(items,
+    modelStore.modelByID(agentStore.selectedAgent?.modelID || ""),
+    modelStore.modelByID(modelStore.multimedia.imageModelID || ""));
 }
-
-function isImageAttachment(file) {
-  const mimeType = String(file?.mimeType || file?.type || "").toLowerCase().split(";", 1)[0].trim();
-  if (mimeType.startsWith("image/")) return true;
-  const name = String(file?.name || "").toLowerCase();
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 && IMAGE_ATTACHMENT_EXTENSIONS.has(name.slice(dot));
-}
-
-function isTextAttachment(file) {
-  const mimeType = String(file?.type || "").toLowerCase().split(";", 1)[0].trim();
-  if (mimeType.startsWith("text/") || TEXT_ATTACHMENT_MIME_TYPES.has(mimeType)) return true;
-  if (mimeType && mimeType !== "application/octet-stream") return false;
-  const name = String(file?.name || "").toLowerCase();
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 && TEXT_ATTACHMENT_EXTENSIONS.has(name.slice(dot));
-}
-
-function isDocumentAttachment(file) {
-  const name = String(file?.name || "").toLowerCase();
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 && DOCUMENT_ATTACHMENT_EXTENSIONS.has(name.slice(dot));
-}
-
-function formatSandbox(manifest) {
-  const profile =
-      manifest?.sandbox?.profile ||
-      "--";
-  const network =
-      manifest?.sandbox?.networkMode ||
-      "--";
-
-  return `${profile} · ${network}`;
-}
-
-function formatRunPhase(phase) {
-  switch (phase) {
-    case "waiting_approval":
-      return "等待审批";
-    case "cancelling":
-      return "取消中";
-    case "running":
-      return "运行中";
-    case "maintaining":
-      return "回答已完成，正在整理记忆";
-    default:
-      return "空闲";
-  }
-}
-
-function formatCapabilitySummary(manifest) {
-  const builtin =
-      manifest?.builtinToolNames?.length ?? 0;
-  const mcp =
-      manifest?.mcpToolNames?.length ?? 0;
-  const skills =
-      manifest?.skillNames?.length ?? 0;
-
-  return `内置 ${builtin} · MCP ${mcp} · Skills ${skills}`;
-}
-
-function formatNameList(values) {
-  if (!Array.isArray(values) || values.length === 0) {
-    return "无";
-  }
-
-  return values.join(", ");
-}
-
-function formatMCPServers(manifest) {
-  const names =
-      (manifest?.mcpServers ?? [])
-          .map((server) => server?.serverName || server?.serverKey || "")
-          .filter(Boolean);
-
-  return formatNameList(names);
-}
-
-function formatUnavailableMCP(manifest) {
-  const failures = Array.isArray(manifest?.mcpUnavailable)
-      ? manifest.mcpUnavailable
-      : [];
-
-  return failures
-      .map((item) => {
-        const name = item?.serverName || item?.serverKey || "未知 Server";
-        const error = String(item?.error || "当前不可用").trim();
-        return `${name}: ${error}`;
-      })
-      .join("；");
-}
-
-function formatWorkspace(manifest) {
-  const mode =
-      manifest?.workspace?.mode ||
-      "--";
-  const root =
-      manifest?.workspace?.rootDir ||
-      "--";
-
-  return `${mode} · ${root}`;
-}
-
-/**
- * 静默刷新当前 Session Context Usage。
- *
- * Session/Model 切换属于正常 UI 生命周期，读取失败不应该弹出全局错误打断用户；RuntimeStore
- * 会保留 contextError，Tooltip 会给出非阻塞提示。用户点击手动压缩时仍会展示真实错误。
- */
-async function refreshContextUsage() {
-  if (!sessionStore.selectedID) {
-    return;
-  }
-
-  await runtimeStore
-      .refreshContextUsage(
-          sessionStore.selectedID,
-          {
-            silent: true,
-          },
-      );
-}
-
-/**
- * 主聊天页面切换当前 Agent Model。
- *
- * 更新 Agent.model_id 后：
- *
- * - 当前已经启动的 Turn 不受影响；
- * - 下一 Turn 由 RuntimeResolver 读取新模型；
- * - Context 环形进度立即按新模型的 Context Window / Tool Schema 重新计算。
- */
-async function switchModel(
-    modelID,
-) {
-  if (
-      !modelID ||
-      modelID ===
-      selectedModelID.value
-  ) {
-    return;
-  }
-
-  const targetModel =
-      modelStore
-          .modelByID(modelID);
-
-  switchingModel.value =
-      true;
-
-  try {
-    await agentStore
-        .switchSelectedModel(
-            modelID,
-        );
-
-    await refreshContextUsage();
-
-    Message.success(
-        `已切换到 ${
-            targetModel
-                ?.displayName ??
-            modelID
-        }`,
-    );
-  } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
-  } finally {
-    switchingModel.value =
-        false;
-  }
-}
-
 function formatAttachmentSize(value) {
   const bytes = Number(value || 0);
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
-
+function setAttachmentDraft(sessionID, items) {
+  attachmentDrafts.value = { ...attachmentDrafts.value, [sessionID]: items };
+}
 function openAttachmentPicker() {
-  if (!sessionStore.selectedID || running.value || sending.value) return;
-  fileInput.value?.click();
+  if (sessionStore.selectedID && !running.value && !sending.value) fileInput.value?.click();
 }
-
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error || new Error(`读取 ${file.name} 失败`));
-    reader.onload = () => {
-      const value = String(reader.result || "");
-      resolve(value.includes(",") ? value.slice(value.indexOf(",") + 1) : value);
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
 async function selectAttachments(event) {
   const input = event?.target;
   const files = Array.from(input?.files || []);
@@ -588,253 +148,99 @@ async function selectAttachments(event) {
   await addAttachments(files);
 }
 
+/**
+ * 选择与粘贴共用批量读取。先冻结目标 Session，再等待 FileReader，不能在等待后用当前
+ * selectedID 写回，否则切到 B 会把 A 的附件放进 B。多批读取合并前再次检查当前总量。
+ * 发送清空草稿时增加版本，阻止迟到读取把已经提交的附件恢复回来。
+ */
 async function addAttachments(files) {
-  if (files.length === 0) return;
-
-  if (attachments.value.length + files.length > MAX_ATTACHMENTS) {
+  const sessionID = sessionStore.selectedID;
+  if (!sessionID || !files.length || running.value || sending.value) return;
+  const existing = attachmentDrafts.value[sessionID] || [];
+  if (existing.length + files.length > MAX_ATTACHMENTS) {
     Message.warning(`单条消息最多允许 ${MAX_ATTACHMENTS} 个附件`);
     return;
   }
-
-  const candidateMetadata = [
-    ...attachments.value,
-    ...files.map((file, index) => ({
-      name: String(file.name || "").trim() || `pasted-image-${Date.now()}-${index + 1}.png`,
-      mimeType: file.type || "application/octet-stream",
-      sizeBytes: file.size
-    })),
-  ];
-  const capabilityError = attachmentCapabilityError(candidateMetadata);
-  if (capabilityError) {
-    Message.warning(capabilityError);
-    return;
-  }
-
-  let total = attachments.value.reduce((sum, item) => sum + Number(item.sizeBytes || 0), 0);
-  const next = [];
+  const metadata = files.map(file => ({ name: file.name, mimeType: file.type, sizeBytes: file.size }));
+  const error = attachmentCapabilityError([...existing, ...metadata]);
+  if (error) { Message.warning(error); return; }
+  const version = attachmentResets.get(sessionID) || 0;
   try {
-    for (const file of files) {
-      const name = String(file.name || "").trim() || `pasted-image-${Date.now()}.png`;
-      if (file.size <= 0) throw new Error(`${name} 是空文件`);
-      if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${name} 超过 12 MiB 限制`);
-      const image = isImageAttachment(file);
-      const document = isDocumentAttachment(file);
-      if (!image && !document && !isTextAttachment(file)) {
-        throw new Error(`${name} 暂不支持；当前文件附件仅支持图片、PDF、Office 和 UTF-8 文本`);
-      }
-      if (!image && !document && file.size > MAX_TEXT_ATTACHMENT_BYTES) {
-        throw new Error(`${name} 超过文本附件 512 KiB 限制`);
-      }
-      total += file.size;
-      if (total > MAX_ATTACHMENT_TOTAL_BYTES) throw new Error("单条消息附件总大小不能超过 24 MiB");
-      next.push({
-        name,
-        mimeType: file.type || "application/octet-stream",
-        sizeBytes: file.size,
-        base64Data: await fileToBase64(file),
-      });
-    }
+    const added = await readComposerAttachments(files, existing);
+    if ((attachmentResets.get(sessionID) || 0) !== version) return;
+    const current = attachmentDrafts.value[sessionID] || [];
+    validateComposerAttachments(added, current);
+    setAttachmentDraft(sessionID, [...current, ...added]);
   } catch (error) {
     Message.error(error?.message || String(error));
-    return;
   }
-  attachments.value = [...attachments.value, ...next];
 }
 
 async function pasteAttachments(event) {
   if (!sessionStore.selectedID || running.value || sending.value) return;
   const files = Array.from(event?.clipboardData?.items || [])
-      .filter((item) => item.kind === "file" && String(item.type || "").toLowerCase().startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter(Boolean);
-  if (files.length === 0) return;
+    .filter(item => item.kind === "file" && String(item.type || "").toLowerCase().startsWith("image/"))
+    .map(item => item.getAsFile()).filter(Boolean);
+  if (!files.length) return;
   event.preventDefault();
   await addAttachments(files);
 }
-
 function previewDraftImage(attachment) {
-  if (!isImageAttachment(attachment) || !attachment?.base64Data) return;
-  imagePreview.value = {
-    visible: true,
-    src: `data:${attachment.mimeType || "image/png"};base64,${attachment.base64Data}`,
-    name: attachment.name || "图片预览",
-  };
+  if (isImageAttachment(attachment) && attachment?.base64Data) {
+    imagePreview.value = { visible: true, src: `data:${attachment.mimeType || "image/png"};base64,${attachment.base64Data}`, name: attachment.name || "图片预览" };
+  }
 }
-
 function removeAttachment(index) {
   attachments.value = attachments.value.filter((_, current) => current !== index);
 }
 
 /**
- * 发送消息。
- *
- * RuntimeStore 会：
- *
- * 1. StartTurn；
- * 2. 等待 Runtime Event；
- * 3. Streaming；
- * 4. 最终重新加载 Session Transcript Message 与 Context Usage。
+ * 发送时冻结文字、附件和 Session。Runtime Store 负责执行和终态重新读取；输入区只处理
+ * 草稿清空及启动失败恢复。/skill 尚未完成选择时保留在输入区，不作为普通任务发送。
  */
 async function send() {
-  if (!canSend.value) {
-    return;
-  }
-
-  const sessionID =
-      sessionStore.selectedID;
-  const content =
-      sessionStore
-          .draftForSession(
-              sessionID,
-          )
-          .trim();
-  // /skill 是输入入口，不把尚未完成选择的命令当成普通任务发送给模型。
-  if (parseSkillCommand(content)) {
-    syncSkillCommand();
-    return;
-  }
-  const pendingAttachments = attachments.value.map((item) => ({...item}));
-  const capabilityError = attachmentCapabilityError(pendingAttachments);
-  if (capabilityError) {
-    Message.warning(capabilityError);
-    return;
-  }
-
-  sessionStore.clearDraft(
-      sessionID,
-  );
-  attachmentDrafts.value = {
-    ...attachmentDrafts.value,
-    [sessionID]: [],
-  };
-
+  if (!canSend.value) return;
+  const sessionID = sessionStore.selectedID;
+  const content = sessionStore.draftForSession(sessionID).trim();
+  if (parseSkillCommand(content)) { syncSkillCommand(); return; }
+  const pending = attachments.value.map(item => ({ ...item }));
+  const error = attachmentCapabilityError(pending);
+  if (error) { Message.warning(error); return; }
+  sessionStore.clearDraft(sessionID);
+  attachmentResets.set(sessionID, (attachmentResets.get(sessionID) || 0) + 1);
+  setAttachmentDraft(sessionID, []);
   sending.value = true;
-
   try {
-    await runtimeStore.send(
-        sessionID,
-        content,
-        pendingAttachments.map(({name, mimeType, base64Data}) => ({name, mimeType, base64Data})),
-    );
+    await runtimeStore.send(sessionID, content,
+      pending.map(({ name, mimeType, base64Data }) => ({ name, mimeType, base64Data })));
   } catch (error) {
-    /* 启动失败时恢复文字和附件，避免用户输入丢失。 */
-    sessionStore.setDraft(
-        sessionID,
-        content,
-    );
-    attachmentDrafts.value = {
-      ...attachmentDrafts.value,
-      [sessionID]: pendingAttachments,
-    };
-
-    if (!runtimeStore.terminalError(sessionID)) {
-      Message.error(error?.message ?? String(error));
-    }
+    // 等待期间用户可能写了下一条草稿。恢复失败输入时保留新内容，且始终写回原 Session。
+    const current = sessionStore.draftForSession(sessionID);
+    sessionStore.setDraft(sessionID, current ? `${content}\n${current}` : content);
+    setAttachmentDraft(sessionID, [...pending, ...(attachmentDrafts.value[sessionID] || [])]);
+    if (!runtimeStore.terminalError(sessionID)) Message.error(error?.message || String(error));
   } finally {
     sending.value = false;
   }
 }
-
 function handleEnter(event) {
-  // IME candidate confirmation also presses Enter. Keep it in the draft.
+  // 中文输入法确认候选词也会产生 Enter，不能把组词操作误当成发送。
   if (event.isComposing || event.keyCode === 229) return;
   event.preventDefault();
   void send();
 }
-
-/**
- * 停止当前 Session Turn。
- */
 async function stop() {
-  try {
-    await runtimeStore.cancel(
-        sessionStore.selectedID,
-    );
-  } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
-  }
+  try { await runtimeStore.cancel(sessionStore.selectedID); }
+  catch (error) { Message.error(error?.message || String(error)); }
 }
-
-/** 手动压缩与正常 Turn 共用后端会话锁，避免并发改写上下文。 */
-async function runCompaction() {
-  const sessionID =
-      sessionStore.selectedID;
-
-  if (!sessionID) {
-    Message.warning(
-        "请先选择一个会话",
-    );
-    return;
-  }
-
-  try {
-    const result =
-        await runtimeStore
-            .compactSessionContext(
-                sessionID,
-            );
-
-    const compacted =
-        Boolean(
-            result?.compaction
-                ?.compacted,
-        );
-    if (compacted) {
-      const before =
-          formatTokens(
-              result.compaction
-                  ?.before
-                  ?.usedTokens,
-          );
-      const after =
-          formatTokens(
-              result.compaction
-                  ?.after
-                  ?.usedTokens,
-          );
-
-      Message.success(
-          `Context 已压缩 · ${before} → ${after}`,
-      );
-      return;
-    }
-
-    Message.info(
-        "当前没有可安全压缩的历史",
-    );
-  } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
-  }
-}
-
-watch(
-    () => [
-      sessionStore.selectedID,
-      selectedModelID.value,
-    ],
-    () => {
-      void refreshContextUsage();
-    },
-    {
-      immediate: true,
-    },
-);
 </script>
 
 <template>
   <!--
     Composer 是 ChatView 的正常第二部分。
-
     不使用：
       position: absolute
       position: fixed
-
     因此不会再覆盖或者被 MessageList 推出屏幕。
   -->
   <footer class="composer" @focusout="event => !event.currentTarget.contains(event.relatedTarget) && (skillCommand = null)">
@@ -868,7 +274,6 @@ watch(
           class="composer-file-input"
           @change="selectAttachments"
       />
-
       <div v-if="attachments.length" class="composer-attachments">
         <div
             v-for="(attachment, index) in attachments"
@@ -898,7 +303,6 @@ watch(
           </button>
         </div>
       </div>
-
       <SkillComposerInput
           :key="sessionStore.selectedID"
           ref="composerInput"
@@ -917,13 +321,11 @@ watch(
           @focus="syncSkillCommand"
           @compositionend="syncSkillCommand"
       />
-
       <ImagePreviewDialog
           v-model:visible="imagePreview.visible"
           :src="imagePreview.src"
           :name="imagePreview.name"
       />
-
       <div
           class="composer-toolbar"
       >
@@ -938,274 +340,19 @@ watch(
           >
             <IconPlus aria-hidden="true"/>
           </button>
-
           <!--
             Context 环形进度只展示 ContextEngine 的估算值，不自己重新计算 Token。
             手动操作与自动压缩使用同一个摘要入口。
           -->
-          <span
-              class="composer-context-control"
-              @pointerdown.capture="dismissContextTooltip"
-              @mouseleave="onContextTriggerLeave"
-          >
-            <a-dropdown
-                trigger="click"
-                position="top"
-                @popup-visible-change="onContextMenuVisibleChange"
-                :disabled="
-                !sessionStore.selectedID ||
-                running ||
-                contextCompacting
-              "
-            >
-              <a-tooltip
-                  position="top"
-                  :popup-visible="contextTooltipVisible"
-                  @popup-visible-change="onContextTooltipVisibleChange"
-              >
-                <button
-                    type="button"
-                    class="context-ring-button"
-                    :class="{
-                    'context-ring-button--warning':
-                      contextUsage?.needsCompaction,
-                    'context-ring-button--loading':
-                      contextLoading || contextCompacting,
-                  }"
-                    :disabled="!sessionStore.selectedID"
-                    aria-label="查看 Context 使用情况与压缩选项"
-                >
-                  <svg
-                      class="context-ring"
-                      viewBox="0 0 20 20"
-                      aria-hidden="true"
-                  >
-                    <circle
-                        class="context-ring__track"
-                        cx="10"
-                        cy="10"
-                        r="8"
-                    />
-
-                    <circle
-                        class="context-ring__value"
-                        cx="10"
-                        cy="10"
-                        r="8"
-                        :style="{
-                        strokeDashoffset:
-                          contextRingOffset,
-                      }"
-                    />
-                  </svg>
-                </button>
-
-                <template #content>
-                  <div class="context-tooltip">
-                    <template v-if="contextUsage">
-                      <div class="context-tooltip__summary">
-                        <div>
-                          上下文
-                          {{ formatTokens(contextUsage.contextWindow) }}
-                        </div>
-
-                        <div>
-                          已用
-                          {{ formatTokens(contextUsage.usedTokens) }}
-                          ({{ Math.round(contextPercent) }}%)
-                        </div>
-                      </div>
-
-                      <div class="context-tooltip__divider"/>
-
-                      <div class="context-tooltip__breakdown">
-                        <div class="context-tooltip__row">
-                          <span>系统 / Agent</span>
-                          <span>{{ formatTokens(contextUsage.systemTokens) }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>工具定义</span>
-                          <span>{{ formatTokens(contextUsage.toolTokens) }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>对话消息</span>
-                          <span>{{ formatTokens(contextUsage.messageTokens) }}</span>
-                        </div>
-
-                        <div class="context-tooltip__row">
-                          <span>压缩摘要</span>
-                          <span>{{ formatTokens(contextUsage.checkpointTokens) }}</span>
-                        </div>
-                      </div>
-
-                      <template v-if="contextAssembly">
-                        <div class="context-tooltip__divider"/>
-
-                        <div class="context-tooltip__breakdown context-tooltip__runtime">
-                          <div class="context-tooltip__row">
-                            <span>模型消息</span>
-                            <span class="context-tooltip__value">{{
-                                contextAssembly.visibleMessageCount
-                              }} 条 · 近期 {{ contextAssembly.recentMessageCount }} 条</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>消息角色</span>
-                            <span class="context-tooltip__value">User {{ contextAssembly.userMessageCount }} · Assistant {{
-                                contextAssembly.assistantMessageCount
-                              }} · Tool {{ contextAssembly.toolResultCount }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>Tool 事务</span>
-                            <span class="context-tooltip__value">调用 {{
-                                contextAssembly.toolCallCount
-                              }} · 结果 {{ contextAssembly.toolResultCount }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>注入状态</span>
-                            <span class="context-tooltip__value">Checkpoint {{
-                                contextAssembly.checkpointInjected ? "是" : "否"
-                              }}</span>
-                          </div>
-                        </div>
-                      </template>
-
-                      <template v-if="contextManifest">
-                        <div class="context-tooltip__divider"/>
-
-                        <div class="context-tooltip__breakdown context-tooltip__runtime">
-                          <div
-                              v-if="activeRunState"
-                              class="context-tooltip__row"
-                          >
-                            <span>当前 Turn</span>
-                            <span class="context-tooltip__value">{{ formatRunPhase(activeRunState.phase) }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>模型</span>
-                            <span class="context-tooltip__value">{{
-                                formatRuntimeModel(contextManifest)
-                              }} · {{ formatRuntimeModelRole(contextManifest) }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>模型能力</span>
-                            <span class="context-tooltip__value">{{
-                                formatModelCapabilities(contextManifest.modelCapabilities)
-                              }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>Agent 能力</span>
-                            <span class="context-tooltip__value">{{ formatCapabilitySummary(contextManifest) }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>模型角色</span>
-                            <span class="context-tooltip__value"
-                                  :title="`Chat ${contextManifest.modelRoles?.chatModelID || '--'} · Utility ${contextManifest.modelRoles?.utilityModelID || '--'} · 图片 ${contextManifest.modelRoles?.imageModelID || '--'}`">Chat / Utility{{
-                                contextManifest.modelRoles?.imageModelID ? ' / 图片' : ''
-                              }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>Sandbox</span>
-                            <span class="context-tooltip__value">{{ formatSandbox(contextManifest) }}</span>
-                          </div>
-
-                          <div
-                              v-if="contextManifest.skillNames?.length"
-                              class="context-tooltip__row"
-                          >
-                            <span>Skills</span>
-                            <span
-                                class="context-tooltip__value"
-                                :title="formatNameList(contextManifest.skillNames)"
-                            >{{ formatNameList(contextManifest.skillNames) }}</span>
-                          </div>
-
-                          <div
-                              v-if="contextManifest.mcpServers?.length"
-                              class="context-tooltip__row"
-                          >
-                            <span>MCP</span>
-                            <span
-                                class="context-tooltip__value"
-                                :title="formatMCPServers(contextManifest)"
-                            >{{ formatMCPServers(contextManifest) }}</span>
-                          </div>
-
-                          <div
-                              v-if="contextManifest.mcpUnavailable?.length"
-                              class="context-tooltip__row"
-                          >
-                            <span>MCP 降级</span>
-                            <span
-                                class="context-tooltip__value"
-                                :title="formatUnavailableMCP(contextManifest)"
-                            >{{ contextManifest.mcpUnavailable.length }} 个 Server 不可用</span>
-                          </div>
-
-                          <div v-for="module in contextManifest.extensions || []" :key="module.id" class="context-tooltip__row">
-                            <span>{{ module.id }}</span>
-                            <span class="context-tooltip__value" :title="formatNameList(module.toolNames)">{{ formatNameList(module.toolNames) }}</span>
-                          </div>
-
-                          <div class="context-tooltip__row">
-                            <span>Workspace</span>
-                            <span
-                                class="context-tooltip__value"
-                                :title="contextManifest.workspace?.rootDir || ''"
-                            >{{ formatWorkspace(contextManifest) }}</span>
-                          </div>
-                        </div>
-                      </template>
-
-                      <div class="context-tooltip__divider"/>
-
-                      <div class="context-tooltip__meta">
-                        自动压缩阈值
-                        {{ formatTokens(contextUsage.thresholdTokens) }}
-                      </div>
-                    </template>
-
-                    <template v-else-if="contextError">
-                      <div>Context 使用情况暂不可用</div>
-                    </template>
-
-                    <template v-else>
-                      <div>正在计算 Context 使用情况…</div>
-                    </template>
-                  </div>
-                </template>
-              </a-tooltip>
-
-              <template #content>
-                <a-doption
-                    :disabled="running || contextCompacting"
-                    @click="runCompaction()"
-                >
-                  压缩
-                </a-doption>
-              </template>
-            </a-dropdown>
-          </span>
-
+          <ComposerContextMenu />
           <ApprovalModeSelect :disabled="running || sending" />
           <span class="composer-hint">{{ $t('输入 /skill 选择技能 · Shift+Enter 换行') }}</span>
         </div>
-
         <div
             class="composer-actions"
         >
           <!--
             主页面真实 Model Switcher。
-
             读取共享 Pinia ModelStore，
             所以设置中新建 Model 后会直接出现在这里。
           -->
@@ -1238,13 +385,10 @@ watch(
                 :value="model.id"
             >
               {{ model.displayName }}
-
               ·
-
               {{ model.providerName }}
             </a-option>
           </a-select>
-
           <!-- 发送与停止共用同一按钮，运行时切换动作并保留可访问的说明。 -->
           <a-button
               type="primary"
@@ -1267,46 +411,33 @@ watch(
     </div>
   </footer>
 </template>
-
 <style scoped>
 .composer {
   flex: 0 0 auto;
-
   width: 100%;
-
   padding: 8px 28px 16px;
-
   background: var(--h-bg);
 }
-
 .composer-inner {
   position: relative;
   /* 按聊天面板的实际宽度响应布局，右侧文件面板展开时也能正确换行。 */
   container-type: inline-size;
   width: 100%;
   max-width: 792px;
-
   margin: 0 auto;
-
   padding: 14px 12px 10px;
-
   border: 1px solid var(--h-border);
-
   border-radius: var(--h-radius-lg);
-
   background: var(--h-surface);
   font-family: var(--h-ui);
   transition: border-color 160ms ease, background-color 160ms ease;
 }
-
 .composer-inner:hover {
   border-color: var(--h-border-strong);
 }
-
 .composer-inner:focus-within {
   border-color: var(--h-accent-border);
 }
-
 /* 技能菜单随输入区宽度布局，不增加页面侧栏；列表单独滚动，保留输入和发送位置。 */
 .skill-menu {
   display: flex;
@@ -1342,18 +473,15 @@ watch(
 .skill-menu__hint { flex-shrink: 0; padding: 8px 14px; border-top: 1px solid var(--h-border); color: var(--h-text-muted); font-size: 12px; }
 .skill-menu button:focus-visible { outline: 2px solid var(--h-accent); outline-offset: -2px; }
 .composer-hint { min-width: 0; margin-left: 8px; color: var(--h-text-muted); font: 11px/1.5 var(--h-ui); overflow-wrap: anywhere; }
-
 .composer-file-input {
   display: none;
 }
-
 .composer-attachments {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin: 0 2px 12px;
 }
-
 .composer-attachment {
   display: flex;
   max-width: 260px;
@@ -1364,14 +492,12 @@ watch(
   border-radius: var(--h-radius-md);
   background: var(--h-bg);
 }
-
 .composer-attachment__body {
   display: flex;
   min-width: 0;
   flex: 1;
   flex-direction: column;
 }
-
 .composer-attachment__preview {
   width: 38px;
   height: 38px;
@@ -1383,13 +509,11 @@ watch(
   background: var(--h-surface-soft, var(--h-bg));
   cursor: zoom-in;
 }
-
 .composer-attachment__preview img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
-
 .composer-attachment__name {
   overflow: hidden;
   color: var(--h-text);
@@ -1397,12 +521,10 @@ watch(
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .composer-attachment__size {
   color: var(--h-text-secondary);
   font-size: 12px;
 }
-
 .composer-attachment__remove,
 .composer-attach-button {
   border: 0;
@@ -1410,12 +532,10 @@ watch(
   color: var(--h-text-secondary);
   cursor: pointer;
 }
-
 .composer-attachment__remove:hover,
 .composer-attach-button:hover:not(:disabled) {
   color: var(--h-accent);
 }
-
 .composer-attach-button {
   display: inline-flex;
   width: 32px;
@@ -1430,217 +550,46 @@ watch(
   white-space: nowrap;
   transition: background 140ms ease, color 140ms ease;
 }
-
 .composer-attach-button .arco-icon {
   font-size: 18px;
 }
-
 .composer-attach-button:hover:not(:disabled) {
   background: var(--h-surface-hover);
 }
-
 .composer-attach-button:disabled {
   cursor: not-allowed;
   opacity: .45;
 }
-
 .composer-toolbar {
   display: flex;
-
   align-items: center;
   justify-content: space-between;
-
   flex-wrap: wrap;
   gap: 8px 12px;
-
   margin-top: 10px;
   padding-top: 0;
   border-top: 0;
 }
-
 .composer-context-area {
   display: flex;
-
   min-width: 0;
   flex: 1 1 0;
-
   align-items: center;
-
   gap: 2px;
   flex-wrap: wrap;
 }
-
-.composer-context-control {
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.context-ring-button {
-  display: inline-flex;
-
-  width: 32px;
-  height: 32px;
-
-  flex: 0 0 32px;
-
-  align-items: center;
-  justify-content: center;
-
-  padding: 0;
-
-  border: 0;
-
-  border-radius: 8px;
-
-  background: transparent;
-
-  color: var(--h-text-muted);
-
-  cursor: pointer;
-
-  transition: background 140ms ease,
-  color 140ms ease,
-  opacity 140ms ease;
-}
-
-.context-ring-button:hover:not(:disabled) {
-  background: var(--h-surface-hover);
-
-  color: var(--h-text);
-}
-
-.context-ring-button:disabled {
-  cursor: default;
-
-  opacity: 0.45;
-}
-
-.composer-attach-button:focus-visible,
-.context-ring-button:focus-visible {
+.composer-attach-button:focus-visible {
   outline: 2px solid var(--h-accent-border);
   outline-offset: 2px;
 }
-
-.context-ring-button--warning {
-  color: var(--h-warning, var(--h-text));
-}
-
-.context-ring-button--loading {
-  opacity: 0.62;
-}
-
-.context-ring-button--loading .context-ring {
-  animation: context-ring-spin 900ms linear infinite;
-}
-
-.context-ring {
-  width: 18px;
-  height: 18px;
-
-  transform: rotate(-90deg);
-}
-
-.context-ring__track,
-.context-ring__value {
-  fill: none;
-
-  stroke-width: 3;
-}
-
-.context-ring__track {
-  stroke: currentColor;
-
-  opacity: 0.18;
-}
-
-.context-ring__value {
-  stroke: currentColor;
-
-  stroke-linecap: round;
-
-  stroke-dasharray: 50.2655;
-
-  transition: stroke-dashoffset 180ms ease;
-}
-
-.context-tooltip {
-  min-width: 260px;
-
-  max-width: 360px;
-
-  font-size: 12px;
-
-  line-height: 1.55;
-}
-
-.context-tooltip__summary {
-  font-weight: 500;
-}
-
-.context-tooltip__divider {
-  height: 1px;
-
-  margin: 7px 0;
-
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.context-tooltip__breakdown {
-  display: grid;
-
-  gap: 3px;
-}
-
-.context-tooltip__row {
-  display: flex;
-
-  align-items: center;
-  justify-content: space-between;
-
-  gap: 18px;
-}
-
-.context-tooltip__row span:first-child,
-.context-tooltip__meta {
-  opacity: 0.76;
-}
-
-.context-tooltip__row span:last-child {
-  font-variant-numeric: tabular-nums;
-}
-
-.context-tooltip__value {
-  max-width: 220px;
-
-  overflow: hidden;
-
-  text-align: right;
-
-  text-overflow: ellipsis;
-
-  white-space: nowrap;
-}
-
-.context-tooltip__runtime {
-  gap: 4px;
-}
-
-.context-tooltip__meta {
-  white-space: nowrap;
-}
-
 .composer-actions {
   display: flex;
-
   min-width: 0;
   flex: 0 1 auto;
   margin-left: auto;
-
   align-items: center;
-
   gap: 8px;
 }
-
 :deep(.composer-model) {
   width: 200px;
   min-width: 0;
@@ -1648,7 +597,6 @@ watch(
   flex: 0 1 200px;
   font-size: 13px;
 }
-
 /* 输入区的辅助选项使用轻量样式，边框与主动作留给整个输入框及发送按钮。 */
 :deep(.composer-model.arco-select-view-single) {
   min-height: 32px;
@@ -1658,28 +606,23 @@ watch(
   background: transparent !important;
   font-family: var(--h-ui);
 }
-
 :deep(.composer-model.arco-select-view-single:hover),
 :deep(.composer-model.arco-select-view-focus) {
   border-color: transparent !important;
   background: var(--h-surface-hover) !important;
 }
-
 :deep(.composer-model .arco-select-view-value) {
   color: var(--h-text-secondary) !important;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 :deep(.composer-model .arco-select-view-input) {
   text-overflow: ellipsis;
 }
-
 :deep(.composer-model .arco-select-view-suffix) {
   color: var(--h-text-muted);
 }
-
 .composer-send-button {
   width: 32px;
   min-width: 32px;
@@ -1691,13 +634,11 @@ watch(
   font-size: 13px;
   font-weight: 500;
 }
-
 .composer-send-icon {
   display: block;
   width: 19px;
   height: 19px;
 }
-
 /* 空草稿使用暖灰，不让禁用的发送动作抢过输入内容。 */
 .composer-send-button.arco-btn-disabled {
   border-color: transparent !important;
@@ -1705,21 +646,9 @@ watch(
   color: var(--h-text-muted) !important;
   opacity: 1;
 }
-
 .composer-send-button--stop .arco-icon {
   font-size: 16px;
 }
-
-@keyframes context-ring-spin {
-  from {
-    transform: rotate(-90deg);
-  }
-
-  to {
-    transform: rotate(270deg);
-  }
-}
-
 @media (
 max-width: 800px
 ) {
@@ -1727,41 +656,29 @@ max-width: 800px
     padding: 8px 16px 14px;
   }
 }
-
 @container (max-width: 560px) {
   .composer-toolbar {
     row-gap: 8px;
   }
-
   .composer-actions {
     flex: 1 1 100%;
     margin-left: 0;
   }
-
   .composer-context-area {
     flex: 1 1 100%;
   }
-
   .composer-hint {
     flex: 1 1 150px;
   }
-
   :deep(.composer-model) {
     width: 0;
     flex: 1;
   }
 }
-
 @media (prefers-reduced-motion: reduce) {
   .composer-inner,
-  .composer-attach-button,
-  .context-ring-button,
-  .context-ring__value {
+  .composer-attach-button {
     transition: none;
-  }
-
-  .context-ring-button--loading .context-ring {
-    animation: none;
   }
 }
 </style>

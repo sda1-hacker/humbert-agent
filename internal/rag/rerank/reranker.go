@@ -5,47 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
-// Scorer 是我们整个 RAG Core 对 Rerank Model 的唯一依赖。
-//
-// 任何 Provider：
-//
-//	BGE Reranker
-//	Cohere
-//	Jina
-//	DashScope
-//	Volcengine
-//	Tencent LKEAP
-//	vLLM
-//
-// 最终都只需要实现：
-//
-//	Query + Passages
-//	    ↓
-//	[]score
-//
-// -----------------------------------------------------------------------------
-// 接口约定:
-//
-// 返回 scores:
-//
-//	len(scores) == len(passages)
-//
-// 并且每个 score 应该已经转换到：
-//
-//	[0, 1]
-//
-// Provider 如果返回 logit，
-// 应该在自己的 Adapter 中先进行 normalization。
-//
-// 这样 Rerank Core 永远不需要知道不同厂商的协议。
+// Scorer 按输入片段顺序返回精排分数；返回数量须与片段数一致。
 type Scorer interface {
 	Score(ctx context.Context, query string, passages []string) ([]float64, error)
 }
@@ -54,6 +25,7 @@ type Scorer interface {
 // 真正送给 Rerank Model 的文本。
 type PassageBuilder func(result retrieval.SearchResult) string
 
+// Outcome 精排成功、阈值降级或模型不可用等执行状态。
 type Outcome string
 
 const (
@@ -73,6 +45,7 @@ const (
 type Diagnostics struct {
 	Applied bool `json:"applied"`
 
+	// Outcome 表示精排成功、阈值降级或模型不可用等执行状态。
 	Outcome Outcome `json:"outcome"`
 
 	Threshold float64 `json:"threshold"`
@@ -96,14 +69,7 @@ type Config struct {
 	// TopK 是最终经过 MMR 后最多保留多少结果。
 	TopK int
 
-	// Threshold 针对 ModelScore。
-	//
-	// 注意：
-	//
-	//     0
-	//     负数
-	//
-	// 都是合法值，因此这里不能把 <=0 当“未配置”。
+	// Threshold 是模型相关性分数阈值，不是融合后的排序分数阈值。
 	Threshold float64
 
 	// MaxCandidates 限制单次送给模型的候选数量。
@@ -120,34 +86,18 @@ type Config struct {
 	// 最高模型分达到这个值时仍保留 Top1。
 	FallbackMinScore float64
 
-	// Composite Score:
-	//
-	//     ModelWeight  * modelScore
-	//   + BaseWeight   * retrievalScore
-	//   + SourceWeight * sourceWeight
+	// ModelWeight、BaseWeight、SourceWeight 分别控制模型相关性、召回分数和来源权重的占比。
 	ModelWeight  float64
 	BaseWeight   float64
 	SourceWeight float64
 
-	// MMR:
-	//
-	//     λ * relevance
-	//     -
-	//     (1-λ) * redundancy
+	// MMRLambda 控制独立精排调用中相关性与内容多样性的取舍，越大越重视相关性。
 	MMRLambda float64
 
 	PassageBuilder PassageBuilder
 }
 
-// DefaultConfig 对齐我们当前采用的 WeKnora 风格。
-//
-// TopK 保持我们最开始设计的：
-//
-//	Recall Top30
-//	    ↓
-//	Rerank
-//	    ↓
-//	Top5
+// DefaultConfig 返回精排阈值、候选上限、融合权重和独立精排的 MMR 参数。
 func DefaultConfig() Config {
 	return Config{
 		TopK:             5,
@@ -181,12 +131,14 @@ type Result struct {
 	Diagnostics Diagnostics `json:"diagnostics"`
 }
 
+// Engine 模型精排引擎，负责评分、阈值处理和排序。
 type Engine struct {
 	scorer    Scorer
 	config    Config
 	configErr error
 }
 
+// NewEngine 保存配置与校验结果；配置错误在执行时返回。
 func NewEngine(scorer Scorer, cfg Config) *Engine {
 	err := cfg.Validate()
 	cfg = normalizeConfig(cfg)
@@ -198,30 +150,14 @@ func NewEngine(scorer Scorer, cfg Config) *Engine {
 	}
 }
 
-// RerankCandidates preserves the accepted candidate pool for context grouping.
-// The search pipeline owns the final context count; standalone Rerank retains
-// its configured TopK behavior. MaxCandidates still limits model requests.
+// RerankCandidates 保留通过阈值的候选池，供父块分组后统一截断；此路径不执行 MMR 多样性选择。
 func (e *Engine) RerankCandidates(ctx context.Context, query string, candidates []retrieval.SearchResult) (Result, error) {
 	copy := *e
 	copy.config.TopK = len(candidates)
 	return copy.Rerank(ctx, query, candidates)
 }
 
-// Rerank 执行完整重排。
-//
-// 模型普通错误：
-//
-//	不向上传播
-//	↓
-//	退回原 Retrieval 顺序
-//	↓
-//	Diagnostics = model_error
-//
-// Context Cancel / Deadline：
-//
-//	继续向上传播
-//
-// 因为取消请求不能被误认为“模型暂时失败”。
+// Rerank 执行评分、过滤、排序与独立调用的 MMR 选择。普通模型错误退回召回顺序，取消和超时直接返回。
 func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieval.SearchResult) (Result, error) {
 	if e.configErr != nil {
 		return Result{}, e.configErr
@@ -232,8 +168,16 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	query = strings.TrimSpace(query)
 
 	diag := Diagnostics{
+		CandidateCount:     len(candidates),
 		Threshold:          e.config.Threshold,
 		EffectiveThreshold: e.config.Threshold,
+	}
+
+	// 精排不可用时保留召回顺序，统一设置降级诊断。
+	fallback := func(outcome Outcome, message string) Result {
+		results := fallbackResults(candidates, e.config.TopK)
+		diag.Outcome, diag.Error, diag.ResultCount = outcome, message, len(results)
+		return Result{Scored: results, Results: results, Diagnostics: diag}
 	}
 
 	if len(candidates) == 0 {
@@ -242,31 +186,10 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	}
 
 	if e.config.Disabled {
-		results := fallbackResults(candidates, e.config.TopK)
-
-		diag.Outcome = OutcomeDisabled
-		diag.CandidateCount = len(candidates)
-		diag.ResultCount = len(results)
-
-		return Result{
-			Scored:      results,
-			Results:     results,
-			Diagnostics: diag,
-		}, nil
+		return fallback(OutcomeDisabled, ""), nil
 	}
-
 	if e.scorer == nil {
-		results := fallbackResults(candidates, e.config.TopK)
-
-		diag.Outcome = OutcomeNoModel
-		diag.CandidateCount = len(candidates)
-		diag.ResultCount = len(results)
-
-		return Result{
-			Scored:      results,
-			Results:     results,
-			Diagnostics: diag,
-		}, nil
+		return fallback(OutcomeNoModel, ""), nil
 	}
 
 	if query == "" {
@@ -277,7 +200,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	//
 	// Retriever 本身已经按 RRF / relevance 排好序，
 	// 所以这里保留头部候选即可。
-	candidates = cloneResults(candidates)
+	candidates = slices.Clone(candidates)
 
 	if len(candidates) > e.config.MaxCandidates {
 		candidates = candidates[:e.config.MaxCandidates]
@@ -303,50 +226,16 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 			return Result{}, err
 		}
 
-		results := fallbackResults(candidates, e.config.TopK)
-
-		diag.Outcome = OutcomeModelError
-		diag.Error = logging.SafeErrorText(err, 2048)
-		diag.ResultCount = len(results)
-
-		return Result{
-			Scored:      results,
-			Results:     results,
-			Diagnostics: diag,
-		}, nil
+		return fallback(OutcomeModelError, logging.SafeErrorText(err, 2048)), nil
 	}
 
 	if len(modelScores) != len(candidates) {
-		results := fallbackResults(candidates, e.config.TopK)
-
-		diag.Outcome = OutcomeModelError
-		diag.Error = fmt.Sprintf(
-			"rerank scorer returned %d scores for %d passages",
-			len(modelScores),
-			len(candidates),
-		)
-		diag.ResultCount = len(results)
-
-		return Result{
-			Scored:      results,
-			Results:     results,
-			Diagnostics: diag,
-		}, nil
+		return fallback(OutcomeModelError, fmt.Sprintf("rerank scorer returned %d scores for %d passages", len(modelScores), len(candidates))), nil
 	}
 
 	for i, score := range modelScores {
 		if math.IsNaN(score) || math.IsInf(score, 0) {
-			results := fallbackResults(candidates, e.config.TopK)
-
-			diag.Outcome = OutcomeModelError
-			diag.Error = fmt.Sprintf("rerank scorer returned invalid score at index %d", i)
-			diag.ResultCount = len(results)
-
-			return Result{
-				Scored:      results,
-				Results:     results,
-				Diagnostics: diag,
-			}, nil
+			return fallback(OutcomeModelError, fmt.Sprintf("rerank scorer returned invalid score at index %d", i)), nil
 		}
 
 		modelScores[i] = clamp01(score)
@@ -365,20 +254,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	selected := indicesAboveThreshold(modelScores, e.config.Threshold)
 	outcome := OutcomeOK
 
-	// -------------------------------------------------------------------------
-	// Threshold Degradation
-	//
-	// 例如：
-	//
-	//     threshold = 0.8
-	//
-	// 没有结果：
-	//
-	//     max(0.8 * 0.7, 0.3)
-	//     = 0.56
-	//
-	// 再试一次。
-	// -------------------------------------------------------------------------
+	// 首次阈值没有结果时，仅降低一次阈值，并保持配置的最低值。
 
 	if len(selected) == 0 && e.config.Threshold > e.config.DegradeFloor {
 		degraded := math.Max(
@@ -394,9 +270,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 		}
 	}
 
-	// -------------------------------------------------------------------------
-	// Fallback Top1
-	// -------------------------------------------------------------------------
+	// 阈值仍没有结果时，按最低分数要求保留最佳候选。
 
 	if len(selected) == 0 {
 		bestIndex := indexOfMax(modelScores)
@@ -468,75 +342,13 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	}, nil
 }
 
-// DefaultPassageBuilder 构造 Rerank Model 输入。
-//
-// 当前使用：
-//
-//	title
-//
-//	context header
-//
-//	body
-//
-// 为什么加 ContextHeader？
-//
-// 因为 Parent 内部经过 Recursive Split 的 Child
-// 可能已经不再包含真正的 Heading 行，
-// 但 ContextHeader 仍然保存了：
-//
-//	# Manual
-//	## Installation
-//	### Linux
-//
-// 这对 Reranker 判断局部语义很有帮助。
-//
-// 我们不做激进 Markdown 删除。
-// 当前 WeKnora 的 passage cleaner 也已经专门改进为
-// 避免破坏 code / math 内容。:chatgpt-content-reference{index="3"}
+// DefaultPassageBuilder 复用统一文本构造规则，将标题、标题路径与子块正文交给精排模型。
 func DefaultPassageBuilder(result retrieval.SearchResult) string {
-	parts := make([]string, 0, 3)
-
-	appendUnique := func(value string) {
-		value = strings.TrimSpace(value)
-
-		if value == "" {
-			return
-		}
-
-		for _, existing := range parts {
-			if existing == value {
-				return
-			}
-		}
-
-		parts = append(parts, value)
-	}
-
-	appendUnique(resultTitle(result))
-	appendUnique(result.ContextHeader)
-	appendUnique(result.Content)
-
-	return strings.Join(parts, "\n\n")
+	doc := &schema.Document{MetaData: result.Metadata}
+	return searchcontent.BuildText(searchcontent.DefaultBuilder().Title(doc), result.ContextHeader, result.Content)
 }
 
-// applyMMR 使用 Maximal Marginal Relevance 降低 TopK 内部的内容重复。
-//
-// 公式：
-//
-//	MMR
-//	  = λ * relevance
-//	  - (1-λ) * max_similarity_to_selected
-//
-// relevance：
-//
-//	Composite Score
-//
-// redundancy：
-//
-//	当前采用 token-set Jaccard。
-//
-// SearchResult.Score 不会被替换成 MMR 临时分数。
-// MMR 只负责“选择顺序”。
+// applyMMR 使用相关性与文本集合的 Jaccard 相似度选择尽量不重复的结果，不修改相关性分数。
 func applyMMR(
 	candidates []retrieval.SearchResult,
 	passages map[string]string,
@@ -548,11 +360,11 @@ func applyMMR(
 	}
 
 	if len(candidates) <= topK {
-		return cloneResults(candidates)
+		return slices.Clone(candidates)
 	}
 
 	selected := make([]retrieval.SearchResult, 0, topK)
-	remaining := cloneResults(candidates)
+	remaining := slices.Clone(candidates)
 
 	tokenCache := make(map[string]map[string]struct{}, len(candidates))
 
@@ -614,18 +426,7 @@ func applyMMR(
 	return selected
 }
 
-// tokenSet 做一个轻量多语言 tokenizer。
-//
-// Latin / Number：
-//
-//	连续字母数字组成 token。
-//
-// CJK：
-//
-//	每个 rune 作为一个 token。
-//
-// 这比单纯 strings.Fields 更适合中文，
-// 因为中文正文通常没有空格。
+// tokenSet 将拉丁字母和数字按词归一化，将中日韩字符按单字收集，用于轻量相似度计算。
 func tokenSet(text string) map[string]struct{} {
 	result := make(map[string]struct{})
 
@@ -659,6 +460,7 @@ func tokenSet(text string) map[string]struct{} {
 	return result
 }
 
+// isCJK 判断字符是否属于当前支持的中日韩文字范围。
 func isCJK(r rune) bool {
 	return unicode.Is(unicode.Han, r) ||
 		unicode.Is(unicode.Hiragana, r) ||
@@ -666,6 +468,7 @@ func isCJK(r rune) bool {
 		unicode.Is(unicode.Hangul, r)
 }
 
+// jaccard 计算两个 token 集合的交并比，空集合返回零。
 func jaccard(a, b map[string]struct{}) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
@@ -688,6 +491,7 @@ func jaccard(a, b map[string]struct{}) float64 {
 	return float64(intersection) / float64(union)
 }
 
+// sourceWeight 优先读取结果中的来源权重，再读取元数据中的可选权重。
 func sourceWeight(result retrieval.SearchResult) float64 {
 	if result.SourceWeight != 0 {
 		return clamp01(result.SourceWeight)
@@ -717,24 +521,7 @@ func sourceWeight(result retrieval.SearchResult) float64 {
 	}
 }
 
-func resultTitle(result retrieval.SearchResult) string {
-	for _, key := range []string{
-		"title",
-		"_title",
-		"file_name",
-	} {
-		if value, ok := result.Metadata[key].(string); ok {
-			value = strings.TrimSpace(value)
-
-			if value != "" {
-				return value
-			}
-		}
-	}
-
-	return ""
-}
-
+// indicesAboveThreshold 返回达到相关性阈值的输入位置，保持原顺序。
 func indicesAboveThreshold(scores []float64, threshold float64) []int {
 	result := make([]int, 0, len(scores))
 
@@ -747,6 +534,7 @@ func indicesAboveThreshold(scores []float64, threshold float64) []int {
 	return result
 }
 
+// indexOfMax 返回最高分位置，同分时保留第一个。
 func indexOfMax(values []float64) int {
 	if len(values) == 0 {
 		return -1
@@ -763,8 +551,9 @@ func indexOfMax(values []float64) int {
 	return best
 }
 
+// fallbackResults 保留召回排序并标记未精排，按独立调用的 TopK 截断。
 func fallbackResults(candidates []retrieval.SearchResult, topK int) []retrieval.SearchResult {
-	results := cloneResults(candidates)
+	results := slices.Clone(candidates)
 
 	for i := range results {
 		results[i].BaseScore = results[i].Score
@@ -778,17 +567,7 @@ func fallbackResults(candidates []retrieval.SearchResult, topK int) []retrieval.
 	return results
 }
 
-func cloneResults(src []retrieval.SearchResult) []retrieval.SearchResult {
-	if len(src) == 0 {
-		return nil
-	}
-
-	dst := make([]retrieval.SearchResult, len(src))
-	copy(dst, src)
-
-	return dst
-}
-
+// clamp01 将有效分数限制在零到一之间。
 func clamp01(value float64) float64 {
 	switch {
 	case value < 0:
@@ -802,6 +581,7 @@ func clamp01(value float64) float64 {
 	}
 }
 
+// normalizeConfig 补齐候选数量、默认权重与模型输入构造函数。
 func normalizeConfig(cfg Config) Config {
 	defaults := DefaultConfig()
 

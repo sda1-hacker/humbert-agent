@@ -134,7 +134,7 @@ func TestSemanticOverlapStopsAtSyntheticUnit(
 			end:   RuneLen("第一段。"),
 		}
 
-	// Synthetic Header。
+	// 自动补充的表头。
 	synthetic :=
 		splitUnit{
 			text: "| A | B |\n| --- | --- |\n",

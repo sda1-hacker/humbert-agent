@@ -445,6 +445,14 @@ export class Event {
         }
         if (/** @type {any} */(false)) {
             /**
+             * 终态携带预算计数，覆盖中途事件持久化失败。
+             * @member
+             * @type {number | undefined}
+             */
+            this["toolCalls"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * @member
              * @type {string | undefined}
              */
@@ -490,7 +498,7 @@ export class Event {
         const $$createField17_0 = $$createType11;
         const $$createField18_0 = $$createType3;
         const $$createField19_0 = $$createType12;
-        const $$createField30_0 = $$createType1;
+        const $$createField31_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("builtinToolNames" in $$parsedSource) {
             $$parsedSource["builtinToolNames"] = $$createField9_0($$parsedSource["builtinToolNames"]);
@@ -511,7 +519,7 @@ export class Event {
             $$parsedSource["runtime"] = $$createField19_0($$parsedSource["runtime"]);
         }
         if ("approval" in $$parsedSource) {
-            $$parsedSource["approval"] = $$createField30_0($$parsedSource["approval"]);
+            $$parsedSource["approval"] = $$createField31_0($$parsedSource["approval"]);
         }
         return new Event(/** @type {Partial<Event>} */($$parsedSource));
     }

@@ -1,6 +1,6 @@
 # AtomicFile：小型 JSON 文档的安全读写
 
-[总目录](../../docs/architecture/README.md) · [Config](../config/README.md)
+[总目录](../../docs/项目源码详解.md) · [Config](../config/README.md)
 
 `WriteJSON` 在目标同目录创建临时文件，编码 JSON、完整写入、fsync、关闭后 rename 原子替换；Unix 上收紧权限。它拒绝覆盖符号链接或目录。`ReadJSON` 严格解码，未知字段报错，缺文件仍返回 `os.ErrNotExist` 供调用方初始化默认值。
 

@@ -3,69 +3,26 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
-	"unicode/utf8"
 
-	"github.com/cloudwego/eino/schema"
-
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
+	"github.com/cloudwego/eino/components/embedding"
+	"github.com/sda1-hacker/humbert-agent/internal/rag"
 )
 
-var _ application.IngestionStore = (*Indexer)(nil)
-
-var (
-	ErrInvalidIngestionBatch = errors.New("postgres indexer: invalid ingestion batch")
-	ErrUnknownParentChunk    = errors.New("postgres indexer: child references unknown parent chunk")
-)
-
-// preparedIngestionChunk 是 ReplaceDocument 真正落库前的内部模型。
+// preparedIngestionChunk 是数据库写入前的内部模型。
 type preparedIngestionChunk struct {
-	record application.ChunkRecord
-
-	metadataJSON  string
-	searchContent string
+	record                      rag.ChunkRecord
+	metadataJSON, searchContent string
 }
 
-// ReplaceDocument 原子替换一个完整 Document 的：
-//
-//	documents
-//	parents
-//	children
-//	retrieval_index
-//
-// -----------------------------------------------------------------------------
-// 非常重要的执行顺序:
-//
-//  1. 在事务外 Build SearchContent
-//
-//  2. 在事务外 Embed Children
-//
-//  3. BEGIN
-//
-//  4. UPSERT Document + Markdown
-//
-//  5. DELETE old chunks
-//
-//  6. INSERT Parents
-//
-//  7. INSERT Children
-//
-//  8. INSERT Child retrieval_index
-//
-//  9. COMMIT
-//
-// Embedding 不放在数据库事务里，
-// 避免远程模型调用长期占用 PostgreSQL Transaction。
-func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.IngestionBatch) error {
-	if err := ctx.Err(); err != nil {
+// storeDocument 共用唯一的文档替换事务，向量化仅由原生 Store 触发。
+func (p *Indexer) storeDocument(ctx context.Context, batch rag.IngestionBatch, texts []string, embedder embedding.Embedder, opts []embedding.Option) error {
+	if err := rag.ValidateIngestionBatch(batch); err != nil {
 		return err
 	}
-
-	if err := validateIngestionBatch(batch); err != nil {
-		return err
+	if len(texts) != len(batch.Children) {
+		return ErrIncompleteSource
 	}
 	if p.config.VersionedDocuments && batch.Attempt == 0 {
 		return errors.New("rag: reserve a document attempt before ingestion")
@@ -73,70 +30,74 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 	if err := p.ensureProfile(ctx, batch.CollectionID); err != nil {
 		return err
 	}
+	var err error
+	batch.ProcessConfig, err = processSnapshot(batch, texts, "index_input_hash")
+	if err != nil {
+		return err
+	}
+	parents, err := prepareStoredChunks(batch.Parents)
+	if err != nil {
+		return err
+	}
+	children, err := prepareStoredChunks(batch.Children)
+	if err != nil {
+		return err
+	}
+	vectors, err := embedTexts(ctx, embedder, texts, p.config.EmbeddingBatchSize, opts, p.config.InputBudget)
+	if err != nil {
+		return err
+	}
+	halfVectors := make([]any, len(vectors))
+	for i, v := range vectors {
+		half, err := makeHalfVector(v)
+		if err != nil {
+			return err
+		}
+		halfVectors[i] = half
+		children[i].searchContent = texts[i]
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return p.replaceStoredDocument(ctx, batch, parents, children, halfVectors)
+}
+
+// PublishDocument 只保存权威原文和分块，可与外部向量库、BM25 库组合。
+// 数据发布前仍在事务内校验预留版本；此入口不调用模型、不写 retrieval_index。
+func (p *Indexer) PublishDocument(ctx context.Context, batch rag.IngestionBatch) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := rag.ValidateIngestionBatch(batch); err != nil {
+		return err
+	}
+	if batch.Attempt <= 0 {
+		return errors.New("rag: reserve a document attempt before publication")
+	}
+	if err := p.ensureProfile(ctx, batch.CollectionID); err != nil {
+		return err
+	}
+	parents, err := prepareStoredChunks(batch.Parents)
+	if err != nil {
+		return err
+	}
+	children, err := prepareStoredChunks(batch.Children)
+	if err != nil {
+		return err
+	}
+	batch.ProcessConfig, err = processSnapshot(batch, nil, "document_input_hash")
+	if err != nil {
+		return err
+	}
+	return p.replaceStoredDocument(ctx, batch, parents, children, nil)
+}
+
+// 同库原子入库和分离索引发布共用同一套事务、版本检查和分块保存规则。
+func (p *Indexer) replaceStoredDocument(ctx context.Context, batch rag.IngestionBatch,
+	preparedParents, preparedChildren []preparedIngestionChunk, halfVectors []any) error {
 	if batch.ContentHash == "" {
 		batch.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(batch.Markdown)))
 	}
-	if len(batch.ProcessConfig) == 0 {
-		batch.ProcessConfig = json.RawMessage("{}")
-	}
-
-	if p.config.Embedder == nil {
-		return ErrMissingEmbedder
-	}
-
-	preparedParents, err := prepareStoredChunks(batch.Parents)
-	if err != nil {
-		return err
-	}
-
-	preparedChildren, texts, err := p.prepareSearchableChunks(batch)
-	if err != nil {
-		return err
-	}
-	batch.ProcessConfig, err = processSnapshot(batch, texts)
-	if err != nil {
-		return err
-	}
-
-	// -------------------------------------------------------------------------
-	// 只给 Child 做 Embedding。
-	//
-	// Parent 不进入 retrieval_index。
-	// -------------------------------------------------------------------------
-
-	vectors, err := embedTexts(
-		ctx,
-		p.config.Embedder,
-		texts,
-		p.config.EmbeddingBatchSize,
-		nil,
-		p.config.InputBudget,
-	)
-
-	if err != nil {
-		return fmt.Errorf("embed ingestion children: %w", err)
-	}
-
-	if len(vectors) != len(preparedChildren) {
-		return fmt.Errorf(
-			"%w: expected %d child vectors, got %d",
-			ErrInvalidEmbedding,
-			len(preparedChildren),
-			len(vectors),
-		)
-	}
-
-	halfVectors := make([]any, len(vectors))
-
-	for i, vector := range vectors {
-		half, err := makeHalfVector(vector)
-		if err != nil {
-			return fmt.Errorf("child %q: %w", preparedChildren[i].record.ID, err)
-		}
-
-		halfVectors[i] = half
-	}
-
 	documentMetadataJSON, err := marshalMetadata(batch.Metadata)
 	if err != nil {
 		return fmt.Errorf("marshal document metadata: %w", err)
@@ -210,6 +171,9 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 			return err
 		}
 
+		if halfVectors == nil {
+			continue
+		} // 分离索引模式只发布原文与分块。
 		if _, err := tx.Exec(
 			ctx,
 			insertRetrievalSQL,
@@ -235,62 +199,8 @@ func (p *Indexer) ReplaceDocument(ctx context.Context, batch application.Ingesti
 	return nil
 }
 
-func (p *Indexer) prepareSearchableChunks(
-	batch application.IngestionBatch,
-) ([]preparedIngestionChunk, []string, error) {
-	prepared, err := prepareStoredChunks(batch.Children)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	texts := make([]string, 0, len(prepared))
-
-	for i := range prepared {
-		record := prepared[i].record
-
-		metadata := cloneIngestionMetadata(record.Metadata)
-		// Explicit fields are authoritative; metadata may have been supplied
-		// by an adapter or copied from an earlier chunk.
-		metadata[metaContextHeader] = record.ContextHeader
-
-		// SearchContent Builder 默认会寻找：
-		//
-		//     title
-		//     _title
-		//     file_name
-		//
-		// 如果 Loader metadata 没有标题，
-		// Application Batch.Title 作为最终 fallback。
-		if _, exists := metadata["title"]; !exists {
-			if _, exists := metadata["_title"]; !exists && batch.Title != "" {
-				metadata["_title"] = batch.Title
-			}
-		}
-
-		doc := &schema.Document{
-			ID:       record.ID,
-			Content:  record.Content,
-			MetaData: metadata,
-		}
-
-		searchContent := p.config.SearchBuilder.Build(doc)
-
-		if strings.TrimSpace(searchContent) == "" {
-			return nil, nil, fmt.Errorf(
-				"%w for child %q",
-				ErrEmptySearchContent,
-				record.ID,
-			)
-		}
-
-		prepared[i].searchContent = searchContent
-		texts = append(texts, searchContent)
-	}
-
-	return prepared, texts, nil
-}
-
-func prepareStoredChunks(records []application.ChunkRecord) ([]preparedIngestionChunk, error) {
+// prepareStoredChunks 预先序列化分块元数据，避免进入事务后才发现编码错误。
+func prepareStoredChunks(records []rag.ChunkRecord) ([]preparedIngestionChunk, error) {
 	result := make([]preparedIngestionChunk, 0, len(records))
 
 	for _, record := range records {
@@ -312,134 +222,7 @@ func prepareStoredChunks(records []application.ChunkRecord) ([]preparedIngestion
 	return result, nil
 }
 
-func validateIngestionBatch(batch application.IngestionBatch) error {
-	if batch.Attempt < 0 {
-		return fmt.Errorf("%w: negative attempt", ErrInvalidIngestionBatch)
-	}
-	if batch.ContentHash != "" && batch.ContentHash != fmt.Sprintf("%x", sha256.Sum256([]byte(batch.Markdown))) {
-		return fmt.Errorf("%w: content hash does not match Markdown", ErrInvalidIngestionBatch)
-	}
-	if len(batch.ProcessConfig) > 0 && !json.Valid(batch.ProcessConfig) {
-		return fmt.Errorf("%w: invalid process config", ErrInvalidIngestionBatch)
-	}
-	if len(batch.ProcessConfig) > 0 {
-		var config map[string]json.RawMessage
-		if json.Unmarshal(batch.ProcessConfig, &config) != nil || config == nil {
-			return fmt.Errorf("%w: process config must be an object", ErrInvalidIngestionBatch)
-		}
-	}
-	if strings.TrimSpace(batch.CollectionID) == "" {
-		return fmt.Errorf("%w: missing collection id", ErrInvalidIngestionBatch)
-	}
-
-	if strings.TrimSpace(batch.DocumentID) == "" {
-		return fmt.Errorf("%w: missing document id", ErrInvalidIngestionBatch)
-	}
-
-	ids := make(map[string]struct{}, len(batch.Parents)+len(batch.Children))
-	parentIDs := make(map[string]application.ChunkRecord, len(batch.Parents))
-	indexes := make(map[string]map[int]bool)
-	sourceRunes := utf8.RuneCountInString(batch.Markdown)
-
-	validateRecord := func(record application.ChunkRecord) error {
-		if strings.TrimSpace(record.ID) == "" {
-			return fmt.Errorf("%w: empty chunk id", ErrInvalidIngestionBatch)
-		}
-
-		if record.DocumentID != batch.DocumentID {
-			return fmt.Errorf(
-				"%w: chunk %q belongs to document %q, batch document is %q",
-				ErrInvalidIngestionBatch,
-				record.ID,
-				record.DocumentID,
-				batch.DocumentID,
-			)
-		}
-
-		if record.ChunkIndex < 0 {
-			return fmt.Errorf("%w: chunk %q has negative index", ErrInvalidIngestionBatch, record.ID)
-		}
-
-		if strings.TrimSpace(record.Content) == "" || record.StartRune < 0 || record.EndRune <= record.StartRune || record.EndRune > sourceRunes {
-			return fmt.Errorf(
-				"%w: chunk %q has invalid rune range [%d,%d)",
-				ErrInvalidIngestionBatch,
-				record.ID,
-				record.StartRune,
-				record.EndRune,
-			)
-		}
-
-		if _, exists := ids[record.ID]; exists {
-			return fmt.Errorf("%w: duplicate chunk id %q", ErrInvalidIngestionBatch, record.ID)
-		}
-
-		ids[record.ID] = struct{}{}
-		if indexes[record.ChunkType] == nil {
-			indexes[record.ChunkType] = make(map[int]bool)
-		}
-		if indexes[record.ChunkType][record.ChunkIndex] {
-			return fmt.Errorf("%w: duplicate %s chunk index %d", ErrInvalidIngestionBatch, record.ChunkType, record.ChunkIndex)
-		}
-		indexes[record.ChunkType][record.ChunkIndex] = true
-		return nil
-	}
-
-	for _, parent := range batch.Parents {
-		if parent.ChunkType != application.ChunkTypeParentText {
-			return fmt.Errorf(
-				"%w: parent %q has chunk type %q",
-				ErrInvalidIngestionBatch,
-				parent.ID,
-				parent.ChunkType,
-			)
-		}
-
-		if err := validateRecord(parent); err != nil {
-			return err
-		}
-
-		if parent.ParentChunkID != "" {
-			return fmt.Errorf("%w: nested parent chunks are unsupported", ErrInvalidIngestionBatch)
-		}
-		parentIDs[parent.ID] = parent
-	}
-
-	for _, child := range batch.Children {
-		if child.ChunkType != application.ChunkTypeText {
-			return fmt.Errorf(
-				"%w: child %q has chunk type %q",
-				ErrInvalidIngestionBatch,
-				child.ID,
-				child.ChunkType,
-			)
-		}
-
-		if err := validateRecord(child); err != nil {
-			return err
-		}
-
-		if child.ParentChunkID == "" {
-			continue
-		}
-
-		if _, exists := parentIDs[child.ParentChunkID]; !exists {
-			return fmt.Errorf(
-				"%w: child %q -> %q",
-				ErrUnknownParentChunk,
-				child.ID,
-				child.ParentChunkID,
-			)
-		}
-		parent := parentIDs[child.ParentChunkID]
-		if child.StartRune < parent.StartRune || child.EndRune > parent.EndRune {
-			return fmt.Errorf("%w: child %q is outside parent source range", ErrInvalidIngestionBatch, child.ID)
-		}
-	}
-
-	return nil
-}
-
+// insertStoredChunk 在当前事务内保存分块；检索索引仅由子块生成。
 func insertStoredChunk(
 	ctx context.Context,
 	tx transaction,
@@ -467,20 +250,6 @@ func insertStoredChunk(
 	}
 
 	return nil
-}
-
-func cloneIngestionMetadata(src map[string]any) map[string]any {
-	if len(src) == 0 {
-		return make(map[string]any)
-	}
-
-	dst := make(map[string]any, len(src)+1)
-
-	for key, value := range src {
-		dst[key] = value
-	}
-
-	return dst
 }
 
 const upsertIngestionDocumentSQL = `

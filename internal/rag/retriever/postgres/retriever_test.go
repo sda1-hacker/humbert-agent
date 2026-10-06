@@ -12,9 +12,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
-// -----------------------------------------------------------------------------
-// Fake Embedder
-// -----------------------------------------------------------------------------
+// 用于测试的向量模型。
 
 type fakeEmbedder struct {
 	dim int
@@ -43,9 +41,7 @@ func (f *fakeEmbedder) EmbedStrings(
 	return result, nil
 }
 
-// -----------------------------------------------------------------------------
-// Fake Database
-// -----------------------------------------------------------------------------
+// 用于测试的数据库。
 
 type queryCall struct {
 	sql  string
@@ -180,9 +176,7 @@ func assignScanValue(
 	)
 }
 
-// -----------------------------------------------------------------------------
-// Vector Retriever
-// -----------------------------------------------------------------------------
+// 向量召回器。
 
 func TestVectorRetrieverSearch(t *testing.T) {
 	db := &fakeQueryer{
@@ -212,7 +206,7 @@ func TestVectorRetrieverSearch(t *testing.T) {
 
 	retriever := newVectorRetriever(db, cfg)
 
-	results, err := retriever.Search(
+	results, err := retriever.searchResults(
 		context.Background(),
 		"安装方法",
 	)
@@ -298,7 +292,7 @@ func TestVectorRetrieverThreshold(t *testing.T) {
 
 	retriever := newVectorRetriever(db, cfg)
 
-	results, err := retriever.Search(
+	results, err := retriever.searchResults(
 		context.Background(),
 		"query",
 	)
@@ -330,7 +324,7 @@ func TestVectorRetrieverRejectsWrongDimension(
 
 	retriever := newVectorRetriever(db, cfg)
 
-	_, err := retriever.Search(
+	_, err := retriever.searchResults(
 		context.Background(),
 		"query",
 	)
@@ -354,9 +348,7 @@ func TestVectorRetrieverRejectsWrongDimension(
 	}
 }
 
-// -----------------------------------------------------------------------------
-// BM25 Retriever
-// -----------------------------------------------------------------------------
+// 关键词召回器。
 
 func TestBM25RetrieverSearch(t *testing.T) {
 	db := &fakeQueryer{
@@ -377,7 +369,7 @@ func TestBM25RetrieverSearch(t *testing.T) {
 
 	retriever := newBM25Retriever(db, cfg)
 
-	results, err := retriever.Search(
+	results, err := retriever.searchResults(
 		context.Background(),
 		"BM25",
 	)
@@ -439,7 +431,7 @@ func TestBM25RetrieverThreshold(t *testing.T) {
 
 	retriever := newBM25Retriever(db, cfg)
 
-	results, err := retriever.Search(
+	results, err := retriever.searchResults(
 		context.Background(),
 		"query",
 	)
@@ -458,9 +450,7 @@ func TestBM25RetrieverThreshold(t *testing.T) {
 	}
 }
 
-// -----------------------------------------------------------------------------
-// Eino mapping
-// -----------------------------------------------------------------------------
+// Eino 文档映射。
 
 func TestRetrieverMapsSearchResultToEinoDocument(
 	t *testing.T,
@@ -487,7 +477,7 @@ func TestRetrieverMapsSearchResultToEinoDocument(
 		},
 	}
 
-	docs := searchResultsToDocuments(results)
+	docs := retrieval.Documents(results)
 
 	if len(docs) != 1 {
 		t.Fatalf(
@@ -519,7 +509,7 @@ func TestRetrieverMapsSearchResultToEinoDocument(
 		)
 	}
 
-	if doc.MetaData[MetaMatchType] !=
+	if doc.MetaData[retrieval.MetaMatchType] !=
 		"hybrid" {
 
 		t.Fatalf(

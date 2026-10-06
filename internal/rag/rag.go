@@ -1,459 +1,153 @@
+// Package rag 提供解析、切分、索引与检索组成的业务 API。
+// 具体数据库和模型在调用方组装，核心只接收 Eino 原生组件。
 package rag
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
+	"sync"
 
-	"github.com/cloudwego/eino/components/embedding"
-	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/embeddinginput"
-	indexerpostgres "github.com/sda1-hacker/humbert-agent/internal/rag/indexer/postgres"
-	tabulaloader "github.com/sda1-hacker/humbert-agent/internal/rag/loader/tabula"
-	embeddingopenai "github.com/sda1-hacker/humbert-agent/internal/rag/provider/embedding/openai"
-	rerankhttp "github.com/sda1-hacker/humbert-agent/internal/rag/provider/rerank/http"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/rerank"
-	retrieverpostgres "github.com/sda1-hacker/humbert-agent/internal/rag/retriever/postgres"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/search"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
+	"github.com/cloudwego/eino/components/document"
+	"github.com/cloudwego/eino/components/indexer"
+	"github.com/cloudwego/eino/components/retriever"
 )
 
-var (
-	ErrMissingDatabaseURL         = errors.New("rag: missing database url")
-	ErrEmbeddingDimensionMismatch = errors.New("rag: embedding dimension does not match postgres schema")
-)
+// Dependencies 声明运行所需组件，不根据 Indexer 的实际类型猜测业务能力。
+// Eino 组件仍可直接使用其原生接口；文档原文、版本和发布由独立业务能力负责。
+type Dependencies struct {
+	// Loader 解析真实文档的 Eino 加载器。
+	Loader document.Loader
+	// Indexer 接收统一检索文本的 Eino 索引器。
+	Indexer indexer.Indexer
+	// Config 召回、精排与父块扩展配置。
+	Config Config
 
-// Config 是整个 RAG Foundation 的 Composition Config。
-//
-// 这里不重新发明：
-//
-//	Chunk Config
-//	Search Config
-//	Rerank Config
-//
-// 而是直接复用各模块自己的 Config。
-//
-// Composition Root 的职责只有一个：
-//
-//	创建对象
-//	注入依赖
-//	保证同一 Embedder 同时用于 Index + Query
-type Config struct {
-	// pgsql 的 url
-	// 'postgres://USER:PASSWORD@HOST:5432/humbert_rag_eval?sslmode=disable'
-	DatabaseURL string
+	// ChunkReader 读取已发布分块，供展示和人工标注。
+	ChunkReader ChunkReader
+	// Lifecycle 解析前预留版本，并提供取消与删除能力。
+	Lifecycle DocumentLifecycle
+	// PublishedChunks 回查权威正文，过滤外部索引中的失效命中。
+	PublishedChunks PublishedChunkReader
 
-	// EnsureSchema=true：
-	//
-	//     自动 CREATE EXTENSION
-	//     自动 EnsureSchema
-	//
-	// 很适合：
-	//
-	//     Demo
-	//     Local Development
-	//
-	// 生产环境建议：
-	//
-	//     false
-	//
-	// 然后由 Migration / DBA 负责 Schema。
-	EnsureSchema bool
-
-	Loader tabulaloader.Config
-
-	Embedding embeddingopenai.Config
-
-	Indexer indexerpostgres.Config
-
-	Hybrid retrieverpostgres.HybridConfig
-
-	// RerankProvider == nil：
-	//
-	//     不调用远程 Rerank Model。
-	//
-	// RRF Retrieval 仍然完全可用。
-	RerankProvider *rerankhttp.Config
-
-	Rerank rerank.Config
-
-	Search search.Config
+	// 外部索引成功后再发布权威文档。使用 PostgreSQL 原子 Indexer 时留空，
+	// 因为它通过 WithIngestionBatch 在同一事务内保存原文、分块和索引。
+	Publisher DocumentPublisher
+	// Close 服务关闭时释放调用方指定的资源，只执行一次。
+	Close func()
 }
 
-func DefaultConfig() Config {
-	embeddingCfg := embeddingopenai.DefaultConfig()
-
-	// 当前数据库固定：
-	//
-	//     HALFVEC(1024)
-	//
-	// 所以默认请求1024维。
-	embeddingCfg.Dimensions = indexerpostgres.EmbeddingDimensions
-
-	return Config{
-		EnsureSchema: false,
-
-		Loader: tabulaloader.DefaultConfig(),
-
-		Embedding: embeddingCfg,
-
-		Indexer: indexerpostgres.DefaultConfig(),
-
-		Hybrid: retrieverpostgres.DefaultHybridConfig(),
-
-		Rerank: rerank.DefaultConfig(),
-
-		Search: search.DefaultConfig(),
-	}
+// Service 是唯一的业务入口。提供导入、检索及文档管理，不再包装另一层 Service。
+type Service struct {
+	loader    document.Loader
+	indexer   indexer.Indexer
+	config    Config
+	chunks    ChunkReader
+	lifecycle DocumentLifecycle
+	publisher DocumentPublisher
+	close     func()
+	closeOnce sync.Once
 }
 
-func (c Config) Validate() error {
-	if err := c.Loader.ParseOptions.Validate(); err != nil {
-		return err
-	}
-	if err := c.Indexer.InputBudget.Validate(); err != nil {
-		return err
-	}
-	if c.Indexer.InputBudget.MaxInputTokens != 0 || c.Indexer.InputBudget.MaxBatchTokens != 0 || c.Indexer.InputBudget.CountTokens != nil {
-		return fmt.Errorf("rag: configure Embedding.InputBudget for both index and query; Indexer.InputBudget is for standalone indexers")
-	}
-	if c.Indexer.EmbeddingBatchSize < 0 {
-		return fmt.Errorf("rag: negative embedding batch size")
-	}
-	if err := c.Hybrid.Validate(); err != nil {
-		return err
-	}
-	if err := c.Rerank.Validate(); err != nil {
-		return err
-	}
-	if err := c.Search.Validate(); err != nil {
-		return err
-	}
-	if c.Search.FinalTopK > retrieverpostgres.MaxTopK {
-		return fmt.Errorf("rag: final top k exceeds maximum recall size %d", retrieverpostgres.MaxTopK)
-	}
-	if c.Hybrid.TopK > 0 && c.Search.FinalTopK > c.Hybrid.TopK {
-		return fmt.Errorf("rag: recall pool must be at least final top k")
-	}
-	if c.Rerank.MaxCandidates > 0 && c.RerankProvider != nil && c.Rerank.MaxCandidates < c.Search.FinalTopK {
-		return fmt.Errorf("rag: rerank candidate pool must be at least final top k")
-	}
-
-	if strings.TrimSpace(c.DatabaseURL) == "" {
-		return ErrMissingDatabaseURL
-	}
-
-	if err := c.Embedding.Validate(); err != nil {
-		return fmt.Errorf("rag embedding config: %w", err)
-	}
-
-	// Dimensions=0 允许某些 Provider 不接受 dimensions 参数。
-	//
-	// 但是它实际返回的 Vector 最终仍会被：
-	//
-	//     PGIndexer
-	//     VectorRetriever
-	//
-	// 强校验为1024维。
-	if c.Embedding.Dimensions > 0 &&
-		c.Embedding.Dimensions != indexerpostgres.EmbeddingDimensions {
-
-		return fmt.Errorf(
-			"%w: postgres=%d embedding=%d",
-			ErrEmbeddingDimensionMismatch,
-			indexerpostgres.EmbeddingDimensions,
-			c.Embedding.Dimensions,
-		)
-	}
-
-	if c.RerankProvider != nil {
-		if err := c.RerankProvider.Validate(); err != nil {
-			return fmt.Errorf("rag rerank config: %w", err)
-		}
-	}
-
-	return nil
-}
-
-// RAG 是整个系统最终的运行时对象。
-//
-// 上层通常只需要：
-//
-//	Ingest()
-//	Search()
-//	Close()
-//
-// 不再需要手动理解内部几十个组件。
-type RAG struct {
-	service *application.Service
-
-	pool    *pgxpool.Pool
-	indexer *indexerpostgres.Indexer
-
-	embedder embedding.Embedder
-}
-
-// NewRAG 完成整个 Dependency Composition。
-//
-// 最重要的不变量：
-//
-//	同一个 embedder instance
-//
-// 同时注入：
-//
-//	PGIndexer
-//	HybridRetriever
-//
-// 从架构层面防止：
-//
-//	入库用 Model A
-//	查询用 Model B
-//
-// 这种非常隐蔽但致命的问题。
-func NewRAG(ctx context.Context, cfg Config) (*RAG, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-
+// New 创建业务服务，允许只配置完整导入流程或只配置检索流程。
+// 创建失败时资源仍由调用方释放；成功后 Close 接管指定清理函数。
+func New(ctx context.Context, deps Dependencies) (*Service, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	// -------------------------------------------------------------------------
-	// PostgreSQL
-	// -------------------------------------------------------------------------
-
-	if cfg.EnsureSchema {
-		if err := indexerpostgres.EnsureExtensions(ctx, cfg.DatabaseURL); err != nil {
-			return nil, fmt.Errorf("bootstrap postgres extensions: %w", err)
-		}
+	if deps.Loader != nil && deps.Indexer == nil {
+		return nil, ErrMissingIndexer
 	}
-
-	pool, err := indexerpostgres.NewPool(ctx, cfg.DatabaseURL)
-	if err != nil {
+	if deps.Indexer != nil && deps.Loader == nil {
+		return nil, ErrMissingLoader
+	}
+	if deps.Loader == nil && deps.Config.Retriever == nil {
+		return nil, ErrMissingRetriever
+	}
+	if err := deps.Config.Search.Validate(); err != nil {
 		return nil, err
 	}
-
-	success := false
-
-	defer func() {
-		if !success {
-			pool.Close()
+	if deps.Config.RecallTopK < 0 {
+		return nil, errors.New("rag: negative recall top k")
+	}
+	if deps.Publisher != nil && (deps.Lifecycle == nil || deps.PublishedChunks == nil) {
+		return nil, errors.New("rag: external publication requires lifecycle and published chunk reader")
+	}
+	if deps.PublishedChunks != nil {
+		// 在业务入口统一过滤，单路与混合模式都不能绕过文档版本检查。
+		for _, component := range []*retriever.Retriever{&deps.Config.Retriever, &deps.Config.VectorRetriever, &deps.Config.KeywordRetriever} {
+			if *component != nil {
+				*component, _ = WithPublishedChunks(*component, deps.PublishedChunks)
+			}
 		}
-	}()
-
-	if cfg.EnsureSchema {
-		if err := indexerpostgres.EnsureSchema(ctx, pool); err != nil {
-			return nil, fmt.Errorf("ensure rag postgres schema: %w", err)
-		}
 	}
-
-	if err := indexerpostgres.CheckSchema(ctx, pool); err != nil {
-		return nil, err
-	}
-	// -------------------------------------------------------------------------
-	// Embedding
-	// -------------------------------------------------------------------------
-
-	embedder, err := embeddingopenai.New(ctx, cfg.Embedding)
-	if err != nil {
-		return nil, fmt.Errorf("create embedding provider: %w", err)
-	}
-
-	// -------------------------------------------------------------------------
-	// Indexer
-	//
-	// 无论 cfg.Indexer.Embedder 原本是什么，
-	// Composition Root 都强制覆盖成上面的唯一 Embedder。
-	// -------------------------------------------------------------------------
-
-	indexerCfg := cfg.Indexer
-	indexerCfg.Embedder = embedder
-	indexerCfg.InputBudget = cfg.Embedding.InputBudget
-	profile := cfg.EmbeddingProfile()
-	indexerCfg.ProfileID = profile.ID()
-	indexerCfg.ProfileJSON = profile.JSON()
-	indexerCfg.VersionedDocuments = true
-
-	pgIndexer, err := indexerpostgres.NewIndexer(pool, indexerCfg)
-	if err != nil {
-		return nil, fmt.Errorf("create postgres indexer: %w", err)
-	}
-
-	// -------------------------------------------------------------------------
-	// Reranker
-	// -------------------------------------------------------------------------
-
-	rerankCfg := cfg.Rerank
-
-	var scorer rerank.Scorer
-
-	if cfg.RerankProvider != nil {
-		httpScorer, err := rerankhttp.NewClient(*cfg.RerankProvider)
-		if err != nil {
-			return nil, fmt.Errorf("create rerank provider: %w", err)
-		}
-
-		scorer = httpScorer
-	} else {
-		// Provider 没配置时显式进入 Disabled，
-		// Diagnostics 会得到：
-		//
-		//     OutcomeDisabled
-		//
-		// 而不是让用户误以为 Rerank Model 出错。
-		rerankCfg.Disabled = true
-	}
-
-	rerankEngine := rerank.NewEngine(scorer, rerankCfg)
-
-	// -------------------------------------------------------------------------
-	// Retrieval
-	//
-	// 和 Indexer 使用同一个 embedder。
-	// -------------------------------------------------------------------------
-
-	hybridCfg := cfg.Hybrid
-	hybridCfg.Embedder = embedder
-
-	searchFactory, err := retrieverpostgres.NewPipelineFactory(
-		pool,
-		retrieverpostgres.PipelineFactoryConfig{
-			Hybrid:      hybridCfg,
-			ProfileID:   profile.ID(),
-			ProfileJSON: profile.JSON(),
-			Reranker:    rerankEngine,
-			Search:      cfg.Search,
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create search pipeline factory: %w", err)
-	}
-
-	// -------------------------------------------------------------------------
-	// Loader
-	// -------------------------------------------------------------------------
-
-	loader := tabulaloader.NewLoader(cfg.Loader)
-
-	// -------------------------------------------------------------------------
-	// Application Facade
-	// -------------------------------------------------------------------------
-
-	service := application.NewService(
-		loader,
-		pgIndexer,
-		searchFactory,
-	)
-
-	success = true
-
-	return &RAG{
-		service:  service,
-		pool:     pool,
-		indexer:  pgIndexer,
-		embedder: embedder,
+	return &Service{
+		loader: deps.Loader, indexer: deps.Indexer, config: deps.Config,
+		chunks: deps.ChunkReader, lifecycle: deps.Lifecycle, publisher: deps.Publisher,
+		close: deps.Close,
 	}, nil
 }
 
-// Ingest 是最终 ingestion 入口。
-func (r *RAG) Ingest(
-	ctx context.Context,
-	req application.IngestRequest,
-) (application.IngestResponse, error) {
-	if r == nil || r.service == nil {
-		return application.IngestResponse{}, errors.New("rag: runtime is not initialized")
+// ListChunks 返回已发布的普通分块，供展示和人工标注使用。
+func (s *Service) ListChunks(ctx context.Context, collectionID, documentID string) ([]ChunkRecord, error) {
+	if s.chunks == nil {
+		return nil, errors.New("rag: chunk reader is not configured")
 	}
-
-	return r.service.Ingest(ctx, req)
+	collectionID, documentID, err := documentScope(ctx, collectionID, documentID)
+	if err != nil {
+		return nil, err
+	}
+	return s.chunks.ListChunks(ctx, collectionID, documentID)
 }
 
-// Search 是最终 retrieval 入口。
-func (r *RAG) Search(
-	ctx context.Context,
-	req application.SearchRequest,
-) (search.Response, error) {
-	if r == nil || r.service == nil {
-		return search.Response{}, errors.New("rag: runtime is not initialized")
+// CancelDocument 作废正在处理的版本；上一次已发布版本仍可检索。
+// 若需立即终止解析或模型请求，调用方还需取消对应 Ingest 的 context。
+func (s *Service) CancelDocument(ctx context.Context, collectionID, documentID string) error {
+	if s.lifecycle == nil {
+		return errors.New("rag: document lifecycle is not configured")
 	}
-
-	return r.service.Search(ctx, req)
+	collectionID, documentID, err := documentScope(ctx, collectionID, documentID)
+	if err != nil {
+		return err
+	}
+	return s.lifecycle.InvalidateDocument(ctx, collectionID, documentID)
 }
 
-// Service 暴露 Application Service。
-//
-// 一般业务代码不需要调用这个方法；
-// 它主要用于：
-//
-//	高级集成
-//	自定义 Handler
-//	Integration Test
-func (r *RAG) Service() *application.Service {
-	if r == nil {
-		return nil
+// DeleteDocument 删除权威文档；外部索引残留通过版本检查过滤。
+func (s *Service) DeleteDocument(ctx context.Context, collectionID, documentID string) error {
+	if s.lifecycle == nil {
+		return errors.New("rag: document lifecycle is not configured")
 	}
-
-	return r.service
+	collectionID, documentID, err := documentScope(ctx, collectionID, documentID)
+	if err != nil {
+		return err
+	}
+	return s.lifecycle.DeleteDocument(ctx, collectionID, documentID)
 }
 
-// Embedder 暴露当前统一 Embedder。
-//
-// 主要用于：
-//
-//	Debug
-//	Smoke Test
-//	Evaluation
-func (r *RAG) Embedder() embedding.Embedder {
-	if r == nil {
-		return nil
-	}
-
-	return r.embedder
-}
-
-// Close 释放数据库连接池。
-func (r *RAG) Close() {
-	if r == nil {
+// Close 可重复调用，底层资源只释放一次。
+func (s *Service) Close() {
+	if s == nil {
 		return
 	}
-
-	if r.pool != nil {
-		r.pool.Close()
-	}
+	s.closeOnce.Do(func() {
+		if s.close != nil {
+			s.close()
+		}
+	})
 }
 
-// EmbeddingProfile contains no credentials. ModelRevision must be bumped when
-// model weights behind an alias change. Key/timeout changes do not alter it.
-func (c Config) EmbeddingProfile() embeddinginput.Profile {
-	endpoint := strings.TrimRight(strings.TrimSpace(c.Embedding.BaseURL), "/")
-	if endpoint == "" {
-		endpoint = "https://api.openai.com/v1"
+// documentScope 检查请求上下文并规范化知识库与文档 ID。
+func documentScope(ctx context.Context, collectionID, documentID string) (string, string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", err
 	}
-	builder := c.Indexer.SearchBuilder
-	if len(builder.TitleKeys) == 0 && builder.ContextHeaderKey == "" {
-		builder = searchcontent.DefaultBuilder()
+	collectionID, documentID = strings.TrimSpace(collectionID), strings.TrimSpace(documentID)
+	if collectionID == "" {
+		return "", "", ErrMissingCollectionID
 	}
-	return embeddinginput.Profile{Provider: "openai-compatible", Endpoint: endpoint, Model: strings.TrimSpace(c.Embedding.Model), Revision: c.Embedding.ModelRevision, Dimensions: indexerpostgres.EmbeddingDimensions, InputVersion: "humbert-search-content-v1", SearchBuilder: builder}
-}
-
-func (r *RAG) ReserveDocument(ctx context.Context, collectionID, documentID string) (int64, error) {
-	if r == nil || r.indexer == nil {
-		return 0, errors.New("rag: not initialized")
+	if documentID == "" {
+		return "", "", ErrMissingDocumentID
 	}
-	return r.indexer.ReserveDocument(ctx, collectionID, documentID)
-}
-func (r *RAG) CancelDocument(ctx context.Context, collectionID, documentID string) error {
-	if r == nil || r.indexer == nil {
-		return errors.New("rag: not initialized")
-	}
-	return r.indexer.InvalidateDocument(ctx, collectionID, documentID)
-}
-func (r *RAG) DeleteDocument(ctx context.Context, collectionID, documentID string) error {
-	if r == nil || r.indexer == nil {
-		return errors.New("rag: not initialized")
-	}
-	return r.indexer.DeleteDocument(ctx, collectionID, documentID)
+	return collectionID, documentID, nil
 }

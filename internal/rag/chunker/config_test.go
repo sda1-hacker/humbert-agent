@@ -140,7 +140,7 @@ func TestNormalizeSplitterConfigKeepsCustomValues(t *testing.T) {
 	}
 }
 
-// Explicit zero disables overlap; DefaultConfig supplies the recommended 80.
+// 显式零值关闭重叠；DefaultConfig 提供推荐的 80 字符重叠。
 func TestNormalizeSplitterConfigZeroOverlap(t *testing.T) {
 	cfg := NormalizeSplitterConfig(
 		SplitterConfig{

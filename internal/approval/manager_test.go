@@ -47,7 +47,7 @@ func approvalInfo() InterruptInfo {
 
 func TestExpiredClickLeavesTimeoutOwnership(t *testing.T) {
 	manager, _ := newApprovalManager(t, time.Minute)
-	request, err := manager.Register(context.Background(), approvalInfo(), "interrupt", "checkpoint")
+	request, err := manager.Register(context.Background(), approvalInfo(), "interrupt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,12 +59,12 @@ func TestExpiredClickLeavesTimeoutOwnership(t *testing.T) {
 	if _, err := manager.Resolve(context.Background(), request.ID, DecisionAllowOnce); !errors.Is(err, ErrNotPending) {
 		t.Fatalf("expired click accepted: %v", err)
 	}
-	resolution, ok, err := manager.Expire(request.ID)
-	if err != nil || !ok || resolution.Approved {
-		t.Fatalf("timeout lost ownership: %+v %v %v", resolution, ok, err)
+	resolution, ok := manager.Expire(request.ID)
+	if !ok || resolution.Approved {
+		t.Fatalf("timeout lost ownership: %+v %v", resolution, ok)
 	}
-	if _, ok, err := manager.Expire(request.ID); err != nil || ok {
-		t.Fatalf("duplicate expiry: %v %v", ok, err)
+	if _, ok := manager.Expire(request.ID); ok {
+		t.Fatalf("duplicate expiry: %v", ok)
 	}
 }
 
@@ -78,7 +78,7 @@ func TestResolveAllowSessionCreatesReusableRule(t *testing.T) {
 		Version: permission.CapabilityIdentityVersion, Kind: permission.CapabilityBuiltin,
 		Tool: "write_file", Risk: permission.RiskWrite, SandboxFingerprint: "sbx1:test",
 	}
-	request, err := manager.Register(ctx, info, "interrupt-1", "checkpoint-1")
+	request, err := manager.Register(ctx, info, "interrupt-1")
 	if err != nil {
 		t.Fatalf("Register 失败: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestResolveAllowSessionCreatesReusableRule(t *testing.T) {
 
 func TestResolveCommandCreatesReusableApproval(t *testing.T) {
 	manager, engine := newApprovalManager(t, time.Minute)
-	request, err := manager.Register(context.Background(), approvalInfo(), "interrupt-1", "checkpoint-1")
+	request, err := manager.Register(context.Background(), approvalInfo(), "interrupt-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestResolveAllowAgentPreservesMCPIdentity(t *testing.T) {
 		},
 		Presentation: permission.Presentation{Title: "请求调用 MCP Tool"},
 	}
-	request, err := manager.Register(ctx, info, "interrupt-mcp", "checkpoint-mcp")
+	request, err := manager.Register(ctx, info, "interrupt-mcp")
 	if err != nil {
 		t.Fatalf("Register MCP 失败: %v", err)
 	}
@@ -167,14 +167,14 @@ func TestResolveAllowAgentPreservesMCPIdentity(t *testing.T) {
 func TestExpireRejectsPendingInvocation(t *testing.T) {
 	manager, _ := newApprovalManager(t, time.Minute)
 	ctx := context.Background()
-	request, err := manager.Register(ctx, approvalInfo(), "interrupt-1", "checkpoint-1")
+	request, err := manager.Register(ctx, approvalInfo(), "interrupt-1")
 	if err != nil {
 		t.Fatalf("Register 失败: %v", err)
 	}
 
-	resolution, ok, err := manager.Expire(request.ID)
-	if err != nil || !ok {
-		t.Fatalf("Expire = ok:%v err:%v", ok, err)
+	resolution, ok := manager.Expire(request.ID)
+	if !ok {
+		t.Fatalf("Expire = ok:%v", ok)
 	}
 	if resolution.Approved {
 		t.Fatal("超时恢复必须按拒绝处理")
@@ -191,7 +191,7 @@ func TestExpireRejectsPendingInvocation(t *testing.T) {
 func TestCompleteNormalizesApprovalID(t *testing.T) {
 	manager, _ := newApprovalManager(t, time.Minute)
 	ctx := context.Background()
-	request, err := manager.Register(ctx, approvalInfo(), "interrupt-1", "checkpoint-1")
+	request, err := manager.Register(ctx, approvalInfo(), "interrupt-1")
 	if err != nil {
 		t.Fatalf("Register 失败: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestCompleteNormalizesApprovalID(t *testing.T) {
 func TestResolveDenyAgentPersistsDenyRule(t *testing.T) {
 	manager, engine := newApprovalManager(t, time.Minute)
 	ctx := context.Background()
-	request, err := manager.Register(ctx, approvalInfo(), "interrupt-1", "checkpoint-1")
+	request, err := manager.Register(ctx, approvalInfo(), "interrupt-1")
 	if err != nil {
 		t.Fatalf("Register 失败: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestResolveDenyAgentPersistsDenyRule(t *testing.T) {
 func TestUpdateTimeoutOnlyAffectsNewRequests(t *testing.T) {
 	manager, _ := newApprovalManager(t, time.Minute)
 	ctx := context.Background()
-	first, err := manager.Register(ctx, approvalInfo(), "interrupt-1", "checkpoint-1")
+	first, err := manager.Register(ctx, approvalInfo(), "interrupt-1")
 	if err != nil {
 		t.Fatalf("Register first 失败: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestUpdateTimeoutOnlyAffectsNewRequests(t *testing.T) {
 	info.ApprovalID = "approval-2"
 	info.RequestID = "request-2"
 	info.RunID = "run-2"
-	second, err := manager.Register(ctx, info, "interrupt-2", "checkpoint-2")
+	second, err := manager.Register(ctx, info, "interrupt-2")
 	if err != nil {
 		t.Fatalf("Register second 失败: %v", err)
 	}

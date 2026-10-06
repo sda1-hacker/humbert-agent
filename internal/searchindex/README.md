@@ -1,6 +1,6 @@
 # SearchIndex：可重建的 SQLite 搜索投影
 
-[总目录](../../docs/architecture/README.md) · [Sessions](../sessions/README.md) · [文档解析](../documenttext/README.md)
+[总目录](../../docs/项目源码详解.md) · [Sessions](../sessions/README.md) · [文档解析](../documenttext/README.md)
 
 `Open` 创建 SQLite、启用 WAL，为每条连接设置 5 秒锁等待，最多使用两个连接，并建立 Session 元数据、消息 FTS5 trigram、工作区文档和文档行索引。会话和文件的事实仍在 JSONL/文件系统；SQLite 只为搜索加速，可按事实来源重新生成。默认数据目录使用 `cache/conversation-search.sqlite` 与 `cache/document-search.sqlite` 两份实例。
 

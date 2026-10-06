@@ -2,6 +2,7 @@ package chunker
 
 import "fmt"
 
+// Validate 检查负数预算、未知策略和空分隔符；零值仍允许使用默认配置。
 func (c SplitterConfig) Validate() error {
 	if c.ChunkSize < 0 || c.ChunkOverlap < 0 || c.TokenLimit < 0 {
 		return fmt.Errorf("rag chunker: sizes, overlap and token limit must be non-negative")

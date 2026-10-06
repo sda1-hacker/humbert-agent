@@ -1,6 +1,6 @@
 # Humbert Agent 项目开发规范
 
-本文面向为 Humbert Agent 编写、修改和评审代码的开发者。项目当前处于开发试验阶段；规范以**保持功能正确、边界清晰、代码容易阅读**为目标。产品介绍与运行方法见 [README.md](README.md)，各模块实现见 [架构手册](docs/architecture/README.md)，领域事实与生命周期见 [领域边界](docs/architecture/domain-boundaries.md)。
+本文面向为 Humbert Agent 编写、修改和评审代码的开发者。项目当前处于开发试验阶段；规范以**保持功能正确、边界清晰、代码容易阅读**为目标。产品介绍与运行方法见 [README.md](README.md)，各模块实现、领域事实与生命周期见 [项目源码详解](docs/项目源码详解.md)。
 
 当规范与实际代码不一致时，先确认代码是否存在缺陷，再在同一次变更中更新代码或规范；不要让过期文档长期充当事实。安全和数据事实来源的约束不能仅因某个旧实现不同而跳过。
 
@@ -35,7 +35,7 @@
 
 允许的主要依赖方向是：**UI → Wails Service → Application/Domain → Store 或外部适配器**。领域逻辑不应依赖 Vue、Wails 组件或页面状态；组件也不应重新实现权限、Session 恢复或数据库规则。新增抽象应隔离真实边界，避免建立职责不明的 `utils`、`common`、`manager` 大包。
 
-阅读一次聊天可从 `ChatService.StartTurn` 追到 `runtime.Service`、`Resolver`、`Executor`、`sessions.Service`，再沿 `humbert:runtime:event` 回到前端 `stores/runtime.js`。详细断点见 [代码阅读导引](docs/architecture/code-reading-guide.md)。
+阅读一次聊天可从 `ChatService.StartTurn` 追到 `runtime.Service`、`Resolver`、`Executor`、`sessions.Service`，再沿 `humbert:runtime:event` 回到前端 `stores/runtime.js`。详细路线见 [源码学习路线](docs/项目源码详解.md#reading)。
 
 ## 3. Go 代码规范
 
@@ -71,7 +71,7 @@
 
 ## 4. 数据、持久化与格式变更
 
-当前数据边界如下；具体目录及恢复流程以 [Session 章节](internal/sessions/README.md) 和 [领域边界](docs/architecture/domain-boundaries.md) 为准。
+当前数据边界如下；具体目录及恢复流程以 [Session 章节](internal/sessions/README.md) 和 [源码详解中的持久化说明](docs/项目源码详解.md#persistence) 为准。
 
 | 数据 | 权威位置 | 约束 |
 | --- | --- | --- |
@@ -140,7 +140,7 @@
 
 ## 9. 测试与验证
 
-测试按风险设计，不为简单转发、样式细节或实现镜像添加脆弱测试。修复 Bug 时优先给**原先会失败、修复后会通过**的回归用例；数据、安全、并发与工具链路需覆盖关键失败路径。
+前端不维护自动化测试文件或测试脚本，使用生产构建和桌面交互检查；后端测试继续按风险设计，不为简单转发、样式细节或实现镜像添加脆弱测试。修复 Bug 时优先给**原先会失败、修复后会通过**的回归用例；数据、安全、并发与工具链路需覆盖关键失败路径。
 
 | 变更 | 最低验证重点 |
 | --- | --- |
@@ -148,7 +148,7 @@
 | JSONL、SQLite、备份 | 崩溃/重启、并发、恢复、旧索引重建与数据一致性 |
 | 权限、Sandbox、工具 | 授权/拒绝、越界、取消、重复调用、结构化结果 |
 | Runtime/Context/提示词 | ToolCall/ToolResult 顺序、压缩、失败后继续、真实模型任务抽查 |
-| Vue 页面、状态、i18n | `npm test`、`npm run build`；交互改动再用桌面应用人工查看 |
+| Vue 页面、状态、i18n | `npm run build`；交互、状态和国际化改动用桌面应用人工核对 |
 | Wails 接口 | Go 编译、前端参数、事件载荷和桌面启动链路 |
 
 从仓库根目录执行常用检查：
@@ -158,17 +158,15 @@ gofmt -w <本次修改的 Go 文件>
 go test ./...
 go vet ./...
 git diff --check
-python3 docs/check_links.py
 cd frontend
-npm test
 npm run build
 ```
 
-首次安装前端依赖使用 `cd frontend && npm ci`。运行桌面开发环境使用 `wails3 dev`；需要发版时再做 `wails3 build` 和目标平台打包检查。网络、浏览器或系统 API 测试可能依赖本机权限；若无法执行，记录**具体命令、失败原因和已通过的替代检查**，绝不把“编译成功”写成“功能已实测”。验证充分后停止重复跑无关测试。
+文档改动还需核对源码详解中的目录锚点和源码链接。首次安装前端依赖使用 `cd frontend && npm ci`。运行桌面开发环境使用 `wails3 dev`；需要发版时再做 `wails3 build` 和目标平台打包检查。网络、浏览器或系统 API 测试可能依赖本机权限；若无法执行，记录**具体命令、失败原因和已通过的替代检查**，绝不把“编译成功”写成“功能已实测”。验证充分后停止重复跑无关测试。
 
 ## 10. 文档与评审交付
 
-- 修改模块职责、数据格式、工具契约、权限边界或用户流程时，同步更新对应包的 `README.md`、[架构手册索引](docs/architecture/README.md)、根 [README.md](README.md) 或配置示例中受影响的内容。文档中的图应与代码链路相符。
+- 修改模块职责、数据格式、工具契约、权限边界或用户流程时，同步更新对应包的 `README.md`、[项目源码详解](docs/项目源码详解.md)、根 [README.md](README.md) 或配置示例中受影响的内容。文档中的图应与代码链路相符。
 - 对外用户说明写“怎么用、失败会怎样”；开发文档写“入口、状态、数据、并发、错误与验证”。不要把实现细节塞进产品界面，也不要把营销描述当工程规范。
 - 评审时依次检查：目标是否完整、是否出现第二份事实、是否突破 Scope/Sandbox、失败是否可见、关闭和重试是否安全、测试是否覆盖实际风险、四种语言是否齐全。
 - 提交说明应写清：改了什么、为什么、验证了什么、仍有哪些实际限制。涉及数据重建时给出准确路径和操作条件；涉及未执行的端到端验证时直说。

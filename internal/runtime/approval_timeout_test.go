@@ -31,7 +31,7 @@ func TestExpiredClickDoesNotStrandWaitingRun(t *testing.T) {
 	must(err)
 	am, err := approval.NewManager(time.Nanosecond, pe, log)
 	must(err)
-	req, err := am.Register(ctx, approval.InterruptInfo{ApprovalID: "approval", RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent", ToolName: "write_file", Risk: permission.RiskWrite, Identity: permission.CapabilityIdentity{Version: permission.CapabilityIdentityVersion, Kind: permission.CapabilityBuiltin, Tool: "write_file", Risk: permission.RiskWrite, SandboxFingerprint: "sbx1:test"}}, "interrupt", "run")
+	req, err := am.Register(ctx, approval.InterruptInfo{ApprovalID: "approval", RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent", ToolName: "write_file", Risk: permission.RiskWrite, Identity: permission.CapabilityIdentity{Version: permission.CapabilityIdentityVersion, Kind: permission.CapabilityBuiltin, Tool: "write_file", Risk: permission.RiskWrite, SandboxFingerprint: "sbx1:test"}}, "interrupt")
 	must(err)
 	if time.Now().Before(req.ExpiresAt) {
 		t.Fatal("fixture not expired")
@@ -43,7 +43,7 @@ func TestExpiredClickDoesNotStrandWaitingRun(t *testing.T) {
 	// Resume 的输入校验失败也必须收尾，测试不连接模型。
 	cp := approval.NewCheckpointStore()
 	must(cp.Set(ctx, "run", []byte("checkpoint")))
-	active := &activeRun{RequestID: "request", RunID: "run", SessionID: "session", snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent"}, startedAt: time.Now(), ctx: runCtx, cancel: cancel, phase: RunPhaseWaitingApproval, waitingApprovalID: req.ID, approvalDone: make(chan struct{}), checkpointStore: cp}
+	active := &activeRun{Snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent"}, startedAt: time.Now(), ctx: runCtx, cancel: cancel, phase: RunPhaseWaitingApproval, waitingApprovalID: req.ID, approvalDone: make(chan struct{}), checkpointStore: cp}
 	s.activeByRequest["request"] = active
 	s.activeBySession["session"] = "request"
 	_, err = s.ResolveApproval(ctx, ResolveApprovalInput{ApprovalID: req.ID, Decision: approval.DecisionAllowOnce})
@@ -104,7 +104,7 @@ func TestApprovalSaveAcrossDeadline(t *testing.T) {
 			must(err)
 			manager, err := approval.NewManager(time.Second, engine, logger)
 			must(err)
-			request, err := manager.Register(ctx, approval.InterruptInfo{ApprovalID: "approval", RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent", ToolName: "write_file", Risk: permission.RiskWrite, Identity: permission.CapabilityIdentity{Version: permission.CapabilityIdentityVersion, Kind: permission.CapabilityBuiltin, Tool: "write_file", Risk: permission.RiskWrite, SandboxFingerprint: "sbx1:test"}}, "interrupt", "run")
+			request, err := manager.Register(ctx, approval.InterruptInfo{ApprovalID: "approval", RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent", ToolName: "write_file", Risk: permission.RiskWrite, Identity: permission.CapabilityIdentity{Version: permission.CapabilityIdentityVersion, Kind: permission.CapabilityBuiltin, Tool: "write_file", Risk: permission.RiskWrite, SandboxFingerprint: "sbx1:test"}}, "interrupt")
 			must(err)
 			events := eventbus.New()
 			var eventsMu sync.Mutex
@@ -121,7 +121,7 @@ func TestApprovalSaveAcrossDeadline(t *testing.T) {
 			checkpoint := approval.NewCheckpointStore()
 			must(checkpoint.Set(ctx, "run", []byte("checkpoint")))
 			done, retry := make(chan struct{}), make(chan struct{}, 1)
-			active := &activeRun{RequestID: "request", RunID: "run", SessionID: "session", snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent"}, startedAt: time.Now(), ctx: runCtx, cancel: cancel, phase: RunPhaseWaitingApproval, waitingApprovalID: request.ID, approvalDone: done, approvalRetry: retry, checkpointStore: checkpoint}
+			active := &activeRun{Snapshot: &Snapshot{RequestID: "request", RunID: "run", SessionID: "session", AgentID: "agent"}, startedAt: time.Now(), ctx: runCtx, cancel: cancel, phase: RunPhaseWaitingApproval, waitingApprovalID: request.ID, approvalDone: done, approvalRetry: retry, checkpointStore: checkpoint}
 			s.activeByRequest["request"] = active
 			s.activeBySession["session"] = "request"
 			if tc.saveFails {

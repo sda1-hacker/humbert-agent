@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	einotool "github.com/cloudwego/eino/components/tool"
 
@@ -145,4 +147,92 @@ func (a *capabilityAssembler) resolveMCP(ctx context.Context, selection []humber
 		return a.mcp.ResolveRuntimeSnapshotBestEffort(ctx, selection, scope)
 	}
 	return a.mcp.ResolveRuntimeSnapshotAvailable(ctx, selection, scope)
+}
+
+// toolNames 从已完成名称冲突检查的最终描述符生成模型可见名称。
+// 主 Agent Manifest 与子 Agent 能力校验共用它，新增来源只需进入 resolve 的集合，
+// 不必再修改另一份 Builtin/MCP/Skill 名称拼装分支。
+func (c capabilitySet) toolNames() []string {
+	names := make([]string, 0, len(c.descriptors))
+	for _, descriptor := range c.descriptors {
+		names = append(names, descriptor.Name)
+	}
+	return uniqueSortedStrings(names)
+}
+
+func uniqueSortedStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func cloneOptionalStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string{}, values...)
+}
+
+func mcpSelectionMap(values []humbertmcp.ToolSelection) map[string][]string {
+	result := make(map[string][]string, len(values))
+	for _, selection := range values {
+		result[selection.ServerID] = append([]string(nil), selection.Tools...)
+	}
+	return result
+}
+
+// mergeRuntimeDescriptors 合并不同 Tool Source 的模型侧名称，并在任何碰撞时 fail-closed。
+// MCP Tool 使用 mcp_<serverKey>_ 前缀，但仍不依赖命名约定来假设“永远不会冲突”。
+func mergeRuntimeDescriptors(base []humberttools.Descriptor, extra []humberttools.Descriptor) ([]humberttools.Descriptor, error) {
+	result := make([]humberttools.Descriptor, 0, len(base)+len(extra))
+	seen := make(map[string]struct{}, len(base)+len(extra))
+	for _, values := range [][]humberttools.Descriptor{base, extra} {
+		for _, descriptor := range values {
+			if _, exists := seen[descriptor.Name]; exists {
+				return nil, fmt.Errorf("Runtime Tool Name 冲突: %s", descriptor.Name)
+			}
+			seen[descriptor.Name] = struct{}{}
+			result = append(result, descriptor)
+		}
+	}
+	return result, nil
+}
+
+// mergeRuntimeTools 生成新的 Tool slice，避免把 MCP Tool append 到 Registry Snapshot 的
+// backing array。当前 Turn 创建后两个来源都保持冻结。
+func mergeRuntimeTools(base []einotool.BaseTool, extra []einotool.BaseTool) []einotool.BaseTool {
+	result := make([]einotool.BaseTool, 0, len(base)+len(extra))
+	result = append(result, base...)
+	result = append(result, extra...)
+	return result
+}
+
+// toolResultMaxCharsForContext 给单个 ToolResult 设置与模型窗口相关的直接注入上限。
+// 完整结果会由 Context Artifact Store 保存，因此这里可以保守限制而不丢失可恢复性。
+func toolResultMaxCharsForContext(contextWindow int) int {
+	if contextWindow <= 0 {
+		return 16000
+	}
+	// 近似允许单结果占 8% 上下文，按中英文混合保守使用约 2 chars/token；
+	// 同时限制在 8K-64K 字符，避免极端大窗口让一次 ToolResult 重新成为上下文炸弹。
+	limit := contextWindow * 2 / 12
+	if limit < 8192 {
+		limit = 8192
+	}
+	if limit > 65536 {
+		limit = 65536
+	}
+	return limit
 }

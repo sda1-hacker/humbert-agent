@@ -14,6 +14,9 @@ import * as schema$0 from "../../../../cloudwego/eino/schema/models.js";
 import * as approval$0 from "../approval/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as sandbox$0 from "../sandbox/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as searchindex$0 from "../searchindex/models.js";
 
 /**
@@ -2838,98 +2841,14 @@ export class ResolveApprovalRequest {
 }
 
 /**
- * SandboxDiagnosticCheckDTO 是一次安全自检的单项结果。
+ * SandboxDiagnosticsDTO 是用户显式运行安全自检后的实测结果。
  */
-export class SandboxDiagnosticCheckDTO {
-    /**
-     * Creates a new SandboxDiagnosticCheckDTO instance.
-     * @param {Partial<SandboxDiagnosticCheckDTO>} [$$source = {}] - The source object to create the SandboxDiagnosticCheckDTO.
-     */
-    constructor($$source = {}) {
-        if (!("key" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["key"] = "";
-        }
-        if (!("label" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["label"] = "";
-        }
-        if (!("status" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["status"] = "";
-        }
-        if (!("detail" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["detail"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new SandboxDiagnosticCheckDTO instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {SandboxDiagnosticCheckDTO}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new SandboxDiagnosticCheckDTO(/** @type {Partial<SandboxDiagnosticCheckDTO>} */($$parsedSource));
-    }
-}
+export const SandboxDiagnosticsDTO = sandbox$0.Diagnostics;
 
 /**
- * SandboxDiagnosticsDTO 汇总 PathGuard 与原生 Process Sandbox 的实测结果。
+ * SandboxDiagnosticsDTO 是用户显式运行安全自检后的实测结果。
+ * @typedef {sandbox$0.Diagnostics} SandboxDiagnosticsDTO
  */
-export class SandboxDiagnosticsDTO {
-    /**
-     * Creates a new SandboxDiagnosticsDTO instance.
-     * @param {Partial<SandboxDiagnosticsDTO>} [$$source = {}] - The source object to create the SandboxDiagnosticsDTO.
-     */
-    constructor($$source = {}) {
-        if (!("summary" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["summary"] = "";
-        }
-        if (!("checks" in $$source)) {
-            /**
-             * @member
-             * @type {SandboxDiagnosticCheckDTO[]}
-             */
-            this["checks"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new SandboxDiagnosticsDTO instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {SandboxDiagnosticsDTO}
-     */
-    static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType37;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("checks" in $$parsedSource) {
-            $$parsedSource["checks"] = $$createField1_0($$parsedSource["checks"]);
-        }
-        return new SandboxDiagnosticsDTO(/** @type {Partial<SandboxDiagnosticsDTO>} */($$parsedSource));
-    }
-}
 
 /**
  * SandboxPolicyDTO 是 Agent Profile 中可编辑的 Sandbox 覆盖配置。
@@ -3317,8 +3236,8 @@ export class SaveTaskRequest {
      * @returns {SaveTaskRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField6_0 = $$createType38;
-        const $$createField7_0 = $$createType39;
+        const $$createField6_0 = $$createType36;
+        const $$createField7_0 = $$createType37;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("schedule" in $$parsedSource) {
             $$parsedSource["schedule"] = $$createField6_0($$parsedSource["schedule"]);
@@ -3433,7 +3352,7 @@ export class SessionSearchDTO {
      * @returns {SessionSearchDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField0_0 = $$createType41;
+        const $$createField0_0 = $$createType39;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("results" in $$parsedSource) {
             $$parsedSource["results"] = $$createField0_0($$parsedSource["results"]);
@@ -3517,7 +3436,7 @@ export class SkillDTO {
         }
         if (/** @type {any} */(false)) {
             /**
-             * Alias 是 Humbert 用户自己的本地展示名称。它不参与 Skill 身份、Agent 引用或 Runtime。
+             * Alias 仅用于本地展示，不参与 Skill 身份或 Agent 引用。
              * @member
              * @type {string | undefined}
              */
@@ -3600,12 +3519,12 @@ export class SkillDTO {
              */
             this["scriptRuntimes"] = undefined;
         }
-        if (!("directoryName" in $$source)) {
+        if (!("hasAssets" in $$source)) {
             /**
              * @member
-             * @type {string}
+             * @type {boolean}
              */
-            this["directoryName"] = "";
+            this["hasAssets"] = false;
         }
         if (!("rootDir" in $$source)) {
             /**
@@ -3621,20 +3540,6 @@ export class SkillDTO {
              */
             this["identity"] = "";
         }
-        if (!("valid" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["valid"] = false;
-        }
-        if (/** @type {any} */(false)) {
-            /**
-             * @member
-             * @type {string | undefined}
-             */
-            this["error"] = undefined;
-        }
         if (!("fileCount" in $$source)) {
             /**
              * @member
@@ -3649,6 +3554,42 @@ export class SkillDTO {
              */
             this["sizeBytes"] = 0;
         }
+        if (!("updatedAt" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["updatedAt"] = "";
+        }
+        if (!("source" in $$source)) {
+            /**
+             * Source 也用于 invalid Skill 的来源修复；原始 URL 不进入 WebView。
+             * @member
+             * @type {SkillSourceDTO}
+             */
+            this["source"] = (new SkillSourceDTO());
+        }
+        if (!("directoryName" in $$source)) {
+            /**
+             * @member
+             * @type {string}
+             */
+            this["directoryName"] = "";
+        }
+        if (!("valid" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["valid"] = false;
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {string | undefined}
+             */
+            this["error"] = undefined;
+        }
         if (!("hasReferences" in $$source)) {
             /**
              * @member
@@ -3662,29 +3603,6 @@ export class SkillDTO {
              * @type {boolean}
              */
             this["hasScripts"] = false;
-        }
-        if (!("hasAssets" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["hasAssets"] = false;
-        }
-        if (!("updatedAt" in $$source)) {
-            /**
-             * @member
-             * @type {string}
-             */
-            this["updatedAt"] = "";
-        }
-        if (!("source" in $$source)) {
-            /**
-             * Source 是 Humbert 记录的安装来源投影。Invalid Skill 也会携带它，
-             * 这样详情页可以直接提供“从来源修复”，而不要求 Package 当前可解析。
-             * @member
-             * @type {SkillSourceDTO}
-             */
-            this["source"] = (new SkillSourceDTO());
         }
         if (!("usedByAgents" in $$source)) {
             /**
@@ -3703,11 +3621,11 @@ export class SkillDTO {
      * @returns {SkillDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType42;
-        const $$createField11_0 = $$createType44;
-        const $$createField12_0 = $$createType46;
-        const $$createField24_0 = $$createType47;
-        const $$createField25_0 = $$createType49;
+        const $$createField7_0 = $$createType40;
+        const $$createField11_0 = $$createType42;
+        const $$createField12_0 = $$createType44;
+        const $$createField19_0 = $$createType45;
+        const $$createField25_0 = $$createType47;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadata" in $$parsedSource) {
             $$parsedSource["metadata"] = $$createField7_0($$parsedSource["metadata"]);
@@ -3719,7 +3637,7 @@ export class SkillDTO {
             $$parsedSource["scriptRuntimes"] = $$createField12_0($$parsedSource["scriptRuntimes"]);
         }
         if ("source" in $$parsedSource) {
-            $$parsedSource["source"] = $$createField24_0($$parsedSource["source"]);
+            $$parsedSource["source"] = $$createField19_0($$parsedSource["source"]);
         }
         if ("usedByAgents" in $$parsedSource) {
             $$parsedSource["usedByAgents"] = $$createField25_0($$parsedSource["usedByAgents"]);
@@ -3749,6 +3667,7 @@ export class SkillDetailDTO {
         }
         if (/** @type {any} */(false)) {
             /**
+             * Alias 仅用于本地展示，不参与 Skill 身份或 Agent 引用。
              * @member
              * @type {string | undefined}
              */
@@ -3875,6 +3794,7 @@ export class SkillDetailDTO {
         }
         if (!("source" in $$source)) {
             /**
+             * Source 也用于 invalid Skill 的来源修复；原始 URL 不进入 WebView。
              * @member
              * @type {SkillSourceDTO}
              */
@@ -3897,11 +3817,11 @@ export class SkillDetailDTO {
      * @returns {SkillDetailDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField7_0 = $$createType42;
-        const $$createField11_0 = $$createType44;
-        const $$createField12_0 = $$createType46;
-        const $$createField19_0 = $$createType47;
-        const $$createField20_0 = $$createType51;
+        const $$createField7_0 = $$createType40;
+        const $$createField11_0 = $$createType42;
+        const $$createField12_0 = $$createType44;
+        const $$createField19_0 = $$createType45;
+        const $$createField20_0 = $$createType49;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("metadata" in $$parsedSource) {
             $$parsedSource["metadata"] = $$createField7_0($$parsedSource["metadata"]);
@@ -4105,8 +4025,8 @@ export class SkillDiscoveryCandidateDTO {
      * @returns {SkillDiscoveryCandidateDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField15_0 = $$createType44;
-        const $$createField16_0 = $$createType46;
+        const $$createField15_0 = $$createType42;
+        const $$createField16_0 = $$createType44;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("diagnostics" in $$parsedSource) {
             $$parsedSource["diagnostics"] = $$createField15_0($$parsedSource["diagnostics"]);
@@ -4165,7 +4085,7 @@ export class SkillDiscoveryDTO {
      * @returns {SkillDiscoveryDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField3_0 = $$createType53;
+        const $$createField3_0 = $$createType51;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("candidates" in $$parsedSource) {
             $$parsedSource["candidates"] = $$createField3_0($$parsedSource["candidates"]);
@@ -4503,8 +4423,8 @@ export class SkillStateDTO {
      */
     static createFrom($$source = {}) {
         const $$createField2_0 = $$createType1;
-        const $$createField3_0 = $$createType49;
-        const $$createField4_0 = $$createType55;
+        const $$createField3_0 = $$createType47;
+        const $$createField4_0 = $$createType53;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("sourceResolvers" in $$parsedSource) {
             $$parsedSource["sourceResolvers"] = $$createField2_0($$parsedSource["sourceResolvers"]);
@@ -4639,7 +4559,7 @@ export class SkillUpdateResultDTO {
      * @returns {SkillUpdateResultDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField4_0 = $$createType47;
+        const $$createField4_0 = $$createType45;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("source" in $$parsedSource) {
             $$parsedSource["source"] = $$createField4_0($$parsedSource["source"]);
@@ -4695,7 +4615,7 @@ export class StartTurnRequest {
      * @returns {StartTurnRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField2_0 = $$createType57;
+        const $$createField2_0 = $$createType55;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("attachments" in $$parsedSource) {
             $$parsedSource["attachments"] = $$createField2_0($$parsedSource["attachments"]);
@@ -4890,8 +4810,8 @@ export class TaskDTO {
      * @returns {TaskDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField10_0 = $$createType38;
-        const $$createField11_0 = $$createType39;
+        const $$createField10_0 = $$createType36;
+        const $$createField11_0 = $$createType37;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("schedule" in $$parsedSource) {
             $$parsedSource["schedule"] = $$createField10_0($$parsedSource["schedule"]);
@@ -5164,7 +5084,7 @@ export class TaskRunDTO {
      * @returns {TaskRunDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField18_0 = $$createType59;
+        const $$createField18_0 = $$createType57;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("approval" in $$parsedSource) {
             $$parsedSource["approval"] = $$createField18_0($$parsedSource["approval"]);
@@ -5245,7 +5165,7 @@ export class TaskScheduleDTO {
      * @returns {TaskScheduleDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType60;
+        const $$createField5_0 = $$createType58;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("weekdays" in $$parsedSource) {
             $$parsedSource["weekdays"] = $$createField5_0($$parsedSource["weekdays"]);
@@ -5424,10 +5344,10 @@ export class UpdateAgentRequest {
      * @returns {UpdateAgentRequest}
      */
     static createFrom($$source = {}) {
-        const $$createField5_0 = $$createType61;
+        const $$createField5_0 = $$createType59;
         const $$createField6_0 = $$createType1;
-        const $$createField9_0 = $$createType62;
-        const $$createField10_0 = $$createType63;
+        const $$createField9_0 = $$createType60;
+        const $$createField10_0 = $$createType61;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("modelRoles" in $$parsedSource) {
             $$parsedSource["modelRoles"] = $$createField5_0($$parsedSource["modelRoles"]);
@@ -5655,7 +5575,7 @@ export class WorkspaceDirectoryDTO {
      * @returns {WorkspaceDirectoryDTO}
      */
     static createFrom($$source = {}) {
-        const $$createField1_0 = $$createType65;
+        const $$createField1_0 = $$createType63;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("entries" in $$parsedSource) {
             $$parsedSource["entries"] = $$createField1_0($$parsedSource["entries"]);
@@ -5946,33 +5866,31 @@ const $$createType32 = $Create.Array($$createType31);
 const $$createType33 = ProactiveQuietHoursDTO.createFrom;
 const $$createType34 = ProactiveRuleDTO.createFrom;
 const $$createType35 = $Create.Map($Create.Any, $$createType34);
-const $$createType36 = SandboxDiagnosticCheckDTO.createFrom;
-const $$createType37 = $Create.Array($$createType36);
-const $$createType38 = TaskScheduleDTO.createFrom;
-const $$createType39 = TaskLimitsDTO.createFrom;
-const $$createType40 = searchindex$0.Result.createFrom;
-const $$createType41 = $Create.Array($$createType40);
-const $$createType42 = $Create.Map($Create.Any, $Create.Any);
-const $$createType43 = SkillDiagnosticDTO.createFrom;
+const $$createType36 = TaskScheduleDTO.createFrom;
+const $$createType37 = TaskLimitsDTO.createFrom;
+const $$createType38 = searchindex$0.Result.createFrom;
+const $$createType39 = $Create.Array($$createType38);
+const $$createType40 = $Create.Map($Create.Any, $Create.Any);
+const $$createType41 = SkillDiagnosticDTO.createFrom;
+const $$createType42 = $Create.Array($$createType41);
+const $$createType43 = SkillScriptRuntimeDTO.createFrom;
 const $$createType44 = $Create.Array($$createType43);
-const $$createType45 = SkillScriptRuntimeDTO.createFrom;
-const $$createType46 = $Create.Array($$createType45);
-const $$createType47 = SkillSourceDTO.createFrom;
-const $$createType48 = SkillAgentDTO.createFrom;
+const $$createType45 = SkillSourceDTO.createFrom;
+const $$createType46 = SkillAgentDTO.createFrom;
+const $$createType47 = $Create.Array($$createType46);
+const $$createType48 = SkillFileDTO.createFrom;
 const $$createType49 = $Create.Array($$createType48);
-const $$createType50 = SkillFileDTO.createFrom;
+const $$createType50 = SkillDiscoveryCandidateDTO.createFrom;
 const $$createType51 = $Create.Array($$createType50);
-const $$createType52 = SkillDiscoveryCandidateDTO.createFrom;
+const $$createType52 = SkillDTO.createFrom;
 const $$createType53 = $Create.Array($$createType52);
-const $$createType54 = SkillDTO.createFrom;
+const $$createType54 = AttachmentRequest.createFrom;
 const $$createType55 = $Create.Array($$createType54);
-const $$createType56 = AttachmentRequest.createFrom;
-const $$createType57 = $Create.Array($$createType56);
-const $$createType58 = TaskApprovalDTO.createFrom;
-const $$createType59 = $Create.Nullable($$createType58);
-const $$createType60 = $Create.Array($Create.Any);
-const $$createType61 = $Create.Nullable($$createType0);
-const $$createType62 = $Create.Nullable($$createType1);
-const $$createType63 = $Create.Nullable($$createType4);
-const $$createType64 = WorkspaceEntryDTO.createFrom;
-const $$createType65 = $Create.Array($$createType64);
+const $$createType56 = TaskApprovalDTO.createFrom;
+const $$createType57 = $Create.Nullable($$createType56);
+const $$createType58 = $Create.Array($Create.Any);
+const $$createType59 = $Create.Nullable($$createType0);
+const $$createType60 = $Create.Nullable($$createType1);
+const $$createType61 = $Create.Nullable($$createType4);
+const $$createType62 = WorkspaceEntryDTO.createFrom;
+const $$createType63 = $Create.Array($$createType62);

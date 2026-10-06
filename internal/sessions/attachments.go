@@ -150,7 +150,7 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 	if len(input.Attachments) == 0 {
 		message = schema.UserMessage(text)
 	}
-	stored, err := s.append(ctx, sessionID, message, transcriptEncodeOptions())
+	stored, err := s.append(ctx, sessionID, message, transcript.EncodeOptions{})
 	if err != nil {
 		cleanup()
 		return Message{}, err
@@ -296,16 +296,14 @@ func (s *Service) userInputMatchesStoredMessage(ctx context.Context, sessionID s
 func (s *Service) HydrateMessages(ctx context.Context, sessionID string, messages []*schema.Message) ([]*schema.Message, error) {
 	result := make([]*schema.Message, 0, len(messages))
 	var hydratedBytes int64
-	imageReplayMask := multimodal.ImageReplayMask(messages)
-	fileReplayMask := multimodal.FileReplayMask(messages)
+	replayMask := multimodal.AttachmentReplayMask(messages)
 	for index, message := range messages {
 		hydrated, err := s.hydrateUserAttachmentsWithBudget(
 			ctx,
 			sessionID,
 			message,
 			&hydratedBytes,
-			imageReplayMask[index],
-			fileReplayMask[index],
+			replayMask[index],
 		)
 		if err != nil {
 			return nil, fmt.Errorf("恢复第 %d 条 Runtime Message 附件失败: %w", index+1, err)
@@ -318,7 +316,7 @@ func (s *Service) HydrateMessages(ctx context.Context, sessionID string, message
 // hydrateUserAttachments 构造单条 Provider Message；附件二进制只在请求内存中存在。
 func (s *Service) hydrateUserAttachments(ctx context.Context, sessionID string, message *schema.Message) (*schema.Message, error) {
 	var hydratedBytes int64
-	return s.hydrateUserAttachmentsWithBudget(ctx, sessionID, message, &hydratedBytes, true, true)
+	return s.hydrateUserAttachmentsWithBudget(ctx, sessionID, message, &hydratedBytes, true)
 }
 
 func (s *Service) hydrateUserAttachmentsWithBudget(
@@ -326,8 +324,7 @@ func (s *Service) hydrateUserAttachmentsWithBudget(
 	sessionID string,
 	message *schema.Message,
 	hydratedBytes *int64,
-	replayImages bool,
-	replayFiles bool,
+	replayAttachments bool,
 ) (*schema.Message, error) {
 	if message == nil || message.Role != schema.User || len(message.UserInputMultiContent) == 0 {
 		return message, nil
@@ -341,7 +338,7 @@ func (s *Service) hydrateUserAttachmentsWithBudget(
 			if part.Image == nil {
 				return nil, errors.New("历史图片附件结构无效")
 			}
-			if !replayImages {
+			if !replayAttachments {
 				next = schema.MessageInputPart{
 					Type: schema.ChatMessagePartTypeText,
 					Text: multimodal.HistoricalImagePlaceholder(part),
@@ -359,7 +356,7 @@ func (s *Service) hydrateUserAttachmentsWithBudget(
 			if part.File == nil {
 				return nil, errors.New("历史文件附件结构无效")
 			}
-			if !replayFiles {
+			if !replayAttachments {
 				next = schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: multimodal.HistoricalFilePlaceholder(part)}
 				break
 			}
@@ -613,9 +610,6 @@ func (s *Service) SaveToolImage(ctx context.Context, sessionID, name, mimeType s
 	}
 	return id, nil
 }
-
-// transcriptEncodeOptions 避免 attachments.go 为零值选项额外引入持久化逻辑。
-func transcriptEncodeOptions() transcript.EncodeOptions { return transcript.EncodeOptions{} }
 
 func stringExtra(values map[string]any, key string) string {
 	if values == nil {

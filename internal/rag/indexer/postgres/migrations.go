@@ -19,10 +19,11 @@ type migration struct {
 	statements []string
 }
 
+// initialSchema 拼接初始表结构与索引语句，用于第一版迁移。
 func initialSchema() []string {
 	var out []string
 	for _, sql := range schemaStatements {
-		// Extensions are installed explicitly by the migration entry point.
+		// 数据库扩展由迁移入口显式安装。
 		if strings.Contains(sql, "CREATE EXTENSION") {
 			continue
 		}
@@ -59,8 +60,7 @@ var lifecycleStatements = []string{
  REFERENCES chunks(collection_id,id) ON DELETE SET NULL (parent_chunk_id)`,
 }
 
-// Migrate runs versioned, checksummed DDL in one transaction under a database
-// advisory lock. It adopts the known legacy schema without dropping its data.
+// Migrate 在数据库咨询锁保护下，以一个事务执行带版本和校验和的迁移，保留已识别旧表中的数据。
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if pool == nil {
 		return errors.New("rag migrate: nil pool")

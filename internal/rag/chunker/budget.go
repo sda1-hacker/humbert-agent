@@ -2,9 +2,7 @@ package chunker
 
 import "strings"
 
-// enforceTokenTarget is the final fallback for unsplittable paragraphs and
-// protected blocks. This is an approximate chunking target, not a provider
-// tokenizer. The indexer independently checks the complete embedding input.
+// enforceTokenTarget 为无法继续切分的段落和保护块提供最终近似预算处理；索引器仍检查完整模型输入。
 func enforceTokenTarget(text string, chunks []Chunk, cfg SplitterConfig) []Chunk {
 	if cfg.TokenLimit <= 0 {
 		return chunks
@@ -30,8 +28,7 @@ func enforceTokenTarget(text string, chunks []Chunk, cfg SplitterConfig) []Chunk
 		if c.ContextHeader != "" {
 			budget -= 2
 		}
-		// A header alone may exhaust the budget. Preserve it and let ingestion
-		// return a clear budget error, rather than dropping citation context.
+		// 标题自身可能耗尽预算；保留引用上下文，由导入阶段返回明确预算错误。
 		if budget < 1 {
 			c.Seq = len(out)
 			out = append(out, c)
@@ -39,7 +36,7 @@ func enforceTokenTarget(text string, chunks []Chunk, cfg SplitterConfig) []Chunk
 		}
 		for start := c.Start; start < c.End; {
 			end := min(start+budget, c.End)
-			// Prefer a sentence/line boundary near the hard fallback boundary.
+			// 在硬切分边界附近优先选择句末或换行。
 			if end < c.End {
 				for i := end - 1; i > start+budget/2; i-- {
 					if source[i] == '\n' || source[i] == '。' || source[i] == ' ' {

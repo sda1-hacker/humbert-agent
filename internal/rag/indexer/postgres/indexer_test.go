@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -12,8 +11,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/sda1-hacker/humbert-agent/internal/rag/application"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
+	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
 type fakeEmbedder struct {
@@ -110,646 +108,119 @@ func (f *fakeDatabase) Begin(context.Context) (transaction, error) {
 	return f.tx, nil
 }
 
-func TestIndexerImplementsEinoInterface(t *testing.T) {
-	var _ indexer.Indexer = (*Indexer)(nil)
-}
-
-func TestStoreRequiresCollectionID(t *testing.T) {
+func TestStoreNativeOptionsAndDocument(t *testing.T) {
+	defaultEmbedder := &fakeEmbedder{dim: EmbeddingDimensions}
+	override := &fakeEmbedder{dim: EmbeddingDimensions}
 	db := &fakeDatabase{}
-	embedder := &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
 	cfg := DefaultConfig()
-	cfg.Embedder = embedder
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-	)
-
-	if !errors.Is(err, ErrMissingCollectionID) {
-		t.Fatalf(
-			"缺少 CollectionID 应失败: got=%v",
-			err,
-		)
-	}
-}
-
-func TestStoreAllowsCallLevelIndex(t *testing.T) {
-	db := &fakeDatabase{}
-	embedder := &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	cfg := DefaultConfig()
-	cfg.Embedder = embedder
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	ids, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-		indexer.WithIndex("knowledge-base-1"),
-	)
-
-	if err != nil {
-		t.Fatalf("WithIndex 应提供 CollectionID: %v", err)
-	}
-
-	if len(ids) != 1 ||
-		ids[0] != "doc-1#chunk-000000" {
-
-		t.Fatalf("Store IDs 错误: %v", ids)
-	}
-}
-
-func TestStoreRequiresEmbedder(t *testing.T) {
-	db := &fakeDatabase{}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-	)
-
-	if !errors.Is(err, ErrMissingEmbedder) {
-		t.Fatalf(
-			"缺少 Embedder 应失败: got=%v",
-			err,
-		)
-	}
-}
-
-func TestStoreCallLevelEmbeddingOverridesDefault(t *testing.T) {
-	db := &fakeDatabase{}
-
-	defaultEmbedder := &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	overrideEmbedder := &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
+	cfg.CollectionID = "default"
 	cfg.Embedder = defaultEmbedder
-
 	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-		indexer.WithEmbedding(overrideEmbedder),
-	)
-
+	doc := &schema.Document{ID: "document", Content: "真实原文", MetaData: map[string]any{"title": "文档标题"}}
+	ids, err := idx.Store(context.Background(), []*schema.Document{doc}, indexer.WithIndex("kb"), indexer.WithEmbedding(override))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if len(defaultEmbedder.calls) != 0 {
-		t.Fatal("默认 Embedder 不应该被调用")
+	if len(ids) != 1 || ids[0] != doc.ID || len(defaultEmbedder.calls) != 0 || len(override.calls) != 1 {
+		t.Fatal("Eino 调用级配置没有正确覆盖默认值")
 	}
-
-	if len(overrideEmbedder.calls) != 1 {
-		t.Fatalf(
-			"调用级 Embedder 应被调用一次: got=%d",
-			len(overrideEmbedder.calls),
-		)
+	if !db.tx.committed || len(db.tx.calls) != 4 {
+		t.Fatalf("单文档写入应包含原文、删除旧块、分块、索引: %+v", db.tx)
 	}
-}
-
-func TestStoreRejectsSubIndexes(t *testing.T) {
-	db := &fakeDatabase{}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-		indexer.WithSubIndexes([]string{"a"}),
-	)
-
-	if !errors.Is(err, ErrSubIndexesUnsupported) {
-		t.Fatalf(
-			"当前 PGIndexer 不支持 SubIndexes: got=%v",
-			err,
-		)
-	}
-}
-
-func TestStoreBuildsSearchContentBeforeEmbedding(t *testing.T) {
-	db := &fakeDatabase{}
-	embedder := &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = embedder
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-	)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(embedder.calls) != 1 ||
-		len(embedder.calls[0]) != 1 {
-
-		t.Fatalf(
-			"Embedder 调用异常: %#v",
-			embedder.calls,
-		)
-	}
-
-	got := embedder.calls[0][0]
-
-	if !strings.Contains(got, "产品手册") {
-		t.Fatalf(
-			"SearchContent 缺少 title: %q",
-			got,
-		)
-	}
-
-	if !strings.Contains(got, "## 安装") {
-		t.Fatalf(
-			"SearchContent 缺少 ContextHeader: %q",
-			got,
-		)
-	}
-
-	if !strings.Contains(got, "安装正文") {
-		t.Fatalf(
-			"SearchContent 缺少 body: %q",
-			got,
-		)
-	}
-}
-
-func TestStoreBatchesEmbedding(t *testing.T) {
-	db := &fakeDatabase{}
-	embedder := &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = embedder
-	cfg.EmbeddingBatchSize = 2
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	docs := []*schema.Document{
-		validChunkDocumentWithIndex(0),
-		validChunkDocumentWithIndex(1),
-		validChunkDocumentWithIndex(2),
-		validChunkDocumentWithIndex(3),
-		validChunkDocumentWithIndex(4),
-	}
-
-	for _, doc := range docs {
-		doc.MetaData[application.MetaSourceChunkCount] = len(docs)
-	}
-	_, err := idx.Store(
-		context.Background(),
-		docs,
-	)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(embedder.calls) != 3 {
-		t.Fatalf(
-			"5 个文档、batch=2 应调用3次 Embedder: got=%d",
-			len(embedder.calls),
-		)
-	}
-
-	if len(embedder.calls[0]) != 2 ||
-		len(embedder.calls[1]) != 2 ||
-		len(embedder.calls[2]) != 1 {
-
-		t.Fatalf(
-			"Embedding batch 切分错误: %#v",
-			embedder.calls,
-		)
-	}
-}
-
-func TestStoreRejectsWrongEmbeddingDimensionBeforeTransaction(t *testing.T) {
-	db := &fakeDatabase{}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = &fakeEmbedder{
-		dim: 768,
-	}
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-	)
-
-	if !errors.Is(err, ErrInvalidEmbedding) {
-		t.Fatalf(
-			"维度错误应返回 ErrInvalidEmbedding: got=%v",
-			err,
-		)
-	}
-
-	if db.begun {
-		t.Fatal(
-			"Embedding 校验失败时不应该开启数据库事务",
-		)
-	}
-}
-
-func TestStoreRejectsMissingSourceDocumentID(t *testing.T) {
-	db := &fakeDatabase{}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	doc := validChunkDocument()
-	delete(
-		doc.MetaData,
-		metaSourceDocumentID,
-	)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{doc},
-	)
-
-	if !errors.Is(err, ErrMissingSourceDocumentID) {
-		t.Fatalf(
-			"缺少 Source Document ID 应失败: got=%v",
-			err,
-		)
-	}
-}
-
-func TestStoreWritesDocumentChunkAndRetrievalRows(t *testing.T) {
-	tx := &fakeTransaction{}
-	db := &fakeDatabase{tx: tx}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-	)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !tx.committed {
-		t.Fatal("事务应该 Commit")
-	}
-
-	var (
-		sawDocumentInsert bool
-		sawDelete         bool
-		sawChunkInsert    bool
-		sawRetrieval      bool
-	)
-
-	for _, call := range tx.calls {
-		switch {
-		case strings.Contains(
-			call.sql,
-			"INSERT INTO documents",
-		):
-			sawDocumentInsert = true
-
-		case strings.Contains(
-			call.sql,
-			"DELETE FROM chunks",
-		):
-			sawDelete = true
-
-		case strings.Contains(
-			call.sql,
-			"INSERT INTO chunks",
-		):
-			sawChunkInsert = true
-
-		case strings.Contains(
-			call.sql,
-			"INSERT INTO retrieval_index",
-		):
-			sawRetrieval = true
+	for _, c := range db.tx.calls {
+		if c.args[0] != "kb" {
+			t.Fatalf("知识库范围未传递: %+v", c)
+		}
+		if strings.Contains(c.sql, "INSERT INTO documents") && c.args[3] != doc.Content {
+			t.Fatal("普通 Eino 文档未保存完整原文")
 		}
 	}
+}
 
-	if !sawDocumentInsert {
-		t.Fatal("没有写 documents")
-	}
-
-	if !sawDelete {
-		t.Fatal(
-			"重新索引前应该删除旧 document chunks",
-		)
-	}
-
-	if !sawChunkInsert {
-		t.Fatal("没有写 chunks")
-	}
-
-	if !sawRetrieval {
-		t.Fatal("没有写 retrieval_index")
+func TestStoreRejectsInvalidInputBeforeEmbedding(t *testing.T) {
+	for _, kind := range []string{"collection", "embedding", "subindex", "nil", "duplicate", "empty", "chunk-without-source", "dimension", "provider"} {
+		t.Run(kind, func(t *testing.T) {
+			db := &fakeDatabase{}
+			embedder := &fakeEmbedder{dim: EmbeddingDimensions}
+			cfg := DefaultConfig()
+			cfg.CollectionID = "kb"
+			cfg.Embedder = embedder
+			docs := []*schema.Document{{ID: "document", Content: "正文"}}
+			var opts []indexer.Option
+			var expected error
+			switch kind {
+			case "collection":
+				cfg.CollectionID = ""
+				expected = ErrMissingCollectionID
+			case "embedding":
+				cfg.Embedder = nil
+				expected = ErrMissingEmbedder
+			case "subindex":
+				opts = append(opts, indexer.WithSubIndexes([]string{"sub"}))
+				expected = ErrSubIndexesUnsupported
+			case "nil":
+				docs[0] = nil
+				expected = ErrMissingChunkID
+			case "duplicate":
+				docs = append(docs, docs[0])
+			case "empty":
+				docs[0].Content = " "
+				expected = ErrEmptySearchContent
+			case "chunk-without-source":
+				docs[0].MetaData = map[string]any{retrieval.MetaSourceDocumentID: "source"}
+				expected = ErrIncompleteSource
+			case "dimension":
+				embedder.dim = 768
+				expected = ErrInvalidEmbedding
+			case "provider":
+				embedder.err = errors.New("model unavailable")
+				expected = embedder.err
+			}
+			_, err := newIndexerWithDatabase(db, cfg).Store(context.Background(), docs, opts...)
+			if err == nil || expected != nil && !errors.Is(err, expected) || db.begun {
+				t.Fatalf("错误输入未提前拒绝: %v", err)
+			}
+		})
 	}
 }
 
-func TestStoreDeletesOldChunksOnlyOncePerDocument(t *testing.T) {
-	tx := &fakeTransaction{}
-	db := &fakeDatabase{tx: tx}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	docs := []*schema.Document{validChunkDocumentWithIndex(0), validChunkDocumentWithIndex(1), validChunkDocumentWithIndex(2)}
-	for _, doc := range docs {
-		doc.MetaData[application.MetaSourceChunkCount] = len(docs)
-	}
-	_, err := idx.Store(context.Background(), docs)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	deleteCount := 0
-	documentUpsertCount := 0
-
-	for _, call := range tx.calls {
-		if strings.Contains(
-			call.sql,
-			"DELETE FROM chunks",
-		) {
-			deleteCount++
-		}
-
-		if strings.Contains(
-			call.sql,
-			"INSERT INTO documents",
-		) {
-			documentUpsertCount++
-		}
-	}
-
-	if deleteCount != 1 {
-		t.Fatalf(
-			"同一 Document 应只执行一次 replace delete: got=%d",
-			deleteCount,
-		)
-	}
-
-	if documentUpsertCount != 1 {
-		t.Fatalf(
-			"同一 Document 应只 upsert 一次: got=%d",
-			documentUpsertCount,
-		)
-	}
-}
-
-func TestMetadataIntAcceptsJSONFloat64(t *testing.T) {
-	metadata := map[string]any{
-		"number": float64(42),
-	}
-
-	got, err := metadataInt(
-		metadata,
-		"number",
-	)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if got != 42 {
-		t.Fatalf(
-			"float64 integer 转换错误: got=%d",
-			got,
-		)
-	}
-}
-
-func TestStripChunkMetadata(t *testing.T) {
-	input := map[string]any{
-		"title":               "文档",
-		metaSourceDocumentID:  "doc-1",
-		metaChunkIndex:        3,
-		metaChunkStart:        100,
-		metaChunkEnd:          200,
-		metaContextHeader:     "## A",
-		"business_custom_key": "keep",
-	}
-
-	got := stripChunkMetadata(input)
-
-	if _, ok := got[metaChunkIndex]; ok {
-		t.Fatal(
-			"document metadata 不应包含 chunk index",
-		)
-	}
-
-	if _, ok := got[metaChunkStart]; ok {
-		t.Fatal(
-			"document metadata 不应包含 chunk start",
-		)
-	}
-
-	if _, ok := got[metaContextHeader]; ok {
-		t.Fatal(
-			"document metadata 不应包含 ContextHeader",
-		)
-	}
-
-	if got["business_custom_key"] != "keep" {
-		t.Fatal(
-			"业务 metadata 不应该被删除",
-		)
-	}
-
-	if got[metaSourceDocumentID] != "doc-1" {
-		t.Fatal(
-			"Source Document ID 应该保留",
-		)
-	}
-}
-
-func TestStoreEmbeddingFailureDoesNotBeginTransaction(t *testing.T) {
+func TestStoreBatchesActualIndexInputs(t *testing.T) {
 	db := &fakeDatabase{}
-
+	embedder := &fakeEmbedder{dim: EmbeddingDimensions}
 	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
-	cfg.Embedder = &fakeEmbedder{
-		dim: EmbeddingDimensions,
-		err: errors.New("embedding service unavailable"),
-	}
-
-	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{
-			validChunkDocument(),
-		},
-	)
-
-	if err == nil {
-		t.Fatal(
-			"Embedding Failure 应返回错误",
-		)
-	}
-
-	if db.begun {
-		t.Fatal(
-			"Embedding 失败时不应该启动 PostgreSQL 事务",
-		)
-	}
-}
-
-func TestSearchBuilderConfigCanBeCustomized(t *testing.T) {
-	db := &fakeDatabase{}
-	embedder := &fakeEmbedder{
-		dim: EmbeddingDimensions,
-	}
-
-	cfg := DefaultConfig()
-	cfg.CollectionID = "kb"
 	cfg.Embedder = embedder
-	cfg.SearchBuilder = searchcontent.Builder{
-		TitleKeys: []string{
-			"custom_title",
-		},
-		ContextHeaderKey: "custom_header",
-	}
-
-	doc := validChunkDocument()
-
-	doc.MetaData["custom_title"] = "CUSTOM TITLE"
-	doc.MetaData["custom_header"] = "CUSTOM HEADER"
-
+	cfg.EmbeddingBatchSize = 1
 	idx := newIndexerWithDatabase(db, cfg)
-
-	_, err := idx.Store(
-		context.Background(),
-		[]*schema.Document{doc},
-	)
-
-	if err != nil {
+	batch := testParentChildBatch()
+	if err := storeBatch(idx, context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
-
-	got := embedder.calls[0][0]
-
-	if !strings.Contains(
-		got,
-		"CUSTOM TITLE",
-	) {
-		t.Fatalf(
-			"Custom Search Builder title 没生效: %q",
-			got,
-		)
+	if len(embedder.calls) != 2 {
+		t.Fatalf("两条子块应分两次向量化: %+v", embedder.calls)
 	}
-
-	if !strings.Contains(
-		got,
-		"CUSTOM HEADER",
-	) {
-		t.Fatalf(
-			"Custom Search Builder header 没生效: %q",
-			got,
-		)
+	for i, c := range embedder.calls {
+		if !strings.Contains(c[0], batch.Children[i].Content) || !strings.Contains(c[0], batch.Title) {
+			t.Fatal("完整检索文本没有送给模型")
+		}
+	}
+	deletes := 0
+	for _, c := range db.tx.calls {
+		if strings.Contains(c.sql, "DELETE FROM chunks") {
+			deletes++
+		}
+	}
+	if deletes != 1 {
+		t.Fatalf("同一文档只应删除一次旧块: %d", deletes)
 	}
 }
 
-func validChunkDocument() *schema.Document {
-	return validChunkDocumentWithIndex(0)
-}
-
-func validChunkDocumentWithIndex(
-	index int,
-) *schema.Document {
-	return &schema.Document{
-		ID: "doc-1#chunk-" + sixDigits(index),
-
-		Content: "## 安装\n\n这里是安装正文。",
-
-		MetaData: map[string]any{
-			"title":                          "产品手册",
-			metaSourceDocumentID:             "doc-1",
-			metaChunkIndex:                   index,
-			metaChunkStart:                   index * 100,
-			metaChunkEnd:                     index*100 + 15,
-			metaContextHeader:                "# 产品手册\n## 安装",
-			"file_name":                      "manual.pdf",
-			"business_custom_data":           "keep",
-			application.MetaSourceMarkdown:   strings.Repeat("文", 1000),
-			application.MetaSourceChunkCount: 1,
-		},
+func TestStoreRollbackOnWriteFailure(t *testing.T) {
+	db := &fakeDatabase{tx: &fakeTransaction{execErr: errors.New("write failed")}}
+	cfg := DefaultConfig()
+	cfg.CollectionID = "kb"
+	cfg.Embedder = &fakeEmbedder{dim: EmbeddingDimensions}
+	_, err := newIndexerWithDatabase(db, cfg).Store(context.Background(), []*schema.Document{{ID: "doc", Content: "正文"}})
+	if err == nil || db.tx.committed || !db.tx.rolledBack {
+		t.Fatal("失败的入库没有回滚")
 	}
-}
-
-func sixDigits(value int) string {
-	text := "000000" +
-		strconv.Itoa(value)
-
-	return text[len(text)-6:]
 }

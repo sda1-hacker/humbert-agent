@@ -1,705 +1,172 @@
 <script setup>
-import {
-  computed,
-  onMounted,
-  reactive,
-  ref,
-  watch,
-} from "vue";
-
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { IconDelete, IconFolder } from "@arco-design/web-vue/es/icon";
 import { Message } from "../../utils/uiMessage.js";
+import { confirmAction } from "../../utils/confirm.js";
+import { createAgentForm, agentFormRequest } from "../../utils/agentForm.js";
+import { DEFAULT_AGENT_AVATAR } from "../../utils/avatar.js";
+import { getSandboxStatus, listBuiltinTools, selectWorkspaceDirectory } from "../../api/agents.js";
+import { useAgentStore } from "../../stores/agents.js";
+import { useModelStore } from "../../stores/models.js";
+import SkillSelector from "../skills/SkillSelector.vue";
+import AgentSecurityEditor from "../agents/AgentSecurityEditor.vue";
+import ModelCapabilityBadges from "../models/ModelCapabilityBadges.vue";
+import IdentityAvatar from "../ui/IdentityAvatar.vue";
 
-import {
-  confirmAction,
-} from "../../utils/confirm.js";
-import { defaultBuiltinTools } from "../../utils/defaultBuiltinTools.js";
+const props = defineProps({ agent: { type: Object, default: null } });
+const visible = defineModel("visible", { type: Boolean, default: false });
+const emit = defineEmits(["created", "updated", "deleted"]);
+const agentStore = useAgentStore();
+const modelStore = useModelStore();
+const saving = ref(false);
+const selectingWorkspace = ref(false);
+const avatarInput = ref(null);
+const activeTab = ref("basic");
+const builtinCatalog = ref([]);
+const platformSandboxStatus = ref(null);
+const form = reactive(createAgentForm(null));
+const creating = computed(() => !form.id);
+const modalTitle = computed(() => creating.value ? "新建 Agent" : "Agent 设置");
 
-import {
-  IconDelete,
-  IconFolder,
-} from "@arco-design/web-vue/es/icon";
-
-import {
-  getSandboxStatus,
-  listBuiltinTools,
-  selectWorkspaceDirectory,
-} from "../../api/agents.js";
-
-import {
-  useAgentStore,
-} from "../../stores/agents.js";
-
-import {
-  useModelStore,
-} from "../../stores/models.js";
-
-import SkillSelector
-  from "../skills/SkillSelector.vue";
-
-import AgentSecurityEditor
-  from "../agents/AgentSecurityEditor.vue";
-
-import ModelCapabilityBadges
-  from "../models/ModelCapabilityBadges.vue";
-
-import IdentityAvatar
-  from "../ui/IdentityAvatar.vue";
-
-import {
-  DEFAULT_AGENT_AVATAR,
-} from "../../utils/avatar.js";
-
-const MAX_AVATAR_BYTES = 2 * 1024 * 1024;
-const AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-
-const props =
-    defineProps({
-      agent: {
-        type: Object,
-        default: null,
-      },
-    });
-
-const visible =
-    defineModel(
-        "visible",
-        {
-          type: Boolean,
-          default: false,
-        },
-    );
-
-const emit =
-    defineEmits([
-      "created",
-      "updated",
-      "deleted",
-    ]);
-
-const agentStore =
-    useAgentStore();
-
-const modelStore =
-    useModelStore();
-
-const saving =
-    ref(false);
-
-const selectingWorkspace =
-    ref(false);
-
-const avatarInput =
-    ref(null);
-
-const activeTab =
-    ref("basic");
-
-const builtinCatalog =
-    ref([]);
-
-const platformSandboxStatus =
-    ref(null);
-
-const form =
-    reactive({
-      id: "",
-
-      name: "",
-
-      avatar: "",
-
-
-      subagentEnabled: false,
-
-      instruction: "",
-
-      modelID: "",
-
-      modelRoles: {
-        utilityModelID: "",
-      },
-
-      enabledSkills: [],
-
-      workspaceMode:
-          "managed",
-
-      workspacePath: "",
-
-      workspaceDisplayPath:
-          "",
-
-      enabledBuiltinTools: [],
-      availableBuiltinTools: [],
-      builtinToolsConfigured: false,
-      sandbox: {
-        profile: "",
-        additionalWritePaths: [],
-        networkMode: "",
-        nativeMode: "",
-      },
-      sandboxStatus: null,
-    });
-
-const creating =
-    computed(() =>
-        !form.id,
-    );
-
-/**
- * 已禁用但当前 Agent 正在使用的 Model
- * 仍然必须展示出来。
- */
-const availableModels =
-    computed(() =>
-        modelStore.models.filter(
-            (model) =>
-                model.enabled ||
-                model.id ===
-                form.modelID,
-        ),
-    );
-
+// 已禁用但仍被 Agent 引用的模型保持可见，用户才能辨认和修复已有配置。
 function roleModelOptions(selectedID) {
-  return modelStore.models.filter((model) => model.enabled || model.id === selectedID);
+  return modelStore.models.filter(model => model.enabled || model.id === selectedID);
 }
+const availableModels = computed(() => roleModelOptions(form.modelID));
+const selectedChatModel = computed(() => modelStore.modelByID(form.modelID));
+const workspaceDisplay = computed(() => form.workspaceMode === "custom"
+  ? form.workspacePath || "尚未选择目录"
+  : form.workspaceDisplayPath || "~/.humbert-agent/workspaces/<agent-id>");
 
-function modelForID(id) {
-  if (!id) return null;
-  return modelStore.modelByID(id);
-}
-
-const selectedChatModel = computed(() => modelForID(form.modelID));
-
-const modalTitle =
-    computed(() =>
-        creating.value
-            ? "新建 Agent"
-            : "Agent 设置",
-    );
-
-const workspaceDisplay =
-    computed(() => {
-      if (
-          form.workspaceMode ===
-          "custom"
-      ) {
-        return (
-            form.workspacePath ||
-            "尚未选择目录"
-        );
-      }
-
-      if (
-          form.workspaceDisplayPath
-      ) {
-        return (
-            form.workspaceDisplayPath
-        );
-      }
-
-      return (
-          "~/.humbert-agent/workspaces/<agent-id>"
-      );
-    });
-
-/**
- * 根据当前 Agent 重置表单。
- *
- * agent=null 表示创建。
- */
+/** 每次打开或更换目标 Agent 都创建独立表单。模型、目录与安全状态来自共享 Store/服务。 */
 function resetForm(agent) {
   activeTab.value = "basic";
-
-  if (!agent) {
-    Object.assign(
-        form,
-        {
-          id: "",
-
-          name: "",
-
-          avatar: "",
-
-
-          subagentEnabled: false,
-
-          instruction: "",
-
-          modelID:
-              modelStore
-                  .enabledModels[0]
-                  ?.id ?? "",
-
-          modelRoles: {
-            utilityModelID: "",
-          },
-
-          enabledSkills: [],
-
-          workspaceMode:
-              "managed",
-
-          workspacePath: "",
-
-          workspaceDisplayPath:
-              "",
-
-          enabledBuiltinTools:
-              defaultBuiltinTools(builtinCatalog.value),
-          availableBuiltinTools:
-              [...builtinCatalog.value],
-          builtinToolsConfigured:
-              builtinCatalog.value.length > 0,
-          sandbox: {
-            profile: "",
-            additionalWritePaths: [],
-            networkMode: "",
-            nativeMode: "",
-          },
-          sandboxStatus:
-          platformSandboxStatus.value,
-        },
-    );
-
-    return;
-  }
-
-  Object.assign(
-      form,
-      {
-        id:
-        agent.id,
-
-        name:
-        agent.name,
-
-        avatar:
-            agent.avatar || "",
-
-        subagentEnabled:
-            Boolean(agent.subagentEnabled),
-
-        instruction:
-        agent.instruction,
-
-        modelID:
-        agent.modelID,
-
-        modelRoles: {
-          utilityModelID: agent.modelRoles?.utilityModelID ?? "",
-        },
-
-        enabledSkills:
-            Array.isArray(agent.enabledSkills)
-                ? [...agent.enabledSkills]
-                : [],
-
-        workspaceMode:
-            agent.workspaceMode ||
-            "managed",
-
-        workspacePath:
-            agent.workspacePath ||
-            "",
-
-        workspaceDisplayPath:
-            agent.workspaceDisplayPath ||
-            "",
-
-        availableBuiltinTools:
-            Array.isArray(agent.availableBuiltinTools) &&
-            agent.availableBuiltinTools.length > 0
-                ? [...agent.availableBuiltinTools]
-                : [...builtinCatalog.value],
-        enabledBuiltinTools:
-            agent.builtinToolsConfigured
-                ? [...(agent.enabledBuiltinTools ?? [])]
-                : (
-                    Array.isArray(agent.availableBuiltinTools) &&
-                    agent.availableBuiltinTools.length > 0
-                        ? agent.availableBuiltinTools
-                        : builtinCatalog.value
-                ).map((tool) => tool.name),
-        builtinToolsConfigured:
-            Boolean(agent.builtinToolsConfigured),
-        sandbox: {
-          profile: agent.sandbox?.profile ?? "",
-          additionalWritePaths: [...(agent.sandbox?.additionalWritePaths ?? [])],
-          networkMode: agent.sandbox?.networkMode ?? "",
-          nativeMode: agent.sandbox?.nativeMode ?? "",
-        },
-        sandboxStatus:
-            agent.sandboxStatus ?? platformSandboxStatus.value,
-      },
-  );
+  Object.assign(form, createAgentForm(agent, {
+    tools: builtinCatalog.value,
+    sandboxStatus: platformSandboxStatus.value,
+    defaultModelID: modelStore.enabledModels[0]?.id || "",
+  }));
 }
+watch([() => visible.value, () => props.agent?.id], ([opened]) => {
+  if (opened) resetForm(props.agent);
+}, { immediate: true });
+
+// 模型目录可能在弹窗之后才到达，只给尚未选择模型的新 Agent 设置默认值。
+watch(() => modelStore.enabledModels.map(model => model.id).join(","), () => {
+  if (creating.value && !form.modelID) form.modelID = modelStore.enabledModels[0]?.id || "";
+});
 
 onMounted(async () => {
   try {
-    const [tools, sandboxStatus] = await Promise.all([
-      listBuiltinTools(),
-      getSandboxStatus(),
-    ]);
+    const [tools, status] = await Promise.all([listBuiltinTools(), getSandboxStatus()]);
     builtinCatalog.value = Array.isArray(tools) ? tools : [];
-    platformSandboxStatus.value = sandboxStatus ?? null;
-
-    if (visible.value) {
-      resetForm(props.agent);
+    platformSandboxStatus.value = status || null;
+    if (!visible.value) return;
+    // 目录加载结束只补齐展示信息，不重置名称、指令、头像等正在编辑的内容。
+    // 用户手动调整工具时会把 builtinToolsConfigured 标成 true，显式空选择也不能被默认值覆盖。
+    const defaults = createAgentForm(props.agent, { tools: builtinCatalog.value, sandboxStatus: status });
+    form.availableBuiltinTools = defaults.availableBuiltinTools;
+    form.sandboxStatus = defaults.sandboxStatus;
+    if (!form.builtinToolsConfigured) {
+      form.enabledBuiltinTools = defaults.enabledBuiltinTools;
+      form.builtinToolsConfigured = defaults.builtinToolsConfigured;
     }
   } catch (error) {
-    Message.warning(error?.message ?? "无法加载 Agent 安全配置");
+    Message.warning(error?.message || "无法加载 Agent 安全配置");
   }
 });
 
-/**
- * 每次打开都重新读取 Agent，
- * 防止 Modal 保存旧表单状态。
- */
-watch(
-    [
-      () => visible.value,
-      () => props.agent?.id,
-    ],
-
-    ([opened]) => {
-      if (!opened) {
-        return;
-      }
-
-      resetForm(
-          props.agent,
-      );
-    },
-
-    {
-      immediate: true,
-    },
-);
-
-/**
- * Model 后加载完成时，新建 Agent 自动选择第一个可用模型。
- */
-watch(
-    () =>
-        modelStore.enabledModels
-            .map(
-                (model) =>
-                    model.id,
-            )
-            .join(","),
-
-    () => {
-      if (
-          creating.value &&
-          !form.modelID &&
-          modelStore
-              .enabledModels
-              .length > 0
-      ) {
-        form.modelID =
-            modelStore
-                .enabledModels[0]
-                .id;
-      }
-    },
-);
-
-/**
- * 使用 Wails Native Directory Dialog 选择 Workspace。
- */
+/** 原生目录选择器只返回用户选择的路径，空字符串表示取消，不改变当前表单。 */
 async function chooseWorkspace() {
-  if (
-      selectingWorkspace.value
-  ) {
-    return;
-  }
-
-  selectingWorkspace.value =
-      true;
-
+  if (selectingWorkspace.value) return;
+  selectingWorkspace.value = true;
   try {
-    const selected =
-        await selectWorkspaceDirectory(
-            form.workspaceMode ===
-            "custom"
-                ? form.workspacePath
-                : "",
-        );
-
-    /**
-     * 空字符串代表用户取消。
-     */
-    if (!selected) {
-      return;
+    const selected = await selectWorkspaceDirectory(form.workspaceMode === "custom" ? form.workspacePath : "");
+    if (selected) {
+      form.workspaceMode = "custom";
+      form.workspacePath = selected;
+      form.workspaceDisplayPath = selected;
     }
-
-    form.workspaceMode =
-        "custom";
-
-    form.workspacePath =
-        selected;
-
-    form.workspaceDisplayPath =
-        selected;
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message || String(error));
   } finally {
-    selectingWorkspace.value =
-        false;
+    selectingWorkspace.value = false;
   }
 }
 
-function fileToDataURL(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error || new Error("读取头像失败"));
-    reader.onload = () => resolve(String(reader.result || ""));
-    reader.readAsDataURL(file);
-  });
-}
-
+/** 头像只保留受限的图片 Data URL，真实格式与安全性仍由后端 avatar 模块校验。 */
 async function chooseAvatar(event) {
   const input = event?.target;
   const file = input?.files?.[0];
   if (input) input.value = "";
   if (!file) return;
-  if (!AVATAR_TYPES.has(String(file.type || "").toLowerCase())) {
+  if (!["image/png", "image/jpeg", "image/gif", "image/webp"].includes(String(file.type || "").toLowerCase())) {
     Message.warning("头像仅支持 PNG、JPEG、GIF 或 WebP");
     return;
   }
-  if (file.size <= 0 || file.size > MAX_AVATAR_BYTES) {
+  if (file.size <= 0 || file.size > 2 * 1024 * 1024) {
     Message.warning("头像图片不能超过 2 MiB");
     return;
   }
   try {
-    form.avatar = await fileToDataURL(file);
+    form.avatar = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error("读取头像失败"));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
   } catch (error) {
     Message.error(error?.message || String(error));
   }
 }
 
-/**
- * 创建或更新 Agent。
- *
- * Agent 自己拥有 Workspace、模型、Skills 与安全能力。
- */
+/** 创建和更新共用请求投影、错误反馈及收尾；只有更换已有目录需要额外确认。 */
 async function save() {
-  if (saving.value) {
+  if (saving.value) return;
+  if (!form.name.trim()) { Message.warning("请输入 Agent 名称"); return; }
+  if (form.workspaceMode === "custom" && !form.workspacePath.trim()) {
+    Message.warning("请选择 Agent 目录");
     return;
   }
-
-  const name =
-      form.name.trim();
-
-  if (!name) {
-    Message.warning(
-        "请输入 Agent 名称",
-    );
-
-    return;
-  }
-
-  if (
-      form.workspaceMode ===
-      "custom" &&
-      !form.workspacePath.trim()
-  ) {
-    Message.warning(
-        "请选择 Agent 目录",
-    );
-
-    return;
-  }
-
+  const id = form.id;
+  const request = agentFormRequest(form);
   saving.value = true;
-
   try {
-    const request = {
-      name,
-
-      avatar:
-      form.avatar,
-
-      subagentEnabled:
-      form.subagentEnabled,
-
-      instruction:
-      form.instruction,
-
-      modelID:
-      form.modelID,
-
-      modelRoles: {
-        utilityModelID: form.modelRoles.utilityModelID || "",
-      },
-
-      enabledSkills:
-          [...form.enabledSkills],
-
-      workspaceMode:
-      form.workspaceMode,
-
-      /**
-       * Managed Workspace 永远不提交自定义路径。
-       */
-      workspacePath:
-          form.workspaceMode ===
-          "custom"
-              ? form.workspacePath
-              : "",
-
-      builtinToolsConfigured:
-          form.builtinToolsConfigured || form.availableBuiltinTools.length > 0,
-      enabledBuiltinTools:
-          [...form.enabledBuiltinTools],
-      sandbox: {
-        profile: form.sandbox.profile,
-        additionalWritePaths: [...form.sandbox.additionalWritePaths],
-        networkMode: form.sandbox.networkMode,
-        nativeMode: form.sandbox.nativeMode,
-      },
-    };
-
-    if (creating.value) {
-      const result =
-          await agentStore.create(
-              request,
-          );
-
-      visible.value = false;
-
-      emit(
-          "created",
-          result,
-      );
-
-      Message.success(
-          "Agent 已创建",
-      );
-
-      return;
-    }
-
-    const previous =
-        agentStore.items.find(
-            (item) =>
-                item.id ===
-                form.id,
-        );
-
-    const workspaceChanged =
-        previous &&
-        (
-            previous.workspaceMode !==
-            form.workspaceMode ||
-            (
-                form.workspaceMode ===
-                "custom" &&
-                previous.workspacePath !==
-                form.workspacePath
-            )
-        );
-
-    if (workspaceChanged) {
-      const confirmed =
-          await confirmAction({
-            title:
-                "更换 Agent 目录",
-
-            message:
-                "更换 Workspace 只影响之后的 Agent Turn，不会移动或删除原目录中的文件。是否继续？",
-
-            confirmText:
-                "继续更换",
-          });
-
-      if (!confirmed) {
-        return;
-      }
-    }
-
-    const result =
-        await agentStore.update(
-            form.id,
-            request,
-        );
-
+    const previous = agentStore.items.find(item => item.id === id);
+    const changed = previous && (previous.workspaceMode !== request.workspaceMode ||
+      request.workspaceMode === "custom" && previous.workspacePath !== request.workspacePath);
+    if (changed && !await confirmAction({
+      title: "更换 Agent 目录",
+      message: "更换 Workspace 只影响之后的 Agent Turn，不会移动或删除原目录中的文件。是否继续？",
+      confirmText: "继续更换",
+    })) return;
+    const result = id ? await agentStore.update(id, request) : await agentStore.create(request);
     visible.value = false;
-
-    emit(
-        "updated",
-        result,
-    );
-
-    Message.success(
-        "Agent 设置已保存",
-    );
+    emit(id ? "updated" : "created", result);
+    Message.success(id ? "Agent 设置已保存" : "Agent 已创建");
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message || String(error));
   } finally {
-    saving.value =
-        false;
+    saving.value = false;
   }
 }
 
-/**
- * 删除 Agent Aggregate。
- *
- * 后端会级联删除全部 Session、附件、Agent Profile，以及 Humbert 管理的
- * managed workspace。Custom Workspace 属于用户外部目录，只解除引用，不会删除真实文件。
- */
+/** 删除操作交给后端聚合生命周期：清理会话与托管目录，自定义外部目录只解除引用。 */
 async function removeAgent() {
-  if (!form.id) {
-    return;
-  }
-
+  const id = form.id;
+  if (!id) return;
   try {
-    const confirmed =
-        await confirmAction({
-          title:
-              "删除 Agent",
-
-          message:
-              `确定删除 Agent「${form.name}」吗？该 Agent 的全部对话、附件、记忆和 Humbert 管理的 Workspace 会一并删除；如果使用的是自定义外部 Workspace，外部文件不会被删除。`,
-
-          confirmText:
-              "删除",
-          danger: true,
-        });
-
-    if (!confirmed) {
-      return;
-    }
-
-    const deletedID =
-        form.id;
-
-    await agentStore.remove(
-        deletedID,
-    );
-
+    if (!await confirmAction({
+      title: "删除 Agent",
+      message: `确定删除 Agent「${form.name}」吗？该 Agent 的全部对话、附件、记忆和 Humbert 管理的 Workspace 会一并删除；如果使用的是自定义外部 Workspace，外部文件不会被删除。`,
+      confirmText: "删除", danger: true,
+    })) return;
+    await agentStore.remove(id);
     visible.value = false;
-
-    emit(
-        "deleted",
-        deletedID,
-    );
-
-    Message.success(
-        "Agent 已删除",
-    );
+    emit("deleted", id);
+    Message.success("Agent 已删除");
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message || String(error));
   }
 }
 </script>
@@ -738,7 +205,6 @@ async function removeAgent() {
                 @change="chooseAvatar"
             />
           </div>
-
           <a-form-item label="Agent 名称">
             <a-input
                 v-model="form.name"
@@ -746,7 +212,6 @@ async function removeAgent() {
                 placeholder="例如：Humbert"
             />
           </a-form-item>
-
           <a-form-item label="子 Agent 协作">
             <div class="subagent-option">
               <div>
@@ -756,7 +221,6 @@ async function removeAgent() {
               <a-switch v-model="form.subagentEnabled" />
             </div>
           </a-form-item>
-
           <a-form-item label="Chat 模型">
             <a-select
                 v-model="form.modelID"
@@ -780,7 +244,6 @@ async function removeAgent() {
               </div>
             </template>
           </a-form-item>
-
           <div class="model-role-panel">
             <div class="model-role-panel__intro">
               <strong>模型角色</strong>
@@ -799,26 +262,21 @@ async function removeAgent() {
                 </a-select>
                 <template #extra>Context 压缩等辅助任务优先使用；窗口不足时 Runtime 会回退当前执行模型。</template>
               </a-form-item>
-
             </div>
           </div>
-
           <a-form-item label="Skills">
             <SkillSelector v-model="form.enabledSkills"/>
           </a-form-item>
-
           <a-form-item label="Agent 目录">
             <div class="workspace-editor">
               <a-radio-group v-model="form.workspaceMode">
                 <a-radio value="managed">Humbert 管理</a-radio>
                 <a-radio value="custom">自定义目录</a-radio>
               </a-radio-group>
-
               <div class="workspace-path">
                 <div class="workspace-path-text" :title="workspaceDisplay">
                   {{ workspaceDisplay }}
                 </div>
-
                 <a-button
                     v-if="form.workspaceMode === 'custom'"
                     type="secondary"
@@ -831,7 +289,6 @@ async function removeAgent() {
                   {{ form.workspacePath ? "重新选择" : "选择目录" }}
                 </a-button>
               </div>
-
               <div class="workspace-help">
                 <template v-if="form.workspaceMode === 'managed'">
                   Humbert 会为这个 Agent 创建独立工作目录。
@@ -844,7 +301,6 @@ async function removeAgent() {
           </a-form-item>
         </a-form>
       </a-tab-pane>
-
       <a-tab-pane key="config" title="Agent 配置">
         <div class="agent-config-pane">
           <div class="agent-config-intro">
@@ -853,16 +309,15 @@ async function removeAgent() {
               这里保存的是这个 Agent 自己的配置。额外可读取目录会写入 Agent Profile，并在之后的对话中继续生效。
             </span>
           </div>
-
           <AgentSecurityEditor
               v-model:sandbox="form.sandbox"
               v-model:enabled-builtin-tools="form.enabledBuiltinTools"
+              @update:enabled-builtin-tools="form.builtinToolsConfigured = true"
               :available-builtin-tools="form.availableBuiltinTools"
               :sandbox-status="form.sandboxStatus"
           />
         </div>
       </a-tab-pane>
-
       <a-tab-pane key="instruction" title="Agent 指令">
         <div class="instruction-pane">
           <div class="agent-config-intro">
@@ -877,7 +332,6 @@ async function removeAgent() {
         </div>
       </a-tab-pane>
     </a-tabs>
-
     <template #footer>
       <div class="agent-modal-footer">
         <a-button
@@ -893,7 +347,6 @@ async function removeAgent() {
           删除 Agent
         </a-button>
         <span v-else></span>
-
         <a-space>
           <a-button :disabled="saving" @click="visible = false">取消</a-button>
           <a-button type="primary" :loading="saving" @click="save">
@@ -904,18 +357,15 @@ async function removeAgent() {
     </template>
   </a-modal>
 </template>
-
 <style scoped>
 .agent-settings-tabs {
   min-height: 420px;
 }
-
 .agent-tab-form,
 .agent-config-pane,
 .instruction-pane {
   padding: 4px 2px 8px;
 }
-
 .agent-avatar-editor {
   display: flex;
   align-items: center;
@@ -926,38 +376,31 @@ async function removeAgent() {
   border-radius: 9px;
   background: var(--h-surface-soft, var(--h-surface));
 }
-
 .agent-avatar-editor__actions {
   display: grid;
   gap: 4px;
 }
-
 .agent-avatar-editor__actions strong {
   color: var(--h-text);
   font-size: 12px;
 }
-
 .agent-avatar-editor__actions span {
   color: var(--h-text-muted);
   font-size: 10px;
 }
-
 .agent-avatar-editor__actions > div {
   display: flex;
   gap: 6px;
   margin-top: 3px;
 }
-
 .agent-avatar-input {
   display: none;
 }
-
 .agent-config-pane,
 .instruction-pane {
   display: grid;
   gap: 16px;
 }
-
 .agent-config-intro {
   display: grid;
   gap: 5px;
@@ -966,18 +409,15 @@ async function removeAgent() {
   border-radius: 9px;
   background: var(--h-surface-soft, var(--h-surface));
 }
-
 .agent-config-intro strong {
   color: var(--h-text);
   font-size: 12px;
 }
-
 .agent-config-intro span {
   color: var(--h-text-muted);
   font-size: 10px;
   line-height: 1.6;
 }
-
 .subagent-option {
   display: flex;
   width: 100%;
@@ -989,28 +429,23 @@ async function removeAgent() {
   border-radius: 9px;
   background: var(--h-surface-soft, var(--h-surface));
 }
-
 .subagent-option > div {
   display: grid;
   gap: 4px;
 }
-
 .subagent-option strong {
   color: var(--h-text);
   font-size: 12px;
 }
-
 .subagent-option span {
   color: var(--h-text-muted);
   font-size: 10px;
   line-height: 1.55;
 }
-
 .model-role-extra {
   display: grid;
   gap: 6px;
 }
-
 .model-role-panel {
   margin-bottom: 18px;
   padding: 12px;
@@ -1018,38 +453,32 @@ async function removeAgent() {
   border-radius: 9px;
   background: var(--h-surface-soft, var(--h-surface));
 }
-
 .model-role-panel__intro {
   display: grid;
   gap: 4px;
   margin-bottom: 12px;
 }
-
 .model-role-panel__intro strong {
   color: var(--h-text);
   font-size: 12px;
 }
-
 .model-role-panel__intro span,
 .model-role-panel :deep(.arco-form-item-extra) {
   color: var(--h-text-muted);
   font-size: 10px;
   line-height: 1.55;
 }
-
 .model-role-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 12px;
 }
-
 .workspace-editor {
   width: 100%;
   padding: 12px;
   border: 1px solid var(--h-border);
   border-radius: 9px;
 }
-
 .workspace-path {
   display: flex;
   min-width: 0;
@@ -1057,7 +486,6 @@ async function removeAgent() {
   gap: 10px;
   margin-top: 12px;
 }
-
 .workspace-path-text {
   min-width: 0;
   flex: 1;
@@ -1072,31 +500,26 @@ async function removeAgent() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .workspace-help {
   margin-top: 8px;
   color: var(--h-text-muted);
   font-size: 10px;
   line-height: 1.6;
 }
-
 .agent-modal-footer {
   display: flex;
   width: 100%;
   align-items: center;
   justify-content: space-between;
 }
-
 :deep(.agent-settings-modal .arco-modal-body) {
   max-height: 72vh;
   overflow-y: auto;
 }
-
 @media (max-width: 760px) {
   .model-role-grid {
     grid-template-columns: 1fr;
   }
-
   .agent-settings-tabs {
     min-height: 360px;
   }

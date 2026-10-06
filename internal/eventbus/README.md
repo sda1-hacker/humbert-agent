@@ -1,6 +1,6 @@
 # EventBus：进程内同步事件分发
 
-[总目录](../../docs/architecture/README.md) · [Runtime](../runtime/README.md)
+[总目录](../../docs/项目源码详解.md) · [Runtime](../runtime/README.md)
 
 `Bus.Subscribe(topic, handler)` 注册处理器并返回可重复调用的取消函数；`Publish` 同步调用当前订阅者；`Close` 停止后续订阅/发布。Bus 本身不创建 goroutine，也不保存事件。Runtime delta、Task 状态和通知都可通过它到达 Wails Service，但 UI 重启后必须从 Store 重读事实。
 

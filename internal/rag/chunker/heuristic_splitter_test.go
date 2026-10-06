@@ -9,7 +9,7 @@ import (
 //
 // 空文本应该直接返回 nil。
 func TestSplitByHeuristicsEmptyText(t *testing.T) {
-	got := splitByHeuristicsImpl("", DefaultConfig(), nil)
+	got := splitByHeuristics("", DefaultConfig(), nil)
 
 	if got != nil {
 		t.Fatalf("空文档应该返回 nil: got=%v", got)
@@ -30,7 +30,7 @@ func TestSplitByHeuristicsShortDocumentFallsBackLegacy(t *testing.T) {
 	cfg.ChunkSize = 1000
 	cfg.ChunkOverlap = 20
 
-	got := splitByHeuristicsImpl(text, cfg, nil)
+	got := splitByHeuristics(text, cfg, nil)
 	want := SplitText(text, cfg)
 
 	if len(got) != len(want) {
@@ -63,7 +63,7 @@ func TestSplitByHeuristicsFormFeedBoundary(t *testing.T) {
 		Languages:    []string{LangChinese},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 
 	if len(chunks) < 2 {
 		t.Fatalf("FormFeed 应产生多个 Chunk: got=%d", len(chunks))
@@ -94,7 +94,7 @@ func TestSplitByHeuristicsNumberedSections(t *testing.T) {
 		Languages:    []string{LangEnglish},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 
 	if len(chunks) < 2 {
 		t.Fatalf("Numbered Sections 应产生多个 Chunk: got=%d", len(chunks))
@@ -124,7 +124,7 @@ func TestSplitByHeuristicsChineseChapterMarkers(t *testing.T) {
 		Languages:    []string{LangChinese},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 
 	if len(chunks) < 3 {
 		t.Fatalf("中文章节应该被拆成多个 Chunk: got=%d", len(chunks))
@@ -152,7 +152,7 @@ func TestSplitByHeuristicsGermanChapterMarkers(t *testing.T) {
 		Languages:    []string{LangGerman},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 
 	if len(chunks) < 2 {
 		t.Fatalf("German Chapter Marker 应产生多个 Chunk: got=%d", len(chunks))
@@ -175,7 +175,7 @@ func TestSplitByHeuristicsUnstructuredDocument(t *testing.T) {
 		Separators:   []string{". "},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 
 	if len(chunks) != 1 {
 		t.Fatalf("普通短文档应该只有一个 Chunk: got=%d", len(chunks))
@@ -295,7 +295,7 @@ func TestSplitByHeuristicsOversizeBlockUsesLegacy(t *testing.T) {
 		Languages:    []string{LangEnglish},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 
 	if len(chunks) < 5 {
 		t.Fatalf("超大 Section 应通过 Legacy 产生多个子 Chunk: got=%d", len(chunks))
@@ -522,7 +522,7 @@ func TestSplitByHeuristicsOverlapActuallyOverlaps(t *testing.T) {
 		Languages:    []string{LangEnglish},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 
 	if len(chunks) < 2 {
 		t.Fatalf("测试 overlap 至少需要两个 Chunk: got=%d", len(chunks))
@@ -585,7 +585,7 @@ func TestSplitByHeuristicsPreservesSourceOffsetsWithoutOverlap(t *testing.T) {
 		Languages:    []string{LangChinese},
 	}
 
-	chunks := splitByHeuristicsImpl(text, cfg, nil)
+	chunks := splitByHeuristics(text, cfg, nil)
 	source := []rune(text)
 
 	if len(chunks) == 0 {
@@ -621,7 +621,7 @@ func TestSplitByHeuristicsPreservesSourceOffsetsWithoutOverlap(t *testing.T) {
 //
 // 我们不只测试：
 //
-//	splitByHeuristicsImpl()
+//	splitByHeuristics()
 //
 // 还必须测试真正生产入口：
 //

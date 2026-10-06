@@ -4,7 +4,6 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "test": "node --experimental-test-module-mocks --test src/utils/*.test.js",
     "dev": "vite",
     "build:dev": "vite build --minify false --mode development && node scripts/ensure-embed.mjs",
     "build": "vite build --mode production && node scripts/ensure-embed.mjs",

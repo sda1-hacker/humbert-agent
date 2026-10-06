@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
+	"github.com/sda1-hacker/humbert-agent/internal/usecases"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
-	"github.com/sda1-hacker/humbert-agent/internal/workspaceview"
 )
 
 const workspaceServiceTimeout = 15 * time.Second
@@ -127,7 +127,7 @@ func (s *WorkspaceService) SearchDocuments(agentID, query string) (DocumentSearc
 	return DocumentSearchDTO{Results: results, Updating: status.Updating, Error: status.Error}, nil
 }
 
-func workspaceOverviewDTO(value workspaceview.Overview) WorkspaceOverviewDTO {
+func workspaceOverviewDTO(value usecases.WorkspaceOverview) WorkspaceOverviewDTO {
 	return WorkspaceOverviewDTO{
 		AgentID:        value.AgentID,
 		AgentName:      value.AgentName,

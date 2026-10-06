@@ -5,28 +5,7 @@ import (
 	"strings"
 )
 
-// DocProfile 表示一整篇文档的结构画像。
-//
-// Profiler 不负责切文档。
-//
-// 它负责回答：
-//
-//	“这篇文档长什么样？”
-//
-// 后面的 Strategy Resolver 再根据这些特征决定：
-//
-//	Heading
-//	Heuristic
-//	Legacy
-//
-// -----------------------------------------------------------------------------
-// 这里保留 json tag。
-//
-// 当前 Demo 还没有 HTTP Preview API，
-// 但是 WeKnora 的 Chunk Preview 会直接把 DocProfile 返回给前端。
-//
-// 我们提前保持相同 JSON 结构，
-// 后面增加 Preview API 时就不需要修改数据模型。
+// DocProfile 记录文档长度、标题及章节信号，供自动选择分块策略使用。
 type DocProfile struct {
 	// -----------------------------------------------------------------
 	// 基础规模统计
@@ -41,38 +20,14 @@ type DocProfile struct {
 	// AvgLineLen 是非 fenced-code 内容的平均行长度。
 	AvgLineLen float64 `json:"avg_line_len"`
 
-	// StdLineLen 是非 fenced-code 内容行长度的标准差。
-	//
-	// 这个指标可以粗略反映文档排版形态：
-	//
-	//     行长度非常稳定
-	//         → 可能是 OCR / 固定宽度文本
-	//
-	//     行长度差异很大
-	//         → 可能有标题、段落、表格等明显结构
+	// StdLineLen 是非代码内容行长度的总体标准差，用于粗略描述排版形态。
 	StdLineLen float64 `json:"std_line_len"`
 
 	// -----------------------------------------------------------------
 	// Markdown Heading 结构
 	// -----------------------------------------------------------------
 
-	// MdHeadingCounts：
-	//
-	//     heading level -> 数量
-	//
-	// 例如：
-	//
-	//     H1 = 1
-	//     H2 = 5
-	//     H3 = 12
-	//
-	// 保存成：
-	//
-	//     map[int]int{
-	//         1: 1,
-	//         2: 5,
-	//         3: 12,
-	//     }
+	// MdHeadingCounts 保存各标题层级的数量。
 	MdHeadingCounts map[int]int `json:"md_heading_counts"`
 
 	// MdHeadingTotal 是所有 Markdown Heading 总数。
@@ -105,41 +60,14 @@ type DocProfile struct {
 	HasTables bool `json:"has_tables"`
 	HasCode   bool `json:"has_code"`
 
-	// CodeRatio = fenced code 中字符数量 / 整篇文档字符数量。
-	//
-	// 它可以帮助以后识别：
-	//
-	//     代码型技术文档
-	//
-	// 和：
-	//
-	//     普通自然语言文档
+	// CodeRatio 是代码字符数占文档总字符数的比例。
 	CodeRatio float64 `json:"code_ratio"`
 
-	// DetectedLangs 是语言提示。
-	//
-	// 普通文档通常只有一个：
-	//
-	//     ["zh"]
-	//
-	// Mixed 文档会转换成：
-	//
-	//     ["en", "de", "zh"]
-	//
-	// 这样后面的 Heuristic Splitter 会同时尝试三套章节规则。
+	// DetectedLangs 是章节识别的语言提示，混合文本启用全部已支持语言。
 	DetectedLangs []string `json:"detected_langs"`
 }
 
-// HeadingDensity 返回 Markdown Heading 占总行数的比例。
-//
-// 例如：
-//
-//	TotalLines      = 100
-//	MdHeadingTotal = 5
-//
-// 则：
-//
-//	HeadingDensity = 0.05
+// HeadingDensity 返回标题行数与总行数的比例。
 func (p *DocProfile) HeadingDensity() float64 {
 	if p.TotalLines == 0 {
 		return 0
@@ -148,49 +76,7 @@ func (p *DocProfile) HeadingDensity() float64 {
 	return float64(p.MdHeadingTotal) / float64(p.TotalLines)
 }
 
-// DominantHeadingLevel 返回最适合用作主要分割边界的 Heading Level。
-//
-// 这是后面 Heading Splitter 非常关键的规则。
-//
-// 规则分两层。
-//
-// 第一优先：
-//
-//	从 H1 → H6
-//
-// 找第一个：
-//
-//	出现次数 >= 3
-//
-// 的层级。
-//
-// 例如：
-//
-//	H1 = 1
-//	H2 = 5
-//	H3 = 20
-//
-// 返回：
-//
-//	H2
-//
-// 因为 H2 已经形成稳定的文档主骨架。
-//
-// -----------------------------------------------------------------------------
-// 如果没有任何层级出现至少 3 次：
-//
-//	选择最深的、至少出现一次的 Heading Level。
-//
-// 例如：
-//
-//	H1 = 1
-//	H2 = 2
-//
-// 返回：
-//
-//	H2
-//
-// 对小型文档来说，用 H2 比只用 H1 更有实际分块价值。
+// DominantHeadingLevel 选择用于划分主章节的标题层级。
 func (p *DocProfile) DominantHeadingLevel() int {
 	if p.MdHeadingTotal == 0 {
 		return 0
@@ -211,24 +97,7 @@ func (p *DocProfile) DominantHeadingLevel() int {
 	return 0
 }
 
-// HeuristicMarkerTotal 返回所有“非 Markdown Heading”结构信号总数。
-//
-// 注意这里没有加入：
-//
-//	BlankParagraphBreaks
-//	RepeatedFooterCount
-//
-// 这是当前 WeKnora 的真实策略。
-//
-// 真正参与这个总分的有：
-//
-//	编号章节
-//	德文章节
-//	英文章节
-//	中文章节
-//	全大写标题
-//	视觉分隔线
-//	换页符
+// HeuristicMarkerTotal 返回启发式结构信号的总数。
 func (p *DocProfile) HeuristicMarkerTotal() int {
 	return p.NumberedSectionCount +
 		p.GermanChapterCount +
@@ -239,25 +108,7 @@ func (p *DocProfile) HeuristicMarkerTotal() int {
 		p.FormFeedCount
 }
 
-// ProfileDocument 扫描整篇文档并生成 DocProfile。
-//
-// 这个过程不会修改原文，也不会产生 Chunk。
-//
-// 整体流程：
-//
-//	Document
-//	    ↓
-//	rune / line 基础统计
-//	    ↓
-//	逐行结构扫描
-//	    ↓
-//	Heading / Chapter / Table / Code...
-//	    ↓
-//	行长度统计
-//	    ↓
-//	Language Detection
-//	    ↓
-//	DocProfile
+// ProfileDocument 扫描文档结构，统计标题、章节、表格、代码及分页信号。
 func ProfileDocument(text string) *DocProfile {
 	profile := &DocProfile{
 		MdHeadingCounts: make(map[int]int),
@@ -292,28 +143,13 @@ func ProfileDocument(text string) *DocProfile {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// -------------------------------------------------------------
-		// Fenced Code 检测。
-		//
-		// 当前使用非常简单的：
-		//
-		//     strings.HasPrefix(trimmed, "```")
-		//
-		// 每看到一次就 toggle。
-		//
-		// 这里没有使用 Protected Span 正则，
-		// 因为 Profiler 只需要便宜的结构扫描。
-		// -------------------------------------------------------------
+		// 快速扫描围栏代码，代码内部不统计标题或章节信号。
 
 		if strings.HasPrefix(trimmed, "```") {
 			inFence = !inFence
 			profile.HasCode = true
 
-			// fence 本身不进入：
-			//
-			//     codeChars
-			//     line length stats
-			//     heading detection
+			// 代码区域不参与标题识别与普通行长统计。
 			continue
 		}
 
@@ -325,18 +161,7 @@ func ProfileDocument(text string) *DocProfile {
 		lineLen := RuneLen(line)
 		lengths = append(lengths, float64(lineLen))
 
-		// Markdown Heading 的优先级最高。
-		//
-		// 如果这一行已经确定是：
-		//
-		//     ## Installation
-		//
-		// 就不继续把它识别为：
-		//
-		//     ALL CAPS
-		//     Numbered section
-		//
-		// 等其他 heuristic signal。
+		// 已识别为 Markdown 标题的行不再重复计入其他结构信号。
 		if matchHeading(line, profile.MdHeadingCounts) {
 			profile.MdHeadingTotal++
 			continue
@@ -370,15 +195,7 @@ func ProfileDocument(text string) *DocProfile {
 			profile.RepeatedFooterCount++
 		}
 
-		// 当前用一个非常便宜的规则判断 Markdown Table。
-		//
-		// 只要某个非代码行：
-		//
-		//     去掉首尾空格后
-		//     以 | 开始
-		//     以 | 结束
-		//
-		// 就认为文档包含表格。
+		// 使用两端竖线快速判断是否包含 Markdown 表格。
 		if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
 			profile.HasTables = true
 		}
@@ -390,14 +207,7 @@ func ProfileDocument(text string) *DocProfile {
 		profile.CodeRatio = float64(codeChars) / float64(profile.TotalChars)
 	}
 
-	// 当前 WeKnora 使用 "\n\n\n" 的出现次数
-	// 作为 BlankParagraphBreaks。
-	//
-	// 注意：
-	//
-	// strings.Count 是非重叠计数，
-	// 它和 ExcessiveBlanksPattern 的“结构边界检测”
-	// 不是完全相同的概念。
+	// 画像中的空白计数使用非重叠统计，与完整边界检测的正则计数不同。
 	profile.BlankParagraphBreaks = strings.Count(text, "\n\n\n")
 
 	detectProfileLanguages(profile, text)
@@ -405,21 +215,7 @@ func ProfileDocument(text string) *DocProfile {
 	return profile
 }
 
-// matchHeading 判断当前行是否为 Markdown ATX Heading。
-//
-// 如果匹配：
-//
-//	## Installation
-//
-// 会得到：
-//
-//	level = 2
-//
-// 并执行：
-//
-//	counts[2]++
-//
-// 返回 true。
+// matchHeading 判断 Markdown ATX 标题并累计对应层级的数量。
 func matchHeading(line string, counts map[int]int) bool {
 	match := MarkdownHeadingPattern.FindStringSubmatch(line)
 
@@ -438,15 +234,7 @@ func matchHeading(line string, counts map[int]int) bool {
 	return true
 }
 
-// calculateLineStats 计算平均行长和标准差。
-//
-// 标准差使用总体方差：
-//
-//	variance /= N
-//
-// 而不是样本方差：
-//
-//	variance /= N - 1
+// calculateLineStats 计算平均行长与总体标准差。
 func calculateLineStats(profile *DocProfile, lengths []float64) {
 	if len(lengths) == 0 {
 		return
@@ -471,22 +259,7 @@ func calculateLineStats(profile *DocProfile, lengths []float64) {
 	profile.StdLineLen = math.Sqrt(variance)
 }
 
-// detectProfileLanguages 为 DocProfile 填充语言提示。
-//
-// 为了避免超大文档语言检测扫描全部内容，
-// 当前只取前 4096 byte 作为 sample。
-//
-// 注意这里是：
-//
-//	byte
-//
-// 不是 rune。
-//
-// 这是为了对标当前 WeKnora 的真实实现。
-//
-// Language Detection 本身只是辅助信号，
-// 即使 UTF-8 恰好在边界被截断，一个尾部 RuneError
-// 对整体 CJK / Latin 比例影响也可以忽略。
+// detectProfileLanguages 仅采样文档前 4096 字节，以限制语言判断的扫描成本。
 func detectProfileLanguages(profile *DocProfile, text string) {
 	const sampleSize = 4096
 
@@ -500,19 +273,7 @@ func detectProfileLanguages(profile *DocProfile, text string) {
 
 	profile.DetectedLangs = []string{lang}
 
-	// mixed 的语义比较特殊。
-	//
-	// 后面的 Heuristic Splitter 不应该使用一个：
-	//
-	//     "mixed chapter regex"
-	//
-	// 而应该把所有支持的语言章节规则都打开。
-	//
-	// 因此转换成：
-	//
-	//     en
-	//     de
-	//     zh
+	// 混合语言启用全部已支持的章节识别规则。
 	if lang == LangMixed {
 		profile.DetectedLangs = []string{
 			LangEnglish,

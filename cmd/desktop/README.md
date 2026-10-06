@@ -1,6 +1,6 @@
 # 桌面入口：启动前数据操作与 Wails 生命周期
 
-[架构手册](../../docs/architecture/README.md) · [App](../../internal/app/README.md)
+[架构手册](../../docs/项目源码详解.md) · [App](../../internal/app/README.md)
 
 `main.go` 先通过 `instancelock.Acquire` 独占数据目录，再执行待恢复/待备份计划，避免第二个进程改写运行中的 Store。随后 `app.Bootstrap` 构建 Go Core，`runDesktop` 用 `services.All(core)` 注册 Wails 服务、嵌入前端资源并创建窗口；退出时在限时 Context 内调用 `core.Shutdown`，最后释放锁。
 

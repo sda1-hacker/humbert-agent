@@ -40,35 +40,18 @@ func TestFuseRRFHybrid(t *testing.T) {
 	}
 }
 
-func TestFuseRRFSortsBeforeAssigningRanks(t *testing.T) {
-	// 故意传入错误顺序：
-	//
-	// A 分数最低，却排在 slice 第一位。
-	vector := []SearchResult{
-		{ChunkID: "A", Score: 0.1},
-		{ChunkID: "B", Score: 0.9},
-		{ChunkID: "C", Score: 0.5},
-	}
-
+func TestFuseRRFPreservesEinoRankingWithoutScores(t *testing.T) {
+	vector := []SearchResult{{ChunkID: "Z"}, {ChunkID: "A"}, {ChunkID: "C"}}
 	got := FuseRRF(vector, nil, DefaultRRFConfig())
-
-	if got[0].ChunkID != "B" {
-		t.Fatalf("必须先按 score 排序，最高分应该是B: %+v", got)
-	}
-
-	if got[0].VectorRank != 1 {
-		t.Fatalf("B 的 VectorRank 应为1: %+v", got[0])
-	}
-
-	if got[2].ChunkID != "A" || got[2].VectorRank != 3 {
-		t.Fatalf("A 应为第三名: %+v", got[2])
+	if got[0].ChunkID != "Z" || got[0].VectorRank != 1 || got[2].ChunkID != "C" || got[2].VectorRank != 3 {
+		t.Fatalf("Eino 排名被打乱: %+v", got)
 	}
 }
 
-func TestFuseRRFDeduplicatesByBestScore(t *testing.T) {
+func TestFuseRRFDeduplicatesByBestRank(t *testing.T) {
 	vector := []SearchResult{
-		{ChunkID: "A", Score: 0.4},
 		{ChunkID: "A", Score: 0.9},
+		{ChunkID: "A", Score: 0.4},
 		{ChunkID: "B", Score: 0.8},
 	}
 
@@ -79,7 +62,7 @@ func TestFuseRRFDeduplicatesByBestScore(t *testing.T) {
 	}
 
 	if got[0].ChunkID != "A" || got[0].Score != 0.9 {
-		t.Fatalf("应该保留 A 的最高分版本: %+v", got)
+		t.Fatalf("应该保留 A 排名最高的结果: %+v", got)
 	}
 }
 

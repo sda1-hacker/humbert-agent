@@ -1,5 +1,4 @@
-// Package embeddinginput validates the final provider input, including titles
-// and synthetic headers. It never truncates source text.
+// Package embeddinginput 校验包含标题与补充表头的完整模型输入，不截断原文。
 package embeddinginput
 
 import (
@@ -12,17 +11,20 @@ import (
 
 var ErrInputBudget = errors.New("rag embedding: input exceeds token budget")
 
-// CountTokens may use a model tokenizer. Without one, UTF-8 bytes provide a
-// conservative budget for byte-based tokenizers. Configure limits for the
-// actual provider; defaults are local safety limits, not model specifications.
+// Budget 限制完整模型输入与单批请求的 token 数。可注入真实分词器；默认以 UTF-8 字节数作保守估算，限制值需按实际模型配置。
 type Budget struct {
+	// MaxInputTokens 单条完整模型输入的 token 上限。
 	MaxInputTokens int
+	// MaxBatchTokens 一次请求的总 token 上限。
 	MaxBatchTokens int
-	CountTokens    func(string) int
+	// CountTokens 可选模型分词计数器，缺失时按 UTF-8 字节数估算。
+	CountTokens func(string) int
 }
 
+// DefaultBudget 返回本地默认保护值，不代表任何模型的官方上下文长度。
 func DefaultBudget() Budget { return Budget{MaxInputTokens: 8192, MaxBatchTokens: 65536} }
 
+// Validate 拒绝负数预算，零值在 Effective 中补齐。
 func (b Budget) Validate() error {
 	if b.MaxInputTokens < 0 || b.MaxBatchTokens < 0 {
 		return fmt.Errorf("rag embedding: negative token budget")
@@ -30,6 +32,7 @@ func (b Budget) Validate() error {
 	return nil
 }
 
+// Effective 补齐预算和计数函数，不修改调用方配置。
 func (b Budget) Effective() Budget {
 	defaults := DefaultBudget()
 	if b.MaxInputTokens == 0 {
@@ -44,10 +47,10 @@ func (b Budget) Effective() Budget {
 	return b
 }
 
+// Batch 一次模型请求的左闭右开输入区间。
 type Batch struct{ Start, End int }
 
-// Plan validates every input before any remote request, then bounds both the
-// number of strings and the total tokens in each request.
+// Plan 在请求模型前校验所有输入，同时限制每批条数与总 token 数。
 func (b Budget) Plan(texts []string, batchSize int) ([]Batch, error) {
 	if err := b.Validate(); err != nil {
 		return nil, err
@@ -83,10 +86,12 @@ type limitedEmbedder struct {
 	budget   Budget
 }
 
+// Limit 包装 Eino Embedder，拒绝超长输入并按批请求，不截断原文。
 func Limit(delegate embedding.Embedder, budget Budget) embedding.Embedder {
 	return &limitedEmbedder{delegate: delegate, budget: budget}
 }
 
+// EmbedStrings 按预算分批生成向量，保持输入顺序并校验向量数量。
 func (e *limitedEmbedder) EmbedStrings(ctx context.Context, texts []string, opts ...embedding.Option) ([][]float64, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

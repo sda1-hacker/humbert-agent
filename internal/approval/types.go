@@ -24,6 +24,17 @@ const (
 	StatusExpired   Status = "expired"
 )
 
+var (
+	// ErrInvalidDecision 表示前端提交了当前版本不支持的审批动作。
+	ErrInvalidDecision = errors.New("Approval 决策不合法")
+
+	// ErrNotFound 表示审批 ID 不存在或已经被 Runtime 清理。
+	ErrNotFound = errors.New("Approval Request 不存在")
+
+	// ErrNotPending 表示审批已经进入 resolving/resolved/cancelled/expired，不能再次处理。
+	ErrNotPending = errors.New("Approval Request 已不是待处理状态")
+)
+
 // Decision 是前端能够提交的审批动作。
 //
 // deny 仅拒绝当前 Tool 调用；allow_once 只批准当前 checkpoint 中保存的这一份调用；
@@ -120,7 +131,7 @@ type ResumeData struct {
 // Request 是 Runtime/Frontend 可观察的一次待审批请求。
 //
 // Request 不保存 raw Tool Arguments；用户可见内容只能来自已经脱敏的 Presentation。
-// CheckpointID/InterruptID 是 Runtime 恢复所需的内部定位信息，对前端 JSON 隐藏。
+// InterruptID 对前端 JSON 隐藏；checkpoint 由 Runtime 使用同一 RunID 定位。
 type Request struct {
 	ID        string `json:"id"`
 	RequestID string `json:"requestId"`
@@ -137,19 +148,12 @@ type Request struct {
 	CreatedAt time.Time `json:"createdAt"`
 	ExpiresAt time.Time `json:"expiresAt"`
 
-	interruptID  string
-	checkpointID string
-	identity     permission.CapabilityIdentity
+	interruptID string
+	identity    permission.CapabilityIdentity
 }
 
 // InterruptID 返回 Eino root-cause interrupt ID。只允许 Runtime 内部用于 ResumeWithParams。
 func (r Request) InterruptID() string { return r.interruptID }
-
-// CheckpointID 返回保存该中断执行态的 checkpoint ID。
-func (r Request) CheckpointID() string { return r.checkpointID }
-
-// Identity 返回本次审批冻结的 Capability Identity。
-func (r Request) Identity() permission.CapabilityIdentity { return r.identity }
 
 // Resolution 是 Manager 成功进入 Resolving 状态后的不可变结果。Runtime 只有取得该对象
 // 才允许调用 Eino Resume，避免同一个审批被重复点击后执行两次 Tool。
