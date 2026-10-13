@@ -37,51 +37,24 @@ const (
 func normalizeCreateProviderInput(
 	input CreateProviderInput,
 ) (CreateProviderInput, error) {
-	name, err := normalizeRequiredText(
-		input.Name,
-		"Provider 名称",
-		100,
-	)
+	name, err := normalizeRequiredText(input.Name, "Provider 名称", 100)
 	if err != nil {
 		return CreateProviderInput{}, err
 	}
 
-	baseURL, err := normalizeProviderBaseURL(
-		input.Type,
-		input.BaseURL,
-	)
+	baseURL, err := normalizeProviderBaseURL(input.Type, input.BaseURL)
 	if err != nil {
 		return CreateProviderInput{}, err
 	}
 
-	return CreateProviderInput{
-		Name: name,
-
-		Type: input.Type,
-
-		BaseURL: baseURL,
-
-		APIKey: strings.TrimSpace(
-			input.APIKey,
-		),
-	}, nil
+	return CreateProviderInput{Name: name, Type: input.Type, BaseURL: baseURL, APIKey: strings.TrimSpace(input.APIKey)}, nil
 }
 
 func normalizeUpdateProviderInput(
 	input UpdateProviderInput,
 ) (UpdateProviderInput, error) {
 	normalized, err :=
-		normalizeCreateProviderInput(
-			CreateProviderInput{
-				Name: input.Name,
-
-				Type: input.Type,
-
-				BaseURL: input.BaseURL,
-
-				APIKey: input.APIKey,
-			},
-		)
+		normalizeCreateProviderInput(CreateProviderInput{Name: input.Name, Type: input.Type, BaseURL: input.BaseURL, APIKey: input.APIKey})
 	if err != nil {
 		return UpdateProviderInput{}, err
 	}
@@ -103,40 +76,26 @@ func normalizeCreateModelInput(
 	input CreateModelInput,
 ) (CreateModelInput, error) {
 	providerID, err :=
-		normalizeRequiredText(
-			input.ProviderID,
-			"Provider ID",
-			128,
-		)
+		normalizeRequiredText(input.ProviderID, "Provider ID", 128)
 	if err != nil {
 		return CreateModelInput{}, err
 	}
 
 	modelName, err :=
-		normalizeRequiredText(
-			input.ModelName,
-			"模型名称",
-			256,
-		)
+		normalizeRequiredText(input.ModelName, "模型名称", 256)
 	if err != nil {
 		return CreateModelInput{}, err
 	}
 
 	displayName :=
-		strings.TrimSpace(
-			input.DisplayName,
-		)
+		strings.TrimSpace(input.DisplayName)
 
 	if displayName == "" {
 		displayName = modelName
 	}
 
 	displayName, err =
-		normalizeRequiredText(
-			displayName,
-			"模型显示名称",
-			128,
-		)
+		normalizeRequiredText(displayName, "模型显示名称", 128)
 	if err != nil {
 		return CreateModelInput{}, err
 	}
@@ -148,13 +107,8 @@ func normalizeCreateModelInput(
 			defaultModelTimeoutMS
 	}
 
-	if timeoutMS < minModelTimeoutMS ||
-		timeoutMS > maxModelTimeoutMS {
-		return CreateModelInput{}, fmt.Errorf(
-			"模型超时时间必须位于 %d-%d 毫秒之间",
-			minModelTimeoutMS,
-			maxModelTimeoutMS,
-		)
+	if timeoutMS < minModelTimeoutMS || timeoutMS > maxModelTimeoutMS {
+		return CreateModelInput{}, fmt.Errorf("模型超时时间必须位于 %d-%d 毫秒之间", minModelTimeoutMS, maxModelTimeoutMS)
 	}
 
 	contextWindow := input.ContextWindow
@@ -162,11 +116,7 @@ func normalizeCreateModelInput(
 		contextWindow = defaultModelContextWindow
 	}
 	if contextWindow < minModelContextWindow || contextWindow > maxModelContextWindow {
-		return CreateModelInput{}, fmt.Errorf(
-			"模型 Context Window 必须位于 %d-%d Token 之间",
-			minModelContextWindow,
-			maxModelContextWindow,
-		)
+		return CreateModelInput{}, fmt.Errorf("模型 Context Window 必须位于 %d-%d Token 之间", minModelContextWindow, maxModelContextWindow)
 	}
 
 	maxOutputTokens := input.MaxOutputTokens
@@ -174,15 +124,10 @@ func normalizeCreateModelInput(
 		maxOutputTokens = defaultModelMaxOutputTokens
 	}
 	if maxOutputTokens < minModelMaxOutputTokens {
-		return CreateModelInput{}, fmt.Errorf(
-			"模型 Max Output Tokens 不能小于 %d",
-			minModelMaxOutputTokens,
-		)
+		return CreateModelInput{}, fmt.Errorf("模型 Max Output Tokens 不能小于 %d", minModelMaxOutputTokens)
 	}
 	if maxOutputTokens >= contextWindow {
-		return CreateModelInput{}, errors.New(
-			"模型 Max Output Tokens 必须小于 Context Window",
-		)
+		return CreateModelInput{}, errors.New("模型 Max Output Tokens 必须小于 Context Window")
 	}
 
 	capabilities, err := normalizeCapabilityConfig(input.Capabilities)
@@ -212,17 +157,7 @@ func normalizeCreateModelInput(
 func normalizeUpdateModelInput(
 	input UpdateModelInput,
 ) (UpdateModelInput, error) {
-	normalized, err :=
-		normalizeCreateModelInput(
-			CreateModelInput(input),
-		)
-	if err != nil {
-		return UpdateModelInput{}, err
-	}
-
-	return UpdateModelInput(
-		normalized,
-	), nil
+	return normalizeCreateModelInput(input)
 }
 
 func normalizeProviderBaseURL(
@@ -241,15 +176,10 @@ func normalizeProviderBaseURL(
 
 	case ProviderTypeOpenAICompatible:
 		if raw == "" {
-			return "", errors.New(
-				"OpenAI-Compatible Provider 必须配置 Base URL",
-			)
+			return "", errors.New("OpenAI-Compatible Provider 必须配置 Base URL")
 		}
 
-		return normalizeRemoteURL(
-			raw,
-			true,
-		)
+		return normalizeRemoteURL(raw, true)
 
 	case ProviderTypeOllama:
 		if raw == "" {
@@ -257,16 +187,10 @@ func normalizeProviderBaseURL(
 				defaultOllamaBaseURL
 		}
 
-		return normalizeRemoteURL(
-			raw,
-			true,
-		)
+		return normalizeRemoteURL(raw, true)
 
 	default:
-		return "", fmt.Errorf(
-			"不支持的 Provider 类型: %q",
-			providerType,
-		)
+		return "", fmt.Errorf("不支持的 Provider 类型: %q", providerType)
 	}
 }
 
@@ -286,71 +210,43 @@ func normalizeRemoteURL(
 	parsed, err :=
 		url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf(
-			"解析 Provider Base URL 失败: %w",
-			err,
-		)
+		return "", fmt.Errorf("解析 Provider Base URL 失败: %w", err)
 	}
 
 	if !parsed.IsAbs() {
-		return "", errors.New(
-			"Provider Base URL 必须是绝对 URL ",
-		)
+		return "", errors.New("Provider Base URL 必须是绝对 URL ")
 	}
 
 	switch parsed.Scheme {
 	case "https":
 	case "http":
-		if !allowLoopbackHTTP ||
-			!isLoopbackHost(
-				parsed.Hostname(),
-			) {
-			return "", errors.New(
-				"HTTP 模型服务只允许 localhost 或 loopback 地址，公网服务必须使用 HTTPS",
-			)
+		if !allowLoopbackHTTP || !isLoopbackHost(parsed.Hostname()) {
+			return "", errors.New("HTTP 模型服务只允许 localhost 或 loopback 地址，公网服务必须使用 HTTPS")
 		}
 
 	default:
-		return "", fmt.Errorf(
-			"Provider Base URL 不支持协议 %q，只允许 http/https ",
-			parsed.Scheme,
-		)
+		return "", fmt.Errorf("Provider Base URL 不支持协议 %q，只允许 http/https ", parsed.Scheme)
 	}
 
-	if strings.TrimSpace(
-		parsed.Hostname(),
-	) == "" {
-		return "", errors.New(
-			"Provider Base URL 缺少 Host ",
-		)
+	if strings.TrimSpace(parsed.Hostname()) == "" {
+		return "", errors.New("Provider Base URL 缺少 Host ")
 	}
 
 	if parsed.User != nil {
-		return "", errors.New(
-			"Provider Base URL 不允许包含用户名或密码 ",
-		)
+		return "", errors.New("Provider Base URL 不允许包含用户名或密码 ")
 	}
 
 	if parsed.RawQuery != "" {
-		return "", errors.New(
-			"Provider Base URL 不允许包含 Query 参数 ",
-		)
+		return "", errors.New("Provider Base URL 不允许包含 Query 参数 ")
 	}
 
 	if parsed.Fragment != "" {
-		return "", errors.New(
-			"Provider Base URL 不允许包含 Fragment ",
-		)
+		return "", errors.New("Provider Base URL 不允许包含 Fragment ")
 	}
 
-	for _, segment := range strings.Split(
-		parsed.Path,
-		"/",
-	) {
+	for _, segment := range strings.Split(parsed.Path, "/") {
 		if segment == ".." {
-			return "", errors.New(
-				"Provider Base URL 路径中不能包含 ",
-			)
+			return "", errors.New("Provider Base URL 路径中不能包含 ")
 		}
 	}
 
@@ -362,24 +258,16 @@ func normalizeRemoteURL(
 	}
 
 	parsed.Path =
-		strings.TrimSuffix(
-			cleanPath,
-			"/",
-		)
+		strings.TrimSuffix(cleanPath, "/")
 
-	return strings.TrimSuffix(
-		parsed.String(),
-		"/",
-	), nil
+	return strings.TrimSuffix(parsed.String(), "/"), nil
 }
 
 func isLoopbackHost(
 	host string,
 ) bool {
 	host =
-		strings.TrimSpace(
-			strings.ToLower(host),
-		)
+		strings.TrimSpace(strings.ToLower(host))
 
 	if host == "localhost" {
 		return true
@@ -387,8 +275,7 @@ func isLoopbackHost(
 
 	ip := net.ParseIP(host)
 
-	return ip != nil &&
-		ip.IsLoopback()
+	return ip != nil && ip.IsLoopback()
 }
 
 func normalizeRequiredText(
@@ -400,26 +287,16 @@ func normalizeRequiredText(
 		strings.TrimSpace(value)
 
 	if value == "" {
-		return "", fmt.Errorf(
-			"%s不能为空",
-			field,
-		)
+		return "", fmt.Errorf("%s不能为空", field)
 	}
 
 	if len(value) > maxLength {
-		return "", fmt.Errorf(
-			"%s长度不能超过 %d",
-			field,
-			maxLength,
-		)
+		return "", fmt.Errorf("%s长度不能超过 %d", field, maxLength)
 	}
 
 	for _, char := range value {
 		if unicode.IsControl(char) {
-			return "", fmt.Errorf(
-				"%s不能包含控制字符",
-				field,
-			)
+			return "", fmt.Errorf("%s不能包含控制字符", field)
 		}
 	}
 

@@ -100,9 +100,7 @@ func (f *UpdatePlanFactory) Build(ctx context.Context, scope humberttools.Scope)
 			}
 			items[i] = it
 		}
-		result := &UpdatePlanOutput{
-			Items: items, Summary: fmt.Sprintf("%d/%d completed", done, len(items)), Adjusted: adjusted,
-		}
+		result := &UpdatePlanOutput{Items: items, Summary: fmt.Sprintf("%d/%d completed", done, len(items)), Adjusted: adjusted}
 		if adjusted {
 			result.Notice = "检测到多个 in_progress；已保留第一项，其余自动调整为 pending"
 		}

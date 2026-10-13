@@ -14,12 +14,7 @@ const (
 )
 
 // charsPerToken 是语言相关的近似字符比例，不是模型的真实分词结果。
-var charsPerToken = map[string]float64{
-	LangEnglish: 4.0,
-	LangGerman:  4.5,
-	LangChinese: 1.7,
-	LangMixed:   3.0,
-}
+var charsPerToken = map[string]float64{LangEnglish: 4.0, LangGerman: 4.5, LangChinese: 1.7, LangMixed: 3.0}
 
 // ApproxTokenCount 根据字符数量与语言比例近似估算 token 数。
 func ApproxTokenCount(text, lang string) int {
@@ -60,10 +55,7 @@ func DetectLanguage(text string) string {
 
 	for _, r := range text {
 		switch {
-		case unicode.Is(unicode.Han, r) ||
-			unicode.Is(unicode.Hangul, r) ||
-			unicode.Is(unicode.Hiragana, r) ||
-			unicode.Is(unicode.Katakana, r):
+		case unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hangul, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r):
 			cjk++
 
 		case isGermanUmlaut(r):
@@ -119,16 +111,7 @@ func hasGermanWords(text string) bool {
 		text = text[:sampleSize]
 	}
 
-	germanWords := []string{
-		" der ",
-		" die ",
-		" das ",
-		" und ",
-		" ist ",
-		" nicht ",
-		" mit ",
-		" auf ",
-	}
+	germanWords := []string{" der ", " die ", " das ", " und ", " ist ", " nicht ", " mit ", " auf "}
 
 	for _, word := range germanWords {
 		if containsLower(text, word) {

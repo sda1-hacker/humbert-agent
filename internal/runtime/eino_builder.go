@@ -15,7 +15,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
-	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
@@ -43,12 +42,12 @@ func buildChatModelAgent(ctx context.Context, snapshot *Snapshot, description st
 // 子 Agent 使用独立的 Context 标识，但辅助模型调用仍计入父运行预算。
 func (r *Resolver) buildAgentHandlers(ctx context.Context, accounting *Snapshot, roles resolvedModelRoles,
 	skillSnapshot skills.RuntimeSnapshot, scope humberttools.Scope, names []string, budget contextengine.Budget,
-	toolTokens int, contextID, instruction string, providerType models.ProviderType,
+	toolTokens int, contextID, instruction string,
 ) ([]adk.ChatModelAgentMiddleware, *contextengine.MidRunCompactor, error) {
 	compactModel := compactionModel(roles)
 	handler, err := r.contextEngine.NewMidRunHandler(contextID, instruction,
 		trackAuxiliaryModel(compactModel, modelRoleUtility, accounting), compactModel.ContextWindow,
-		compactModel.MaxOutputTokens, budget, toolTokens, reasoningReplayPolicyForProvider(providerType))
+		compactModel.MaxOutputTokens, budget, toolTokens, reasoningReplayPolicyForModel(roles.chat))
 	if err != nil {
 		return nil, nil, fmt.Errorf("创建 MidRun Context Middleware 失败: %w", err)
 	}
@@ -139,7 +138,7 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 	eventSnapshot.MaxIterations = r.maxIterations
 	handlers, _, err := r.buildAgentHandlers(ctx, eventSnapshot, roles, skillSnapshot, toolScope,
 		exposedNames, budget, toolTokens,
-		input.ParentScope.SessionID+"/subagent/"+childInfo.Agent.ID, instruction, modelSnapshot.ProviderType)
+		input.ParentScope.SessionID+"/subagent/"+childInfo.Agent.ID, instruction)
 	if err != nil {
 		return collaboration.BuiltAgent{}, err
 	}

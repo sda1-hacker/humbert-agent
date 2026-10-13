@@ -332,11 +332,7 @@ func (s *SkillService) InstallSkill(sourceDirectory string) (SkillDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceInstallTimeout)
 	defer cancel()
 
-	value, err := s.deps.Skills.InstallFromDirectory(ctx, sourceDirectory)
-	if err != nil {
-		return SkillDTO{}, fmt.Errorf("安装本地 Skill 失败: %w", err)
-	}
-	return projectSkillDTO(value), nil
+	return dtoResult("安装本地 Skill 失败: %w", projectSkillDTO)(s.deps.Skills.InstallFromDirectory(ctx, sourceDirectory))
 }
 
 // InstallSkillFromURL 从公开 HTTPS Skill 来源安装 Skill。
@@ -354,11 +350,7 @@ func (s *SkillService) InstallSkillFromURL(sourceURL string, skillPath string) (
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	value, err := s.deps.Skills.InstallFromURL(ctx, sourceURL, skillPath)
-	if err != nil {
-		return SkillDTO{}, fmt.Errorf("安装远程 Skill 失败: %w", err)
-	}
-	return projectSkillDTO(value), nil
+	return dtoResult("安装远程 Skill 失败: %w", projectSkillDTO)(s.deps.Skills.InstallFromURL(ctx, sourceURL, skillPath))
 }
 
 // DiscoverSkillSource 扫描公开 HTTPS 仓库/归档中的 Skill，不修改本地 Catalog。
@@ -368,11 +360,7 @@ func (s *SkillService) DiscoverSkillSource(sourceURL string, skillPath string) (
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
-	result, err := s.deps.Skills.DiscoverFromURL(ctx, sourceURL, skillPath)
-	if err != nil {
-		return SkillDiscoveryDTO{}, fmt.Errorf("扫描远程 Skill Source 失败: %w", err)
-	}
-	return projectSkillDiscovery(result), nil
+	return dtoResult("扫描远程 Skill Source 失败: %w", projectSkillDiscovery)(s.deps.Skills.DiscoverFromURL(ctx, sourceURL, skillPath))
 }
 
 // DiscoverLocalSkillSource 扫描用户选择的本地 Skill/仓库目录，不执行安装。
@@ -382,11 +370,7 @@ func (s *SkillService) DiscoverLocalSkillSource(sourceDirectory string) (SkillDi
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), skillServiceReadTimeout)
 	defer cancel()
-	result, err := s.deps.Skills.DiscoverFromDirectory(ctx, sourceDirectory)
-	if err != nil {
-		return SkillDiscoveryDTO{}, fmt.Errorf("扫描本地 Skill Source 失败: %w", err)
-	}
-	return projectSkillDiscovery(result), nil
+	return dtoResult("扫描本地 Skill Source 失败: %w", projectSkillDiscovery)(s.deps.Skills.DiscoverFromDirectory(ctx, sourceDirectory))
 }
 
 // InstallDiscoveredSkillsFromURL 从同一次远程 Source 选择中原子安装多个 Skill。
@@ -455,11 +439,7 @@ func (s *SkillService) UpdateSkill(name string) (SkillUpdateResultDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.deps.Skills.Update(ctx, name)
-	if err != nil {
-		return SkillUpdateResultDTO{}, fmt.Errorf("更新 Skill 失败: %w", err)
-	}
-	return projectSkillUpdateResult(result), nil
+	return dtoResult("更新 Skill 失败: %w", projectSkillUpdateResult)(s.deps.Skills.Update(ctx, name))
 }
 
 // ReinstallSkill 从已记录来源强制重新安装 Skill。
@@ -470,11 +450,7 @@ func (s *SkillService) ReinstallSkill(name string) (SkillUpdateResultDTO, error)
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.deps.Skills.Reinstall(ctx, name)
-	if err != nil {
-		return SkillUpdateResultDTO{}, fmt.Errorf("重新安装 Skill 失败: %w", err)
-	}
-	return projectSkillUpdateResult(result), nil
+	return dtoResult("重新安装 Skill 失败: %w", projectSkillUpdateResult)(s.deps.Skills.Reinstall(ctx, name))
 }
 
 // ReinstallSkillFromURL 为旧版本/手工安装的 Skill 建立远程来源，或显式更换来源。
@@ -485,11 +461,7 @@ func (s *SkillService) ReinstallSkillFromURL(name string, sourceURL string, skil
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.deps.Skills.ReinstallFromURL(ctx, name, sourceURL, skillPath)
-	if err != nil {
-		return SkillUpdateResultDTO{}, fmt.Errorf("从 URL 重新安装 Skill 失败: %w", err)
-	}
-	return projectSkillUpdateResult(result), nil
+	return dtoResult("从 URL 重新安装 Skill 失败: %w", projectSkillUpdateResult)(s.deps.Skills.ReinstallFromURL(ctx, name, sourceURL, skillPath))
 }
 
 // ReinstallSkillFromDirectory 为旧版本/手工安装的 Skill 建立本地来源，或显式更换来源。
@@ -500,11 +472,7 @@ func (s *SkillService) ReinstallSkillFromDirectory(name string, sourceDirectory 
 	ctx, cancel := context.WithTimeout(context.Background(), s.skillMutationTimeout())
 	defer cancel()
 
-	result, err := s.deps.Skills.ReinstallFromDirectory(ctx, name, sourceDirectory)
-	if err != nil {
-		return SkillUpdateResultDTO{}, fmt.Errorf("从本地目录重新安装 Skill 失败: %w", err)
-	}
-	return projectSkillUpdateResult(result), nil
+	return dtoResult("从本地目录重新安装 Skill 失败: %w", projectSkillUpdateResult)(s.deps.Skills.ReinstallFromDirectory(ctx, name, sourceDirectory))
 }
 
 // SetSkillAlias 设置或清除一个 Skill 的本地展示别名。
@@ -576,11 +544,7 @@ func projectSkillAgents(values []agents.AgentInfo) []SkillAgentDTO {
 		if id == "" {
 			continue
 		}
-		result = append(result, SkillAgentDTO{
-			ID:            id,
-			Name:          strings.TrimSpace(value.Agent.Name),
-			EnabledSkills: append([]string(nil), value.Agent.EnabledSkills...),
-		})
+		result = append(result, SkillAgentDTO{ID: id, Name: strings.TrimSpace(value.Agent.Name), EnabledSkills: append([]string(nil), value.Agent.EnabledSkills...)})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Name != result[j].Name {

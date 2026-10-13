@@ -92,7 +92,7 @@ func (f *Factory) Create(ctx context.Context, resolved ResolvedModel) (einomodel
 	if err != nil {
 		return nil, fmt.Errorf("创建 %s ChatModel 失败: %w", providerType, err)
 	}
-	return &reasoningOmittingModel{inner: value}, nil
+	return &reasoningModel{inner: value, replay: supportsReasoningReplay(providerType, resolved.Model.ModelName)}, nil
 }
 
 // newStreamingHTTPClient 创建适用于 LLM SSE/Streaming 的 HTTP Client。

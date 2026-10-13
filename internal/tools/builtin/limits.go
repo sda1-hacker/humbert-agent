@@ -35,21 +35,15 @@ type FileLimits struct {
 // Validate 校验 File Tool Limits。
 func (c FileLimits) Validate() error {
 	if c.MaxReadableFileBytes <= 0 {
-		return errors.New(
-			"MaxReadableFileBytes 必须大于 0",
-		)
+		return errors.New("MaxReadableFileBytes 必须大于 0")
 	}
 
 	if c.MaxReadLines <= 0 {
-		return errors.New(
-			"MaxReadLines 必须大于 0",
-		)
+		return errors.New("MaxReadLines 必须大于 0")
 	}
 
 	if c.MaxListEntries <= 0 {
-		return errors.New(
-			"MaxListEntries 必须大于 0",
-		)
+		return errors.New("MaxListEntries 必须大于 0")
 	}
 
 	return nil

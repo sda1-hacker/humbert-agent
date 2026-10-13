@@ -6,6 +6,8 @@
 
 Service 保留现有名称、方法、请求和返回 DTO，负责超时、桌面对话框、DTO 转换和 Wails 事件桥。Agent/会话删除、Skill 引用检查、MCP 凭据提交与失败清理由应用用例复用。会话和文件搜索资源归 `searchindex.Service` 所有，Wails 入口只查询并返回 `updating` 状态。
 
+`result.go` 的 `dtoResult` 复用简单的“领域调用 → 包装错误 → DTO 转换”出口；方法仍自行创建 Context 和控制副作用顺序，出错时不执行转换。`mapDTO` 保持列表的空数组语义。模型创建与更新复用 `SaveModelRequest.modelInput`；`ModelCapabilitiesDTO` 直接别名到领域能力类型，JSON 字段保持原样。
+
 `WorkspaceDependencies.WorkspaceView` 现在指向 `usecases.WorkspaceQuery`，不再依赖单独的 workspaceview 包。WorkspaceService 的 Overview/ListDirectory/PreviewFile/SearchDocuments 名称、超时和 DTO 字段保持原样；查询仍按 AgentID 读取当前配置，前端不能指定任意绝对根目录。
 
 `AgentService.ListAgents` 在一次请求中只生成一份内置工具目录和 Sandbox 状态，再投影各 Agent 的专属配置与工作区路径。目录不跨请求缓存，下一次读取能看到新的全局策略；各 DTO 的可选择工具切片独立，修改某一项不会污染其他 Agent。单项查询和保存返回仍复用同一 DTO 投影。工具名称存在性校验不维护多余的去重集合，实际规范化与去重由 Agent 领域负责。
@@ -20,4 +22,4 @@ Service 保留现有名称、方法、请求和返回 DTO，负责超时、桌�
 
 `SkillMetadataDTO` 定义列表/详情的共同元数据，并匿名嵌入 `SkillDTO`、`SkillDetailDTO`，JSON 仍是原有顶层字段。`projectSkillMetadata` 唯一转换公共字段，复制 Metadata、诊断和解释器信息；更新时间共用 UTC RFC3339Nano 格式化。列表额外包含有效性/引用，详情额外包含文件树，正文仍按需查询。
 
-Skills State 只投影并排序一次 Agent 列表；`buildSkillUsageMap` 沿同一排序建立引用桶，按 Agent 去除重复 Skill 名称。UsedByAgents 保持最小身份信息，EnabledSkills 留空；各列表的可变集合仍独立。后端测试验证扁平 JSON 字段、null/空数组、UTC 时间、引用顺序与复制隔离，无需新增前端测试。
+Skills State 只投影并排序一次 Agent 列表；`buildSkillUsageMap` 沿同一排序建立引用桶，按 Agent 去除重复 Skill 名称。UsedByAgents 保持最小身份信息，EnabledSkills 留空；各列表的可变集合仍独立。本次归档回归验证了扁平 JSON 字段、null/空数组、UTC 时间、引用顺序与复制隔离；现有测试代码已按维护者要求移出仓库。

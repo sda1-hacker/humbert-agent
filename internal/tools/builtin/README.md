@@ -31,7 +31,7 @@ flowchart TD
 
 `glob_files` 递归查找文件名，`list_files` 列目录。`run_command` 支持程序名、绝对路径和相对工作目录的程序路径；`commandenv` 统一处理审批身份与执行路径，并补足桌面启动时缺少的 Homebrew、Go 等 PATH。命令按当前 Sandbox 目录权限执行，允许工作区内构建与编辑；每次调用有独立临时目录。风险审批模式自动允许原生隔离下可识别的常规检查（如 `go vet/test/build`），删除和未知脚本等请求确认。会话或 Agent 长期允许绑定完整 argv、工作目录与超时的指纹。请求审批模式忽略历史 Allow；完全操作模式不再询问，并在下一轮采用全目录文件权限。权限 Allow 本身仍不能突破当前轮的冻结沙箱。
 
-风险审批下，内置 `glob_files`、`grep_files`、`list_files`、`read_file` 查询工作区外的已授权目录也不会弹窗；查询不会自行扩大权限，实际路径仍经 `PathGuard` 校验。`filesystem_approval_test.go` 从真实 Registry/Permission Guard 走到 Eino 文件工具，同时覆盖外部目录正常查询与受保护目录拒绝。
+风险审批下，内置 `glob_files`、`grep_files`、`list_files`、`read_file` 查询工作区外的已授权目录也不会弹窗；查询不会自行扩大权限，实际路径仍经 `PathGuard` 校验。本次仓库外归档回归从真实 Registry/Permission Guard 走到 Eino 文件工具，验证了外部目录正常查询与受保护目录拒绝；现有测试代码已按维护者要求移出仓库。
 
 调试一个工具：先从 `app/tools.go` 找注册名，再看本文件 Factory 的 `Descriptor`/`Build`/`run`，最后查 `GuardInvokableTool` 与 `runtime.Executor` 的 Tool Started/Completed 事件和对应 JSONL ToolResult。
 

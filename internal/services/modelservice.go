@@ -37,14 +37,7 @@ type ModelCapabilityConfigDTO struct {
 }
 
 // ModelCapabilitiesDTO 是 Runtime 经过 Auto 推断 + Override 后的有效能力。
-type ModelCapabilitiesDTO struct {
-	Tools     bool `json:"tools"`
-	Vision    bool `json:"vision"`
-	Files     bool `json:"files"`
-	Reasoning bool `json:"reasoning"`
-	JSON      bool `json:"json"`
-	Audio     bool `json:"audio"`
-}
+type ModelCapabilitiesDTO = models.Capabilities
 
 // ModelDTO 是返回给 Vue 的 Model 数据。
 type ModelDTO struct {
@@ -171,11 +164,7 @@ func (s *ModelService) UpdateMultimediaConfig(request MultimediaConfigDTO) (Mult
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err := s.deps.Models.SetMultimediaConfig(ctx, models.MultimediaConfig{ImageModelID: request.ImageModelID})
-	if err != nil {
-		return MultimediaConfigDTO{}, fmt.Errorf("更新多媒体模型配置失败: %w", err)
-	}
-	return multimediaConfigDTO(value), nil
+	return dtoResult("更新多媒体模型配置失败: %w", multimediaConfigDTO)(s.deps.Models.SetMultimediaConfig(ctx, models.MultimediaConfig{ImageModelID: request.ImageModelID}))
 }
 
 // CreateProvider 创建 Provider。
@@ -183,25 +172,8 @@ func (s *ModelService) CreateProvider(request CreateProviderRequest) (ProviderDT
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err :=
-		s.deps.Models.
-			CreateProvider(
-				ctx,
-				models.CreateProviderInput{
-					Name: request.Name,
-
-					Type: models.ProviderType(request.Type),
-
-					BaseURL: request.BaseURL,
-
-					APIKey: request.APIKey,
-				},
-			)
-	if err != nil {
-		return ProviderDTO{}, fmt.Errorf("创建 Provider 失败: %w", err)
-	}
-
-	return toProviderDTO(value), nil
+	return dtoResult("创建 Provider 失败: %w", toProviderDTO)(s.deps.Models.CreateProvider(ctx,
+		models.CreateProviderInput{Name: request.Name, Type: models.ProviderType(request.Type), BaseURL: request.BaseURL, APIKey: request.APIKey}))
 }
 
 // UpdateProvider 修改 Provider。
@@ -209,28 +181,8 @@ func (s *ModelService) UpdateProvider(id string, request UpdateProviderRequest) 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err :=
-		s.deps.Models.
-			UpdateProvider(
-				ctx,
-				id,
-				models.UpdateProviderInput{
-					Name: request.Name,
-
-					Type: models.ProviderType(request.Type),
-
-					BaseURL: request.BaseURL,
-
-					APIKey: request.APIKey,
-
-					UpdateAPIKey: request.UpdateAPIKey,
-				},
-			)
-	if err != nil {
-		return ProviderDTO{}, fmt.Errorf("修改 Provider 失败: %w", err)
-	}
-
-	return toProviderDTO(value), nil
+	return dtoResult("修改 Provider 失败: %w", toProviderDTO)(s.deps.Models.UpdateProvider(ctx, id,
+		models.UpdateProviderInput{Name: request.Name, Type: models.ProviderType(request.Type), BaseURL: request.BaseURL, APIKey: request.APIKey, UpdateAPIKey: request.UpdateAPIKey}))
 }
 
 // DeleteProvider 删除 Provider。
@@ -251,28 +203,7 @@ func (s *ModelService) CreateModel(request SaveModelRequest) (ModelDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err :=
-		s.deps.Models.
-			CreateModel(
-				ctx,
-				models.CreateModelInput{
-					ProviderID: request.ProviderID,
-
-					ModelName: request.ModelName,
-
-					DisplayName: request.DisplayName,
-
-					TimeoutMS: request.TimeoutMS,
-
-					ContextWindow: request.ContextWindow,
-
-					MaxOutputTokens: request.MaxOutputTokens,
-
-					Capabilities: capabilityConfigFromDTO(request.CapabilityConfig),
-
-					Enabled: request.Enabled,
-				},
-			)
+	value, err := s.deps.Models.CreateModel(ctx, request.modelInput())
 	if err != nil {
 		return ModelDTO{}, fmt.Errorf("创建 Model 失败: %w", err)
 	}
@@ -285,29 +216,7 @@ func (s *ModelService) UpdateModel(id string, request SaveModelRequest) (ModelDT
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err :=
-		s.deps.Models.
-			UpdateModel(
-				ctx,
-				id,
-				models.UpdateModelInput{
-					ProviderID: request.ProviderID,
-
-					ModelName: request.ModelName,
-
-					DisplayName: request.DisplayName,
-
-					TimeoutMS: request.TimeoutMS,
-
-					ContextWindow: request.ContextWindow,
-
-					MaxOutputTokens: request.MaxOutputTokens,
-
-					Capabilities: capabilityConfigFromDTO(request.CapabilityConfig),
-
-					Enabled: request.Enabled,
-				},
-			)
+	value, err := s.deps.Models.UpdateModel(ctx, id, request.modelInput())
 	if err != nil {
 		return ModelDTO{}, fmt.Errorf("修改 Model 失败: %w", err)
 	}
@@ -428,13 +337,7 @@ func (s *ModelService) modelDTOByID(ctx context.Context, id string) (ModelDTO, e
 }
 
 func toProviderDTOs(values []models.Provider) []ProviderDTO {
-	result := make([]ProviderDTO, 0, len(values))
-
-	for _, value := range values {
-		result = append(result, toProviderDTO(value))
-	}
-
-	return result
+	return mapDTO(values, toProviderDTO)
 }
 
 func toProviderDTO(value models.Provider) ProviderDTO {
@@ -456,13 +359,7 @@ func toProviderDTO(value models.Provider) ProviderDTO {
 }
 
 func toModelDTOs(values []models.ModelInfo) []ModelDTO {
-	result := make([]ModelDTO, 0, len(values))
-
-	for _, value := range values {
-		result = append(result, toModelDTO(value))
-	}
-
-	return result
+	return mapDTO(values, toModelDTO)
 }
 
 func toModelDTO(value models.ModelInfo) ModelDTO {
@@ -519,9 +416,14 @@ func capabilityConfigDTO(value models.CapabilityConfig) ModelCapabilityConfigDTO
 }
 
 func capabilitiesDTO(value models.Capabilities) ModelCapabilitiesDTO {
-	return ModelCapabilitiesDTO{
-		Tools: value.Tools, Vision: value.Vision, Files: value.Files,
-		Reasoning: value.Reasoning, JSON: value.JSON, Audio: value.Audio,
+	return value
+}
+
+func (request SaveModelRequest) modelInput() models.CreateModelInput {
+	return models.CreateModelInput{
+		ProviderID: request.ProviderID, ModelName: request.ModelName, DisplayName: request.DisplayName,
+		TimeoutMS: request.TimeoutMS, ContextWindow: request.ContextWindow, MaxOutputTokens: request.MaxOutputTokens,
+		Capabilities: capabilityConfigFromDTO(request.CapabilityConfig), Enabled: request.Enabled,
 	}
 }
 

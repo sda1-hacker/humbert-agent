@@ -82,13 +82,7 @@ func (e *AgentExecutor) Execute(ctx context.Context, event Event, decision Decis
 		Prompt:    prompt,
 		Origin:    "proactive",
 		OriginRef: event.Key,
-		Limits: tasks.Limits{
-			MaxDurationSeconds: 15 * 60,
-			MaxModelCalls:      12,
-			MaxToolCalls:       30,
-			MaxAttempts:        1,
-			RetryDelaySeconds:  30,
-		},
+		Limits:    tasks.Limits{MaxDurationSeconds: 15 * 60, MaxModelCalls: 12, MaxToolCalls: 30, MaxAttempts: 1, RetryDelaySeconds: 30},
 	})
 	if err != nil {
 		return ExecutionResult{}, err

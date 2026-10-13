@@ -38,12 +38,7 @@ func NewManager(timeout time.Duration, permissions *permission.Engine, logger *l
 	if timeout <= 0 {
 		return nil, errors.New("ApprovalManager timeout 必须大于 0")
 	}
-	return &Manager{
-		permissions: permissions,
-		logger:      logger,
-		timeout:     timeout,
-		requests:    make(map[string]Request),
-	}, nil
+	return &Manager{permissions: permissions, logger: logger, timeout: timeout, requests: make(map[string]Request)}, nil
 }
 
 // UpdateTimeout 更新后续新 Approval Request 使用的等待超时。

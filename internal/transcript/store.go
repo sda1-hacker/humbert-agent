@@ -79,11 +79,9 @@ func NewStore(agentsRoot string) (*Store, error) {
 
 	return &Store{
 		agentsRoot: absoluteRoot,
-		locks: &lockRegistry{
-			values: make(map[string]*lockEntry),
-		},
-		cache:     newDocumentCache(),
-		locations: newLocationCache(),
+		locks:      &lockRegistry{values: make(map[string]*lockEntry)},
+		cache:      newDocumentCache(),
+		locations:  newLocationCache(),
 	}, nil
 }
 
@@ -134,13 +132,7 @@ func (s *Store) CreateSession(ctx context.Context, input CreateSessionInput) err
 		createdAt = time.Now().UTC()
 	}
 
-	header := SessionHeader{
-		Type:      "session",
-		Version:   CurrentVersion,
-		ID:        input.ID,
-		Timestamp: formatTime(createdAt),
-		CWD:       strings.TrimSpace(input.CWD),
-	}
+	header := SessionHeader{Type: "session", Version: CurrentVersion, ID: input.ID, Timestamp: formatTime(createdAt), CWD: strings.TrimSpace(input.CWD)}
 
 	line, err := encodeJSONLine(header)
 	if err != nil {
@@ -197,12 +189,7 @@ func (s *Store) AppendMessage(
 		return Entry{}, err
 	}
 
-	entry := Entry{
-		Type:      EntryMessage,
-		ID:        uuid.NewString(),
-		Timestamp: formatTime(time.Now().UTC()),
-		Message:   &message,
-	}
+	entry := Entry{Type: EntryMessage, ID: uuid.NewString(), Timestamp: formatTime(time.Now().UTC()), Message: &message}
 
 	return s.appendEntry(ctx, agentID, sessionID, entry, "")
 }
@@ -626,12 +613,7 @@ func (s *Store) appendEntry(
 	// append 前执行 compare-and-append 检查；即使 firstKeptEntryId 仍属于同一 ActiveBranch，
 	// 只要期间追加过新节点，也拒绝提交旧摘要。普通 Message append 不使用该约束。
 	if expectedLeafID != "" && document.LeafID != expectedLeafID {
-		return Entry{}, fmt.Errorf(
-			"%w: expected_leaf_id=%s actual_leaf_id=%s",
-			ErrCompactionStale,
-			expectedLeafID,
-			document.LeafID,
-		)
+		return Entry{}, fmt.Errorf("%w: expected_leaf_id=%s actual_leaf_id=%s", ErrCompactionStale, expectedLeafID, document.LeafID)
 	}
 
 	if entry.Type == EntryCompaction {

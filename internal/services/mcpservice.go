@@ -457,10 +457,7 @@ func toMCPServerDTO(value humbertmcp.Server, status humbertmcp.RuntimeStatus) MC
 		dto.HasBearerCredential = strings.TrimSpace(value.HTTP.BearerCredentialID) != ""
 		dto.Headers = make([]MCPHTTPHeaderDTO, 0, len(value.HTTP.Headers))
 		for _, header := range value.HTTP.Headers {
-			dto.Headers = append(dto.Headers, MCPHTTPHeaderDTO{
-				Name:          header.Name,
-				HasCredential: strings.TrimSpace(header.CredentialID) != "",
-			})
+			dto.Headers = append(dto.Headers, MCPHTTPHeaderDTO{Name: header.Name, HasCredential: strings.TrimSpace(header.CredentialID) != ""})
 		}
 	}
 	return dto

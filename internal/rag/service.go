@@ -219,9 +219,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 
 	baseCfg := chunker.NormalizeSplitterConfig(req.Splitter)
 
-	response := IngestResponse{
-		Documents: make([]IngestDocumentResult, 0, len(sourceDocs)),
-	}
+	response := IngestResponse{Documents: make([]IngestDocumentResult, 0, len(sourceDocs))}
 
 	for index, sourceDoc := range sourceDocs {
 		if err := ctx.Err(); err != nil {
@@ -262,32 +260,18 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 		}{Version: "humbert-rag-v2", Splitter: baseCfg, ParentChild: req.ParentChild}
 
 		if req.ParentChild {
-			parentCfg, childCfg := chunker.DeriveParentChildConfigs(
-				baseCfg,
-				req.ParentChunkSize,
-				req.ChildChunkSize,
-			)
+			parentCfg, childCfg := chunker.DeriveParentChildConfigs(baseCfg, req.ParentChunkSize, req.ChildChunkSize)
 			processConfig.ParentSplitter, processConfig.ChildSplitter = &parentCfg, &childCfg
 
 			parentChild, diagnostics := chunker.SplitParentChildWithDiagnostics(markdown, parentCfg, childCfg)
 			diag = diagnostics
 
-			batch = buildParentChildBatch(
-				req.CollectionID,
-				sourceDoc,
-				markdown,
-				parentChild,
-			)
+			batch = buildParentChildBatch(req.CollectionID, sourceDoc, markdown, parentChild)
 		} else {
 			chunks, diagnostics := chunker.SplitWithDiagnostics(markdown, baseCfg)
 			diag = diagnostics
 
-			batch = buildFlatBatch(
-				req.CollectionID,
-				sourceDoc,
-				markdown,
-				chunks,
-			)
+			batch = buildFlatBatch(req.CollectionID, sourceDoc, markdown, chunks)
 		}
 
 		batch.Attempt = attempt
@@ -438,13 +422,7 @@ func buildFlatBatch(
 	for _, chunk := range chunks {
 		chunkID := fmt.Sprintf("%s#chunk-%06d", source.ID, chunk.Seq)
 
-		batch.Children = append(batch.Children, buildChunkRecord(
-			source,
-			chunk,
-			chunkID,
-			ChunkTypeText,
-			"",
-		))
+		batch.Children = append(batch.Children, buildChunkRecord(source, chunk, chunkID, ChunkTypeText, ""))
 	}
 
 	return batch
@@ -473,13 +451,7 @@ func buildParentChildBatch(
 		parentID := fmt.Sprintf("%s#parent-%06d", source.ID, parent.Seq)
 		parentIDs[i] = parentID
 
-		batch.Parents = append(batch.Parents, buildChunkRecord(
-			source,
-			parent,
-			parentID,
-			ChunkTypeParentText,
-			"",
-		))
+		batch.Parents = append(batch.Parents, buildChunkRecord(source, parent, parentID, ChunkTypeParentText, ""))
 	}
 
 	for _, child := range result.Children {
@@ -491,13 +463,7 @@ func buildParentChildBatch(
 
 		childID := fmt.Sprintf("%s#chunk-%06d", source.ID, child.Seq)
 
-		batch.Children = append(batch.Children, buildChunkRecord(
-			source,
-			child.Chunk,
-			childID,
-			ChunkTypeText,
-			parentID,
-		))
+		batch.Children = append(batch.Children, buildChunkRecord(source, child.Chunk, childID, ChunkTypeText, parentID))
 	}
 
 	return batch

@@ -124,13 +124,7 @@ func (m *Manager) SetAlias(ctx context.Context, name string, alias string) error
 		return err
 	}
 
-	m.logger.Info(
-		ctx,
-		"Skill 展示 Alias 已更新",
-		"operation", "skill.alias.update",
-		"skill_name", name,
-		"alias_set", alias != "",
-	)
+	m.logger.Info(ctx, "Skill 展示 Alias 已更新", "operation", "skill.alias.update", "skill_name", name, "alias_set", alias != "")
 	return nil
 }
 
@@ -139,10 +133,7 @@ func (m *Manager) overridesPath() string {
 }
 
 func (m *Manager) readOverridesLocked(ctx context.Context) (skillOverridesDocument, error) {
-	document := skillOverridesDocument{
-		SchemaVersion: skillOverridesSchemaVersion,
-		Skills:        make(map[string]skillOverride),
-	}
+	document := skillOverridesDocument{SchemaVersion: skillOverridesSchemaVersion, Skills: make(map[string]skillOverride)}
 	path := m.overridesPath()
 	if err := atomicfile.ReadJSON(ctx, path, &document); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -151,10 +142,7 @@ func (m *Manager) readOverridesLocked(ctx context.Context) (skillOverridesDocume
 		return skillOverridesDocument{}, fmt.Errorf("读取 Skill 展示配置失败: %w", err)
 	}
 	if document.SchemaVersion != skillOverridesSchemaVersion {
-		return skillOverridesDocument{}, fmt.Errorf(
-			"读取 Skill 展示配置失败: 不支持 schema_version=%d",
-			document.SchemaVersion,
-		)
+		return skillOverridesDocument{}, fmt.Errorf("读取 Skill 展示配置失败: 不支持 schema_version=%d", document.SchemaVersion)
 	}
 	if document.Skills == nil {
 		document.Skills = make(map[string]skillOverride)

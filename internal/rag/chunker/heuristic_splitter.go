@@ -132,10 +132,7 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 	// PDF 换页符是高优先级结构边界。
 
 	for _, index := range allRuneIndices(text, "\f") {
-		bounds = append(bounds, boundary{
-			runeStart: index,
-			priority:  PrioFormFeed,
-		})
+		bounds = append(bounds, boundary{runeStart: index, priority: PrioFormFeed})
 	}
 
 	// -------------------------------------------------------------------------
@@ -161,10 +158,7 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 
 			for _, pattern := range chapterPatterns {
 				if pattern.MatchString(line) {
-					bounds = append(bounds, boundary{
-						runeStart: runePos,
-						priority:  PrioChapterMarker,
-					})
+					bounds = append(bounds, boundary{runeStart: runePos, priority: PrioChapterMarker})
 
 					added = true
 					break
@@ -174,10 +168,7 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 			// 识别整数或多级编号的小节标题。
 
 			if !added && NumberedSectionPattern.MatchString(line) {
-				bounds = append(bounds, boundary{
-					runeStart: runePos,
-					priority:  PrioNumberedHead,
-				})
+				bounds = append(bounds, boundary{runeStart: runePos, priority: PrioNumberedHead})
 
 				added = true
 			}
@@ -185,10 +176,7 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 			// 识别全大写短标题。
 
 			if !added && AllCapsHeadingPattern.MatchString(line) {
-				bounds = append(bounds, boundary{
-					runeStart: runePos,
-					priority:  PrioAllCapsHeading,
-				})
+				bounds = append(bounds, boundary{runeStart: runePos, priority: PrioAllCapsHeading})
 
 				added = true
 			}
@@ -196,10 +184,7 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 			// 识别连续星号或下划线等视觉分隔线。
 
 			if !added && VisualSeparatorPattern.MatchString(line) {
-				bounds = append(bounds, boundary{
-					runeStart: runePos,
-					priority:  PrioVisualSep,
-				})
+				bounds = append(bounds, boundary{runeStart: runePos, priority: PrioVisualSep})
 
 				added = true
 			}
@@ -207,10 +192,7 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 			// 匹配中英文和德语页脚。
 
 			if !added && PageFooterPattern.MatchString(line) {
-				bounds = append(bounds, boundary{
-					runeStart: runePos,
-					priority:  PrioPageFooter,
-				})
+				bounds = append(bounds, boundary{runeStart: runePos, priority: PrioPageFooter})
 			}
 		}
 
@@ -229,10 +211,7 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 	for _, location := range ExcessiveBlanksPattern.FindAllStringIndex(text, -1) {
 		runeStart := RuneLen(text[:location[1]])
 
-		bounds = append(bounds, boundary{
-			runeStart: runeStart,
-			priority:  PrioBlankBlock,
-		})
+		bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioBlankBlock})
 	}
 
 	if len(bounds) == 0 {
@@ -336,12 +315,7 @@ func appendChunk(out []Chunk, runes []rune, start, end int, seq *int) []Chunk {
 		return out
 	}
 
-	out = append(out, Chunk{
-		Content: content,
-		Seq:     *seq,
-		Start:   start,
-		End:     end,
-	})
+	out = append(out, Chunk{Content: content, Seq: *seq, Start: start, End: end})
 
 	(*seq)++
 
@@ -403,9 +377,7 @@ func applyOverlapAligned(runes []rune, curEnd, overlap int, bounds []boundary) i
 	bestBoundary := -1
 
 	for _, item := range bounds {
-		if item.runeStart >= windowStart &&
-			item.runeStart < curEnd &&
-			item.runeStart > bestBoundary {
+		if item.runeStart >= windowStart && item.runeStart < curEnd && item.runeStart > bestBoundary {
 
 			bestBoundary = item.runeStart
 		}

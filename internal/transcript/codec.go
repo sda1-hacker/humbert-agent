@@ -68,11 +68,7 @@ func EncodeMessage(message *schema.Message, options EncodeOptions) (AgentMessage
 		if err != nil {
 			return AgentMessage{}, fmt.Errorf("编码 UserMessage 失败: %w", err)
 		}
-		return AgentMessage{
-			Role:      RoleUser,
-			Content:   content,
-			Timestamp: timestamp.UnixMilli(),
-		}, nil
+		return AgentMessage{Role: RoleUser, Content: content, Timestamp: timestamp.UnixMilli()}, nil
 
 	case schema.Assistant:
 		content, err := encodeAssistantContent(message)
@@ -140,12 +136,9 @@ func EncodeMessage(message *schema.Message, options EncodeOptions) (AgentMessage
 // Thinking 恢复到 schema.Message.ReasoningContent；ToolCall 恢复到 schema.ToolCalls；
 // ToolResult 恢复成标准 schema.Tool Message。
 //
-// 这里刻意不把历史 Thinking 重新放进 AssistantGenMultiContent.Reasoning。当前
-// eino-ext OpenAI/OpenAI-Compatible Adapter 会把 AssistantGenMultiContent 当作普通多模态
-// Chat Message Part 编码，而其 Chat Completions 请求并不接受 reasoning part，历史会话一旦
-// 包含 Thinking，就会报：
-//
-//	unsupported chat message part type for AssistantGenMultiContent: reasoning
+// 历史 Thinking 统一恢复到 ReasoningContent，正文恢复到 Content，不重新构造结构化
+// reasoning part。模型出站边界将本轮生成的文本/推理块归一到同一表示，避免结构差异
+// 改变重放前缀；是否发送原生 reasoning_content 由具体模型协议决定。
 //
 // JSONL 仍完整保留 thinkingSignature 等持久化信息；当前标准 ChatModel Runtime 只通过
 // ReasoningContent 回放 Reasoning。以后切换到支持结构化 Reasoning 的 AgenticModel 时，
@@ -180,10 +173,7 @@ func DecodeMessage(message *AgentMessage) (DecodedMessage, error) {
 		if err != nil {
 			return DecodedMessage{}, err
 		}
-		return DecodedMessage{
-			Message: userMessage,
-			Options: options,
-		}, nil
+		return DecodedMessage{Message: userMessage, Options: options}, nil
 
 	case RoleAssistant:
 		result := &schema.Message{Role: schema.Assistant}
@@ -207,11 +197,7 @@ func DecodeMessage(message *AgentMessage) (DecodedMessage, error) {
 			case ContentToolCall:
 				arguments, err := normalizeToolArguments(block.Arguments)
 				if err != nil {
-					return DecodedMessage{}, fmt.Errorf(
-						"content[%d] ToolCall Arguments 无效: %w",
-						index,
-						err,
-					)
+					return DecodedMessage{}, fmt.Errorf("content[%d] ToolCall Arguments 无效: %w", index, err)
 				}
 
 				extra := make(map[string]any)
@@ -225,15 +211,7 @@ func DecodeMessage(message *AgentMessage) (DecodedMessage, error) {
 					extra = nil
 				}
 
-				toolCalls = append(toolCalls, schema.ToolCall{
-					ID:   block.ID,
-					Type: "function",
-					Function: schema.FunctionCall{
-						Name:      block.Name,
-						Arguments: string(arguments),
-					},
-					Extra: extra,
-				})
+				toolCalls = append(toolCalls, schema.ToolCall{ID: block.ID, Type: "function", Function: schema.FunctionCall{Name: block.Name, Arguments: string(arguments)}, Extra: extra})
 
 			default:
 				return DecodedMessage{}, fmt.Errorf("Assistant ContentBlock 类型不支持: %q", block.Type)
@@ -245,26 +223,15 @@ func DecodeMessage(message *AgentMessage) (DecodedMessage, error) {
 		result.ToolCalls = toolCalls
 		result.ResponseMeta = decodeResponseMeta(message)
 
-		return DecodedMessage{
-			Message:    result,
-			Options:    options,
-			StopReason: message.StopReason,
-		}, nil
+		return DecodedMessage{Message: result, Options: options, StopReason: message.StopReason}, nil
 
 	case RoleToolResult:
 		text, err := wireTextContent(message.Content)
 		if err != nil {
 			return DecodedMessage{}, err
 		}
-		result := schema.ToolMessage(
-			text,
-			message.ToolCallID,
-			schema.WithToolName(message.ToolName),
-		)
-		return DecodedMessage{
-			Message: result,
-			Options: options,
-		}, nil
+		result := schema.ToolMessage(text, message.ToolCallID, schema.WithToolName(message.ToolName))
+		return DecodedMessage{Message: result, Options: options}, nil
 
 	default:
 		return DecodedMessage{}, fmt.Errorf("不支持的 Transcript Message Role: %q", message.Role)
@@ -424,28 +391,17 @@ func encodeAssistantContent(message *schema.Message) ([]ContentBlock, error) {
 				continue
 			}
 			hasStructuredReasoning = true
-			blocks = append(blocks, ContentBlock{
-				Type:              ContentThinking,
-				Thinking:          part.Reasoning.Text,
-				ThinkingSignature: part.Reasoning.Signature,
-			})
+			blocks = append(blocks, ContentBlock{Type: ContentThinking, Thinking: part.Reasoning.Text, ThinkingSignature: part.Reasoning.Signature})
 
 		default:
-			return nil, fmt.Errorf(
-				"AssistantGenMultiContent[%d] 类型 %q 暂未纳入 Session v3 协议",
-				index,
-				part.Type,
-			)
+			return nil, fmt.Errorf("AssistantGenMultiContent[%d] 类型 %q 暂未纳入 Session v3 协议", index, part.Type)
 		}
 	}
 
 	// 部分 Provider 目前只填写兼容字段 Content / ReasoningContent。只有结构化字段不存在
 	// 时才回退，避免同一内容被持久化两次。
 	if !hasStructuredReasoning && message.ReasoningContent != "" {
-		blocks = append([]ContentBlock{{
-			Type:     ContentThinking,
-			Thinking: message.ReasoningContent,
-		}}, blocks...)
+		blocks = append([]ContentBlock{{Type: ContentThinking, Thinking: message.ReasoningContent}}, blocks...)
 	}
 	if !hasStructuredText && message.Content != "" {
 		blocks = append(blocks, ContentBlock{Type: ContentText, Text: message.Content})
@@ -507,20 +463,14 @@ func decodeResponseMeta(message *AgentMessage) *schema.ResponseMeta {
 		return nil
 	}
 
-	meta := &schema.ResponseMeta{
-		FinishReason: einoFinishReason(message.StopReason),
-	}
+	meta := &schema.ResponseMeta{FinishReason: einoFinishReason(message.StopReason)}
 	if message.Usage != nil {
 		meta.Usage = &schema.TokenUsage{
-			PromptTokens: message.Usage.Input,
-			PromptTokenDetails: schema.PromptTokenDetails{
-				CachedTokens: message.Usage.CacheRead,
-			},
-			CompletionTokens: message.Usage.Output,
-			CompletionTokensDetails: schema.CompletionTokensDetails{
-				ReasoningTokens: message.Usage.Reasoning,
-			},
-			TotalTokens: message.Usage.TotalTokens,
+			PromptTokens:            message.Usage.Input,
+			PromptTokenDetails:      schema.PromptTokenDetails{CachedTokens: message.Usage.CacheRead},
+			CompletionTokens:        message.Usage.Output,
+			CompletionTokensDetails: schema.CompletionTokensDetails{ReasoningTokens: message.Usage.Reasoning},
+			TotalTokens:             message.Usage.TotalTokens,
 		}
 	}
 	return meta

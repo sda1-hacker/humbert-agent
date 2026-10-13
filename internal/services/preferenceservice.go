@@ -27,31 +27,19 @@ func (s *PreferenceService) ServiceName() string { return "PreferenceService" }
 func (s *PreferenceService) GetUserProfile() (UserProfileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.deps.Preferences.Get(ctx)
-	if err != nil {
-		return UserProfileDTO{}, fmt.Errorf("读取用户资料失败: %w", err)
-	}
-	return userProfileDTO(value), nil
+	return dtoResult("读取用户资料失败: %w", userProfileDTO)(s.deps.Preferences.Get(ctx))
 }
 
 func (s *PreferenceService) UpdateUserProfile(request UserProfileDTO) (UserProfileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	value, err := s.deps.Preferences.Update(ctx, preferences.UserProfile{Name: request.Name, Avatar: request.Avatar, Language: request.Language})
-	if err != nil {
-		return UserProfileDTO{}, fmt.Errorf("更新用户资料失败: %w", err)
-	}
-	return userProfileDTO(value), nil
+	return dtoResult("更新用户资料失败: %w", userProfileDTO)(s.deps.Preferences.Update(ctx, preferences.UserProfile{Name: request.Name, Avatar: request.Avatar, Language: request.Language}))
 }
 
 func (s *PreferenceService) SetLanguage(language string) (UserProfileDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.deps.Preferences.SetLanguage(ctx, language)
-	if err != nil {
-		return UserProfileDTO{}, fmt.Errorf("保存界面语言失败: %w", err)
-	}
-	return userProfileDTO(value), nil
+	return dtoResult("保存界面语言失败: %w", userProfileDTO)(s.deps.Preferences.SetLanguage(ctx, language))
 }
 
 func userProfileDTO(value preferences.UserProfile) UserProfileDTO {

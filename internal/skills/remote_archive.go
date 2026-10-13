@@ -101,10 +101,7 @@ func (m *Manager) downloadRemoteArchive(ctx context.Context, source *url.URL, de
 		return fmt.Errorf("写入远程 Skill ZIP 失败: %w", err)
 	}
 	if written > m.config.MaxDownloadBytes {
-		return fmt.Errorf(
-			"远程 Skill ZIP 超过 %d bytes 下载上限；大型 Git 仓库请使用 /tree/<ref>/<skill-path> 或项目发布的轻量 Skill ZIP",
-			m.config.MaxDownloadBytes,
-		)
+		return fmt.Errorf("远程 Skill ZIP 超过 %d bytes 下载上限；大型 Git 仓库请使用 /tree/<ref>/<skill-path> 或项目发布的轻量 Skill ZIP", m.config.MaxDownloadBytes)
 	}
 	if err := output.Sync(); err != nil {
 		return fmt.Errorf("同步远程 Skill ZIP 失败: %w", err)
@@ -157,8 +154,7 @@ func (m *Manager) extractRemoteArchive(ctx context.Context, archivePath string, 
 		if files > maxFiles {
 			return fmt.Errorf("远程 Skill ZIP 文件数量超过 %d 个安全上限", maxFiles)
 		}
-		if entry.UncompressedSize64 > uint64(maxExpanded) ||
-			expanded > maxExpanded-int64(entry.UncompressedSize64) {
+		if entry.UncompressedSize64 > uint64(maxExpanded) || expanded > maxExpanded-int64(entry.UncompressedSize64) {
 			return fmt.Errorf("远程 Skill ZIP 解压后体积超过 %d bytes 安全上限", maxExpanded)
 		}
 		expanded += int64(entry.UncompressedSize64)
@@ -320,10 +316,5 @@ func isPublicSkillIP(ip netip.Addr) bool {
 		return false
 	}
 	ip = ip.Unmap()
-	return !ip.IsUnspecified() &&
-		!ip.IsLoopback() &&
-		!ip.IsPrivate() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast() &&
-		!ip.IsMulticast()
+	return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsLinkLocalMulticast() && !ip.IsMulticast()
 }

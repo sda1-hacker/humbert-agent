@@ -417,14 +417,6 @@ func chromePath() string {
 	}
 }
 
-func startBrowserWithMode(ctx context.Context, visible bool) (*browserSession, error) {
-	profile, err := os.MkdirTemp("", "humbert-browser-*")
-	if err != nil {
-		return nil, err
-	}
-	return startBrowserWithProfile(ctx, visible, profile, true)
-}
-
 // 持久配置只供当前 Agent 使用，不读取用户自己的 Chrome Profile。
 func persistentBrowserProfile(root, key string) (string, error) {
 	if strings.TrimSpace(root) == "" || strings.TrimSpace(key) == "" {

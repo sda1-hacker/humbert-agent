@@ -76,14 +76,7 @@ func buildUnitsWithProtection(
 
 				partRuneLen := RuneLen(part)
 
-				units = append(
-					units,
-					splitUnit{
-						text:  part,
-						start: runeOffset,
-						end:   runeOffset + partRuneLen,
-					},
-				)
+				units = append(units, splitUnit{text: part, start: runeOffset, end: runeOffset + partRuneLen})
 
 				// 下一个 part 紧接着当前 part。
 				runeOffset += partRuneLen
@@ -101,17 +94,9 @@ func buildUnitsWithProtection(
 		// 正常情况：
 		// Protected 内容不超过 7500 rune，
 		// 整体作为一个原子 Unit。
-		if protectedRuneLen <=
-			maxProtectedUnitSize {
+		if protectedRuneLen <= maxProtectedUnitSize {
 
-			units = append(
-				units,
-				splitUnit{
-					text:  protectedText,
-					start: runePos,
-					end:   runePos + protectedRuneLen,
-				},
-			)
+			units = append(units, splitUnit{text: protectedText, start: runePos, end: runePos + protectedRuneLen})
 
 		} else {
 			// 异常长的保护区域仍须拆分，避免无界块大小。
@@ -146,14 +131,7 @@ func buildUnitsWithProtection(
 
 				chunkRuneLen := chunkEnd - offset
 
-				units = append(
-					units,
-					splitUnit{
-						text:  chunkText,
-						start: runePos + offset,
-						end:   runePos + offset + chunkRuneLen,
-					},
-				)
+				units = append(units, splitUnit{text: chunkText, start: runePos + offset, end: runePos + offset + chunkRuneLen})
 				offset = chunkEnd
 			}
 		}
@@ -184,14 +162,7 @@ func buildUnitsWithProtection(
 
 			partRuneLen := RuneLen(part)
 
-			units = append(
-				units,
-				splitUnit{
-					text:  part,
-					start: runeOffset,
-					end:   runeOffset + partRuneLen,
-				},
-			)
+			units = append(units, splitUnit{text: part, start: runeOffset, end: runeOffset + partRuneLen})
 			runeOffset += partRuneLen
 		}
 	}

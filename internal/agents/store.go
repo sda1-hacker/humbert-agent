@@ -90,10 +90,7 @@ func NewStore(
 		return nil, fmt.Errorf("验证 Agent Root 失败: %w", err)
 	}
 
-	return &Store{
-		agentsRoot:  absoluteRoot,
-		transcripts: transcripts,
-	}, nil
+	return &Store{agentsRoot: absoluteRoot, transcripts: transcripts}, nil
 }
 
 // Create 创建 Agent Profile。
@@ -128,10 +125,7 @@ func (s *Store) Create(ctx context.Context, value Agent) error {
 		return fmt.Errorf("准备 Agent Session 目录失败: %w", err)
 	}
 
-	if err := atomicfile.WriteJSON(ctx, path, 0o600, agentDocument{
-		SchemaVersion: agentConfigSchemaVersion,
-		Agent:         value,
-	}); err != nil {
+	if err := atomicfile.WriteJSON(ctx, path, 0o600, agentDocument{SchemaVersion: agentConfigSchemaVersion, Agent: value}); err != nil {
 		return fmt.Errorf("创建 Agent Profile 失败: %w", err)
 	}
 
@@ -193,10 +187,7 @@ func (s *Store) updateLocked(ctx context.Context, value Agent) error {
 		return fmt.Errorf("检查 Agent Profile 失败: %w", err)
 	}
 
-	if err := atomicfile.WriteJSON(ctx, path, 0o600, agentDocument{
-		SchemaVersion: agentConfigSchemaVersion,
-		Agent:         value,
-	}); err != nil {
+	if err := atomicfile.WriteJSON(ctx, path, 0o600, agentDocument{SchemaVersion: agentConfigSchemaVersion, Agent: value}); err != nil {
 		return fmt.Errorf("更新 Agent Profile 失败: %w", err)
 	}
 	return nil
@@ -319,16 +310,8 @@ func (s *Store) BeginDelete(ctx context.Context, id string) (DeletionState, erro
 	if mode == "" {
 		mode = workspace.ModeManaged
 	}
-	state := DeletionState{
-		AgentID:       value.ID,
-		WorkspaceMode: mode,
-		WorkspacePath: value.WorkspacePath,
-		StartedAt:     time.Now().UTC(),
-	}
-	if err := atomicfile.WriteJSON(ctx, markerPath, 0o600, agentDeletionDocument{
-		SchemaVersion: agentDeletionSchemaVersion,
-		Deletion:      state,
-	}); err != nil {
+	state := DeletionState{AgentID: value.ID, WorkspaceMode: mode, WorkspacePath: value.WorkspacePath, StartedAt: time.Now().UTC()}
+	if err := atomicfile.WriteJSON(ctx, markerPath, 0o600, agentDeletionDocument{SchemaVersion: agentDeletionSchemaVersion, Deletion: state}); err != nil {
 		return DeletionState{}, fmt.Errorf("写入 Agent 删除标记失败: %w", err)
 	}
 	return state, nil
@@ -418,8 +401,7 @@ func (s *Store) CountAgentsByModel(ctx context.Context, modelID string) (int, er
 	count := 0
 	for _, value := range values {
 		agent := value.Agent
-		if agent.ModelID == modelID ||
-			agent.ModelRoles.UtilityModelID == modelID {
+		if agent.ModelID == modelID || agent.ModelRoles.UtilityModelID == modelID {
 			count++
 		}
 	}
@@ -441,18 +423,10 @@ func (s *Store) readAgentLocked(ctx context.Context, id string) (Agent, error) {
 	}
 
 	if document.SchemaVersion != agentConfigSchemaVersion {
-		return Agent{}, fmt.Errorf(
-			"Agent %s config.json schema_version 不支持: %d",
-			id,
-			document.SchemaVersion,
-		)
+		return Agent{}, fmt.Errorf("Agent %s config.json schema_version 不支持: %d", id, document.SchemaVersion)
 	}
 	if document.Agent.ID != id {
-		return Agent{}, fmt.Errorf(
-			"Agent config.json ID 与目录不一致: file=%s content=%s",
-			id,
-			document.Agent.ID,
-		)
+		return Agent{}, fmt.Errorf("Agent config.json ID 与目录不一致: file=%s content=%s", id, document.Agent.ID)
 	}
 
 	return document.Agent, nil
@@ -572,11 +546,7 @@ func validateAgentID(id string) error {
 	if id == "" || id == "." || id == ".." {
 		return errors.New("Agent ID 不能为空或使用特殊路径名称")
 	}
-	if strings.ContainsRune(id, 0) ||
-		strings.Contains(id, "/") ||
-		strings.Contains(id, `\`) ||
-		filepath.IsAbs(id) ||
-		filepath.VolumeName(id) != "" ||
+	if strings.ContainsRune(id, 0) || strings.Contains(id, "/") || strings.Contains(id, `\`) || filepath.IsAbs(id) || filepath.VolumeName(id) != "" ||
 		filepath.Clean(id) != id {
 		return fmt.Errorf("非法 Agent ID: %q", id)
 	}

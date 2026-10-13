@@ -93,20 +93,13 @@ func (a *Adapter) BuildTools(
 			return officialmcp.ToolNameMapperOutput{ExposedName: name}, nil
 		},
 		DescriptionPolicy: &officialmcp.DescriptionPolicy{MaxChars: a.config.MaxToolDescriptionChars},
-		ResultPolicy: &officialmcp.ResultPolicy{
-			IncludeStructuredContent: true,
-		},
+		ResultPolicy:      &officialmcp.ResultPolicy{IncludeStructuredContent: true},
 	})
 	if err != nil {
 		return humbertmcp.RuntimeSnapshot{}, fmt.Errorf("通过 Eino officialmcp 获取 Server %q Tools 失败: %w", server.Key, err)
 	}
 	if len(baseTools) != len(selected) {
-		return humbertmcp.RuntimeSnapshot{}, fmt.Errorf(
-			"MCP Server %q 已选择 %d 个 Tool，但只解析到 %d 个；Catalog 可能已发生变化",
-			server.Key,
-			len(selected),
-			len(baseTools),
-		)
+		return humbertmcp.RuntimeSnapshot{}, fmt.Errorf("MCP Server %q 已选择 %d 个 Tool，但只解析到 %d 个；Catalog 可能已发生变化", server.Key, len(selected), len(baseTools))
 	}
 
 	// Server 的 tools/list 顺序不是 Humbert 的持久化语义。先读取 exposed name，再按名称稳定
@@ -156,11 +149,7 @@ func (a *Adapter) BuildTools(
 		if err != nil {
 			return humbertmcp.RuntimeSnapshot{}, fmt.Errorf("保护 MCP Tool %q 失败: %w", info.Name, err)
 		}
-		items = append(items, resolvedTool{
-			name:       info.Name,
-			tool:       guarded,
-			descriptor: descriptor,
-		})
+		items = append(items, resolvedTool{name: info.Name, tool: guarded, descriptor: descriptor})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
 
@@ -173,11 +162,7 @@ func (a *Adapter) BuildTools(
 		toolNames = append(toolNames, item.name)
 	}
 
-	return humbertmcp.RuntimeSnapshot{
-		Tools:       resolved,
-		Descriptors: descriptors,
-		ToolNames:   toolNames,
-	}, nil
+	return humbertmcp.RuntimeSnapshot{Tools: resolved, Descriptors: descriptors, ToolNames: toolNames}, nil
 }
 
 // observedInvokableTool 只观察真实 MCP Tool 执行结果。Permission Ask/Deny 发生在外层

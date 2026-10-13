@@ -177,11 +177,7 @@ func (m *Manager) ListDirectory(
 		return left < right
 	})
 
-	return DirectoryListing{
-		Path:      displayRelativePath(normalized),
-		Entries:   result,
-		Truncated: truncated,
-	}, nil
+	return DirectoryListing{Path: displayRelativePath(normalized), Entries: result, Truncated: truncated}, nil
 }
 
 // PreviewFile 返回一个适合桌面 UI 展示的受限预览。
@@ -232,12 +228,7 @@ func (m *Manager) PreviewFile(
 	}
 	defer file.Close()
 
-	result := FilePreview{
-		Path:       filepath.ToSlash(normalized),
-		Name:       filepath.Base(normalized),
-		Size:       info.Size(),
-		ModifiedAt: info.ModTime().UTC(),
-	}
+	result := FilePreview{Path: filepath.ToSlash(normalized), Name: filepath.Base(normalized), Size: info.Size(), ModifiedAt: info.ModTime().UTC()}
 
 	// MIME 判断需要少量文件头。读取文件头不会改变后续 Seek 位置的可靠性，
 	// 因为 *os.File 支持 Seek；如果未来 os.Root 返回其他实现，这里失败也会安全退出。

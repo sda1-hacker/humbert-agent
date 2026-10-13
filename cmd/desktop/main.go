@@ -85,16 +85,9 @@ func run() int {
 		logging.NewBootstrap()
 
 	core, err :=
-		coreapp.Bootstrap(
-			context.Background(),
-		)
+		coreapp.Bootstrap(context.Background())
 	if err != nil {
-		bootstrapLogger.Error(
-			context.Background(),
-			"Humbert 启动失败",
-			"error",
-			err,
-		)
+		bootstrapLogger.Error(context.Background(), "Humbert 启动失败", "error", err)
 
 		return 1
 	}
@@ -102,31 +95,16 @@ func run() int {
 	exitCode := 0
 
 	if err := runDesktop(core); err != nil {
-		core.Logger().Error(
-			context.Background(),
-			"Wails Desktop 运行失败",
-			"error",
-			err,
-		)
+		core.Logger().Error(context.Background(), "Wails Desktop 运行失败", "error", err)
 
 		exitCode = 1
 	}
 
 	shutdownCtx, cancel :=
-		context.WithTimeout(
-			context.Background(),
-			5*time.Second,
-		)
+		context.WithTimeout(context.Background(), 5*time.Second)
 
-	if err := core.Shutdown(
-		shutdownCtx,
-	); err != nil {
-		bootstrapLogger.Error(
-			context.Background(),
-			"Humbert 关闭过程存在错误",
-			"error",
-			err,
-		)
+	if err := core.Shutdown(shutdownCtx); err != nil {
+		bootstrapLogger.Error(context.Background(), "Humbert 关闭过程存在错误", "error", err)
 
 		exitCode = 1
 	}
@@ -157,31 +135,21 @@ func runDesktop(
 			// 注册服务
 			Services: services.All(core),
 			// 前端资产
-			Assets: application.AssetOptions{
-				Handler: application.AssetFileServerFS(
-					frontend.Assets,
-				),
-			},
-			Mac: application.MacOptions{
-				ApplicationShouldTerminateAfterLastWindowClosed: true,
-			},
+			Assets: application.AssetOptions{Handler: application.AssetFileServerFS(frontend.Assets)},
+			Mac:    application.MacOptions{ApplicationShouldTerminateAfterLastWindowClosed: true},
 		},
 	)
 
 	window := wailsApp.Window.NewWithOptions(
 		application.WebviewWindowOptions{
-			Name:      "main",
-			Title:     cfg.App.Name,
-			Width:     1100,
-			Height:    750,
-			MinWidth:  860,
-			MinHeight: 600,
-			BackgroundColour: application.NewRGB(
-				248,
-				246,
-				242,
-			),
-			URL: "/",
+			Name:             "main",
+			Title:            cfg.App.Name,
+			Width:            1100,
+			Height:           750,
+			MinWidth:         860,
+			MinHeight:        600,
+			BackgroundColour: application.NewRGB(248, 246, 242),
+			URL:              "/",
 			Mac: application.MacWindow{
 				TitleBar: application.MacTitleBar{
 					// 使用透明标题栏，让整个窗口视觉更统一。
@@ -202,18 +170,10 @@ func runDesktop(
 	window.Center()
 	window.Show()
 
-	logger.Info(
-		context.Background(),
-		"Wails Desktop 已启动",
-		"window",
-		"main",
-	)
+	logger.Info(context.Background(), "Wails Desktop 已启动", "window", "main")
 
 	if err := wailsApp.Run(); err != nil {
-		return fmt.Errorf(
-			"运行 Wails application 失败: %w",
-			err,
-		)
+		return fmt.Errorf("运行 Wails application 失败: %w", err)
 	}
 
 	return nil
@@ -226,10 +186,7 @@ func runDesktop(
 func marshalFrontendError(
 	err error,
 ) []byte {
-	message := logging.SafeErrorText(
-		err,
-		2048,
-	)
+	message := logging.SafeErrorText(err, 2048)
 
 	payload := struct {
 		Message string `json:"message"`
@@ -243,9 +200,7 @@ func marshalFrontendError(
 	// 如果标准库未来行为发生异常，返回固定 JSON，
 	// 不能把原始错误重新暴露给前端。
 	if marshalErr != nil {
-		return []byte(
-			`{"message":"内部错误序列化失败"}`,
-		)
+		return []byte(`{"message":"内部错误序列化失败"}`)
 	}
 
 	return result

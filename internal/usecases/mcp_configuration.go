@@ -80,11 +80,7 @@ func (s *MCPConfiguration) Create(ctx context.Context, request MCPConfigurationR
 			if configureErr != nil {
 				return cleanupCreatedServer(fmt.Errorf("创建 MCP stdio Credential 失败: %w", configureErr))
 			}
-			value, err = s.manager.Update(ctx, value.ID, humbertmcp.UpdateServerInput{
-				Name:      request.Name,
-				Transport: transport,
-				Stdio:     configured,
-			})
+			value, err = s.manager.Update(ctx, value.ID, humbertmcp.UpdateServerInput{Name: request.Name, Transport: transport, Stdio: configured})
 			if err != nil {
 				return cleanupCreatedServer(fmt.Errorf("保存 MCP stdio Credential 配置失败: %w", err))
 			}
@@ -96,11 +92,7 @@ func (s *MCPConfiguration) Create(ctx context.Context, request MCPConfigurationR
 		if configureErr != nil {
 			return cleanupCreatedServer(fmt.Errorf("创建 MCP HTTP Credential 失败: %w", configureErr))
 		}
-		value, err = s.manager.Update(ctx, value.ID, humbertmcp.UpdateServerInput{
-			Name:      request.Name,
-			Transport: transport,
-			HTTP:      configured,
-		})
+		value, err = s.manager.Update(ctx, value.ID, humbertmcp.UpdateServerInput{Name: request.Name, Transport: transport, HTTP: configured})
 		if err != nil {
 			return cleanupCreatedServer(fmt.Errorf("保存 MCP HTTP 配置失败: %w", err))
 		}
@@ -143,12 +135,7 @@ func (s *MCPConfiguration) Update(ctx context.Context, id string, request MCPCon
 		}
 	}
 
-	value, err := s.manager.Update(ctx, id, humbertmcp.UpdateServerInput{
-		Name:      request.Name,
-		Transport: transport,
-		Stdio:     stdioConfig,
-		HTTP:      httpConfig,
-	})
+	value, err := s.manager.Update(ctx, id, humbertmcp.UpdateServerInput{Name: request.Name, Transport: transport, Stdio: stdioConfig, HTTP: httpConfig})
 	if err != nil {
 		s.cleanupCredentials(ctx, createdCredentialIDs)
 		return humbertmcp.Server{}, fmt.Errorf("更新 MCP Server 失败: %w", err)
@@ -184,10 +171,7 @@ func (s *MCPConfiguration) prepareStdioConfig(
 
 	validationConfig := requestStdioWithoutCredentials(request)
 	for _, item := range request.Env {
-		validationConfig.Env = append(validationConfig.Env, humbertmcp.StdioEnvCredential{
-			Name:         strings.TrimSpace(item.Name),
-			CredentialID: "pending",
-		})
+		validationConfig.Env = append(validationConfig.Env, humbertmcp.StdioEnvCredential{Name: strings.TrimSpace(item.Name), CredentialID: "pending"})
 	}
 	if err := humbertmcp.ValidateStdioConfig(validationConfig); err != nil {
 		return nil, nil, err
@@ -257,10 +241,7 @@ func (s *MCPConfiguration) prepareHTTPConfig(
 			return nil, nil, fmt.Errorf("自定义 HTTP Header %q 重复", name)
 		}
 		seen[key] = struct{}{}
-		validationConfig.Headers = append(validationConfig.Headers, humbertmcp.HTTPHeaderCredential{
-			Name:         name,
-			CredentialID: "pending",
-		})
+		validationConfig.Headers = append(validationConfig.Headers, humbertmcp.HTTPHeaderCredential{Name: name, CredentialID: "pending"})
 	}
 	if err := humbertmcp.ValidateHTTPConfig(validationConfig); err != nil {
 		return nil, nil, err
@@ -380,11 +361,7 @@ func requestStdioWithoutCredentials(request MCPConfigurationRequest) *humbertmcp
 	if humbertmcp.Transport(request.Transport) != humbertmcp.TransportStdio {
 		return nil
 	}
-	return &humbertmcp.StdioConfig{
-		Command:          request.Command,
-		Args:             append([]string(nil), request.Args...),
-		WorkingDirectory: request.WorkingDirectory,
-	}
+	return &humbertmcp.StdioConfig{Command: request.Command, Args: append([]string(nil), request.Args...), WorkingDirectory: request.WorkingDirectory}
 }
 
 func requestHTTPWithoutCredentials(request MCPConfigurationRequest) *humbertmcp.HTTPConfig {

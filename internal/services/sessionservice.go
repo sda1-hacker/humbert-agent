@@ -121,11 +121,7 @@ func (s *SessionService) Create(agentID string, title string) (SessionDTO, error
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err := s.deps.Sessions.Create(ctx, sessions.CreateSessionInput{AgentID: agentID, Title: title})
-	if err != nil {
-		return SessionDTO{}, fmt.Errorf("创建 Session 失败: %w", err)
-	}
-	return sessionDTO(value), nil
+	return dtoResult("创建 Session 失败: %w", sessionDTO)(s.deps.Sessions.Create(ctx, sessions.CreateSessionInput{AgentID: agentID, Title: title}))
 }
 
 // Rename 修改 Session 名称。
@@ -133,21 +129,13 @@ func (s *SessionService) Rename(id string, title string) (SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	value, err := s.deps.Sessions.Rename(ctx, id, title)
-	if err != nil {
-		return SessionDTO{}, fmt.Errorf("修改 Session 失败: %w", err)
-	}
-	return sessionDTO(value), nil
+	return dtoResult("修改 Session 失败: %w", sessionDTO)(s.deps.Sessions.Rename(ctx, id, title))
 }
 
 func (s *SessionService) SetArchived(id string, archived bool) (SessionDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.deps.Sessions.SetArchived(ctx, id, archived)
-	if err != nil {
-		return SessionDTO{}, fmt.Errorf("更新会话归档状态失败: %w", err)
-	}
-	return sessionDTO(value), nil
+	return dtoResult("更新会话归档状态失败: %w", sessionDTO)(s.deps.Sessions.SetArchived(ctx, id, archived))
 }
 
 // Delete 删除 Session 与完整消息历史。

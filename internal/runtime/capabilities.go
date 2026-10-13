@@ -91,10 +91,7 @@ func (a *capabilityAssembler) resolve(ctx context.Context, profile agents.Agent,
 		return capabilitySet{}, err
 	}
 	if skillSnapshot.Enabled() {
-		descriptors, err = mergeRuntimeDescriptors(
-			descriptors,
-			[]humberttools.Descriptor{{Name: skills.SkillToolName, Risk: humberttools.RiskRead}},
-		)
+		descriptors, err = mergeRuntimeDescriptors(descriptors, []humberttools.Descriptor{{Name: skills.SkillToolName, Risk: humberttools.RiskRead}})
 		if err != nil {
 			return capabilitySet{}, err
 		}

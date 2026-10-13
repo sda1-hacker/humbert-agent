@@ -15,11 +15,7 @@ type RRFConfig struct {
 
 // DefaultRRFConfig 返回当前推荐默认值。
 func DefaultRRFConfig() RRFConfig {
-	return RRFConfig{
-		K:             60,
-		VectorWeight:  0.7,
-		KeywordWeight: 0.3,
-	}
+	return RRFConfig{K: 60, VectorWeight: 0.7, KeywordWeight: 0.3}
 }
 
 // FuseRRF 按 Eino 返回的相关性顺序计算加权排名融合。

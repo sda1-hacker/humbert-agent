@@ -145,10 +145,7 @@ func (m *Manager) installValidatedPackage(
 	if err := m.writeSourcesLocked(ctx, sources); err != nil {
 		removeErr := os.RemoveAll(target)
 		if removeErr != nil {
-			return Info{}, errors.Join(
-				fmt.Errorf("Skill 来源记录保存失败: %w", err),
-				fmt.Errorf("回滚已安装 Skill 失败: %w", removeErr),
-			)
+			return Info{}, errors.Join(fmt.Errorf("Skill 来源记录保存失败: %w", err), fmt.Errorf("回滚已安装 Skill 失败: %w", removeErr))
 		}
 		return Info{}, fmt.Errorf("Skill 来源记录保存失败，安装已回滚: %w", err)
 	}
@@ -200,10 +197,7 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 		// 删除失败时尽力恢复原路径；恢复失败会把两个错误一起返回。
 		restoreErr := os.Rename(quarantine, target)
 		if restoreErr != nil {
-			return errors.Join(
-				fmt.Errorf("删除 Skill %q 失败: %w", name, err),
-				fmt.Errorf("恢复 Skill 目录失败: %w", restoreErr),
-			)
+			return errors.Join(fmt.Errorf("删除 Skill %q 失败: %w", name, err), fmt.Errorf("恢复 Skill 目录失败: %w", restoreErr))
 		}
 		return fmt.Errorf("删除 Skill %q 失败: %w", name, err)
 	}
@@ -211,22 +205,10 @@ func (m *Manager) Remove(ctx context.Context, name string) error {
 	// Alias 属于 Humbert 用户自己的展示覆盖，不属于 Package。Package 删除成功后做
 	// best-effort 清理；即使展示元数据损坏，也不能把已经成功完成的物理删除伪装成失败。
 	if aliasErr := m.removeAliasLocked(context.Background(), name); aliasErr != nil {
-		m.logger.Warn(
-			context.Background(),
-			"Skill 已删除，但清理展示 Alias 失败",
-			"operation", "skill.alias.cleanup",
-			"skill_name", name,
-			"error", aliasErr,
-		)
+		m.logger.Warn(context.Background(), "Skill 已删除，但清理展示 Alias 失败", "operation", "skill.alias.cleanup", "skill_name", name, "error", aliasErr)
 	}
 	if sourceErr := m.removeSourceLocked(context.Background(), name); sourceErr != nil {
-		m.logger.Warn(
-			context.Background(),
-			"Skill 已删除，但清理来源记录失败",
-			"operation", "skill.source.cleanup",
-			"skill_name", name,
-			"error", sourceErr,
-		)
+		m.logger.Warn(context.Background(), "Skill 已删除，但清理来源记录失败", "operation", "skill.source.cleanup", "skill_name", name, "error", sourceErr)
 	}
 
 	m.logger.Info(ctx, "本地 Skill 已删除", "operation", "skill.remove", "skill_name", name)
@@ -407,11 +389,7 @@ func (m *Manager) installValidatedPackages(
 		if err := os.Mkdir(tempDir, 0o700); err != nil {
 			return nil, fmt.Errorf("创建 Skill %q 安装临时目录失败: %w", name, err)
 		}
-		item := stagedInstall{
-			request: request,
-			tempDir: tempDir,
-			target:  filepath.Join(m.rootDir, name),
-		}
+		item := stagedInstall{request: request, tempDir: tempDir, target: filepath.Join(m.rootDir, name)}
 		staged = append(staged, item)
 
 		if err := copyPackageTree(ctx, request.Package.Info.RootDir, tempDir); err != nil {

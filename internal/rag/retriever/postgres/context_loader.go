@@ -23,9 +23,7 @@ func NewParentLoader(
 	collectionID string,
 ) (*ParentLoader, error) {
 	if pool == nil {
-		return nil, fmt.Errorf(
-			"postgres parent loader: nil pool",
-		)
+		return nil, fmt.Errorf("postgres parent loader: nil pool")
 	}
 
 	collectionID = strings.TrimSpace(collectionID)
@@ -34,20 +32,14 @@ func NewParentLoader(
 		return nil, ErrMissingCollectionID
 	}
 
-	return newParentLoader(
-		poolQueryer{pool: pool},
-		collectionID,
-	), nil
+	return newParentLoader(poolQueryer{pool: pool}, collectionID), nil
 }
 
 func newParentLoader(
 	db queryer,
 	collectionID string,
 ) *ParentLoader {
-	return &ParentLoader{
-		db:           db,
-		collectionID: strings.TrimSpace(collectionID),
-	}
+	return &ParentLoader{db: db, collectionID: strings.TrimSpace(collectionID)}
 }
 
 // LoadParents 使用一次查询读取所有父块，避免逐条子块查询数据库。
@@ -61,26 +53,15 @@ func (l *ParentLoader) LoadParents(
 		return map[string]retrieval.SearchResult{}, nil
 	}
 
-	resultRows, err := l.db.Query(
-		ctx,
-		parentChunkSQL,
-		l.collectionID,
-		ids,
-	)
+	resultRows, err := l.db.Query(ctx, parentChunkSQL, l.collectionID, ids)
 
 	if err != nil {
-		return nil, fmt.Errorf(
-			"load parent chunks: %w",
-			err,
-		)
+		return nil, fmt.Errorf("load parent chunks: %w", err)
 	}
 
 	defer resultRows.Close()
 
-	result := make(
-		map[string]retrieval.SearchResult,
-		len(ids),
-	)
+	result := make(map[string]retrieval.SearchResult, len(ids))
 
 	for resultRows.Next() {
 		var (
@@ -101,10 +82,7 @@ func (l *ParentLoader) LoadParents(
 			&parentParentID,
 			&rawMetadata,
 		); err != nil {
-			return nil, fmt.Errorf(
-				"scan parent chunk: %w",
-				err,
-			)
+			return nil, fmt.Errorf("scan parent chunk: %w", err)
 		}
 
 		if parentParentID != nil {
@@ -112,15 +90,8 @@ func (l *ParentLoader) LoadParents(
 		}
 
 		if len(rawMetadata) > 0 {
-			if err := json.Unmarshal(
-				rawMetadata,
-				&parent.Metadata,
-			); err != nil {
-				return nil, fmt.Errorf(
-					"decode parent metadata %q: %w",
-					parent.ChunkID,
-					err,
-				)
+			if err := json.Unmarshal(rawMetadata, &parent.Metadata); err != nil {
+				return nil, fmt.Errorf("decode parent metadata %q: %w", parent.ChunkID, err)
 			}
 		}
 
@@ -133,10 +104,7 @@ func (l *ParentLoader) LoadParents(
 	}
 
 	if err := resultRows.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"iterate parent chunks: %w",
-			err,
-		)
+		return nil, fmt.Errorf("iterate parent chunks: %w", err)
 	}
 
 	return result, nil

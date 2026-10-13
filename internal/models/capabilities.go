@@ -115,19 +115,12 @@ func inferCapabilities(providerType ProviderType, modelName string) Capabilities
 		return Capabilities{}
 	}
 
-	textOnlyUtility := containsAny(name,
-		"embedding", "rerank", "moderation", "whisper", "tts", "speech", "dall-e", "image-generation",
-	)
+	textOnlyUtility := containsAny(name, "embedding", "rerank", "moderation", "whisper", "tts", "speech", "dall-e", "image-generation")
 	tools := !textOnlyUtility
 
-	vision := containsAny(name,
-		"vision", "-vl", "vl-", "llava", "pixtral", "gemma-3", "gemma3",
-		"gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "omni",
-	)
+	vision := containsAny(name, "vision", "-vl", "vl-", "llava", "pixtral", "gemma-3", "gemma3", "gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "omni")
 
-	reasoning := containsAny(name,
-		"reason", "deepseek-r1", "qwq", "o1", "o3", "o4", "gpt-5",
-	)
+	reasoning := containsAny(name, "reason", "deepseek-r1", "qwq", "o1", "o3", "o4", "gpt-5")
 
 	jsonMode := false
 	if providerType == ProviderTypeOpenAI {
@@ -142,14 +135,7 @@ func inferCapabilities(providerType ProviderType, modelName string) Capabilities
 	// 即使模型支持 Vision，也不等价于支持 PDF/任意文件内容。
 	files := false
 
-	return Capabilities{
-		Tools:     tools,
-		Vision:    vision,
-		Files:     files,
-		Reasoning: reasoning,
-		JSON:      jsonMode,
-		Audio:     audio,
-	}
+	return Capabilities{Tools: tools, Vision: vision, Files: files, Reasoning: reasoning, JSON: jsonMode, Audio: audio}
 }
 
 func containsAny(value string, needles ...string) bool {

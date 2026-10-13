@@ -129,11 +129,7 @@ func (r *RemoteSkillSourceRegistry) Register(resolver RemoteSkillSourceResolver)
 		}
 	}
 
-	r.resolvers = append(r.resolvers, registeredRemoteSkillSourceResolver{
-		resolver: resolver,
-		name:     name,
-		priority: resolver.Priority(),
-	})
+	r.resolvers = append(r.resolvers, registeredRemoteSkillSourceResolver{resolver: resolver, name: name, priority: resolver.Priority()})
 	sort.SliceStable(r.resolvers, func(i, j int) bool {
 		if r.resolvers[i].priority != r.resolvers[j].priority {
 			return r.resolvers[i].priority > r.resolvers[j].priority
@@ -210,11 +206,7 @@ func (r *RemoteSkillSourceRegistry) Resolve(rawURL string, explicitSkillPath str
 		for _, entry := range matched {
 			names = append(names, entry.name)
 		}
-		return RemoteSkillSource{}, fmt.Errorf(
-			"远程 Skill Source Resolver 冲突: 优先级 %d 同时匹配 %s",
-			matchedPriority,
-			strings.Join(names, "、"),
-		)
+		return RemoteSkillSource{}, fmt.Errorf("远程 Skill Source Resolver 冲突: 优先级 %d 同时匹配 %s", matchedPriority, strings.Join(names, "、"))
 	}
 
 	entry := matched[0]
@@ -286,10 +278,7 @@ func normalizeRepositoryPathSegment(value string, provider string, label string)
 		return "", fmt.Errorf("%s Skill 地址缺少合法 %s", provider, label)
 	}
 	for _, char := range value {
-		valid := (char >= 'a' && char <= 'z') ||
-			(char >= 'A' && char <= 'Z') ||
-			(char >= '0' && char <= '9') ||
-			char == '-' || char == '_' || char == '.'
+		valid := (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.'
 		if !valid {
 			return "", fmt.Errorf("%s %s %q 包含非法字符 %q", provider, label, value, char)
 		}

@@ -75,13 +75,7 @@ func splitByHeadings(text string, cfg SplitterConfig, profile *DocProfile) []Chu
 
 		// 小章节的预算同时考虑标题路径，标题路径不写入原文正文。
 		if RuneLen(breadcrumb)+2+len(sectionRunes) <= cfg.ChunkSize {
-			chunks = append(chunks, Chunk{
-				Content:       sectionContent,
-				ContextHeader: breadcrumb,
-				Seq:           seq,
-				Start:         boundary.runeStart,
-				End:           sectionEnd,
-			})
+			chunks = append(chunks, Chunk{Content: sectionContent, ContextHeader: breadcrumb, Seq: seq, Start: boundary.runeStart, End: sectionEnd})
 
 			seq++
 			continue
@@ -150,10 +144,7 @@ func findHeadingBoundaries(text string, primaryLevel int) []headingBoundary {
 						// 只给已有的 leading boundary 填上 Heading。
 						boundaries[0].headingLine = line
 					} else {
-						boundaries = append(boundaries, headingBoundary{
-							runeStart:   runePos,
-							headingLine: line,
-						})
+						boundaries = append(boundaries, headingBoundary{runeStart: runePos, headingLine: line})
 					}
 				}
 			}
@@ -217,12 +208,7 @@ func buildSectionBreadcrumbIndex(
 
 	hierarchy := seed
 
-	result := []sectionBreadcrumb{
-		{
-			runeStart:  0,
-			breadcrumb: hierarchy.BreadcrumbWithHashes(),
-		},
-	}
+	result := []sectionBreadcrumb{{runeStart: 0, breadcrumb: hierarchy.BreadcrumbWithHashes()}}
 
 	if len(section) == 0 {
 		return result
@@ -253,10 +239,7 @@ func buildSectionBreadcrumbIndex(
 			if match != nil && len(match[1]) > primaryLevel {
 				hierarchy.Observe(line)
 
-				result = append(result, sectionBreadcrumb{
-					runeStart:  runePos,
-					breadcrumb: hierarchy.BreadcrumbWithHashes(),
-				})
+				result = append(result, sectionBreadcrumb{runeStart: runePos, breadcrumb: hierarchy.BreadcrumbWithHashes()})
 			}
 		}
 
@@ -311,10 +294,7 @@ func coalesceTinyHeadingChunks(chunks []Chunk, chunkSize int) []Chunk {
 		sharedHeader := commonHeadingPrefix(current.ContextHeader, next.ContextHeader)
 
 		canMerge :=
-			sharedHeader != "" &&
-				current.End == next.Start &&
-				currentLen < target &&
-				currentLen+nextLen <= chunkSize
+			sharedHeader != "" && current.End == next.Start && currentLen < target && currentLen+nextLen <= chunkSize
 
 		if canMerge {
 			current.Content += next.Content

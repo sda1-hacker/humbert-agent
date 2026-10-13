@@ -62,11 +62,7 @@ func DefaultSettings() Settings {
 	return Settings{
 		Enabled:                  true,
 		HeartbeatIntervalMinutes: 5,
-		QuietHours: QuietHours{
-			Enabled: false,
-			Start:   "22:00",
-			End:     "08:00",
-		},
+		QuietHours:               QuietHours{Enabled: false, Start: "22:00", End: "08:00"},
 		Rules: map[EventKind]EventRule{
 			EventTaskFailed:          {Enabled: true, Action: ActionNotify},
 			EventTaskTimedOut:        {Enabled: true, Action: ActionNotify},

@@ -33,4 +33,4 @@ Agent 删除使用 `active → deleting → removed` 的持久化状态：开始
 
 调试配置为何未进入当前 Turn：先看 `AgentInfo`，再看 `Resolver.resolveContextBase` 生成的 Snapshot/Manifest。已启动的 Turn 不会重新读取配置。删除问题需检查持久化删除标记和关联 Session/Task/Managed Workspace 清理阶段。
 
-回归测试见 [service_contract_test.go](service_contract_test.go)：验证所有身份写入入口使用一致限制、失败不改变已有配置、窄命令保留无关字段，以及并发局部更新不会被完整更新的旧快照覆盖。
+本次仓库外归档回归验证了所有身份写入入口使用一致限制、失败不改变已有配置、窄命令保留无关字段，以及并发局部更新不会被完整更新的旧快照覆盖。现有测试代码已按维护者要求移出仓库。

@@ -44,13 +44,7 @@ func NewManager(store *Store, cfg config.MCPConfig, logger *logging.Logger) (*Ma
 	if logger == nil {
 		return nil, errors.New("MCP Manager Logger 不能为空")
 	}
-	return &Manager{
-		store:        store,
-		config:       cfg,
-		logger:       logger,
-		revision:     1,
-		catalogCache: make(map[string]catalogCacheEntry),
-	}, nil
+	return &Manager{store: store, config: cfg, logger: logger, revision: 1, catalogCache: make(map[string]catalogCacheEntry)}, nil
 }
 
 func (m *Manager) SetRuntimeBackend(backend RuntimeBackend) {

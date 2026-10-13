@@ -84,10 +84,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("检查 Permission Policy 文件失败: %w", err)
 	}
 
-	if err := atomicfile.WriteJSON(ctx, path, 0o600, policyDocument{
-		Version: policySchemaVersion,
-		Rules:   []Rule{},
-	}); err != nil {
+	if err := atomicfile.WriteJSON(ctx, path, 0o600, policyDocument{Version: policySchemaVersion, Rules: []Rule{}}); err != nil {
 		return nil, fmt.Errorf("初始化 Permission Policy 文件失败: %w", err)
 	}
 
@@ -330,11 +327,7 @@ func migratePolicyV1(legacy legacyPolicyDocumentV1) policyDocument {
 		if old.Action != ActionDeny || old.Scope != GrantAgent {
 			continue
 		}
-		identity := CapabilityIdentity{
-			Version: CapabilityIdentityVersion,
-			Kind:    inferLegacyCapabilityKind(old),
-			Tool:    strings.TrimSpace(old.ToolName),
-		}
+		identity := CapabilityIdentity{Version: CapabilityIdentityVersion, Kind: inferLegacyCapabilityKind(old), Tool: strings.TrimSpace(old.ToolName)}
 		if identity.Kind == CapabilityCommand {
 			identity.Command = strings.TrimSpace(old.Condition.Command)
 		}

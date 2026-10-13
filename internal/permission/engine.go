@@ -176,11 +176,7 @@ func (e *Engine) Grant(ctx context.Context, grant ApprovalGrant) (*Rule, error) 
 
 	// install_skill 和 schedule_task 尚未完整绑定参数，不能创建可复用 Allow。
 	if grant.Request.ToolName == "install_skill" || grant.Request.ToolName == "schedule_task" {
-		return nil, fmt.Errorf(
-			"%w: %s 只允许单次批准，不能创建 Session/Agent Allow Rule",
-			ErrInvalidApprovalScope,
-			grant.Request.ToolName,
-		)
+		return nil, fmt.Errorf("%w: %s 只允许单次批准，不能创建 Session/Agent Allow Rule", ErrInvalidApprovalScope, grant.Request.ToolName)
 	}
 	if grant.Request.ToolName == "run_command" && grant.Request.Identity.InvocationFingerprint == "" {
 		return nil, fmt.Errorf("%w: run_command 缺少完整参数身份", ErrInvalidApprovalScope)
@@ -303,12 +299,7 @@ func (e *Engine) ClearPersistentAllows(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	e.logger.Info(
-		ctx,
-		"Permission 长期授权已批量撤销",
-		"operation", "permission.rule.clear_persistent_allows",
-		"deleted_count", count,
-	)
+	e.logger.Info(ctx, "Permission 长期授权已批量撤销", "operation", "permission.rule.clear_persistent_allows", "deleted_count", count)
 	return count, nil
 }
 
@@ -412,8 +403,7 @@ func newestRuleWithAction(sessionRules []Rule, agentRules []Rule, action Action)
 		if rule.Action != action {
 			return
 		}
-		if !found || rule.CreatedAt.After(selected.CreatedAt) ||
-			(rule.CreatedAt.Equal(selected.CreatedAt) && rule.ID > selected.ID) {
+		if !found || rule.CreatedAt.After(selected.CreatedAt) || (rule.CreatedAt.Equal(selected.CreatedAt) && rule.ID > selected.ID) {
 			selected = rule
 			found = true
 		}

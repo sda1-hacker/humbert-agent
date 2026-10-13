@@ -36,11 +36,7 @@ func ValidatePermissionConfig(cfg PermissionConfig) error {
 	default:
 		return fmt.Errorf("不支持的审批模式 %q", cfg.Mode)
 	}
-	for name, action := range map[string]string{
-		"read_action":  cfg.ReadAction,
-		"write_action": cfg.WriteAction,
-		"exec_action":  cfg.ExecAction,
-	} {
+	for name, action := range map[string]string{"read_action": cfg.ReadAction, "write_action": cfg.WriteAction, "exec_action": cfg.ExecAction} {
 		switch action {
 		case "allow", "deny", "ask":
 		default:

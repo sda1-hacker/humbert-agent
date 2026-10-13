@@ -63,12 +63,10 @@ func NewStore(ctx context.Context, transcripts *transcript.Store) (*Store, error
 		return nil, err
 	}
 	store := &Store{
-		transcripts: transcripts,
-		catalog:     catalog,
-		issues:      make(map[string]SessionIssue),
-		sessionLocks: &sessionLockRegistry{
-			values: make(map[string]*sessionLockEntry),
-		},
+		transcripts:  transcripts,
+		catalog:      catalog,
+		issues:       make(map[string]SessionIssue),
+		sessionLocks: &sessionLockRegistry{values: make(map[string]*sessionLockEntry)},
 	}
 	if err := store.rebuildIndex(ctx); err != nil {
 		_ = catalog.close()
@@ -156,12 +154,7 @@ func (s *Store) CreateSession(ctx context.Context, value Session) error {
 	unlock := s.sessionLocks.lock(value.ID)
 	defer unlock()
 
-	if err := s.transcripts.CreateSession(ctx, transcript.CreateSessionInput{
-		ID:        value.ID,
-		AgentID:   value.AgentID,
-		CWD:       value.CWD,
-		CreatedAt: value.CreatedAt,
-	}); err != nil {
+	if err := s.transcripts.CreateSession(ctx, transcript.CreateSessionInput{ID: value.ID, AgentID: value.AgentID, CWD: value.CWD, CreatedAt: value.CreatedAt}); err != nil {
 		return translateTranscriptError(err)
 	}
 
@@ -173,10 +166,7 @@ func (s *Store) CreateSession(ctx context.Context, value Session) error {
 	if err := s.catalog.insert(ctx, value); err != nil {
 		rollbackErr := s.transcripts.DeleteSession(context.WithoutCancel(ctx), value.AgentID, value.ID)
 		if rollbackErr != nil {
-			return errors.Join(
-				fmt.Errorf("写入 Session 元数据库失败: %w", err),
-				fmt.Errorf("回滚 Session 数据目录失败: %w", rollbackErr),
-			)
+			return errors.Join(fmt.Errorf("写入 Session 元数据库失败: %w", err), fmt.Errorf("回滚 Session 数据目录失败: %w", rollbackErr))
 		}
 		return fmt.Errorf("写入 Session 元数据库失败: %w", err)
 	}
@@ -347,12 +337,7 @@ func (s *Store) ListMessagePage(
 			CreatedAt:   createdAt.UTC(),
 		})
 	}
-	return MessagePage{
-		Messages:     pageMessages,
-		StartIndex:   entryPage.StartIndex,
-		HasMore:      entryPage.HasMore,
-		NextBeforeID: entryPage.NextBeforeID,
-	}, nil
+	return MessagePage{Messages: pageMessages, StartIndex: entryPage.StartIndex, HasMore: entryPage.HasMore, NextBeforeID: entryPage.NextBeforeID}, nil
 }
 
 // LoadTranscript 返回指定 Session 的完整 JSONL Tree 内存投影。
@@ -483,12 +468,7 @@ func (s *Store) rebuildIndex(ctx context.Context) error {
 		}
 		for _, ref := range refs {
 			if existing, exists := seen[ref.ID]; exists && existing != ref.AgentID {
-				return fmt.Errorf(
-					"发现重复 Session ID %s，分别属于 Agent %s 和 %s",
-					ref.ID,
-					existing,
-					ref.AgentID,
-				)
+				return fmt.Errorf("发现重复 Session ID %s，分别属于 Agent %s 和 %s", ref.ID, existing, ref.AgentID)
 			}
 			seen[ref.ID] = ref.AgentID
 			value, err := s.catalog.get(ctx, ref.ID)
@@ -544,10 +524,7 @@ func (s *Store) recoverSessionFromHeader(ctx context.Context, agentID, sessionID
 	if modifiedAt.Before(createdAt) {
 		modifiedAt = createdAt
 	}
-	return Session{
-		ID: sessionID, AgentID: agentID, Title: "恢复的会话", CWD: header.CWD,
-		CreatedAt: createdAt, UpdatedAt: modifiedAt,
-	}, nil
+	return Session{ID: sessionID, AgentID: agentID, Title: "恢复的会话", CWD: header.CWD, CreatedAt: createdAt, UpdatedAt: modifiedAt}, nil
 }
 
 func (s *Store) clearIssue(sessionID string) {

@@ -71,11 +71,7 @@ type SplitterConfig struct {
 
 // DefaultSeparators 返回默认递归分隔符。
 func DefaultSeparators() []string {
-	return []string{
-		"\n\n",
-		"\n",
-		"。",
-	}
+	return []string{"\n\n", "\n", "。"}
 }
 
 // DefaultConfig 返回一份默认 SplitterConfig。
@@ -83,11 +79,7 @@ func DefaultSeparators() []string {
 // 注意这里返回的 Separators 是一份新的 slice，
 // 避免不同配置实例共享底层数组。
 func DefaultConfig() SplitterConfig {
-	return SplitterConfig{
-		ChunkSize:    DefaultChunkSize,
-		ChunkOverlap: DefaultChunkOverlap,
-		Separators:   DefaultSeparators(),
-	}
+	return SplitterConfig{ChunkSize: DefaultChunkSize, ChunkOverlap: DefaultChunkOverlap, Separators: DefaultSeparators()}
 }
 
 // NormalizeSplitterConfig 对调用者传进来的配置应用基础默认值。

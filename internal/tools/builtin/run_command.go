@@ -47,34 +47,23 @@ type CommandLimits struct {
 // Validate 校验 CommandLimits。
 func (l CommandLimits) Validate() error {
 	if l.DefaultTimeout <= 0 {
-		return errors.New(
-			"DefaultTimeout 必须大于 0",
-		)
+		return errors.New("DefaultTimeout 必须大于 0")
 	}
 
-	if l.MaxTimeout <= 0 ||
-		l.DefaultTimeout > l.MaxTimeout {
-		return errors.New(
-			"MaxTimeout 无效",
-		)
+	if l.MaxTimeout <= 0 || l.DefaultTimeout > l.MaxTimeout {
+		return errors.New("MaxTimeout 无效")
 	}
 
 	if l.MaxOutputBytes <= 0 {
-		return errors.New(
-			"MaxOutputBytes 必须大于 0",
-		)
+		return errors.New("MaxOutputBytes 必须大于 0")
 	}
 
 	if l.MaxArgs <= 0 {
-		return errors.New(
-			"MaxArgs 必须大于 0",
-		)
+		return errors.New("MaxArgs 必须大于 0")
 	}
 
 	if l.MaxArgBytes <= 0 {
-		return errors.New(
-			"MaxArgBytes 必须大于 0",
-		)
+		return errors.New("MaxArgBytes 必须大于 0")
 	}
 
 	return nil
@@ -147,9 +136,7 @@ func NewRunCommandFactory(
 	environment []string,
 ) (*RunCommandFactory, error) {
 	if workspaceManager == nil {
-		return nil, errors.New(
-			"RunCommand WorkspaceManager 不能为空",
-		)
+		return nil, errors.New("RunCommand WorkspaceManager 不能为空")
 	}
 
 	if runner == nil {
@@ -157,32 +144,15 @@ func NewRunCommandFactory(
 	}
 
 	if err := limits.Validate(); err != nil {
-		return nil, fmt.Errorf(
-			"RunCommand Limits 无效: %w",
-			err,
-		)
+		return nil, fmt.Errorf("RunCommand Limits 无效: %w", err)
 	}
 
-	return &RunCommandFactory{
-		workspaces: workspaceManager,
-
-		runner: runner,
-
-		limits: limits,
-
-		environment: cloneStringSlice(
-			environment,
-		),
-	}, nil
+	return &RunCommandFactory{workspaces: workspaceManager, runner: runner, limits: limits, environment: cloneStringSlice(environment)}, nil
 }
 
 // Descriptor 返回 Humbert Registry 描述。
 func (f *RunCommandFactory) Descriptor() humberttools.Descriptor {
-	return humberttools.Descriptor{
-		Name: runCommandToolName,
-
-		Risk: humberttools.RiskExec,
-	}
+	return humberttools.Descriptor{Name: runCommandToolName, Risk: humberttools.RiskExec}
 }
 
 // Build 创建绑定当前 Runtime Workspace 的 Eino Tool。
@@ -194,16 +164,11 @@ func (f *RunCommandFactory) Build(
 	error,
 ) {
 	if ctx == nil {
-		return nil, errors.New(
-			"构建 run_command 失败: context.Context 不能为空",
-		)
+		return nil, errors.New("构建 run_command 失败: context.Context 不能为空")
 	}
 
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"构建 run_command 被取消: %w",
-			err,
-		)
+		return nil, fmt.Errorf("构建 run_command 被取消: %w", err)
 	}
 
 	return utils.InferTool(
@@ -216,11 +181,7 @@ func (f *RunCommandFactory) Build(
 			*RunCommandOutput,
 			error,
 		) {
-			return f.run(
-				callCtx,
-				scope,
-				input,
-			)
+			return f.run(callCtx, scope, input)
 		},
 	)
 }
@@ -234,64 +195,37 @@ func (f *RunCommandFactory) run(
 	error,
 ) {
 	if ctx == nil {
-		return nil, errors.New(
-			"run_command: context.Context 不能为空",
-		)
+		return nil, errors.New("run_command: context.Context 不能为空")
 	}
 
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"run_command 被取消: %w",
-			err,
-		)
+		return nil, fmt.Errorf("run_command 被取消: %w", err)
 	}
 
 	if input == nil {
-		return nil, errors.New(
-			"run_command 输入不能为空",
-		)
+		return nil, errors.New("run_command 输入不能为空")
 	}
 
 	command :=
-		normalizeCommandName(
-			input.Command,
-		)
+		normalizeCommandName(input.Command)
 
 	if err :=
-		validateCommandName(
-			command,
-		); err != nil {
-		return nil, fmt.Errorf(
-			"run_command command 无效: %w",
-			err,
-		)
+		validateCommandName(command); err != nil {
+		return nil, fmt.Errorf("run_command command 无效: %w", err)
 	}
 
 	if err :=
-		validateCommandArguments(
-			input.Args,
-			f.limits,
-		); err != nil {
-		return nil, fmt.Errorf(
-			"run_command args 无效: %w",
-			err,
-		)
+		validateCommandArguments(input.Args, f.limits); err != nil {
+		return nil, fmt.Errorf("run_command args 无效: %w", err)
 	}
 
 	workingDirectory,
 		displayDirectory,
 		err :=
-		resolveCommandWorkingDirectory(
-			ctx,
-			scope,
-			input.WorkingDirectory,
-		)
+		resolveCommandWorkingDirectory(ctx, scope, input.WorkingDirectory)
 
 	if err != nil {
-		return nil, fmt.Errorf(
-			"run_command working_directory 无效: %w",
-			err,
-		)
+		return nil, fmt.Errorf("run_command working_directory 无效: %w", err)
 	}
 
 	executable, err := commandenv.Resolve(command, workingDirectory)
@@ -300,8 +234,7 @@ func (f *RunCommandFactory) run(
 	}
 
 	timeout :=
-		f.limits.
-			DefaultTimeout
+		f.limits.DefaultTimeout
 
 	if input.TimeoutSeconds > 0 {
 		timeout = time.Duration(input.TimeoutSeconds) * time.Second
@@ -347,10 +280,7 @@ func (f *RunCommandFactory) run(
 	}
 	message := ""
 	if processResult.TimedOut {
-		message = fmt.Sprintf(
-			"命令执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时，不表示 Shell 未启用。",
-			timeout,
-		)
+		message = fmt.Sprintf("命令执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时，不表示 Shell 未启用。", timeout)
 	} else if terminationReason == "signaled" {
 		message = "本地进程被操作系统信号异常终止。"
 		if detail := strings.TrimSpace(processResult.TerminationDetail); detail != "" {
@@ -383,15 +313,9 @@ func cloneStringSlice(
 	values []string,
 ) []string {
 	cloned :=
-		make(
-			[]string,
-			len(values),
-		)
+		make([]string, len(values))
 
-	copy(
-		cloned,
-		values,
-	)
+	copy(cloned, values)
 
 	return cloned
 }
@@ -403,40 +327,21 @@ func validateCommandArguments(
 	args []string,
 	limits CommandLimits,
 ) error {
-	if len(args) >
-		limits.MaxArgs {
-		return fmt.Errorf(
-			"参数数量 %d 超过最大值 %d",
-			len(args),
-			limits.MaxArgs,
-		)
+	if len(args) > limits.MaxArgs {
+		return fmt.Errorf("参数数量 %d 超过最大值 %d", len(args), limits.MaxArgs)
 	}
 
 	for index, arg := range args {
-		if strings.ContainsRune(
-			arg,
-			'\x00',
-		) {
-			return fmt.Errorf(
-				"第 %d 个参数包含 NUL",
-				index+1,
-			)
+		if strings.ContainsRune(arg, '\x00') {
+			return fmt.Errorf("第 %d 个参数包含 NUL", index+1)
 		}
 
-		if len(arg) >
-			limits.MaxArgBytes {
-			return fmt.Errorf(
-				"第 %d 个参数超过 %d bytes",
-				index+1,
-				limits.MaxArgBytes,
-			)
+		if len(arg) > limits.MaxArgBytes {
+			return fmt.Errorf("第 %d 个参数超过 %d bytes", index+1, limits.MaxArgBytes)
 		}
 
 		if !utf8.ValidString(arg) {
-			return fmt.Errorf(
-				"第 %d 个参数不是有效 UTF-8",
-				index+1,
-			)
+			return fmt.Errorf("第 %d 个参数不是有效 UTF-8", index+1)
 		}
 	}
 
@@ -514,13 +419,7 @@ func newBoundedCommandOutput(
 			limit
 	}
 
-	return &boundedCommandOutput{
-		limit: limit,
-
-		headLimit: headLimit,
-
-		tailLimit: limit - headLimit,
-	}
+	return &boundedCommandOutput{limit: limit, headLimit: headLimit, tailLimit: limit - headLimit}
 }
 
 func (b *boundedCommandOutput) Write(
@@ -536,13 +435,10 @@ func (b *boundedCommandOutput) Write(
 	defer b.mu.Unlock()
 
 	b.total +=
-		int64(
-			originalLength,
-		)
+		int64(originalLength)
 
 	remainingHead :=
-		b.headLimit -
-			b.head.Len()
+		b.headLimit - b.head.Len()
 
 	if remainingHead > 0 {
 		take :=
@@ -554,32 +450,21 @@ func (b *boundedCommandOutput) Write(
 		}
 
 		_, _ =
-			b.head.Write(
-				p[:take],
-			)
+			b.head.Write(p[:take])
 
 		p =
 			p[take:]
 	}
 
-	if len(p) > 0 &&
-		b.tailLimit > 0 {
+	if len(p) > 0 && b.tailLimit > 0 {
 		b.tail =
-			append(
-				b.tail,
-				p...,
-			)
+			append(b.tail, p...)
 
-		if len(b.tail) >
-			b.tailLimit {
+		if len(b.tail) > b.tailLimit {
 			overflow :=
-				len(b.tail) -
-					b.tailLimit
+				len(b.tail) - b.tailLimit
 
-			copy(
-				b.tail,
-				b.tail[overflow:],
-			)
+			copy(b.tail, b.tail[overflow:])
 
 			b.tail =
 				b.tail[:b.tailLimit]
@@ -597,57 +482,28 @@ func (b *boundedCommandOutput) Result() (
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.total <=
-		int64(
-			b.limit,
-		) {
+	if b.total <= int64(b.limit) {
 		combined :=
-			append(
-				[]byte(nil),
-				b.head.Bytes()...,
-			)
+			append([]byte(nil), b.head.Bytes()...)
 
 		combined =
-			append(
-				combined,
-				b.tail...,
-			)
+			append(combined, b.tail...)
 
-		return strings.ToValidUTF8(
-				string(combined),
-				"�",
-			),
+		return strings.ToValidUTF8(string(combined), "�"),
 			false
 	}
 
 	dropped :=
-		b.total -
-			int64(
-				b.head.Len(),
-			) -
-			int64(
-				len(b.tail),
-			)
+		b.total - int64(b.head.Len()) - int64(len(b.tail))
 
 	var builder strings.Builder
 
-	builder.Write(
-		b.head.Bytes(),
-	)
+	builder.Write(b.head.Bytes())
 
-	fmt.Fprintf(
-		&builder,
-		"\n... [truncated %d bytes] ...\n",
-		dropped,
-	)
+	fmt.Fprintf(&builder, "\n... [truncated %d bytes] ...\n", dropped)
 
-	builder.Write(
-		b.tail,
-	)
+	builder.Write(b.tail)
 
-	return strings.ToValidUTF8(
-			builder.String(),
-			"�",
-		),
+	return strings.ToValidUTF8(builder.String(), "�"),
 		true
 }

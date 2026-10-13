@@ -102,11 +102,7 @@ type VectorConfig struct {
 
 // DefaultVectorConfig 返回向量召回的候选数量、维度与默认阈值。
 func DefaultVectorConfig() VectorConfig {
-	return VectorConfig{
-		TopK:           DefaultTopK,
-		ScoreThreshold: DefaultVectorThreshold,
-		Dimensions:     DefaultDimensions,
-	}
+	return VectorConfig{TopK: DefaultTopK, ScoreThreshold: DefaultVectorThreshold, Dimensions: DefaultDimensions}
 }
 
 // VectorRetriever 使用 pgvector 的半精度向量与 HNSW 索引进行余弦相似度召回。
@@ -139,10 +135,7 @@ func newVectorRetriever(db queryer, cfg VectorConfig) *VectorRetriever {
 		cfg.Dimensions = DefaultDimensions
 	}
 
-	return &VectorRetriever{
-		db:     db,
-		config: cfg,
-	}
+	return &VectorRetriever{db: db, config: cfg}
 }
 
 // Retrieve 实现 Eino Retriever。
@@ -170,12 +163,7 @@ func (r *VectorRetriever) searchResults(
 	threshold := r.config.ScoreThreshold
 
 	common := einoretriever.GetCommonOptions(
-		&einoretriever.Options{
-			Index:          &collectionID,
-			TopK:           &topK,
-			ScoreThreshold: &threshold,
-			Embedding:      r.config.Embedder,
-		},
+		&einoretriever.Options{Index: &collectionID, TopK: &topK, ScoreThreshold: &threshold, Embedding: r.config.Embedder},
 		opts...,
 	)
 
@@ -187,14 +175,7 @@ func (r *VectorRetriever) searchResults(
 		return nil, ErrMissingEmbedder
 	}
 
-	return r.search(
-		ctx,
-		query,
-		strings.TrimSpace(*common.Index),
-		*common.TopK,
-		*common.ScoreThreshold,
-		common.Embedding,
-	)
+	return r.search(ctx, query, strings.TrimSpace(*common.Index), *common.TopK, *common.ScoreThreshold, common.Embedding)
 }
 
 func (r *VectorRetriever) search(
@@ -219,39 +200,23 @@ func (r *VectorRetriever) search(
 		return nil, ErrInvalidThreshold
 	}
 
-	vectors, err := embedder.EmbedStrings(
-		ctx,
-		[]string{query},
-	)
+	vectors, err := embedder.EmbedStrings(ctx, []string{query})
 
 	if err != nil {
 		return nil, fmt.Errorf("embed retrieval query: %w", err)
 	}
 
 	if len(vectors) != 1 {
-		return nil, fmt.Errorf(
-			"%w: expected one vector, got %d",
-			ErrInvalidEmbedding,
-			len(vectors),
-		)
+		return nil, fmt.Errorf("%w: expected one vector, got %d", ErrInvalidEmbedding, len(vectors))
 	}
 
-	queryVector, err := toHalfVector(
-		vectors[0],
-		r.config.Dimensions,
-	)
+	queryVector, err := toHalfVector(vectors[0], r.config.Dimensions)
 
 	if err != nil {
 		return nil, err
 	}
 
-	resultRows, err := r.db.Query(
-		ctx,
-		vectorSearchSQL,
-		queryVector,
-		collectionID,
-		topK,
-	)
+	resultRows, err := r.db.Query(ctx, vectorSearchSQL, queryVector, collectionID, topK)
 
 	if err != nil {
 		return nil, fmt.Errorf("postgres vector search: %w", err)
@@ -259,10 +224,7 @@ func (r *VectorRetriever) search(
 
 	defer resultRows.Close()
 
-	results, err := scanSearchResults(
-		resultRows,
-		retrieval.MatchVector,
-	)
+	results, err := scanSearchResults(resultRows, retrieval.MatchVector)
 
 	if err != nil {
 		return nil, err
@@ -292,10 +254,7 @@ type BM25Config struct {
 
 // DefaultBM25Config 返回关键词召回的默认候选数量。
 func DefaultBM25Config() BM25Config {
-	return BM25Config{
-		TopK:           DefaultTopK,
-		ScoreThreshold: DefaultKeywordThreshold,
-	}
+	return BM25Config{TopK: DefaultTopK, ScoreThreshold: DefaultKeywordThreshold}
 }
 
 // BM25Retriever 通过 ParadeDB 进行关键词召回的 Eino 检索器。
@@ -324,10 +283,7 @@ func newBM25Retriever(db queryer, cfg BM25Config) *BM25Retriever {
 		cfg.TopK = DefaultTopK
 	}
 
-	return &BM25Retriever{
-		db:     db,
-		config: cfg,
-	}
+	return &BM25Retriever{db: db, config: cfg}
 }
 
 func (r *BM25Retriever) Retrieve(
@@ -352,26 +308,13 @@ func (r *BM25Retriever) searchResults(
 	topK := r.config.TopK
 	threshold := r.config.ScoreThreshold
 
-	common := einoretriever.GetCommonOptions(
-		&einoretriever.Options{
-			Index:          &collectionID,
-			TopK:           &topK,
-			ScoreThreshold: &threshold,
-		},
-		opts...,
-	)
+	common := einoretriever.GetCommonOptions(&einoretriever.Options{Index: &collectionID, TopK: &topK, ScoreThreshold: &threshold}, opts...)
 
 	if err := validateCommonOptions(common); err != nil {
 		return nil, err
 	}
 
-	return r.search(
-		ctx,
-		query,
-		strings.TrimSpace(*common.Index),
-		*common.TopK,
-		*common.ScoreThreshold,
-	)
+	return r.search(ctx, query, strings.TrimSpace(*common.Index), *common.TopK, *common.ScoreThreshold)
 }
 
 func (r *BM25Retriever) search(
@@ -395,13 +338,7 @@ func (r *BM25Retriever) search(
 		return nil, ErrInvalidThreshold
 	}
 
-	resultRows, err := r.db.Query(
-		ctx,
-		bm25SearchSQL,
-		collectionID,
-		query,
-		topK,
-	)
+	resultRows, err := r.db.Query(ctx, bm25SearchSQL, collectionID, query, topK)
 
 	if err != nil {
 		return nil, fmt.Errorf("postgres bm25 search: %w", err)
@@ -409,10 +346,7 @@ func (r *BM25Retriever) search(
 
 	defer resultRows.Close()
 
-	results, err := scanSearchResults(
-		resultRows,
-		retrieval.MatchKeyword,
-	)
+	results, err := scanSearchResults(resultRows, retrieval.MatchKeyword)
 
 	if err != nil {
 		return nil, err
@@ -514,10 +448,7 @@ func scanSearchResults(
 			&rawMetadata,
 			&result.Score,
 		); err != nil {
-			return nil, fmt.Errorf(
-				"scan postgres retrieval row: %w",
-				err,
-			)
+			return nil, fmt.Errorf("scan postgres retrieval row: %w", err)
 		}
 
 		if parentChunkID != nil {
@@ -525,15 +456,8 @@ func scanSearchResults(
 		}
 
 		if len(rawMetadata) > 0 {
-			if err := json.Unmarshal(
-				rawMetadata,
-				&result.Metadata,
-			); err != nil {
-				return nil, fmt.Errorf(
-					"decode retrieval metadata for chunk %q: %w",
-					result.ChunkID,
-					err,
-				)
+			if err := json.Unmarshal(rawMetadata, &result.Metadata); err != nil {
+				return nil, fmt.Errorf("decode retrieval metadata for chunk %q: %w", result.ChunkID, err)
 			}
 		}
 
@@ -556,10 +480,7 @@ func scanSearchResults(
 	}
 
 	if err := resultRows.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"iterate postgres retrieval rows: %w",
-			err,
-		)
+		return nil, fmt.Errorf("iterate postgres retrieval rows: %w", err)
 	}
 
 	return results, nil
@@ -573,9 +494,7 @@ func scanSearchResults(
 func validateCommonOptions(
 	options *einoretriever.Options,
 ) error {
-	if options == nil ||
-		options.Index == nil ||
-		strings.TrimSpace(*options.Index) == "" {
+	if options == nil || options.Index == nil || strings.TrimSpace(*options.Index) == "" {
 
 		return ErrMissingCollectionID
 	}
@@ -606,12 +525,7 @@ func validateCommonOptions(
 // validateTopK 限制数据库请求的候选数量，防止无界召回。
 func validateTopK(topK int) error {
 	if topK <= 0 || topK > MaxTopK {
-		return fmt.Errorf(
-			"%w: expected 1..%d, got %d",
-			ErrInvalidTopK,
-			MaxTopK,
-			topK,
-		)
+		return fmt.Errorf("%w: expected 1..%d, got %d", ErrInvalidTopK, MaxTopK, topK)
 	}
 
 	return nil
@@ -627,11 +541,7 @@ func filterByScore(
 		return nil
 	}
 
-	filtered := make(
-		[]retrieval.SearchResult,
-		0,
-		len(results),
-	)
+	filtered := make([]retrieval.SearchResult, 0, len(results))
 
 	for _, item := range results {
 		if item.Score >= threshold {
@@ -652,34 +562,20 @@ func toHalfVector(
 	dimensions int,
 ) (pgvector.HalfVector, error) {
 	if len(vector) != dimensions {
-		return pgvector.HalfVector{}, fmt.Errorf(
-			"%w: expected %d dimensions, got %d",
-			ErrInvalidEmbedding,
-			dimensions,
-			len(vector),
-		)
+		return pgvector.HalfVector{}, fmt.Errorf("%w: expected %d dimensions, got %d", ErrInvalidEmbedding, dimensions, len(vector))
 	}
 
 	values := make([]float32, len(vector))
 	nonzero := false
 
 	for i, value := range vector {
-		if math.IsNaN(value) ||
-			math.IsInf(value, 0) {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
 
-			return pgvector.HalfVector{}, fmt.Errorf(
-				"%w: vector[%d] is not finite",
-				ErrInvalidEmbedding,
-				i,
-			)
+			return pgvector.HalfVector{}, fmt.Errorf("%w: vector[%d] is not finite", ErrInvalidEmbedding, i)
 		}
 
 		if math.Abs(value) > 65504 {
-			return pgvector.HalfVector{}, fmt.Errorf(
-				"%w: vector[%d] exceeds half precision range",
-				ErrInvalidEmbedding,
-				i,
-			)
+			return pgvector.HalfVector{}, fmt.Errorf("%w: vector[%d] exceeds half precision range", ErrInvalidEmbedding, i)
 		}
 
 		values[i] = float32(value)

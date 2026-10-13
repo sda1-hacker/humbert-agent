@@ -28,10 +28,7 @@ type Config struct {
 
 // DefaultConfig 返回基础切分配置；空策略使用递归切分，自动策略需显式设置。
 func DefaultConfig() Config {
-	return Config{
-		Splitter:    corechunker.DefaultConfig(),
-		IDGenerator: DefaultIDGenerator,
-	}
+	return Config{Splitter: corechunker.DefaultConfig(), IDGenerator: DefaultIDGenerator}
 }
 
 // Transformer 适配 Eino 文档转换接口，实际分块算法由核心 chunker 实现。
@@ -47,9 +44,7 @@ func NewTransformer(config Config) *Transformer {
 		config.IDGenerator = DefaultIDGenerator
 	}
 
-	return &Transformer{
-		config: config,
-	}
+	return &Transformer{config: config}
 }
 
 // transformerOptions 保存当前调用的配置覆盖，不修改组件默认值。
@@ -88,10 +83,7 @@ func (t *Transformer) Transform(
 
 	// 基于独立配置副本应用本次选项，避免覆盖组件默认值。
 	options := document.GetTransformerImplSpecificOptions(
-		&transformerOptions{
-			splitter:    t.config.Splitter.Clone(),
-			idGenerator: t.config.IDGenerator,
-		},
+		&transformerOptions{splitter: t.config.Splitter.Clone(), idGenerator: t.config.IDGenerator},
 		opts...,
 	)
 
@@ -121,12 +113,7 @@ func (t *Transformer) Transform(
 				return nil, err
 			}
 
-			chunkDoc := chunkToDocument(
-				source,
-				sourceIndex,
-				chunk,
-				options.idGenerator,
-			)
+			chunkDoc := chunkToDocument(source, sourceIndex, chunk, options.idGenerator)
 			result = append(result, chunkDoc)
 		}
 	}
@@ -153,11 +140,7 @@ func chunkToDocument(
 		metadata[retrieval.MetaSourceDocumentID] = source.ID
 	}
 
-	return &schema.Document{
-		ID:       generator(source, sourceIndex, chunk),
-		Content:  chunk.Content,
-		MetaData: metadata,
-	}
+	return &schema.Document{ID: generator(source, sourceIndex, chunk), Content: chunk.Content, MetaData: metadata}
 }
 
 // DefaultIDGenerator 使用来源 ID 与分块序号生成稳定 ID；来源无 ID 时使用输入位置。

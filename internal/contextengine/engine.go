@@ -61,12 +61,7 @@ func NewEngine(
 	if logger == nil {
 		return nil, errors.New("ContextEngine Logger 不能为空")
 	}
-	return &Engine{
-		config:    cfg,
-		sessions:  sessions,
-		estimator: estimator,
-		logger:    logger,
-	}, nil
+	return &Engine{config: cfg, sessions: sessions, estimator: estimator, logger: logger}, nil
 }
 
 // Build 从当前 ActiveBranch 构造下一次模型调用的 Context Snapshot。
@@ -134,24 +129,13 @@ func (e *Engine) buildFromDocument(
 
 	// System/Tool 都不能靠压缩旧对话释放，因此必须先从硬阈值中扣除，再决定
 	// 本轮真正能够保留多少 Recent History。
-	budget = ResolveBudgetForFixedContext(
-		budget,
-		breakdown.SystemTokens+breakdown.ToolTokens,
-		breakdown.CheckpointTokens,
-	)
+	budget = ResolveBudgetForFixedContext(budget, breakdown.SystemTokens+breakdown.ToolTokens, breakdown.CheckpointTokens)
 
 	messages := projection.Messages
 	usage := usageFromBudget(budget, breakdown, projection.LatestCompactionID)
 	assembly := assemblyFromProjection(projection)
 
-	return Snapshot{
-		Instruction: baseInstruction,
-		Messages:    messages,
-		Budget:      budget,
-		Window:      projection.Window,
-		Usage:       usage,
-		Assembly:    assembly,
-	}, nil
+	return Snapshot{Instruction: baseInstruction, Messages: messages, Budget: budget, Window: projection.Window, Usage: usage, Assembly: assembly}, nil
 }
 
 func assemblyFromProjection(projection projectionResult) Assembly {
@@ -198,10 +182,7 @@ func usageFromBudget(budget Budget, breakdown usageBreakdown, latestCompactionID
 	breakdown.CheckpointTokens = maxInt(breakdown.CheckpointTokens, 0)
 	breakdown.MessageTokens = maxInt(breakdown.MessageTokens, 0)
 
-	used := breakdown.SystemTokens +
-		breakdown.ToolTokens +
-		breakdown.CheckpointTokens +
-		breakdown.MessageTokens
+	used := breakdown.SystemTokens + breakdown.ToolTokens + breakdown.CheckpointTokens + breakdown.MessageTokens
 	percent := 0.0
 	if budget.ContextWindow > 0 {
 		percent = float64(used) * 100 / float64(budget.ContextWindow)

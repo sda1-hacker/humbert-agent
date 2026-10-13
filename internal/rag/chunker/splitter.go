@@ -41,19 +41,12 @@ func SplitText(
 	// -------------------------------------------------------------
 
 	protected :=
-		protectedSpans(
-			text,
-		)
+		protectedSpans(text)
 
 	// 普通区域递归拆分，保护区域保持原子，再统一记录字符坐标。
 
 	units :=
-		buildUnitsWithProtection(
-			text,
-			protected,
-			separators,
-			chunkSize,
-		)
+		buildUnitsWithProtection(text, protected, separators, chunkSize)
 
 	// -------------------------------------------------------------
 	// Step 3：
@@ -61,9 +54,5 @@ func SplitText(
 	// Unit → 最终 Chunk。
 	// -------------------------------------------------------------
 
-	return mergeUnits(
-		units,
-		chunkSize,
-		chunkOverlap,
-	)
+	return mergeUnits(units, chunkSize, chunkOverlap)
 }

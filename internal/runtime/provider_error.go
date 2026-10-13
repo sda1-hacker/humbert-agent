@@ -12,9 +12,7 @@ var (
 	// 这类错误不是 Humbert Tool/Session/JSONL 逻辑错误，也不应该把已经被 Provider
 	// 判定为不可交付的 partial output 继续写入 Session。Runtime 会保留用户消息和此前
 	// 已完成的合法 Agent Step，但丢弃本次被拦截的未完成 Assistant Stream。
-	ErrProviderContentBlocked = errors.New(
-		"模型服务内容安全检查拦截了本次输入或输出",
-	)
+	ErrProviderContentBlocked = errors.New("模型服务内容安全检查拦截了本次输入或输出")
 )
 
 const providerContentBlockedUserMessage = "模型服务的内容安全检查拦截了本次输入或输出。请调整问题表述后重试，或切换到其他可用模型。"
@@ -35,11 +33,7 @@ func classifyProviderError(err error) error {
 	if !isProviderContentBlockedText(err.Error()) {
 		return err
 	}
-	return fmt.Errorf(
-		"%w: %v",
-		ErrProviderContentBlocked,
-		err,
-	)
+	return fmt.Errorf("%w: %v", ErrProviderContentBlocked, err)
 }
 
 // isProviderContentBlockedText 判断错误文本是否属于内容安全拒绝。
@@ -51,13 +45,11 @@ func isProviderContentBlockedText(value string) bool {
 		return false
 	}
 
-	if strings.Contains(text, "data_inspection_failed") ||
-		strings.Contains(text, "datainspectionfailed") {
+	if strings.Contains(text, "data_inspection_failed") || strings.Contains(text, "datainspectionfailed") {
 		return true
 	}
 
-	if strings.Contains(text, "content security warning") ||
-		strings.Contains(text, "custom_role_blocked") ||
+	if strings.Contains(text, "content security warning") || strings.Contains(text, "custom_role_blocked") ||
 		strings.Contains(text, "customroleblocked") {
 		return true
 	}
@@ -66,9 +58,7 @@ func isProviderContentBlockedText(value string) bool {
 	// "inappropriatntent"。只要同时出现 input/output/data 与 inappropriat 词干，就
 	// 可以可靠判断为同一类审核拒绝。
 	if strings.Contains(text, "inappropriat") &&
-		(strings.Contains(text, "input data") ||
-			strings.Contains(text, "output data") ||
-			strings.Contains(text, "input or output data")) {
+		(strings.Contains(text, "input data") || strings.Contains(text, "output data") || strings.Contains(text, "input or output data")) {
 		return true
 	}
 

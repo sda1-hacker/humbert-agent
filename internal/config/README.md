@@ -15,4 +15,6 @@ flowchart LR
 
 `configwrite.go` 将权限和 Sandbox 相关设置的修改写回配置；`permission.go`、`sandbox.go`、`tools.go` 提供各域校验与默认值。`resolvePaths` 与 `ensureLayout` 将所有核心数据集中在受控根目录，并设置私有目录权限。配置写入要保持用户文件可解析；更改字段后要考虑旧版默认值和配置迁移。
 
+`tools.go` 的 `checkToolBounds` 按声明顺序检查范围，保持原先的上限、首个错误和错误文本；工具默认值集中注册。读取仍显式使用原有 Viper 键，环境变量入口、`shell_enabled` 开关与命令环境白名单保持原样。
+
 阅读 `config.go:Load` → `loadFromHome` → `resolvePaths` → `normalize/validate`，再按设置类型看 `SavePermissionConfig` 或 `SaveSandboxAndShellConfig`。UI 上的动态 Provider 设置请去 `models` 包追踪。

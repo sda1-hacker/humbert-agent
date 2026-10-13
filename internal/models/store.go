@@ -73,10 +73,7 @@ func NewStore(
 	if modelsFile == "" {
 		return nil, errors.New("models.json 路径不能为空")
 	}
-	store := &Store{
-		providersFile: providersFile,
-		modelsFile:    modelsFile,
-	}
+	store := &Store{providersFile: providersFile, modelsFile: modelsFile}
 
 	if err := store.ensureDocuments(ctx); err != nil {
 		return nil, err
@@ -236,18 +233,10 @@ func (s *Store) ListModels(ctx context.Context) ([]ModelInfo, error) {
 	for _, model := range models {
 		provider, exists := providerByID[model.ProviderID]
 		if !exists {
-			return nil, fmt.Errorf(
-				"模型 %s 引用了不存在的 Provider %s",
-				model.ID,
-				model.ProviderID,
-			)
+			return nil, fmt.Errorf("模型 %s 引用了不存在的 Provider %s", model.ID, model.ProviderID)
 		}
 
-		result = append(result, ModelInfo{
-			Model:        model,
-			ProviderName: provider.Name,
-			ProviderType: provider.Type,
-		})
+		result = append(result, ModelInfo{Model: model, ProviderName: provider.Name, ProviderType: provider.Type})
 	}
 
 	sort.SliceStable(result, func(i, j int) bool {
@@ -361,9 +350,7 @@ func (s *Store) UpdateModel(ctx context.Context, value Model) error {
 
 	found := false
 	for index, existing := range models {
-		if existing.ID != value.ID &&
-			existing.ProviderID == value.ProviderID &&
-			existing.ModelName == value.ModelName {
+		if existing.ID != value.ID && existing.ProviderID == value.ProviderID && existing.ModelName == value.ModelName {
 			return ErrModelConflict
 		}
 
@@ -413,10 +400,7 @@ func (s *Store) ensureDocuments(ctx context.Context) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("检查 providers.json 失败: %w", err)
 		}
-		if err := atomicfile.WriteJSON(ctx, s.providersFile, 0o600, providersDocument{
-			SchemaVersion: modelConfigSchemaVersion,
-			Providers:     []Provider{},
-		}); err != nil {
+		if err := atomicfile.WriteJSON(ctx, s.providersFile, 0o600, providersDocument{SchemaVersion: modelConfigSchemaVersion, Providers: []Provider{}}); err != nil {
 			return fmt.Errorf("初始化 providers.json 失败: %w", err)
 		}
 	}
@@ -425,10 +409,7 @@ func (s *Store) ensureDocuments(ctx context.Context) error {
 		if !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("检查 models.json 失败: %w", err)
 		}
-		if err := atomicfile.WriteJSON(ctx, s.modelsFile, 0o600, modelsDocument{
-			SchemaVersion: modelConfigSchemaVersion,
-			Models:        []Model{},
-		}); err != nil {
+		if err := atomicfile.WriteJSON(ctx, s.modelsFile, 0o600, modelsDocument{SchemaVersion: modelConfigSchemaVersion, Models: []Model{}}); err != nil {
 			return fmt.Errorf("初始化 models.json 失败: %w", err)
 		}
 	}
@@ -442,10 +423,7 @@ func (s *Store) listProvidersLocked(ctx context.Context) ([]Provider, error) {
 		return nil, fmt.Errorf("读取 Provider 配置失败: %w", err)
 	}
 	if document.SchemaVersion != modelConfigSchemaVersion {
-		return nil, fmt.Errorf(
-			"不支持的 providers.json schema_version: %d",
-			document.SchemaVersion,
-		)
+		return nil, fmt.Errorf("不支持的 providers.json schema_version: %d", document.SchemaVersion)
 	}
 	if document.Providers == nil {
 		document.Providers = []Provider{}
@@ -467,10 +445,7 @@ func (s *Store) readModelsDocumentLocked(ctx context.Context) (modelsDocument, e
 		return modelsDocument{}, fmt.Errorf("读取 Model 配置失败: %w", err)
 	}
 	if document.SchemaVersion != modelConfigSchemaVersion {
-		return modelsDocument{}, fmt.Errorf(
-			"不支持的 models.json schema_version: %d",
-			document.SchemaVersion,
-		)
+		return modelsDocument{}, fmt.Errorf("不支持的 models.json schema_version: %d", document.SchemaVersion)
 	}
 	if document.Models == nil {
 		document.Models = []Model{}
@@ -536,10 +511,7 @@ func (s *Store) writeProvidersLocked(ctx context.Context, values []Provider) err
 		}
 		return values[i].ID < values[j].ID
 	})
-	if err := atomicfile.WriteJSON(ctx, s.providersFile, 0o600, providersDocument{
-		SchemaVersion: modelConfigSchemaVersion,
-		Providers:     values,
-	}); err != nil {
+	if err := atomicfile.WriteJSON(ctx, s.providersFile, 0o600, providersDocument{SchemaVersion: modelConfigSchemaVersion, Providers: values}); err != nil {
 		return fmt.Errorf("写入 providers.json 失败: %w", err)
 	}
 	return nil
@@ -562,11 +534,7 @@ func (s *Store) writeModelsDocumentLocked(ctx context.Context, document modelsDo
 		}
 		return values[i].ID < values[j].ID
 	})
-	if err := atomicfile.WriteJSON(ctx, s.modelsFile, 0o600, modelsDocument{
-		SchemaVersion: modelConfigSchemaVersion,
-		Models:        values,
-		Multimedia:    document.Multimedia,
-	}); err != nil {
+	if err := atomicfile.WriteJSON(ctx, s.modelsFile, 0o600, modelsDocument{SchemaVersion: modelConfigSchemaVersion, Models: values, Multimedia: document.Multimedia}); err != nil {
 		return fmt.Errorf("写入 models.json 失败: %w", err)
 	}
 	return nil

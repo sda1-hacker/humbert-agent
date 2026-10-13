@@ -139,10 +139,7 @@ func (m *Manager) sourcesPath() string {
 }
 
 func (m *Manager) readSourcesLocked(ctx context.Context) (skillSourcesDocument, error) {
-	document := skillSourcesDocument{
-		SchemaVersion: skillSourcesSchemaVersion,
-		Skills:        make(map[string]SourceInfo),
-	}
+	document := skillSourcesDocument{SchemaVersion: skillSourcesSchemaVersion, Skills: make(map[string]SourceInfo)}
 	if err := atomicfile.ReadJSON(ctx, m.sourcesPath(), &document); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return document, nil
@@ -150,10 +147,7 @@ func (m *Manager) readSourcesLocked(ctx context.Context) (skillSourcesDocument, 
 		return skillSourcesDocument{}, fmt.Errorf("读取 Skill 来源配置失败: %w", err)
 	}
 	if document.SchemaVersion != skillSourcesSchemaVersion {
-		return skillSourcesDocument{}, fmt.Errorf(
-			"读取 Skill 来源配置失败: 不支持 schema_version=%d",
-			document.SchemaVersion,
-		)
+		return skillSourcesDocument{}, fmt.Errorf("读取 Skill 来源配置失败: 不支持 schema_version=%d", document.SchemaVersion)
 	}
 	if document.Skills == nil {
 		document.Skills = make(map[string]SourceInfo)

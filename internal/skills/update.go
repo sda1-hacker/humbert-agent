@@ -79,12 +79,7 @@ func (m *Manager) CheckUpdate(ctx context.Context, name string) (UpdateCheck, er
 	}
 	defer cleanup()
 	if candidate.Info.Name != current.Info.Name {
-		return UpdateCheck{}, fmt.Errorf(
-			"%w: 来源中的 Skill name 从 %q 变为 %q，拒绝自动替换",
-			ErrInvalidSkill,
-			current.Info.Name,
-			candidate.Info.Name,
-		)
+		return UpdateCheck{}, fmt.Errorf("%w: 来源中的 Skill name 从 %q 变为 %q，拒绝自动替换", ErrInvalidSkill, current.Info.Name, candidate.Info.Name)
 	}
 
 	return UpdateCheck{
@@ -116,14 +111,7 @@ func (m *Manager) Update(ctx context.Context, name string) (UpdateResult, error)
 
 	// 自动 Update 沿用第一次记录的来源建立时间；UpdatedAt 会在原子提交时刷新。
 	refreshedSource.InstalledAt = source.InstalledAt
-	return m.replaceValidatedPackage(
-		operationCtx,
-		current.Info.Name,
-		installedState{Valid: true, Package: current},
-		candidate,
-		refreshedSource,
-		false,
-	)
+	return m.replaceValidatedPackage(operationCtx, current.Info.Name, installedState{Valid: true, Package: current}, candidate, refreshedSource, false)
 }
 
 // Reinstall 从已记录来源强制重新安装 Skill，即使当前 Package 已损坏或来源内容 Identity 没变化
@@ -163,14 +151,7 @@ func (m *Manager) Reinstall(ctx context.Context, name string) (UpdateResult, err
 	defer cleanup()
 
 	refreshedSource.InstalledAt = source.InstalledAt
-	return m.replaceValidatedPackage(
-		operationCtx,
-		name,
-		current,
-		candidate,
-		refreshedSource,
-		true,
-	)
+	return m.replaceValidatedPackage(operationCtx, name, current, candidate, refreshedSource, true)
 }
 
 // ReinstallFromURL 从用户新提供的远程来源原子替换现有 Skill，并建立/更换来源记录。
@@ -208,14 +189,7 @@ func (m *Manager) ReinstallFromURL(
 		return UpdateResult{}, err
 	}
 	defer cleanup()
-	return m.replaceValidatedPackage(
-		operationCtx,
-		name,
-		current,
-		candidate,
-		source,
-		true,
-	)
+	return m.replaceValidatedPackage(operationCtx, name, current, candidate, source, true)
 }
 
 // ReinstallFromDirectory 从用户重新选择的本地目录原子替换现有 Skill，并建立/更换来源记录。
@@ -252,14 +226,7 @@ func (m *Manager) ReinstallFromDirectory(
 	if err != nil {
 		return UpdateResult{}, err
 	}
-	return m.replaceValidatedPackage(
-		ctx,
-		name,
-		current,
-		candidate,
-		source,
-		true,
-	)
+	return m.replaceValidatedPackage(ctx, name, current, candidate, source, true)
 }
 
 func (m *Manager) prepareUpdateContext(
@@ -350,11 +317,7 @@ func (m *Manager) installedStateLocked(
 		return installedState{}, fmt.Errorf("读取 Skill %q 安装路径失败: %w", name, err)
 	}
 	if info.Mode()&os.ModeSymlink == 0 && !info.IsDir() {
-		return installedState{}, fmt.Errorf(
-			"%w: Skill %q 安装路径既不是目录也不是符号链接",
-			ErrInvalidSkill,
-			name,
-		)
+		return installedState{}, fmt.Errorf("%w: Skill %q 安装路径既不是目录也不是符号链接", ErrInvalidSkill, name)
 	}
 	return installedState{Valid: false}, nil
 }
@@ -385,11 +348,7 @@ func (m *Manager) preparePackageFromSource(
 		}
 		return pkg, refreshed, func() {}, nil
 	case SkillSourceKindRemote:
-		pkg, refreshed, _, cleanup, err := m.prepareRemoteSkillPackage(
-			ctx,
-			source.OriginalURL,
-			source.SkillPath,
-		)
+		pkg, refreshed, _, cleanup, err := m.prepareRemoteSkillPackage(ctx, source.OriginalURL, source.SkillPath)
 		if err != nil {
 			return Package{}, SourceInfo{}, func() {}, err
 		}
@@ -398,12 +357,7 @@ func (m *Manager) preparePackageFromSource(
 		// 变化就悄悄切换来源。用户若确实要更换 Provider，应通过 ReinstallFromURL 显式确认。
 		if source.Provider != "" && !strings.EqualFold(source.Provider, refreshed.Provider) {
 			cleanup()
-			return Package{}, SourceInfo{}, func() {}, fmt.Errorf(
-				"%w: 记录的 Provider=%q，但当前 URL 解析为 %q；请显式更换来源",
-				ErrInvalidSkill,
-				source.Provider,
-				refreshed.Provider,
-			)
+			return Package{}, SourceInfo{}, func() {}, fmt.Errorf("%w: 记录的 Provider=%q，但当前 URL 解析为 %q；请显式更换来源", ErrInvalidSkill, source.Provider, refreshed.Provider)
 		}
 		return pkg, refreshed, cleanup, nil
 	default:
@@ -420,12 +374,7 @@ func (m *Manager) replaceValidatedPackage(
 	force bool,
 ) (UpdateResult, error) {
 	if candidate.Info.Name != name {
-		return UpdateResult{}, fmt.Errorf(
-			"%w: 来源中的 Skill name=%q，与当前 %q 不一致",
-			ErrInvalidSkill,
-			candidate.Info.Name,
-			name,
-		)
+		return UpdateResult{}, fmt.Errorf("%w: 来源中的 Skill name=%q，与当前 %q 不一致", ErrInvalidSkill, candidate.Info.Name, name)
 	}
 
 	m.mu.Lock()
@@ -436,11 +385,7 @@ func (m *Manager) replaceValidatedPackage(
 		return UpdateResult{}, err
 	}
 	if !installedStateMatches(expected, current) {
-		return UpdateResult{}, fmt.Errorf(
-			"%w: Skill %q 在更新准备期间已发生变化，请重新检查",
-			ErrSkillSnapshotStale,
-			name,
-		)
+		return UpdateResult{}, fmt.Errorf("%w: Skill %q 在更新准备期间已发生变化，请重新检查", ErrSkillSnapshotStale, name)
 	}
 
 	previousIdentity := current.identity()
@@ -453,12 +398,7 @@ func (m *Manager) replaceValidatedPackage(
 		if stored, ok := sources.Skills[name]; ok {
 			currentSource = stored
 		}
-		return UpdateResult{
-			Info:             current.Package.Info,
-			PreviousIdentity: previousIdentity,
-			Changed:          false,
-			Source:           currentSource.Clone(),
-		}, nil
+		return UpdateResult{Info: current.Package.Info, PreviousIdentity: previousIdentity, Changed: false, Source: currentSource.Clone()}, nil
 	}
 
 	stage := filepath.Join(m.rootDir, ".humbert-update-"+uuid.NewString())
@@ -542,13 +482,7 @@ func (m *Manager) replaceValidatedPackage(
 
 	if backupExists {
 		if err := os.RemoveAll(backup); err != nil {
-			m.logger.Warn(
-				context.Background(),
-				"Skill 已更新，但清理旧 Package 备份失败",
-				"operation", "skill.update.cleanup",
-				"skill_name", name,
-				"error", err,
-			)
+			m.logger.Warn(context.Background(), "Skill 已更新，但清理旧 Package 备份失败", "operation", "skill.update.cleanup", "skill_name", name, "error", err)
 		} else {
 			backupExists = false
 		}
@@ -575,10 +509,7 @@ func (m *Manager) replaceValidatedPackage(
 }
 
 func cloneSkillSourcesDocument(document skillSourcesDocument) skillSourcesDocument {
-	cloned := skillSourcesDocument{
-		SchemaVersion: document.SchemaVersion,
-		Skills:        make(map[string]SourceInfo, len(document.Skills)),
-	}
+	cloned := skillSourcesDocument{SchemaVersion: document.SchemaVersion, Skills: make(map[string]SourceInfo, len(document.Skills))}
 	for name, source := range document.Skills {
 		cloned.Skills[name] = source.Clone()
 	}

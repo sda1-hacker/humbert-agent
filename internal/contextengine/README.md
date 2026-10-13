@@ -41,4 +41,6 @@ flowchart LR
 
 Usage 是本地估算。校准使用中间件处理后的首次模型输入，不再拿压缩前的估算与压缩后的 Provider usage 比较。
 
+Thinking 回放由调用模型协议决定。MiMo 使用 Include，保留当前窗口内所有 Assistant 的原生 reasoning，包括已完成旧轮次；Auto 仅保留当前用户轮次之后的推理，Omit 则省略。Include 的 thinking 同样计入软硬预算。压缩以后只发送检查点与保留边界后的完整轨迹，不把已压缩 thinking 再拼回窗口，也不将 thinking 混入普通 Assistant 正文；完整原始历史仍可从 Transcript 回查。
+
 `EstimateMessageCosts` 只计算一次 `multimodal.AttachmentReplayMask`，与真实附件水合和模型能力判断共享回放窗口。近期图片仍预留固定成本且不按 Base64 字符数估算；近期文本按提取正文估算，旧附件使用同一占位函数。共享窗口只删除重复计算，没有放宽上下文硬预算。

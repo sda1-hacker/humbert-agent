@@ -147,14 +147,7 @@ func semanticOverlapWindow(current []splitUnit, maxLen int) []splitUnit {
 
 		start := unitLen - remaining
 
-		reversed = append(
-			reversed,
-			splitUnit{
-				text:  string(runes[start:]),
-				start: unit.start + start,
-				end:   unit.end,
-			},
-		)
+		reversed = append(reversed, splitUnit{text: string(runes[start:]), start: unit.start + start, end: unit.end})
 
 		remaining = 0
 	}
@@ -172,12 +165,6 @@ func semanticOverlapWindow(current []splitUnit, maxLen int) []splitUnit {
 	}
 
 	return window
-}
-
-// findSemanticOverlapBoundary 是方便测试和内部使用的入口。
-func findSemanticOverlapBoundary(text string) (int, bool) {
-
-	return findSemanticOverlapBoundaryEndingAtOrAfter(text, 0)
 }
 
 // findSemanticOverlapBoundaryEndingAtOrAfter 查找指定位置之后的段落、换行或句末边界。
@@ -230,11 +217,7 @@ func findSemanticOverlapBoundaryEndingAtOrAfter(text string, minEnd int) (int, b
 			return
 		}
 
-		candidate := semanticOverlapBoundary{
-			start:    start,
-			end:      end,
-			priority: priority,
-		}
+		candidate := semanticOverlapBoundary{start: start, end: end, priority: priority}
 
 		if !found || candidate.priority < best.priority || (candidate.priority == best.priority && candidate.start < best.start) {
 			best = candidate
@@ -248,11 +231,7 @@ func findSemanticOverlapBoundaryEndingAtOrAfter(text string, minEnd int) (int, b
 
 	for i := 0; i < len(runes); i++ {
 		switch {
-		case i+3 < len(runes) &&
-			runes[i] == '\r' &&
-			runes[i+1] == '\n' &&
-			runes[i+2] == '\r' &&
-			runes[i+3] == '\n':
+		case i+3 < len(runes) && runes[i] == '\r' && runes[i+1] == '\n' && runes[i+2] == '\r' && runes[i+3] == '\n':
 
 			consider(i, i+4, 1)
 
@@ -262,9 +241,7 @@ func findSemanticOverlapBoundaryEndingAtOrAfter(text string, minEnd int) (int, b
 
 			i += 3
 
-		case i+1 < len(runes) &&
-			runes[i] == '\n' &&
-			runes[i+1] == '\n':
+		case i+1 < len(runes) && runes[i] == '\n' && runes[i+1] == '\n':
 
 			consider(i, i+2, 1)
 

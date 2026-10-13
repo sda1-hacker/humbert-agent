@@ -10,12 +10,7 @@ import (
 
 const MaxBytes = 2 * 1024 * 1024
 
-var supportedMIMETypes = map[string]bool{
-	"image/png":  true,
-	"image/jpeg": true,
-	"image/gif":  true,
-	"image/webp": true,
-}
+var supportedMIMETypes = map[string]bool{"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true}
 
 // NormalizeDataURL validates an avatar and returns a canonical data URL.
 // Empty input clears the avatar. SVG is intentionally excluded because avatars

@@ -195,10 +195,7 @@ func (s *ChatService) ResolveApproval(request ResolveApprovalRequest) (agentrunt
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	result, err := s.deps.Runtime.ResolveApproval(ctx, agentruntime.ResolveApprovalInput{
-		ApprovalID: request.ApprovalID,
-		Decision:   request.Decision,
-	})
+	result, err := s.deps.Runtime.ResolveApproval(ctx, agentruntime.ResolveApprovalInput{ApprovalID: request.ApprovalID, Decision: request.Decision})
 	if err != nil {
 		return agentruntime.ResolveApprovalResult{}, fmt.Errorf("处理 Tool Approval 失败: %w", err)
 	}

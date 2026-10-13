@@ -147,12 +147,7 @@ func (p *Indexer) replaceStoredDocument(ctx context.Context, batch rag.Ingestion
 	// 删除旧 Chunk。
 	//
 	// retrieval_index 通过 FK ON DELETE CASCADE 一起删除。
-	if _, err := tx.Exec(
-		ctx,
-		deleteDocumentChunksSQL,
-		batch.CollectionID,
-		batch.DocumentID,
-	); err != nil {
+	if _, err := tx.Exec(ctx, deleteDocumentChunksSQL, batch.CollectionID, batch.DocumentID); err != nil {
 		return fmt.Errorf("delete previous chunks for document %q: %w", batch.DocumentID, err)
 	}
 
@@ -184,11 +179,7 @@ func (p *Indexer) replaceStoredDocument(ctx context.Context, batch rag.Ingestion
 			halfVectors[i],
 			child.metadataJSON,
 		); err != nil {
-			return fmt.Errorf(
-				"insert retrieval index for child %q: %w",
-				child.record.ID,
-				err,
-			)
+			return fmt.Errorf("insert retrieval index for child %q: %w", child.record.ID, err)
 		}
 	}
 
@@ -206,17 +197,10 @@ func prepareStoredChunks(records []rag.ChunkRecord) ([]preparedIngestionChunk, e
 	for _, record := range records {
 		metadataJSON, err := marshalMetadata(record.Metadata)
 		if err != nil {
-			return nil, fmt.Errorf(
-				"marshal metadata for chunk %q: %w",
-				record.ID,
-				err,
-			)
+			return nil, fmt.Errorf("marshal metadata for chunk %q: %w", record.ID, err)
 		}
 
-		result = append(result, preparedIngestionChunk{
-			record:       record,
-			metadataJSON: metadataJSON,
-		})
+		result = append(result, preparedIngestionChunk{record: record, metadataJSON: metadataJSON})
 	}
 
 	return result, nil

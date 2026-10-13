@@ -176,23 +176,7 @@ type CreateModelInput struct {
 }
 
 // UpdateModelInput 描述修改模型所需的业务参数。
-type UpdateModelInput struct {
-	ProviderID string
-
-	ModelName string
-
-	DisplayName string
-
-	TimeoutMS int
-
-	ContextWindow int
-
-	MaxOutputTokens int
-
-	Capabilities CapabilityConfig
-
-	Enabled bool
-}
+type UpdateModelInput = CreateModelInput
 
 // TestResult 是一次真实模型连通性测试的结果。
 //

@@ -118,10 +118,6 @@ func (s *Service) beginOperation(ctx context.Context) (context.Context, func(), 
 	}, nil
 }
 
-func (s *Service) reserveSession(sessionID string, requestID string) error {
-	return s.reserveAgentSession(sessionID, "", requestID)
-}
-
 func (s *Service) ensureSessionUnreserved(sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

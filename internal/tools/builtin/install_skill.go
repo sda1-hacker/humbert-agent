@@ -138,11 +138,7 @@ func (f *InstallSkillFactory) run(
 		return nil, fmt.Errorf("install_skill 安装失败: %w", err)
 	}
 
-	output := &InstallSkillOutput{
-		Name:        installed.Name,
-		Description: installed.Description,
-		Installed:   true,
-	}
+	output := &InstallSkillOutput{Name: installed.Name, Description: installed.Description, Installed: true}
 	if !input.EnableForCurrentAgent {
 		return output, nil
 	}

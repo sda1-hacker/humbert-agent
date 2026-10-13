@@ -14,9 +14,7 @@ const (
 )
 
 // MarkdownHeadingPattern 匹配 ATX 标题，两个捕获组分别保存井号和标题正文。
-var MarkdownHeadingPattern = regexp.MustCompile(
-	`(?m)^(#{1,6})\s+(.+?)\s*#*\s*$`,
-)
+var MarkdownHeadingPattern = regexp.MustCompile(`(?m)^(#{1,6})\s+(.+?)\s*#*\s*$`)
 
 // FormFeedPattern 匹配 ASCII Form Feed：
 //
@@ -27,27 +25,19 @@ var MarkdownHeadingPattern = regexp.MustCompile(
 var FormFeedPattern = regexp.MustCompile(`\f`)
 
 // NumberedSectionPattern 匹配编号小节，限制层级与标题长度以减少正文误识别。
-var NumberedSectionPattern = regexp.MustCompile(
-	`(?m)^[ \t]*(?:\d+(?:\.\d+){1,3}\.?|(?:\d+|[IVX]{1,5})\.)[ \t]+\S.{0,200}$`,
-)
+var NumberedSectionPattern = regexp.MustCompile(`(?m)^[ \t]*(?:\d+(?:\.\d+){1,3}\.?|(?:\d+|[IVX]{1,5})\.)[ \t]+\S.{0,200}$`)
 
 // AllCapsHeadingPattern 匹配短全大写标题，包含常见德语大写字母。
-var AllCapsHeadingPattern = regexp.MustCompile(
-	`(?m)^[ \t]*([A-ZÄÖÜ][A-ZÄÖÜ \-]{3,80}):?\s*$`,
-)
+var AllCapsHeadingPattern = regexp.MustCompile(`(?m)^[ \t]*([A-ZÄÖÜ][A-ZÄÖÜ \-]{3,80}):?\s*$`)
 
 // VisualSeparatorPattern 匹配星号、下划线和横线等视觉分隔线。
-var VisualSeparatorPattern = regexp.MustCompile(
-	`(?m)^[ \t]*(?:-{3,}|={3,}|\*{3,}|_{3,})[ \t]*$`,
-)
+var VisualSeparatorPattern = regexp.MustCompile(`(?m)^[ \t]*(?:-{3,}|={3,}|\*{3,}|_{3,})[ \t]*$`)
 
 // ExcessiveBlanksPattern 匹配三个或更多连续换行。
 var ExcessiveBlanksPattern = regexp.MustCompile(`\n{3,}`)
 
 // PageFooterPattern 匹配常见中英文、德语页码和页脚。
-var PageFooterPattern = regexp.MustCompile(
-	`(?mi)^[ \t]*(?:Seite|Page|页码?)\s+\d+(?:\s*(?:von|of|/)\s*\d+)?[ \t]*$`,
-)
+var PageFooterPattern = regexp.MustCompile(`(?mi)^[ \t]*(?:Seite|Page|页码?)\s+\d+(?:\s*(?:von|of|/)\s*\d+)?[ \t]*$`)
 
 // GermanChapterPattern 匹配德语章节标记。
 //
@@ -56,9 +46,7 @@ var PageFooterPattern = regexp.MustCompile(
 //	Kapitel 1: Einführung
 //	Abschnitt 2. Installation
 //	Teil IV Architektur
-var GermanChapterPattern = regexp.MustCompile(
-	`(?m)^[ \t]*(?:Kapitel|Abschnitt|Teil)\s+(?:[0-9]+|[IVX]{1,5})[\.: ].{0,200}$`,
-)
+var GermanChapterPattern = regexp.MustCompile(`(?m)^[ \t]*(?:Kapitel|Abschnitt|Teil)\s+(?:[0-9]+|[IVX]{1,5})[\.: ].{0,200}$`)
 
 // EnglishChapterPattern 匹配英文章节标记。
 //
@@ -67,14 +55,10 @@ var GermanChapterPattern = regexp.MustCompile(
 //	Chapter 1: Introduction
 //	Section 2. Installation
 //	Part III Architecture
-var EnglishChapterPattern = regexp.MustCompile(
-	`(?m)^[ \t]*(?:Chapter|Section|Part)\s+(?:[0-9]+|[IVX]{1,5})[\.: ].{0,200}$`,
-)
+var EnglishChapterPattern = regexp.MustCompile(`(?m)^[ \t]*(?:Chapter|Section|Part)\s+(?:[0-9]+|[IVX]{1,5})[\.: ].{0,200}$`)
 
 // ChineseChapterPattern 匹配中文章、节、部分及篇名，支持简繁体与数字编号。
-var ChineseChapterPattern = regexp.MustCompile(
-	`(?m)^[ \t]*第[ \t]*[一二三四五六七八九十百千零〇0-9]+[ \t]*(?:章|节|節|部分|篇)[ \t]?.{0,200}$`,
-)
+var ChineseChapterPattern = regexp.MustCompile(`(?m)^[ \t]*第[ \t]*[一二三四五六七八九十百千零〇0-9]+[ \t]*(?:章|节|節|部分|篇)[ \t]?.{0,200}$`)
 
 // SentenceSeparators 返回适合各语言的句末分隔符；英文要求标点后有空格，避免误切版本号和域名。
 func SentenceSeparators(lang string) []string {
@@ -116,9 +100,5 @@ func ChapterPatternsForLangs(languages []string) []*regexp.Regexp {
 
 // allChapterPatterns 统一返回所有章节匹配规则。
 func allChapterPatterns() []*regexp.Regexp {
-	return []*regexp.Regexp{
-		GermanChapterPattern,
-		EnglishChapterPattern,
-		ChineseChapterPattern,
-	}
+	return []*regexp.Regexp{GermanChapterPattern, EnglishChapterPattern, ChineseChapterPattern}
 }

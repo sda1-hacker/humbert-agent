@@ -342,13 +342,7 @@ func invalidDiscoveryPackage(root string, candidatePath string, err error) Packa
 	if name == "." || name == "" {
 		name = filepath.Base(root)
 	}
-	return Package{Info: Info{
-		Name:          name,
-		DirectoryName: filepath.Base(root),
-		RootDir:       root,
-		Valid:         false,
-		Error:         truncateDiscoveryError(err),
-	}}
+	return Package{Info: Info{Name: name, DirectoryName: filepath.Base(root), RootDir: root, Valid: false, Error: truncateDiscoveryError(err)}}
 }
 
 func truncateDiscoveryError(err error) string {

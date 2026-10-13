@@ -27,10 +27,7 @@ func EnsureExtensions(ctx context.Context, dsn string) error {
 		return fmt.Errorf("rag backend: PostgreSQL 15+ required")
 	}
 
-	for _, statement := range []string{
-		`CREATE EXTENSION IF NOT EXISTS vector`,
-		`CREATE EXTENSION IF NOT EXISTS pg_search`,
-	} {
+	for _, statement := range []string{`CREATE EXTENSION IF NOT EXISTS vector`, `CREATE EXTENSION IF NOT EXISTS pg_search`} {
 		if _, err := conn.Exec(ctx, statement); err != nil {
 			return fmt.Errorf("ensure postgres extension: %w", err)
 		}

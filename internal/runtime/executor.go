@@ -254,9 +254,7 @@ func extractApprovalInterrupt(interrupt *adk.InterruptInfo) (*InterruptedExecuti
 const recoverableToolErrorPrefix = "[Humbert Tool Error]\n"
 
 func formatRecoverableToolError(err error) string {
-	return recoverableToolErrorPrefix +
-		"本次工具调用失败，但 Agent Turn 可以继续。\n" +
-		"错误: " + logging.SafeErrorText(err, 4096) + "\n" +
+	return recoverableToolErrorPrefix + "本次工具调用失败，但 Agent Turn 可以继续。\n" + "错误: " + logging.SafeErrorText(err, 4096) + "\n" +
 		"请根据错误调整参数或选择替代能力；不要假设该工具已经成功执行。"
 }
 

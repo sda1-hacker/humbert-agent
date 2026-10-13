@@ -42,9 +42,7 @@ type Config struct {
 
 // DefaultConfig 返回请求超时等默认设置，模型与凭据由调用方提供。
 func DefaultConfig() Config {
-	return Config{
-		Timeout: 30 * time.Second,
-	}
+	return Config{Timeout: 30 * time.Second}
 }
 
 // Validate 检查模型、地址、维度与请求超时。

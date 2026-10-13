@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
@@ -87,33 +86,21 @@ func (s *WorkspaceService) ServiceName() string { return "WorkspaceService" }
 func (s *WorkspaceService) Overview(agentID string) (WorkspaceOverviewDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceServiceTimeout)
 	defer cancel()
-	value, err := s.deps.WorkspaceView.Overview(ctx, agentID)
-	if err != nil {
-		return WorkspaceOverviewDTO{}, fmt.Errorf("读取工作区总览失败: %w", err)
-	}
-	return workspaceOverviewDTO(value), nil
+	return dtoResult("读取工作区总览失败: %w", workspaceOverviewDTO)(s.deps.WorkspaceView.Overview(ctx, agentID))
 }
 
 // ListDirectory 懒加载工作区中的一个目录。
 func (s *WorkspaceService) ListDirectory(agentID, path string) (WorkspaceDirectoryDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceServiceTimeout)
 	defer cancel()
-	value, err := s.deps.WorkspaceView.ListDirectory(ctx, agentID, path)
-	if err != nil {
-		return WorkspaceDirectoryDTO{}, fmt.Errorf("读取工作区目录失败: %w", err)
-	}
-	return workspaceDirectoryDTO(value), nil
+	return dtoResult("读取工作区目录失败: %w", workspaceDirectoryDTO)(s.deps.WorkspaceView.ListDirectory(ctx, agentID, path))
 }
 
 // PreviewFile 返回安全受限的文件预览。
 func (s *WorkspaceService) PreviewFile(agentID, path string) (WorkspacePreviewDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), workspaceServiceTimeout)
 	defer cancel()
-	value, err := s.deps.WorkspaceView.PreviewFile(ctx, agentID, path)
-	if err != nil {
-		return WorkspacePreviewDTO{}, fmt.Errorf("预览工作区文件失败: %w", err)
-	}
-	return workspacePreviewDTO(value), nil
+	return dtoResult("预览工作区文件失败: %w", workspacePreviewDTO)(s.deps.WorkspaceView.PreviewFile(ctx, agentID, path))
 }
 
 // SearchDocuments 立即检索已提交索引，后台同步当前工作区文件。工作区位置每次重新解析。
@@ -148,14 +135,7 @@ func workspaceDirectoryDTO(value workspace.DirectoryListing) WorkspaceDirectoryD
 		if !entry.ModifiedAt.IsZero() {
 			modifiedAt = formatRequiredTime(entry.ModifiedAt)
 		}
-		entries = append(entries, WorkspaceEntryDTO{
-			Name:       entry.Name,
-			Path:       entry.Path,
-			Type:       entry.Type,
-			Size:       entry.Size,
-			ModifiedAt: modifiedAt,
-			Hidden:     entry.Hidden,
-		})
+		entries = append(entries, WorkspaceEntryDTO{Name: entry.Name, Path: entry.Path, Type: entry.Type, Size: entry.Size, ModifiedAt: modifiedAt, Hidden: entry.Hidden})
 	}
 	return WorkspaceDirectoryDTO{Path: value.Path, Entries: entries, Truncated: value.Truncated}
 }

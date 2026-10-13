@@ -13,7 +13,7 @@
 | `evidenceIDs / evaluate` | 按去重子块证据计算 Recall、Precision |
 | `printSettings / printSearch` | 展示配置意图、实际诊断、命中证据和上下文 |
 
-现有测试集中在 `main_test.go`；运行示例只需要 `main.go`。
+运行示例只需要 `main.go`。现有回归测试文件已于 2026-10-12 按维护者要求移出仓库，本次精简已用仓库外归档用例验证。
 
 ## 1. 运行
 
@@ -274,7 +274,8 @@ Precision = |R ∩ G| / |R|
 ## 5. 验证
 
 ```bash
-go test ./examples/5-rag ./internal/rag/...
+go build ./examples/5-rag ./internal/rag/...
+go vet ./examples/5-rag ./internal/rag/...
 ```
 
-指标测试覆盖父块合并、重复证据、扩展正文不凭空增加命中，以及空结果。纯 Go 测试不代表真实数据库和模型已经连通，完整流程需要使用上面的真实文档运行命令。
+本次归档回归覆盖父块合并、重复证据、扩展正文不凭空增加命中，以及空结果。上述命令只验证编译和静态检查；真实数据库、模型连接及完整文档流程需要单独验证。

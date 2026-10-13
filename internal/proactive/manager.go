@@ -378,13 +378,7 @@ func proactiveEventFromTask(value tasks.Event) (Event, bool) {
 	if value.Task != nil && strings.TrimSpace(value.Task.Name) != "" {
 		taskName = "“" + strings.TrimSpace(value.Task.Name) + "”"
 	}
-	base := Event{
-		AgentID:    run.AgentID,
-		SessionID:  run.SessionID,
-		TaskID:     run.TaskID,
-		RunID:      run.ID,
-		OccurredAt: time.Now().UTC(),
-	}
+	base := Event{AgentID: run.AgentID, SessionID: run.SessionID, TaskID: run.TaskID, RunID: run.ID, OccurredAt: time.Now().UTC()}
 	// 从聊天创建的任务，结果通知回到发起会话；执行记录仍保留独立运行会话。
 	if value.Task != nil && value.Task.Origin == "chat" && value.Task.OriginRef != "" {
 		base.SessionID = value.Task.OriginRef
@@ -450,10 +444,7 @@ func (m *Manager) processEvent(ctx context.Context, event Event) {
 		return
 	}
 	now := time.Now().UTC()
-	record := Record{
-		ID: uuid.NewString(), Event: event,
-		Status: RecordIgnored, CreatedAt: now, UpdatedAt: now,
-	}
+	record := Record{ID: uuid.NewString(), Event: event, Status: RecordIgnored, CreatedAt: now, UpdatedAt: now}
 	m.executeRecord(ctx, &record)
 }
 

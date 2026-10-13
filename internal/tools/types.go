@@ -137,9 +137,7 @@ func (d Descriptor) Validate() error {
 			return fmt.Errorf("%w: Tool Name %q 包含非法字符 %q", ErrInvalidTool, name, char)
 		}
 
-		if index == 0 &&
-			char >= '0' &&
-			char <= '9' {
+		if index == 0 && char >= '0' && char <= '9' {
 
 			return fmt.Errorf("%w: Tool Name 不能以数字开头", ErrInvalidTool)
 		}
@@ -158,9 +156,7 @@ func (d Descriptor) Validate() error {
 	}
 	if d.MCPOrigin != nil {
 		origin := d.MCPOrigin
-		if strings.TrimSpace(origin.ServerID) == "" ||
-			strings.TrimSpace(origin.ServerFingerprint) == "" ||
-			strings.TrimSpace(origin.RawToolName) == "" {
+		if strings.TrimSpace(origin.ServerID) == "" || strings.TrimSpace(origin.ServerFingerprint) == "" || strings.TrimSpace(origin.RawToolName) == "" {
 			return fmt.Errorf("%w: MCP Tool %q 缺少 ServerID/Fingerprint/RawToolName", ErrInvalidTool, name)
 		}
 	}
@@ -235,9 +231,7 @@ func (s Scope) Validate() error {
 		return errors.New("Tool Scope Workspace RootDir 不能为空")
 	}
 
-	if s.Workspace.AgentID != "" &&
-		s.Workspace.AgentID !=
-			s.AgentID {
+	if s.Workspace.AgentID != "" && s.Workspace.AgentID != s.AgentID {
 
 		return errors.New("Tool Scope AgentID 与 Workspace AgentID 不一致")
 	}

@@ -51,9 +51,7 @@ func (m *Manager) RunAutomation(ctx context.Context, input AutomationInput) (Tas
 	if _, err := m.agents.Get(ctx, agentID); err != nil {
 		return Task{}, Run{}, err
 	}
-	name, prompt, status, schedule, limits, err := normalizeTaskInput(
-		input.Name, input.Prompt, TaskStatusActive, Schedule{Type: ScheduleManual}, input.Limits,
-	)
+	name, prompt, status, schedule, limits, err := normalizeTaskInput(input.Name, input.Prompt, TaskStatusActive, Schedule{Type: ScheduleManual}, input.Limits)
 	if err != nil {
 		return Task{}, Run{}, err
 	}
@@ -243,12 +241,6 @@ func (m *Manager) enqueueDue(ctx context.Context, now time.Time) error {
 		m.publish(Event{Type: "run." + string(created.Status), TaskID: task.ID, RunID: created.ID, Run: &created})
 	}
 	return nil
-}
-
-func (m *Manager) dispatch(ctx context.Context) error {
-	m.cycleMu.Lock()
-	defer m.cycleMu.Unlock()
-	return m.dispatchLocked(ctx)
 }
 
 func (m *Manager) dispatchLocked(ctx context.Context) error {
@@ -445,10 +437,7 @@ func (m *Manager) resolveRunSession(ctx context.Context, task *Task, startedAt t
 		return sessions.Session{}, errors.New("Task 不能为空")
 	}
 	if task.EffectiveConversationMode() != ConversationContinuous {
-		return m.sessions.Create(ctx, sessions.CreateSessionInput{
-			AgentID: task.AgentID,
-			Title:   taskSessionTitle(*task, startedAt),
-		})
+		return m.sessions.Create(ctx, sessions.CreateSessionInput{AgentID: task.AgentID, Title: taskSessionTitle(*task, startedAt)})
 	}
 
 	if persistentID := strings.TrimSpace(task.PersistentSessionID); persistentID != "" {
@@ -464,10 +453,7 @@ func (m *Manager) resolveRunSession(ctx context.Context, task *Task, startedAt t
 		}
 	}
 
-	created, err := m.sessions.Create(ctx, sessions.CreateSessionInput{
-		AgentID: task.AgentID,
-		Title:   continuousTaskSessionTitle(*task),
-	})
+	created, err := m.sessions.Create(ctx, sessions.CreateSessionInput{AgentID: task.AgentID, Title: continuousTaskSessionTitle(*task)})
 	if err != nil {
 		return sessions.Session{}, err
 	}

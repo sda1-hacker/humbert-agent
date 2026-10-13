@@ -117,18 +117,11 @@ func inspectPackage(
 		return Package{}, fmt.Errorf("%w: 缺少 %s", ErrInvalidSkill, SkillDefinitionFileName)
 	}
 	definitionDigest := sha256.Sum256(definitionBytes)
-	if int64(len(definitionBytes)) != definitionIdentity.SizeBytes ||
-		hex.EncodeToString(definitionDigest[:]) != definitionIdentity.SHA256 {
+	if int64(len(definitionBytes)) != definitionIdentity.SizeBytes || hex.EncodeToString(definitionDigest[:]) != definitionIdentity.SHA256 {
 		return Package{}, fmt.Errorf("%w: %s 在扫描过程中发生变化", ErrSkillSnapshotStale, SkillDefinitionFileName)
 	}
 	if int64(len(definitionBytes)) > cfg.MaxDefinitionBytes {
-		return Package{}, fmt.Errorf(
-			"%w: %s 大小 %d 超过上限 %d",
-			ErrInvalidSkill,
-			SkillDefinitionFileName,
-			len(definitionBytes),
-			cfg.MaxDefinitionBytes,
-		)
+		return Package{}, fmt.Errorf("%w: %s 大小 %d 超过上限 %d", ErrInvalidSkill, SkillDefinitionFileName, len(definitionBytes), cfg.MaxDefinitionBytes)
 	}
 	if !utf8.Valid(definitionBytes) || bytes.IndexByte(definitionBytes, 0) >= 0 {
 		return Package{}, fmt.Errorf("%w: %s 必须是 UTF-8 文本", ErrInvalidSkill, SkillDefinitionFileName)
@@ -145,12 +138,7 @@ func inspectPackage(
 
 	directoryName := filepath.Base(absolute)
 	if requireDirectoryNameMatch && directoryName != name {
-		return Package{}, fmt.Errorf(
-			"%w: 目录名 %q 必须与 SKILL.md name %q 一致",
-			ErrInvalidSkill,
-			directoryName,
-			name,
-		)
+		return Package{}, fmt.Errorf("%w: 目录名 %q 必须与 SKILL.md name %q 一致", ErrInvalidSkill, directoryName, name)
 	}
 
 	description := normalizeDescription(meta.Description)
@@ -158,20 +146,12 @@ func inspectPackage(
 		return Package{}, fmt.Errorf("%w: SKILL.md description 不能为空", ErrInvalidSkill)
 	}
 	if len(description) > maxSkillDescriptionLength {
-		return Package{}, fmt.Errorf(
-			"%w: Skill description 长度不能超过 %d 字节",
-			ErrInvalidSkill,
-			maxSkillDescriptionLength,
-		)
+		return Package{}, fmt.Errorf("%w: Skill description 长度不能超过 %d 字节", ErrInvalidSkill, maxSkillDescriptionLength)
 	}
 
 	compatibility := normalizeDescription(meta.Compatibility)
 	if len(compatibility) > maxSkillCompatibilityLength {
-		return Package{}, fmt.Errorf(
-			"%w: Skill compatibility 长度不能超过 %d 字节",
-			ErrInvalidSkill,
-			maxSkillCompatibilityLength,
-		)
+		return Package{}, fmt.Errorf("%w: Skill compatibility 长度不能超过 %d 字节", ErrInvalidSkill, maxSkillCompatibilityLength)
 	}
 
 	contextMode := strings.ToLower(strings.TrimSpace(meta.Context))
@@ -191,11 +171,7 @@ func inspectPackage(
 		files,
 	)
 	if specStatus == SpecStatusLegacy {
-		diagnostics = append([]Diagnostic{{
-			Code:    "legacy_spec",
-			Level:   DiagnosticWarning,
-			Message: "该 Package 使用 Humbert 早期兼容格式：" + specMessage,
-		}}, diagnostics...)
+		diagnostics = append([]Diagnostic{{Code: "legacy_spec", Level: DiagnosticWarning, Message: "该 Package 使用 Humbert 早期兼容格式：" + specMessage}}, diagnostics...)
 	}
 
 	body = strings.TrimSpace(body)
@@ -260,11 +236,7 @@ func parseDefinition(data []byte) (frontMatter, string, error) {
 	text := strings.TrimPrefix(string(data), "\ufeff")
 	lines := strings.SplitAfter(text, "\n")
 	if len(lines) == 0 || strings.TrimSpace(strings.TrimSuffix(lines[0], "\n")) != "---" {
-		return frontMatter{}, "", fmt.Errorf(
-			"%w: %s 必须以 YAML frontmatter 开始",
-			ErrInvalidSkill,
-			SkillDefinitionFileName,
-		)
+		return frontMatter{}, "", fmt.Errorf("%w: %s 必须以 YAML frontmatter 开始", ErrInvalidSkill, SkillDefinitionFileName)
 	}
 
 	end := -1
@@ -276,11 +248,7 @@ func parseDefinition(data []byte) (frontMatter, string, error) {
 		}
 	}
 	if end < 0 {
-		return frontMatter{}, "", fmt.Errorf(
-			"%w: %s 缺少 frontmatter 结束标记 ---",
-			ErrInvalidSkill,
-			SkillDefinitionFileName,
-		)
+		return frontMatter{}, "", fmt.Errorf("%w: %s 缺少 frontmatter 结束标记 ---", ErrInvalidSkill, SkillDefinitionFileName)
 	}
 
 	var yamlBuilder strings.Builder
@@ -313,9 +281,7 @@ func normalizeSkillName(value string) (string, error) {
 	// 下划线；这里保留对已经安装/引用的 legacy Skill 的兼容，避免一次整理让现有
 	// Agent Profile 失效。新社区标准 Skill 是这个校验集合的严格子集。
 	for index, char := range value {
-		valid := (char >= 'a' && char <= 'z') ||
-			(char >= '0' && char <= '9') ||
-			char == '-' || char == '_'
+		valid := (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '-' || char == '_'
 		if !valid {
 			return "", fmt.Errorf("%w: Skill name %q 包含非法字符 %q", ErrInvalidSkill, value, char)
 		}
@@ -467,20 +433,10 @@ func scanPackageFiles(
 			limit = cfg.MaxDefinitionBytes
 		}
 		if entryInfo.Size() > limit {
-			return fmt.Errorf(
-				"%w: 文件 %s 大小 %d 超过上限 %d",
-				ErrInvalidSkill,
-				relative,
-				entryInfo.Size(),
-				limit,
-			)
+			return fmt.Errorf("%w: 文件 %s 大小 %d 超过上限 %d", ErrInvalidSkill, relative, entryInfo.Size(), limit)
 		}
 		if totalBytes+entryInfo.Size() > cfg.MaxPackageBytes {
-			return fmt.Errorf(
-				"%w: Skill 包总大小超过上限 %d",
-				ErrInvalidSkill,
-				cfg.MaxPackageBytes,
-			)
+			return fmt.Errorf("%w: Skill 包总大小超过上限 %d", ErrInvalidSkill, cfg.MaxPackageBytes)
 		}
 
 		data, err := os.ReadFile(path)

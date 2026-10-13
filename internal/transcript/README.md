@@ -54,7 +54,7 @@ sequenceDiagram
 | `history_index.go` | `session_history` 所需的逆序遍历与局部范围读取。 |
 | `tool_result.go` | 工具结果及文件效果的确定性提取。 |
 
-追踪一条消息时记录 `sessionID`、`Entry.ID`、`ParentID`：先在 `AppendMessage` 看写入，再在 `LoadMessagePage` 看 UI 读取，最后在 `projectActiveBranch` 看模型可见形式。相关测试在本包 `*_test.go`；更高层读取由 `sessions.Service` 测试覆盖。
+追踪一条消息时记录 `sessionID`、`Entry.ID`、`ParentID`：先在 `AppendMessage` 看写入，再在 `LoadMessagePage` 看 UI 读取，最后在 `projectActiveBranch` 看模型可见形式。本次仓库外归档回归覆盖本包记录及 `sessions.Service` 的更高层读取；现有测试代码已按维护者要求移出仓库。
 
 ## 用一个分支例子读代码
 

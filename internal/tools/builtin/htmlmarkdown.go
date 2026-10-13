@@ -16,20 +16,13 @@ import (
 
 // chromeElements are dropped whole (element + subtree) in addition to the base
 // plugin's defaults: they carry no readable body content for a text extraction.
-var chromeElements = []string{
-	"nav", "footer", "header", "aside", "svg", "form", "template",
-}
+var chromeElements = []string{"nav", "footer", "header", "aside", "svg", "form", "template"}
 
 // mdConverter is the shared, configured converter. It is built once — NewConverter
 // registers plugins and tag handlers, which is wasteful to repeat per call, and
 // the converter is safe for concurrent ConvertString use.
 var mdConverter = sync.OnceValue(func() *converter.Converter {
-	conv := converter.NewConverter(
-		converter.WithPlugins(
-			base.NewBasePlugin(),
-			commonmark.NewCommonmarkPlugin(),
-		),
-	)
+	conv := converter.NewConverter(converter.WithPlugins(base.NewBasePlugin(), commonmark.NewCommonmarkPlugin()))
 	for _, tag := range chromeElements {
 		conv.Register.TagType(tag, converter.TagTypeRemove, converter.PriorityStandard)
 	}

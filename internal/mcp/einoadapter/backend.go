@@ -555,11 +555,7 @@ func (b *Backend) sessionWithPolicy(ctx context.Context, server humbertmcp.Serve
 	}
 	delete(b.sessions, cacheKey)
 	attemptCtx, attemptCancel := context.WithCancel(ctx)
-	attempt := &connectionAttempt{
-		serverID: server.ID,
-		done:     make(chan struct{}),
-		cancel:   attemptCancel,
-	}
+	attempt := &connectionAttempt{serverID: server.ID, done: make(chan struct{}), cancel: attemptCancel}
 	b.connecting[attemptKey] = attempt
 	if b.generations[server.ID] == generation {
 		b.markConnectingLocked(server.ID, fingerprint)
@@ -630,13 +626,7 @@ func (b *Backend) sessionWithPolicy(ctx context.Context, server humbertmcp.Serve
 	delete(b.retryBackoff, cacheKey)
 	b.statuses[server.ID] = runtimeStatusEntry{
 		fingerprint: fingerprint,
-		status: humbertmcp.RuntimeStatus{
-			State:         humbertmcp.ConnectionConnected,
-			Connected:     true,
-			ConnectedAt:   now,
-			LastUsedAt:    now,
-			LastSuccessAt: now,
-		},
+		status:      humbertmcp.RuntimeStatus{State: humbertmcp.ConnectionConnected, Connected: true, ConnectedAt: now, LastUsedAt: now, LastSuccessAt: now},
 	}
 	b.mu.Unlock()
 	b.finishConnectionAttempt(attemptKey, attempt, connected, nil)

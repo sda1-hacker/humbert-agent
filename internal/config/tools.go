@@ -174,380 +174,130 @@ func LoadToolConfig(configFile string) (ToolConfig, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	v.AutomaticEnv()
 	setToolDefaults(v)
-
 	configFile = strings.TrimSpace(configFile)
 	if configFile != "" {
 		info, err := os.Stat(configFile)
 		switch {
 		case err == nil:
 			if info.IsDir() {
-				return ToolConfig{}, fmt.Errorf(
-					"Tool 配置文件路径指向目录: %s",
-					configFile,
-				)
+				return ToolConfig{}, fmt.Errorf("Tool 配置文件路径指向目录: %s", configFile)
 			}
-
 			v.SetConfigFile(configFile)
 			if err := v.ReadInConfig(); err != nil {
-				return ToolConfig{}, fmt.Errorf(
-					"读取 Tool 配置失败: %w",
-					err,
-				)
+				return ToolConfig{}, fmt.Errorf("读取 Tool 配置失败: %w", err)
 			}
-
 		case errors.Is(err, os.ErrNotExist):
-			// 首次启动时 config.yaml 可以尚不存在，此时只使用默认值和环境变量。
-
+			// 首次启动允许尚无配置文件。
 		default:
-			return ToolConfig{}, fmt.Errorf(
-				"检查 Tool 配置文件失败: %w",
-				err,
-			)
+			return ToolConfig{}, fmt.Errorf("检查 Tool 配置文件失败: %w", err)
 		}
 	}
-
 	result := ToolConfig{
 		Files: FileToolConfig{
-			Enabled: v.GetBool(
-				"tools.files.enabled",
-			),
-			MaxReadableFileBytes: v.GetInt64(
-				"tools.files.max_readable_file_bytes",
-			),
-			MaxWritableFileBytes: v.GetInt64(
-				"tools.files.max_writable_file_bytes",
-			),
-			MaxReadLines: v.GetInt(
-				"tools.files.max_read_lines",
-			),
-			MaxListEntries: v.GetInt(
-				"tools.files.max_list_entries",
-			),
+			Enabled:              v.GetBool("tools.files.enabled"),
+			MaxReadableFileBytes: v.GetInt64("tools.files.max_readable_file_bytes"),
+			MaxWritableFileBytes: v.GetInt64("tools.files.max_writable_file_bytes"),
+			MaxReadLines:         v.GetInt("tools.files.max_read_lines"),
+			MaxListEntries:       v.GetInt("tools.files.max_list_entries"),
 		},
 		WebSearch: WebSearchToolConfig{
-			Enabled: v.GetBool(
-				"tools.web_search.enabled",
-			),
-			Provider: strings.ToLower(
-				strings.TrimSpace(
-					v.GetString(
-						"tools.web_search.provider",
-					),
-				),
-			),
-			TimeoutSeconds: v.GetInt(
-				"tools.web_search.timeout_seconds",
-			),
-			DefaultResults: v.GetInt(
-				"tools.web_search.default_results",
-			),
-			MaxResults: v.GetInt(
-				"tools.web_search.max_results",
-			),
+			Enabled:        v.GetBool("tools.web_search.enabled"),
+			Provider:       strings.ToLower(strings.TrimSpace(v.GetString("tools.web_search.provider"))),
+			TimeoutSeconds: v.GetInt("tools.web_search.timeout_seconds"),
+			DefaultResults: v.GetInt("tools.web_search.default_results"),
+			MaxResults:     v.GetInt("tools.web_search.max_results"),
 		},
 		WebFetch: WebFetchToolConfig{
-			Enabled: v.GetBool(
-				"tools.web_fetch.enabled",
-			),
-			TimeoutSeconds: v.GetInt(
-				"tools.web_fetch.timeout_seconds",
-			),
-			MaxBodyBytes: v.GetInt64(
-				"tools.web_fetch.max_body_bytes",
-			),
-			DefaultMaxChars: v.GetInt(
-				"tools.web_fetch.default_max_chars",
-			),
-			MaxChars: v.GetInt(
-				"tools.web_fetch.max_chars",
-			),
-			MaxRedirects: v.GetInt(
-				"tools.web_fetch.max_redirects",
-			),
+			Enabled:         v.GetBool("tools.web_fetch.enabled"),
+			TimeoutSeconds:  v.GetInt("tools.web_fetch.timeout_seconds"),
+			MaxBodyBytes:    v.GetInt64("tools.web_fetch.max_body_bytes"),
+			DefaultMaxChars: v.GetInt("tools.web_fetch.default_max_chars"),
+			MaxChars:        v.GetInt("tools.web_fetch.max_chars"),
+			MaxRedirects:    v.GetInt("tools.web_fetch.max_redirects"),
 		},
 		Command: CommandToolConfig{
-			Enabled: v.GetBool(
-				"security.shell_enabled",
-			),
-			DefaultTimeoutSeconds: v.GetInt(
-				"tools.command.default_timeout_seconds",
-			),
-			MaxTimeoutSeconds: v.GetInt(
-				"tools.command.max_timeout_seconds",
-			),
-			MaxOutputBytes: v.GetInt(
-				"tools.command.max_output_bytes",
-			),
-			MaxArgs: v.GetInt(
-				"tools.command.max_args",
-			),
-			MaxArgBytes: v.GetInt(
-				"tools.command.max_arg_bytes",
-			),
+			Enabled:               v.GetBool("security.shell_enabled"),
+			DefaultTimeoutSeconds: v.GetInt("tools.command.default_timeout_seconds"),
+			MaxTimeoutSeconds:     v.GetInt("tools.command.max_timeout_seconds"),
+			MaxOutputBytes:        v.GetInt("tools.command.max_output_bytes"),
+			MaxArgs:               v.GetInt("tools.command.max_args"),
+			MaxArgBytes:           v.GetInt("tools.command.max_arg_bytes"),
 		},
 	}
-
 	if err := result.Validate(); err != nil {
-		return ToolConfig{}, fmt.Errorf(
-			"Tool 配置无效: %w",
-			err,
-		)
+		return ToolConfig{}, fmt.Errorf("Tool 配置无效: %w", err)
 	}
-
 	return result, nil
 }
 
 // Validate 校验整个 Tool 配置。
 func (c ToolConfig) Validate() error {
-	if err := c.Files.Validate(); err != nil {
-		return err
+	for _, validate := range []func() error{c.Files.Validate, c.WebSearch.Validate, c.WebFetch.Validate, c.Command.Validate} {
+		if err := validate(); err != nil {
+			return err
+		}
 	}
-
-	if err := c.WebSearch.Validate(); err != nil {
-		return err
-	}
-
-	if err := c.WebFetch.Validate(); err != nil {
-		return err
-	}
-
-	if err := c.Command.Validate(); err != nil {
-		return err
-	}
-
 	return nil
 }
 
 // Validate 校验 File Tool 配置。
 func (c FileToolConfig) Validate() error {
-	if c.MaxReadableFileBytes <= 0 {
-		return errors.New(
-			"tools.files.max_readable_file_bytes 必须大于 0",
-		)
-	}
-
-	if c.MaxReadableFileBytes >
-		absoluteMaxReadableFileBytes {
-		return fmt.Errorf(
-			"tools.files.max_readable_file_bytes 不能超过 %d",
-			absoluteMaxReadableFileBytes,
-		)
-	}
-
-	if c.MaxWritableFileBytes <= 0 {
-		return errors.New(
-			"tools.files.max_writable_file_bytes 必须大于 0",
-		)
-	}
-
-	if c.MaxWritableFileBytes >
-		absoluteMaxWritableFileBytes {
-		return fmt.Errorf(
-			"tools.files.max_writable_file_bytes 不能超过 %d",
-			absoluteMaxWritableFileBytes,
-		)
-	}
-
-	if c.MaxReadLines <= 0 {
-		return errors.New(
-			"tools.files.max_read_lines 必须大于 0",
-		)
-	}
-
-	if c.MaxReadLines >
-		absoluteMaxReadLines {
-		return fmt.Errorf(
-			"tools.files.max_read_lines 不能超过 %d",
-			absoluteMaxReadLines,
-		)
-	}
-
-	if c.MaxListEntries <= 0 {
-		return errors.New(
-			"tools.files.max_list_entries 必须大于 0",
-		)
-	}
-
-	if c.MaxListEntries >
-		absoluteMaxListEntries {
-		return fmt.Errorf(
-			"tools.files.max_list_entries 不能超过 %d",
-			absoluteMaxListEntries,
-		)
-	}
-
-	return nil
+	return checkToolBounds("tools.files", true,
+		toolBound{"max_readable_file_bytes", c.MaxReadableFileBytes, 1, absoluteMaxReadableFileBytes},
+		toolBound{"max_writable_file_bytes", c.MaxWritableFileBytes, 1, absoluteMaxWritableFileBytes},
+		toolBound{"max_read_lines", int64(c.MaxReadLines), 1, absoluteMaxReadLines},
+		toolBound{"max_list_entries", int64(c.MaxListEntries), 1, absoluteMaxListEntries})
 }
 
 // Validate 校验 Web Search 配置。
 func (c WebSearchToolConfig) Validate() error {
-	provider :=
-		strings.ToLower(
-			strings.TrimSpace(
-				c.Provider,
-			),
-		)
-
-	switch provider {
-	case "auto",
-		"anysearch_free",
-		"bing",
-		"duckduckgo":
-		// 合法 Provider。
-
+	switch strings.ToLower(strings.TrimSpace(c.Provider)) {
+	case "auto", "anysearch_free", "bing", "duckduckgo":
 	default:
-		return fmt.Errorf(
-			"tools.web_search.provider 不支持: %q",
-			c.Provider,
-		)
+		return fmt.Errorf("tools.web_search.provider 不支持: %q", c.Provider)
 	}
-
-	if c.TimeoutSeconds <= 0 ||
-		c.TimeoutSeconds >
-			absoluteMaxWebSearchTimeoutSeconds {
-		return fmt.Errorf(
-			"tools.web_search.timeout_seconds 必须位于 1-%d 之间",
-			absoluteMaxWebSearchTimeoutSeconds,
-		)
+	if err := checkToolBounds("tools.web_search", false,
+		toolBound{"timeout_seconds", int64(c.TimeoutSeconds), 1, absoluteMaxWebSearchTimeoutSeconds},
+		toolBound{"default_results", int64(c.DefaultResults), 1, absoluteMaxWebSearchResults},
+		toolBound{"max_results", int64(c.MaxResults), 1, absoluteMaxWebSearchResults}); err != nil {
+		return err
 	}
-
-	if c.DefaultResults <= 0 ||
-		c.DefaultResults >
-			absoluteMaxWebSearchResults {
-		return fmt.Errorf(
-			"tools.web_search.default_results 必须位于 1-%d 之间",
-			absoluteMaxWebSearchResults,
-		)
+	if c.DefaultResults > c.MaxResults {
+		return errors.New("tools.web_search.default_results 不能大于 max_results")
 	}
-
-	if c.MaxResults <= 0 ||
-		c.MaxResults >
-			absoluteMaxWebSearchResults {
-		return fmt.Errorf(
-			"tools.web_search.max_results 必须位于 1-%d 之间",
-			absoluteMaxWebSearchResults,
-		)
-	}
-
-	if c.DefaultResults >
-		c.MaxResults {
-		return errors.New(
-			"tools.web_search.default_results 不能大于 max_results",
-		)
-	}
-
 	return nil
 }
 
 // Validate 校验 Web Fetch 配置。
 func (c WebFetchToolConfig) Validate() error {
-	if c.TimeoutSeconds <= 0 ||
-		c.TimeoutSeconds >
-			absoluteMaxWebFetchTimeoutSeconds {
-		return fmt.Errorf(
-			"tools.web_fetch.timeout_seconds 必须位于 1-%d 之间",
-			absoluteMaxWebFetchTimeoutSeconds,
-		)
+	if err := checkToolBounds("tools.web_fetch", false,
+		toolBound{"timeout_seconds", int64(c.TimeoutSeconds), 1, absoluteMaxWebFetchTimeoutSeconds},
+		toolBound{"max_body_bytes", c.MaxBodyBytes, 1, absoluteMaxWebFetchBodyBytes},
+		toolBound{"default_max_chars", int64(c.DefaultMaxChars), 1, absoluteMaxWebFetchChars},
+		toolBound{"max_chars", int64(c.MaxChars), 1, absoluteMaxWebFetchChars}); err != nil {
+		return err
 	}
-
-	if c.MaxBodyBytes <= 0 ||
-		c.MaxBodyBytes >
-			absoluteMaxWebFetchBodyBytes {
-		return fmt.Errorf(
-			"tools.web_fetch.max_body_bytes 必须位于 1-%d 之间",
-			absoluteMaxWebFetchBodyBytes,
-		)
+	if c.DefaultMaxChars > c.MaxChars {
+		return errors.New("tools.web_fetch.default_max_chars 不能大于 max_chars")
 	}
-
-	if c.DefaultMaxChars <= 0 ||
-		c.DefaultMaxChars >
-			absoluteMaxWebFetchChars {
-		return fmt.Errorf(
-			"tools.web_fetch.default_max_chars 必须位于 1-%d 之间",
-			absoluteMaxWebFetchChars,
-		)
-	}
-
-	if c.MaxChars <= 0 ||
-		c.MaxChars >
-			absoluteMaxWebFetchChars {
-		return fmt.Errorf(
-			"tools.web_fetch.max_chars 必须位于 1-%d 之间",
-			absoluteMaxWebFetchChars,
-		)
-	}
-
-	if c.DefaultMaxChars >
-		c.MaxChars {
-		return errors.New(
-			"tools.web_fetch.default_max_chars 不能大于 max_chars",
-		)
-	}
-
-	if c.MaxRedirects < 0 ||
-		c.MaxRedirects >
-			absoluteMaxWebFetchRedirects {
-		return fmt.Errorf(
-			"tools.web_fetch.max_redirects 必须位于 0-%d 之间",
-			absoluteMaxWebFetchRedirects,
-		)
-	}
-
-	return nil
+	return checkToolBounds("tools.web_fetch", false, toolBound{"max_redirects", int64(c.MaxRedirects), 0, absoluteMaxWebFetchRedirects})
 }
 
 // Validate 校验本地命令执行配置。
 func (c CommandToolConfig) Validate() error {
 	if c.DefaultTimeoutSeconds <= 0 {
-		return errors.New(
-			"tools.command.default_timeout_seconds 必须大于 0",
-		)
+		return errors.New("tools.command.default_timeout_seconds 必须大于 0")
 	}
-
-	if c.MaxTimeoutSeconds <= 0 ||
-		c.MaxTimeoutSeconds >
-			absoluteMaxCommandTimeoutSeconds {
-		return fmt.Errorf(
-			"tools.command.max_timeout_seconds 必须位于 1-%d 之间",
-			absoluteMaxCommandTimeoutSeconds,
-		)
+	if err := checkToolBounds("tools.command", false, toolBound{"max_timeout_seconds", int64(c.MaxTimeoutSeconds), 1, absoluteMaxCommandTimeoutSeconds}); err != nil {
+		return err
 	}
-
-	if c.DefaultTimeoutSeconds >
-		c.MaxTimeoutSeconds {
-		return errors.New(
-			"tools.command.default_timeout_seconds 不能大于 max_timeout_seconds",
-		)
+	if c.DefaultTimeoutSeconds > c.MaxTimeoutSeconds {
+		return errors.New("tools.command.default_timeout_seconds 不能大于 max_timeout_seconds")
 	}
-
-	if c.MaxOutputBytes <= 0 ||
-		c.MaxOutputBytes >
-			absoluteMaxCommandOutputBytes {
-		return fmt.Errorf(
-			"tools.command.max_output_bytes 必须位于 1-%d 之间",
-			absoluteMaxCommandOutputBytes,
-		)
-	}
-
-	if c.MaxArgs <= 0 ||
-		c.MaxArgs >
-			absoluteMaxCommandArgs {
-		return fmt.Errorf(
-			"tools.command.max_args 必须位于 1-%d 之间",
-			absoluteMaxCommandArgs,
-		)
-	}
-
-	if c.MaxArgBytes <= 0 ||
-		c.MaxArgBytes >
-			absoluteMaxCommandArgBytes {
-		return fmt.Errorf(
-			"tools.command.max_arg_bytes 必须位于 1-%d 之间",
-			absoluteMaxCommandArgBytes,
-		)
-	}
-
-	return nil
+	return checkToolBounds("tools.command", false,
+		toolBound{"max_output_bytes", int64(c.MaxOutputBytes), 1, absoluteMaxCommandOutputBytes},
+		toolBound{"max_args", int64(c.MaxArgs), 1, absoluteMaxCommandArgs},
+		toolBound{"max_arg_bytes", int64(c.MaxArgBytes), 1, absoluteMaxCommandArgBytes})
 }
 
 // SafeCommandEnvironment 返回允许传递给 Agent 本地子进程的环境变量白名单。
@@ -555,43 +305,17 @@ func (c CommandToolConfig) Validate() error {
 // 该函数位于 config package，是因为读取宿主环境属于 Application Configuration
 // Boundary。Builtin Tool 不允许自行调用 os.Getenv/os.Environ。
 func SafeCommandEnvironment() []string {
-	keys := []string{
-		"PATH",
-		"HOME",
-		"TMPDIR",
-		"LANG",
-		"LC_ALL",
-		"LC_CTYPE",
-		"GOROOT",
-		"GOPATH",
-		"GOCACHE",
-		"GOMODCACHE",
-	}
+	keys := []string{"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "GOROOT", "GOPATH", "GOCACHE", "GOMODCACHE"}
 
 	if runtime.GOOS == "windows" {
-		keys = append(
-			keys,
-			"USERPROFILE",
-			"SYSTEMROOT",
-			"WINDIR",
-			"PATHEXT",
-			"TEMP",
-			"TMP",
-		)
+		keys = append(keys, "USERPROFILE", "SYSTEMROOT", "WINDIR", "PATHEXT", "TEMP", "TMP")
 	}
 
 	result :=
-		make(
-			[]string,
-			0,
-			len(keys),
-		)
+		make([]string, 0, len(keys))
 
 	seen :=
-		make(
-			map[string]struct{},
-			len(keys),
-		)
+		make(map[string]struct{}, len(keys))
 
 	for _, key := range keys {
 		lookupKey := key
@@ -611,11 +335,7 @@ func SafeCommandEnvironment() []string {
 			value, ok = commandenv.Path(), true
 		}
 
-		if !ok ||
-			strings.ContainsRune(
-				value,
-				'\x00',
-			) {
+		if !ok || strings.ContainsRune(value, '\x00') {
 			continue
 		}
 
@@ -623,126 +343,61 @@ func SafeCommandEnvironment() []string {
 			struct{}{}
 
 		result =
-			append(
-				result,
-				key+"="+value,
-			)
+			append(result, key+"="+value)
 	}
 
 	return result
 }
 
 // setToolDefaults 统一声明 Tool 配置默认值。
-func setToolDefaults(
-	v *viper.Viper,
-) {
-	v.SetDefault(
-		"tools.files.enabled",
-		true,
-	)
+func setToolDefaults(v *viper.Viper) {
+	for key, value := range map[string]any{
+		"tools.files.enabled":                   true,
+		"tools.files.max_readable_file_bytes":   defaultMaxReadableFileBytes,
+		"tools.files.max_writable_file_bytes":   defaultMaxWritableFileBytes,
+		"tools.files.max_read_lines":            defaultMaxReadLines,
+		"tools.files.max_list_entries":          defaultMaxListEntries,
+		"tools.web_search.enabled":              true,
+		"tools.web_search.provider":             defaultWebSearchProvider,
+		"tools.web_search.timeout_seconds":      defaultWebSearchTimeoutSeconds,
+		"tools.web_search.default_results":      defaultWebSearchResults,
+		"tools.web_search.max_results":          defaultWebSearchMaxResults,
+		"tools.web_fetch.enabled":               true,
+		"tools.web_fetch.timeout_seconds":       defaultWebFetchTimeoutSeconds,
+		"tools.web_fetch.max_body_bytes":        defaultWebFetchMaxBodyBytes,
+		"tools.web_fetch.default_max_chars":     defaultWebFetchMaxChars,
+		"tools.web_fetch.max_chars":             defaultWebFetchAbsoluteChars,
+		"tools.web_fetch.max_redirects":         defaultWebFetchMaxRedirects,
+		"security.shell_enabled":                false,
+		"tools.command.default_timeout_seconds": defaultCommandTimeoutSeconds,
+		"tools.command.max_timeout_seconds":     defaultCommandMaxTimeoutSeconds,
+		"tools.command.max_output_bytes":        defaultCommandMaxOutputBytes,
+		"tools.command.max_args":                defaultCommandMaxArgs,
+		"tools.command.max_arg_bytes":           defaultCommandMaxArgBytes,
+	} {
+		v.SetDefault(key, value)
+	}
+}
 
-	v.SetDefault(
-		"tools.files.max_readable_file_bytes",
-		defaultMaxReadableFileBytes,
-	)
+// toolBound 保持声明顺序，多个无效参数仍报告原先的第一个错误。
+type toolBound struct {
+	field           string
+	value, min, max int64
+}
 
-	v.SetDefault(
-		"tools.files.max_writable_file_bytes",
-		defaultMaxWritableFileBytes,
-	)
-
-	v.SetDefault(
-		"tools.files.max_read_lines",
-		defaultMaxReadLines,
-	)
-
-	v.SetDefault(
-		"tools.files.max_list_entries",
-		defaultMaxListEntries,
-	)
-
-	v.SetDefault(
-		"tools.web_search.enabled",
-		true,
-	)
-
-	v.SetDefault(
-		"tools.web_search.provider",
-		defaultWebSearchProvider,
-	)
-
-	v.SetDefault(
-		"tools.web_search.timeout_seconds",
-		defaultWebSearchTimeoutSeconds,
-	)
-
-	v.SetDefault(
-		"tools.web_search.default_results",
-		defaultWebSearchResults,
-	)
-
-	v.SetDefault(
-		"tools.web_search.max_results",
-		defaultWebSearchMaxResults,
-	)
-
-	v.SetDefault(
-		"tools.web_fetch.enabled",
-		true,
-	)
-
-	v.SetDefault(
-		"tools.web_fetch.timeout_seconds",
-		defaultWebFetchTimeoutSeconds,
-	)
-
-	v.SetDefault(
-		"tools.web_fetch.max_body_bytes",
-		defaultWebFetchMaxBodyBytes,
-	)
-
-	v.SetDefault(
-		"tools.web_fetch.default_max_chars",
-		defaultWebFetchMaxChars,
-	)
-
-	v.SetDefault(
-		"tools.web_fetch.max_chars",
-		defaultWebFetchAbsoluteChars,
-	)
-
-	v.SetDefault(
-		"tools.web_fetch.max_redirects",
-		defaultWebFetchMaxRedirects,
-	)
-
-	v.SetDefault(
-		"security.shell_enabled",
-		false,
-	)
-
-	v.SetDefault(
-		"tools.command.default_timeout_seconds",
-		defaultCommandTimeoutSeconds,
-	)
-
-	v.SetDefault(
-		"tools.command.max_timeout_seconds",
-		defaultCommandMaxTimeoutSeconds,
-	)
-
-	v.SetDefault(
-		"tools.command.max_output_bytes",
-		defaultCommandMaxOutputBytes,
-	)
-
-	v.SetDefault(
-		"tools.command.max_args",
-		defaultCommandMaxArgs,
-	)
-
-	v.SetDefault(
-		"tools.command.max_arg_bytes",
-		defaultCommandMaxArgBytes,
-	)
+func checkToolBounds(prefix string, separate bool, bounds ...toolBound) error {
+	for _, bound := range bounds {
+		if bound.value >= bound.min && bound.value <= bound.max {
+			continue
+		}
+		field := prefix + "." + bound.field
+		if separate {
+			if bound.value < bound.min {
+				return fmt.Errorf("%s 必须大于 0", field)
+			}
+			return fmt.Errorf("%s 不能超过 %d", field, bound.max)
+		}
+		return fmt.Errorf("%s 必须位于 %d-%d 之间", field, bound.min, bound.max)
+	}
+	return nil
 }

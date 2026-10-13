@@ -177,11 +177,7 @@ func newStreamableHTTPClientWithAccess(endpoint string, headers http.Header, all
 	}).DialContext
 
 	return &http.Client{
-		Transport: credentialHeaderRoundTripper{
-			base:          transport,
-			headers:       headers.Clone(),
-			allowedOrigin: origin,
-		},
+		Transport: credentialHeaderRoundTripper{base: transport, headers: headers.Clone(), allowedOrigin: origin},
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if request == nil || request.URL == nil {
 				return errors.New("MCP HTTP redirect 缺少目标 URL")
@@ -351,12 +347,8 @@ func (b *Backend) connectHTTP(ctx context.Context, server humbertmcp.Server, pol
 	defer cancel()
 
 	session, err := officialmcpsession.Connect(connectCtx, officialmcpsession.ServerConfig{
-		Name: server.Name,
-		Transport: officialmcpsession.TransportConfig{
-			Type:       officialmcpsession.TransportStreamableHTTP,
-			URL:        server.HTTP.Endpoint,
-			HTTPClient: httpClient,
-		},
+		Name:      server.Name,
+		Transport: officialmcpsession.TransportConfig{Type: officialmcpsession.TransportStreamableHTTP, URL: server.HTTP.Endpoint, HTTPClient: httpClient},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("连接 Streamable HTTP MCP Server %q 失败: %w", server.Name, err)

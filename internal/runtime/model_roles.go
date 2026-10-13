@@ -54,14 +54,7 @@ func (e *ModelCapabilityError) Error() string {
 			break
 		}
 	}
-	return fmt.Sprintf(
-		"%v：模型「%s」(%s) 缺少能力 %s，%s",
-		ErrModelCapabilityUnsupported,
-		name,
-		e.Role,
-		strings.Join(e.Capabilities, "/"),
-		hint,
-	)
+	return fmt.Sprintf("%v：模型「%s」(%s) 缺少能力 %s，%s", ErrModelCapabilityUnsupported, name, e.Role, strings.Join(e.Capabilities, "/"), hint)
 }
 
 func (e *ModelCapabilityError) Unwrap() error { return ErrModelCapabilityUnsupported }
@@ -128,9 +121,7 @@ func (r *Resolver) resolveModelRoles(
 		image = &snapshot
 	}
 
-	return resolvedModelRoles{
-		chat: chat, utility: utility, imageModelID: imageModelID, image: image,
-	}, nil
+	return resolvedModelRoles{chat: chat, utility: utility, imageModelID: imageModelID, image: image}, nil
 }
 
 func (r *Resolver) currentTurnRequirements(ctx context.Context, sessionID string) (turnInputRequirements, error) {
@@ -213,11 +204,14 @@ func compactionModel(roles resolvedModelRoles) models.RuntimeSnapshot {
 	return roles.chat
 }
 
-// 只有 Ollama 的当前协议明确支持把 thinking 作为历史 Assistant 字段回传。
-// OpenAI Chat Completions 与未知兼容端点默认只发送回答和工具事务。
-func reasoningReplayPolicyForProvider(provider models.ProviderType) contextengine.ReasoningReplayPolicy {
-	if provider == models.ProviderTypeOllama {
+// MiMo 回放当前窗口内所有 thinking，保持前序工具链；Ollama 保留当前轮次。
+// OpenAI 与未知兼容端点默认只发送回答和工具事务。
+func reasoningReplayPolicyForModel(model models.RuntimeSnapshot) contextengine.ReasoningReplayPolicy {
+	if model.ProviderType == models.ProviderTypeOllama {
 		return contextengine.ReasoningReplayAuto
+	}
+	if model.SupportsReasoningReplay() {
+		return contextengine.ReasoningReplayInclude
 	}
 	return contextengine.ReasoningReplayOmit
 }

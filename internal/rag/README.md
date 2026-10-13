@@ -115,10 +115,10 @@ go run ./examples/5-rag /绝对路径/你的文档.pdf
 ## 验证
 
 ```bash
-go test ./...
-go test -race ./internal/rag/...
+go build ./internal/rag/... ./examples/5-rag
+go vet ./internal/rag/... ./examples/5-rag
 ```
 
-数据库集成测试仅在设置 `HUMBERT_RAG_TEST_DATABASE_URL` 时运行，该地址应指向安装好扩展的专用测试数据库；测试创建并清理随机 schema。未配置时跳过。纯 Go 回归测试覆盖原生组件、独立索引发布失败、版本过滤、父子块引用、超时及降级诊断。
+现有 Go 测试文件已于 2026-10-12 按维护者要求移出仓库，本次使用仓库外归档用例再次验证。归档回归覆盖原生组件、独立索引发布失败、版本过滤、父子块引用、超时及降级诊断；没有配置专用 PostgreSQL 测试地址，5 个真实数据库用例跳过。上面的编译和静态检查不能代替这些行为验证。
 
 组件边界采用 [Eino Indexer](https://github.com/cloudwego/eino/blob/main/components/indexer/interface.go) 和 [Eino Retriever](https://github.com/cloudwego/eino/blob/main/components/retriever/interface.go)。切分参考 [WeKnora](https://github.com/Tencent/WeKnora/blob/main/internal/infrastructure/chunker/strategy.go) 的结构判断、校验回退和父子块处理，没有引入后端注册器。

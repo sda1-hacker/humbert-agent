@@ -205,13 +205,7 @@ func (r *Runner) Run(ctx context.Context, policy EffectivePolicy, spec ProcessSp
 		}
 	}
 
-	result := ProcessResult{
-		ExitCode:          0,
-		TimedOut:          timedOut,
-		TerminationReason: "exited",
-		Duration:          time.Since(startedAt),
-		NativeUsed:        nativeUsed,
-	}
+	result := ProcessResult{ExitCode: 0, TimedOut: timedOut, TerminationReason: "exited", Duration: time.Since(startedAt), NativeUsed: nativeUsed}
 	if timedOut {
 		result.ExitCode = -1
 		result.TerminationReason = "timeout"

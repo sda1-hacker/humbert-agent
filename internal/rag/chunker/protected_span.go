@@ -21,45 +21,32 @@ var protectedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)\$\$.*?\$\$`),
 
 	// 2. markdown 图片引用
-	regexp.MustCompile(
-		`!\[[^\]\n]{0,200}\]\([^)\n]{1,500}\)`,
-	),
+	regexp.MustCompile(`!\[[^\]\n]{0,200}\]\([^)\n]{1,500}\)`),
 
 	// 3. markdown 链接
-	regexp.MustCompile(
-		`\[[^\]\n]{1,200}\]\([^)\n]{1,500}\)`,
-	),
+	regexp.MustCompile(`\[[^\]\n]{1,200}\]\([^)\n]{1,500}\)`),
 
 	// 4. Markdown 表格 Header + Separator
 	// 例如：
 	//     | 城市 | 标准 |
 	//     | --- | --- |
 	// 这两行应当作为一个完整区域。
-	regexp.MustCompile(
-		"(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+" +
-			"\\s*(?:\\|\\s*:?-{3,}:?\\s*)+\\|[\\r\\n]+",
-	),
+	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+" + "\\s*(?:\\|\\s*:?-{3,}:?\\s*)+\\|[\\r\\n]+"),
 
 	// 5. Markdown 普通表格行
-	regexp.MustCompile(
-		"(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+",
-	),
+	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+"),
 
 	// 6. fenced code block 代码块
 	// 例如：
 	//     ```go
 	//     fmt.Println("hello")
 	//     ```
-	regexp.MustCompile(
-		"(?s)```(?:\\w+)?[\\r\\n].*?```",
-	),
+	regexp.MustCompile("(?s)```(?:\\w+)?[\\r\\n].*?```"),
 
 	// 7. Markdown inline code 代码行
 	// 例如：
 	//     `go test ./...`
-	regexp.MustCompile(
-		"`[^`\\r\\n]+`",
-	),
+	regexp.MustCompile("`[^`\\r\\n]+`"),
 }
 
 // protectedSpans 扫描文本，找到所有不能轻易拆分的区域 --> 找到文本中所有的 protected span
@@ -92,13 +79,7 @@ func protectedSpans(text string) []span {
 				continue
 			}
 
-			all = append(
-				all,
-				match{
-					start: loc[0],
-					end:   loc[1],
-				},
-			)
+			all = append(all, match{start: loc[0], end: loc[1]})
 		}
 	}
 
@@ -122,11 +103,7 @@ func protectedSpans(text string) []span {
 	)
 
 	// 丢弃与已保留区域重叠的重复命中。
-	result := make(
-		[]span,
-		0,
-		len(all),
-	)
+	result := make([]span, 0, len(all))
 
 	lastEnd := 0
 
@@ -136,13 +113,7 @@ func protectedSpans(text string) []span {
 			continue
 		}
 
-		result = append(
-			result,
-			span{
-				start: item.start,
-				end:   item.end,
-			},
-		)
+		result = append(result, span{start: item.start, end: item.end})
 
 		lastEnd = item.end
 	}
@@ -159,11 +130,7 @@ func protectedSpansRune(
 		return nil
 	}
 
-	result := make(
-		[]span,
-		0,
-		len(byteSpans),
-	)
+	result := make([]span, 0, len(byteSpans))
 
 	// 当前已经扫描到的 rune 位置。
 	runeIndex := 0
@@ -187,13 +154,7 @@ func protectedSpansRune(
 			runeIndex++
 		}
 
-		result = append(
-			result,
-			span{
-				start: startRune,
-				end:   runeIndex,
-			},
-		)
+		result = append(result, span{start: startRune, end: runeIndex})
 	}
 	return result
 }

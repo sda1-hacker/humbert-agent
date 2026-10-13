@@ -445,10 +445,7 @@ func cloneServer(value Server) Server {
 func cloneSelections(values []ToolSelection) []ToolSelection {
 	result := make([]ToolSelection, len(values))
 	for i, value := range values {
-		result[i] = ToolSelection{
-			ServerID: value.ServerID,
-			Tools:    append([]string(nil), value.Tools...),
-		}
+		result[i] = ToolSelection{ServerID: value.ServerID, Tools: append([]string(nil), value.Tools...)}
 	}
 	return result
 }

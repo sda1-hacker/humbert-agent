@@ -6,6 +6,8 @@
 
 `Store` 把 Server 配置保存在 `mcp/servers.json`，包括 stdio/Streamable HTTP 传输、启用状态、工具风险覆盖等；敏感凭据由凭据库提供。`Manager` 负责 CRUD、工具发现、选择校验、缓存和修订号。`einoadapter.Backend` 才负责真实连接与 Eino Tool 构造。Agent Profile 保存选中的 Server/Tool；本轮 `Resolver` 将其解析成 `RuntimeSnapshot`。
 
+`Store.Create/Update` 复用私有 `save` 流程完成校验、加锁、读取和原子提交；创建时的 ID/Key 冲突和更新时的不存在/Key 冲突保持各自语义及检查顺序。凭据提交与失败回滚仍由应用用例负责。
+
 ```mermaid
 flowchart LR
   A[Agent 的 ToolSelection] --> M[Manager.ResolveRuntimeSnapshot]

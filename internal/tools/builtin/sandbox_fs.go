@@ -59,15 +59,7 @@ func openSandboxTarget(ctx context.Context, scope humberttools.Scope, input stri
 			display = "."
 		}
 	}
-	return &sandboxTarget{
-		root:     root,
-		rootPath: rootPath,
-		relative: relative,
-		absolute: absolute,
-		display:  display,
-		decision: decision,
-		policy:   policy,
-	}, nil
+	return &sandboxTarget{root: root, rootPath: rootPath, relative: relative, absolute: absolute, display: display, decision: decision, policy: policy}, nil
 }
 
 // canReadChild 对每个后代重新裁决：父目录可读不代表其中的受保护目录也可读。

@@ -109,7 +109,7 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 | internal/searchindex/、internal/databackup/ | SQLite 搜索投影与加密备份 |
 | frontend/ | Vue 3 桌面界面与 Wails bindings |
 
-完整的代码学习说明集中在 [项目源码详解](docs/项目源码详解.md)：根据当前源码解读全部非 RAG 后端、前端、桌面入口和数据命令，覆盖设计、调用流程、持久化、并发、权限及失败处理，并附桌面接口、数据字段、函数和测试索引。首次阅读可按其中的 [学习路线](docs/项目源码详解.md#reading) 跟踪一次真实聊天。
+完整的代码学习说明集中在 [项目源码详解](docs/项目源码详解.md)：根据当前源码解读全部非 RAG 后端、前端、桌面入口和数据命令，覆盖设计、调用流程、持久化、并发、权限及失败处理，并附桌面接口、数据字段、函数索引和验证说明。首次阅读可按其中的 [学习路线](docs/项目源码详解.md#reading) 跟踪一次真实聊天。
 
 ### 默认数据目录
 
@@ -184,9 +184,11 @@ cd frontend
 npm ci
 npm run build
 cd ..
-go test ./...
+go build ./cmd/... ./internal/... ./examples/...
 go vet ./...
 ~~~
+
+2026-10-12 按维护者要求移除了仓库中的现有测试代码。此次精简在移除前执行了全量回归与相关包的 race 检查，移除后通过仓库外归档用例再次验证。上面的编译和静态检查不替代行为回归；后续高风险修改仍需针对性验证。不要在 macOS 上以 `go build ./...` 链接 iOS 支架，它由对应平台构建任务组装。
 
 frontend/dist/.gitkeep 让未构建前端的干净检出也能通过 Go 的嵌入资源检查。前端通过 Wails Runtime 的 `Call.ByName` 调用服务，正常构建不依赖生成的 JS bindings。修改 Wails 服务签名时，应同步检查 `frontend/src/api/` 的调用参数；如需类型 bindings，可显式执行：
 

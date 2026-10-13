@@ -23,5 +23,4 @@ package main
 //AfterAgent
 
 func main() {
-
 }

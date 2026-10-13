@@ -83,9 +83,7 @@ func (c *documentCache) putOwned(path string, document Document, info os.FileInf
 	if existing := c.values[path]; existing != nil {
 		c.removeLocked(existing)
 	}
-	item := &documentCacheItem{
-		path: path, document: document, fileInfo: info, cost: info.Size(),
-	}
+	item := &documentCacheItem{path: path, document: document, fileInfo: info, cost: info.Size()}
 	item.messageIndexes, item.messagePositions = indexMessages(document.ActiveBranch)
 	item.element = c.lru.PushFront(item)
 	c.values[path] = item
@@ -190,9 +188,7 @@ func (c *documentCache) removeLocked(item *documentCacheItem) {
 }
 
 func sameTranscriptFile(cached os.FileInfo, current os.FileInfo) bool {
-	return cached != nil && current != nil &&
-		cached.Size() == current.Size() &&
-		cached.ModTime().Equal(current.ModTime()) &&
+	return cached != nil && current != nil && cached.Size() == current.Size() && cached.ModTime().Equal(current.ModTime()) &&
 		os.SameFile(cached, current)
 }
 

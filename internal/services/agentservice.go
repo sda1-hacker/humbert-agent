@@ -245,31 +245,30 @@ func (s *AgentService) CreateAgent(request CreateAgentRequest) (AgentDTO, error)
 	}
 
 	value, err :=
-		s.deps.Agents.
-			Create(
-				ctx,
-				agents.CreateInput{
-					Name: request.Name,
+		s.deps.Agents.Create(
+			ctx,
+			agents.CreateInput{
+				Name: request.Name,
 
-					Avatar: request.Avatar,
+				Avatar: request.Avatar,
 
-					SubagentEnabled: createInput.SubagentEnabled,
+				SubagentEnabled: createInput.SubagentEnabled,
 
-					Instruction: request.Instruction,
+				Instruction: request.Instruction,
 
-					ModelID: request.ModelID,
+				ModelID: request.ModelID,
 
-					ModelRoles: modelRolesFromDTO(request.ModelRoles),
+				ModelRoles: modelRolesFromDTO(request.ModelRoles),
 
-					EnabledSkills:       append([]string(nil), request.EnabledSkills...),
-					EnabledBuiltinTools: createInput.EnabledBuiltinTools,
-					Sandbox:             createInput.Sandbox,
+				EnabledSkills:       append([]string(nil), request.EnabledSkills...),
+				EnabledBuiltinTools: createInput.EnabledBuiltinTools,
+				Sandbox:             createInput.Sandbox,
 
-					WorkspaceMode: workspace.Mode(request.WorkspaceMode),
+				WorkspaceMode: workspace.Mode(request.WorkspaceMode),
 
-					WorkspacePath: request.WorkspacePath,
-				},
-			)
+				WorkspacePath: request.WorkspacePath,
+			},
+		)
 
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("创建 Agent 失败: %w", err)
@@ -305,32 +304,31 @@ func (s *AgentService) UpdateAgent(id string, request UpdateAgentRequest) (Agent
 	subagentEnabled := request.SubagentEnabled
 
 	value, err :=
-		s.deps.Agents.
-			Update(
-				ctx,
-				id,
-				agents.UpdateInput{
-					Name: request.Name,
+		s.deps.Agents.Update(
+			ctx,
+			id,
+			agents.UpdateInput{
+				Name: request.Name,
 
-					Avatar: request.Avatar,
+				Avatar: request.Avatar,
 
-					SubagentEnabled: &subagentEnabled,
+				SubagentEnabled: &subagentEnabled,
 
-					Instruction: request.Instruction,
+				Instruction: request.Instruction,
 
-					ModelID: request.ModelID,
+				ModelID: request.ModelID,
 
-					ModelRoles: modelRoles,
+				ModelRoles: modelRoles,
 
-					EnabledSkills:       append([]string(nil), request.EnabledSkills...),
-					EnabledBuiltinTools: enabledBuiltinTools,
-					Sandbox:             sandboxPolicy,
+				EnabledSkills:       append([]string(nil), request.EnabledSkills...),
+				EnabledBuiltinTools: enabledBuiltinTools,
+				Sandbox:             sandboxPolicy,
 
-					WorkspaceMode: workspace.Mode(request.WorkspaceMode),
+				WorkspaceMode: workspace.Mode(request.WorkspaceMode),
 
-					WorkspacePath: request.WorkspacePath,
-				},
-			)
+				WorkspacePath: request.WorkspacePath,
+			},
+		)
 
 	if err != nil {
 		return AgentDTO{}, fmt.Errorf("更新 Agent 失败: %w", err)
@@ -559,8 +557,7 @@ func (s *AgentService) toDTO(value agents.AgentInfo) (AgentDTO, error) {
 func (s *AgentService) toDTOWithCatalog(value agents.AgentInfo, catalog []BuiltinToolDTO, status SandboxStatusDTO) (AgentDTO, error) {
 	displayPath := value.Agent.WorkspacePath
 
-	if value.Agent.WorkspaceMode ==
-		workspace.ModeManaged {
+	if value.Agent.WorkspaceMode == workspace.ModeManaged {
 
 		path, err := s.deps.Workspaces.ManagedPath(value.Agent.ID)
 

@@ -14,13 +14,9 @@ import (
 
 var (
 	// ErrNotFound 用于允许调用方通过 errors.Is 判断凭据不存在。
-	ErrNotFound = errors.New(
-		"凭据不存在",
-	)
+	ErrNotFound = errors.New("凭据不存在")
 
-	credentialIDPattern = regexp.MustCompile(
-		`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`,
-	)
+	credentialIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 )
 
 // Store 负责 Humbert 的敏感凭据本地存储。
@@ -43,66 +39,40 @@ func New(root string) (*Store, error) {
 	root = strings.TrimSpace(root)
 
 	if root == "" {
-		return nil, errors.New(
-			"凭据目录不能为空",
-		)
+		return nil, errors.New("凭据目录不能为空")
 	}
 
 	absoluteRoot, err :=
 		filepath.Abs(root)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"解析凭据目录失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("解析凭据目录失败: %w", err)
 	}
 
 	absoluteRoot =
 		filepath.Clean(absoluteRoot)
 
-	if err := os.MkdirAll(
-		absoluteRoot,
-		0700,
-	); err != nil {
-		return nil, fmt.Errorf(
-			"创建凭据目录失败: %w",
-			err,
-		)
+	if err := os.MkdirAll(absoluteRoot, 0700); err != nil {
+		return nil, fmt.Errorf("创建凭据目录失败: %w", err)
 	}
 
 	rootInfo, err := os.Lstat(absoluteRoot)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"读取凭据目录状态失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("读取凭据目录状态失败: %w", err)
 	}
 	if rootInfo.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New(
-			"凭据目录不能是符号链接",
-		)
+		return nil, errors.New("凭据目录不能是符号链接")
 	}
 	if !rootInfo.IsDir() {
-		return nil, errors.New(
-			"凭据路径不是目录",
-		)
+		return nil, errors.New("凭据路径不是目录")
 	}
 
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(
-			absoluteRoot,
-			0700,
-		); err != nil {
-			return nil, fmt.Errorf(
-				"设置凭据目录权限失败: %w",
-				err,
-			)
+		if err := os.Chmod(absoluteRoot, 0700); err != nil {
+			return nil, fmt.Errorf("设置凭据目录权限失败: %w", err)
 		}
 	}
 
-	return &Store{
-		root: absoluteRoot,
-	}, nil
+	return &Store{root: absoluteRoot}, nil
 }
 
 // Put 新增或替换一个凭据。
@@ -117,10 +87,7 @@ func (s *Store) Put(
 		return errors.New("context.Context 不能为空")
 	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf(
-			"保存凭据被取消: %w",
-			err,
-		)
+		return fmt.Errorf("保存凭据被取消: %w", err)
 	}
 	if s.system != nil {
 		return s.putSystem(ctx, id, value)
@@ -137,20 +104,12 @@ func (s *Store) Put(
 	value = strings.TrimSpace(value)
 
 	if value == "" {
-		return errors.New(
-			"凭据内容不能为空",
-		)
+		return errors.New("凭据内容不能为空")
 	}
 
-	temp, err := os.CreateTemp(
-		s.root,
-		".credential-*",
-	)
+	temp, err := os.CreateTemp(s.root, ".credential-*")
 	if err != nil {
-		return fmt.Errorf(
-			"创建凭据临时文件失败: %w",
-			err,
-		)
+		return fmt.Errorf("创建凭据临时文件失败: %w", err)
 	}
 
 	tempName := temp.Name()
@@ -165,58 +124,30 @@ func (s *Store) Put(
 	}()
 
 	if runtime.GOOS != "windows" {
-		if err := temp.Chmod(
-			0600,
-		); err != nil {
-			return fmt.Errorf(
-				"设置凭据临时文件权限失败: %w",
-				err,
-			)
+		if err := temp.Chmod(0600); err != nil {
+			return fmt.Errorf("设置凭据临时文件权限失败: %w", err)
 		}
 	}
 
-	if _, err := temp.WriteString(
-		value,
-	); err != nil {
-		return fmt.Errorf(
-			"写入凭据失败: %w",
-			err,
-		)
+	if _, err := temp.WriteString(value); err != nil {
+		return fmt.Errorf("写入凭据失败: %w", err)
 	}
 
 	if err := temp.Sync(); err != nil {
-		return fmt.Errorf(
-			"同步凭据文件失败: %w",
-			err,
-		)
+		return fmt.Errorf("同步凭据文件失败: %w", err)
 	}
 
 	if err := temp.Close(); err != nil {
-		return fmt.Errorf(
-			"关闭凭据临时文件失败: %w",
-			err,
-		)
+		return fmt.Errorf("关闭凭据临时文件失败: %w", err)
 	}
 
-	if err := replaceFile(
-		tempName,
-		target,
-	); err != nil {
-		return fmt.Errorf(
-			"提交凭据失败: %w",
-			err,
-		)
+	if err := replaceFile(tempName, target); err != nil {
+		return fmt.Errorf("提交凭据失败: %w", err)
 	}
 
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(
-			target,
-			0600,
-		); err != nil {
-			return fmt.Errorf(
-				"设置凭据文件权限失败: %w",
-				err,
-			)
+		if err := os.Chmod(target, 0600); err != nil {
+			return fmt.Errorf("设置凭据文件权限失败: %w", err)
 		}
 	}
 
@@ -234,10 +165,7 @@ func (s *Store) Get(
 		return "", errors.New("context.Context 不能为空")
 	}
 	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf(
-			"读取凭据被取消: %w",
-			err,
-		)
+		return "", fmt.Errorf("读取凭据被取消: %w", err)
 	}
 	if s.system != nil {
 		return s.getSystem(ctx, id)
@@ -249,44 +177,25 @@ func (s *Store) Get(
 	}
 	if err := validateCredentialTarget(path, false); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf(
-				"%w: %s",
-				ErrNotFound,
-				id,
-			)
+			return "", fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
 		return "", err
 	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
-		if errors.Is(
-			err,
-			os.ErrNotExist,
-		) {
-			return "", fmt.Errorf(
-				"%w: %s",
-				ErrNotFound,
-				id,
-			)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("%w: %s", ErrNotFound, id)
 		}
 
-		return "", fmt.Errorf(
-			"读取凭据失败: %w",
-			err,
-		)
+		return "", fmt.Errorf("读取凭据失败: %w", err)
 	}
 
 	value :=
-		strings.TrimSpace(
-			string(content),
-		)
+		strings.TrimSpace(string(content))
 
 	if value == "" {
-		return "", fmt.Errorf(
-			"凭据文件为空: %s",
-			id,
-		)
+		return "", fmt.Errorf("凭据文件为空: %s", id)
 	}
 
 	return value, nil
@@ -303,10 +212,7 @@ func (s *Store) Delete(
 		return errors.New("context.Context 不能为空")
 	}
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf(
-			"删除凭据被取消: %w",
-			err,
-		)
+		return fmt.Errorf("删除凭据被取消: %w", err)
 	}
 	if s.system != nil {
 		return s.deleteSystem(ctx, id)
@@ -317,12 +223,8 @@ func (s *Store) Delete(
 		return err
 	}
 
-	if err := os.Remove(path); err != nil &&
-		!errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf(
-			"删除凭据失败: %w",
-			err,
-		)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("删除凭据失败: %w", err)
 	}
 
 	return nil
@@ -334,39 +236,19 @@ func (s *Store) pathFor(
 	id = strings.TrimSpace(id)
 
 	if !credentialIDPattern.MatchString(id) {
-		return "", fmt.Errorf(
-			"非法凭据 ID: %q",
-			id,
-		)
+		return "", fmt.Errorf("非法凭据 ID: %q", id)
 	}
 
-	target := filepath.Clean(
-		filepath.Join(
-			s.root,
-			id+".secret",
-		),
-	)
+	target := filepath.Clean(filepath.Join(s.root, id+".secret"))
 
 	relative, err :=
-		filepath.Rel(
-			s.root,
-			target,
-		)
+		filepath.Rel(s.root, target)
 	if err != nil {
-		return "", fmt.Errorf(
-			"校验凭据路径失败: %w",
-			err,
-		)
+		return "", fmt.Errorf("校验凭据路径失败: %w", err)
 	}
 
-	if relative == ".." ||
-		strings.HasPrefix(
-			relative,
-			".."+string(filepath.Separator),
-		) {
-		return "", errors.New(
-			"凭据路径越界",
-		)
+	if relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("凭据路径越界")
 	}
 
 	return target, nil
@@ -399,10 +281,7 @@ func replaceFile(
 	destination string,
 ) error {
 	// Unix 通常允许 Rename 直接替换目标。
-	if err := os.Rename(
-		source,
-		destination,
-	); err == nil {
+	if err := os.Rename(source, destination); err == nil {
 		return nil
 	}
 
@@ -418,52 +297,24 @@ func replaceFile(
 	if _, err := os.Stat(destination); err == nil {
 		oldExists = true
 
-		if err := os.Rename(
-			destination,
-			backup,
-		); err != nil {
-			return fmt.Errorf(
-				"备份旧凭据失败: %w",
-				err,
-			)
+		if err := os.Rename(destination, backup); err != nil {
+			return fmt.Errorf("备份旧凭据失败: %w", err)
 		}
-	} else if !errors.Is(
-		err,
-		os.ErrNotExist,
-	) {
-		return fmt.Errorf(
-			"检查旧凭据失败: %w",
-			err,
-		)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("检查旧凭据失败: %w", err)
 	}
 
-	if err := os.Rename(
-		source,
-		destination,
-	); err != nil {
+	if err := os.Rename(source, destination); err != nil {
 		if oldExists {
-			_ = os.Rename(
-				backup,
-				destination,
-			)
+			_ = os.Rename(backup, destination)
 		}
 
-		return fmt.Errorf(
-			"替换凭据失败: %w",
-			err,
-		)
+		return fmt.Errorf("替换凭据失败: %w", err)
 	}
 
 	if oldExists {
-		if err := os.Remove(backup); err != nil &&
-			!errors.Is(
-				err,
-				os.ErrNotExist,
-			) {
-			return fmt.Errorf(
-				"清理凭据备份失败: %w",
-				err,
-			)
+		if err := os.Remove(backup); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("清理凭据备份失败: %w", err)
 		}
 	}
 

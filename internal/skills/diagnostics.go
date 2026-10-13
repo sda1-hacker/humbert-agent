@@ -74,37 +74,23 @@ func evaluateRuntimeCompatibility(
 	}
 
 	if contextMode != "" {
-		markUnsupported(
-			"eino_context",
-			fmt.Sprintf("当前 Humbert Runtime 尚未启用 Eino Skill context=%s；Package 可以安装，但暂不能为 Agent 启用", contextMode),
-		)
+		markUnsupported("eino_context", fmt.Sprintf("当前 Humbert Runtime 尚未启用 Eino Skill context=%s；Package 可以安装，但暂不能为 Agent 启用", contextMode))
 	}
 	if strings.TrimSpace(agent) != "" {
-		markUnsupported(
-			"eino_agent",
-			fmt.Sprintf("当前 Humbert Runtime 尚未接入 Eino Skill agent=%s", strings.TrimSpace(agent)),
-		)
+		markUnsupported("eino_agent", fmt.Sprintf("当前 Humbert Runtime 尚未接入 Eino Skill agent=%s", strings.TrimSpace(agent)))
 	}
 	if strings.TrimSpace(model) != "" {
-		markUnsupported(
-			"eino_model",
-			fmt.Sprintf("当前 Humbert Runtime 不允许 Skill 覆盖 Agent 默认模型（model=%s）", strings.TrimSpace(model)),
-		)
+		markUnsupported("eino_model", fmt.Sprintf("当前 Humbert Runtime 不允许 Skill 覆盖 Agent 默认模型（model=%s）", strings.TrimSpace(model)))
 	}
 
 	if compatibility = strings.TrimSpace(compatibility); compatibility != "" {
-		diagnostics = append(diagnostics, Diagnostic{
-			Code:    "compatibility_note",
-			Level:   DiagnosticInfo,
-			Message: "Skill 声明的环境要求：" + compatibility,
-		})
+		diagnostics = append(diagnostics, Diagnostic{Code: "compatibility_note", Level: DiagnosticInfo, Message: "Skill 声明的环境要求：" + compatibility})
 	}
 	if allowedTools = strings.TrimSpace(allowedTools); allowedTools != "" {
 		diagnostics = append(diagnostics, Diagnostic{
-			Code:  "allowed_tools",
-			Level: DiagnosticInfo,
-			Message: "Skill 声明 allowed-tools=" + allowedTools +
-				"。Humbert 只把它作为兼容提示，不会用它绕过 Agent Tool Selection、Permission 或 Approval。",
+			Code:    "allowed_tools",
+			Level:   DiagnosticInfo,
+			Message: "Skill 声明 allowed-tools=" + allowedTools + "。Humbert 只把它作为兼容提示，不会用它绕过 Agent Tool Selection、Permission 或 Approval。",
 		})
 	}
 
@@ -112,15 +98,9 @@ func evaluateRuntimeCompatibility(
 	for _, script := range scripts {
 		switch {
 		case !script.Supported:
-			markNeedsSetup(
-				"script_runtime_unsupported",
-				fmt.Sprintf("脚本 %s 的运行时尚未被 Humbert 识别；仍可读取脚本内容，但不能通过 run_skill_script 执行", script.Path),
-			)
+			markNeedsSetup("script_runtime_unsupported", fmt.Sprintf("脚本 %s 的运行时尚未被 Humbert 识别；仍可读取脚本内容，但不能通过 run_skill_script 执行", script.Path))
 		case !script.Available:
-			markNeedsSetup(
-				"script_runtime_missing",
-				fmt.Sprintf("脚本 %s 需要 %s，但当前 Humbert 进程 PATH 中未找到该程序", script.Path, script.Command),
-			)
+			markNeedsSetup("script_runtime_missing", fmt.Sprintf("脚本 %s 需要 %s，但当前 Humbert 进程 PATH 中未找到该程序", script.Path, script.Command))
 		}
 	}
 

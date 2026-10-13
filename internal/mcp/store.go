@@ -42,10 +42,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 
 	store := &Store{path: path}
 	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-		if err := atomicfile.WriteJSON(ctx, path, 0o600, serversDocument{
-			SchemaVersion: serversSchemaVersion,
-			Servers:       []Server{},
-		}); err != nil {
+		if err := atomicfile.WriteJSON(ctx, path, 0o600, serversDocument{SchemaVersion: serversSchemaVersion, Servers: []Server{}}); err != nil {
 			return nil, fmt.Errorf("初始化 MCP servers.json 失败: %w", err)
 		}
 	} else if err != nil {
@@ -100,29 +97,20 @@ func (s *Store) Get(ctx context.Context, id string) (Server, error) {
 }
 
 func (s *Store) Create(ctx context.Context, value Server) error {
-	if err := validateContext(ctx, "创建 MCP Server"); err != nil {
-		return err
-	}
-	if err := validateServer(value); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	values, err := s.listLocked(ctx)
-	if err != nil {
-		return err
-	}
-	for _, existing := range values {
-		if existing.ID == value.ID || existing.Key == value.Key {
-			return fmt.Errorf("%w: id=%s key=%s", ErrServerExists, value.ID, value.Key)
-		}
-	}
-	values = append(values, cloneServer(value))
-	return s.writeLocked(ctx, values)
+	return s.save(ctx, value, true)
 }
 
 func (s *Store) Update(ctx context.Context, value Server) error {
-	if err := validateContext(ctx, "更新 MCP Server"); err != nil {
+	return s.save(ctx, value, false)
+}
+
+// save 共用校验、锁与原子提交；创建/更新仍保留各自的冲突和不存在语义。
+func (s *Store) save(ctx context.Context, value Server, create bool) error {
+	operation := "更新 MCP Server"
+	if create {
+		operation = "创建 MCP Server"
+	}
+	if err := validateContext(ctx, operation); err != nil {
 		return err
 	}
 	if err := validateServer(value); err != nil {
@@ -134,19 +122,25 @@ func (s *Store) Update(ctx context.Context, value Server) error {
 	if err != nil {
 		return err
 	}
-	found := false
-	for index := range values {
-		if values[index].ID != value.ID {
-			if values[index].Key == value.Key {
+	found := -1
+	for index, existing := range values {
+		if create && (existing.ID == value.ID || existing.Key == value.Key) {
+			return fmt.Errorf("%w: id=%s key=%s", ErrServerExists, value.ID, value.Key)
+		}
+		if existing.ID != value.ID {
+			if existing.Key == value.Key {
 				return fmt.Errorf("%w: key=%s", ErrServerExists, value.Key)
 			}
 			continue
 		}
-		values[index] = cloneServer(value)
-		found = true
+		found = index
 	}
-	if !found {
+	if create {
+		values = append(values, cloneServer(value))
+	} else if found < 0 {
 		return fmt.Errorf("%w: %s", ErrServerNotFound, value.ID)
+	} else {
+		values[found] = cloneServer(value)
 	}
 	return s.writeLocked(ctx, values)
 }
@@ -209,10 +203,7 @@ func (s *Store) listLocked(ctx context.Context) ([]Server, error) {
 }
 
 func (s *Store) writeLocked(ctx context.Context, values []Server) error {
-	document := serversDocument{
-		SchemaVersion: serversSchemaVersion,
-		Servers:       values,
-	}
+	document := serversDocument{SchemaVersion: serversSchemaVersion, Servers: values}
 	if err := atomicfile.WriteJSON(ctx, s.path, 0o600, document); err != nil {
 		return fmt.Errorf("写入 MCP servers.json 失败: %w", err)
 	}

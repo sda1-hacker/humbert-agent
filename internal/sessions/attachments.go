@@ -192,13 +192,7 @@ func (s *Service) renameDefaultSessionFromFirstInput(
 		title = string(runes[:maxAutomaticTitleRunes-1]) + "…"
 	}
 	if err := s.store.RenameSession(ctx, sessionID, title); err != nil {
-		s.logger.Warn(
-			ctx,
-			"Session 自动命名失败",
-			"operation", "session.title.auto",
-			"session_id", sessionID,
-			"error", err,
-		)
+		s.logger.Warn(ctx, "Session 自动命名失败", "operation", "session.title.auto", "session_id", sessionID, "error", err)
 	}
 }
 
@@ -298,25 +292,13 @@ func (s *Service) HydrateMessages(ctx context.Context, sessionID string, message
 	var hydratedBytes int64
 	replayMask := multimodal.AttachmentReplayMask(messages)
 	for index, message := range messages {
-		hydrated, err := s.hydrateUserAttachmentsWithBudget(
-			ctx,
-			sessionID,
-			message,
-			&hydratedBytes,
-			replayMask[index],
-		)
+		hydrated, err := s.hydrateUserAttachmentsWithBudget(ctx, sessionID, message, &hydratedBytes, replayMask[index])
 		if err != nil {
 			return nil, fmt.Errorf("恢复第 %d 条 Runtime Message 附件失败: %w", index+1, err)
 		}
 		result = append(result, hydrated)
 	}
 	return result, nil
-}
-
-// hydrateUserAttachments 构造单条 Provider Message；附件二进制只在请求内存中存在。
-func (s *Service) hydrateUserAttachments(ctx context.Context, sessionID string, message *schema.Message) (*schema.Message, error) {
-	var hydratedBytes int64
-	return s.hydrateUserAttachmentsWithBudget(ctx, sessionID, message, &hydratedBytes, true)
 }
 
 func (s *Service) hydrateUserAttachmentsWithBudget(
@@ -339,10 +321,7 @@ func (s *Service) hydrateUserAttachmentsWithBudget(
 				return nil, errors.New("历史图片附件结构无效")
 			}
 			if !replayAttachments {
-				next = schema.MessageInputPart{
-					Type: schema.ChatMessagePartTypeText,
-					Text: multimodal.HistoricalImagePlaceholder(part),
-				}
+				next = schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: multimodal.HistoricalImagePlaceholder(part)}
 				break
 			}
 			common, err := s.hydrateCommon(ctx, sessionID, part.Image.MessagePartCommon, hydratedBytes)
@@ -395,10 +374,7 @@ func (s *Service) hydrateCommon(
 	if hydratedBytes != nil {
 		*hydratedBytes += int64(len(data))
 		if *hydratedBytes > maxRuntimeAttachmentBytes {
-			return schema.MessagePartCommon{}, fmt.Errorf(
-				"本次模型上下文中的图片附件超过 %d MiB，请开启新会话或先压缩旧上下文",
-				maxRuntimeAttachmentBytes/(1024*1024),
-			)
+			return schema.MessagePartCommon{}, fmt.Errorf("本次模型上下文中的图片附件超过 %d MiB，请开启新会话或先压缩旧上下文", maxRuntimeAttachmentBytes/(1024*1024))
 		}
 	}
 	encoded := base64.StdEncoding.EncodeToString(data)

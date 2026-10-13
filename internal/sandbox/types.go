@@ -216,10 +216,6 @@ func WorkspaceOnlyPolicy(root string) EffectivePolicy {
 		NetworkMode:   NetworkPublic,
 		NativeMode:    NativeOff,
 		WorkspaceRoot: root,
-		PathRules: []PathRule{{
-			Root:   root,
-			Access: AccessFull,
-			Source: RuleSourceWorkspace,
-		}},
+		PathRules:     []PathRule{{Root: root, Access: AccessFull, Source: RuleSourceWorkspace}},
 	}
 }

@@ -83,12 +83,7 @@ func (m *Manager) prepareRemoteSkillPackage(
 		return Package{}, SourceInfo{}, RemoteSkillSource{}, func() {}, err
 	}
 
-	packageRoot, err := findRemoteSkillPackage(
-		extractDir,
-		resolved.SkillPath,
-		resolved.SkillName,
-		m.config.MaxDefinitionBytes,
-	)
+	packageRoot, err := findRemoteSkillPackage(extractDir, resolved.SkillPath, resolved.SkillName, m.config.MaxDefinitionBytes)
 	if err != nil {
 		return fail(err)
 	}
@@ -133,12 +128,7 @@ func (m *Manager) prepareRemoteSkillArchive(
 	}
 	cleanup := func() {
 		if removeErr := os.RemoveAll(workDir); removeErr != nil {
-			m.logger.Warn(
-				context.Background(),
-				"清理远程 Skill 临时目录失败",
-				"operation", "skill.remote.cleanup",
-				"error", removeErr,
-			)
+			m.logger.Warn(context.Background(), "清理远程 Skill 临时目录失败", "operation", "skill.remote.cleanup", "error", removeErr)
 		}
 	}
 	fail := func(err error) (RemoteSkillSource, string, func(), error) {
@@ -233,12 +223,7 @@ func findRemoteSkillPackage(
 	sort.Strings(candidates)
 
 	if requestedPath == "" && requestedName != "" {
-		selected, err := selectRemoteSkillByName(
-			root,
-			candidates,
-			requestedName,
-			maxDefinitionBytes,
-		)
+		selected, err := selectRemoteSkillByName(root, candidates, requestedName, maxDefinitionBytes)
 		if err != nil {
 			return "", err
 		}
@@ -264,12 +249,7 @@ func findRemoteSkillPackage(
 		}
 	}
 	if len(matches) == 0 {
-		return "", fmt.Errorf(
-			"%w: ZIP 中没有 skill_path=%q 对应的 %s",
-			ErrSkillNotFound,
-			requestedPath,
-			SkillDefinitionFileName,
-		)
+		return "", fmt.Errorf("%w: ZIP 中没有 skill_path=%q 对应的 %s", ErrSkillNotFound, requestedPath, SkillDefinitionFileName)
 	}
 	if len(matches) > 1 {
 		return "", fmt.Errorf("%w: skill_path=%q 匹配到多个 Skill", ErrInvalidSkill, requestedPath)
@@ -303,21 +283,12 @@ func selectRemoteSkillByName(
 		return filepath.Join(root, filepath.FromSlash(basenameMatches[0])), nil
 	}
 	if len(basenameMatches) > 1 {
-		return "", fmt.Errorf(
-			"%w: Skill 名称 %q 匹配到多个目录（%s）",
-			ErrInvalidSkill,
-			requestedName,
-			strings.Join(limitStrings(basenameMatches, 8), "、"),
-		)
+		return "", fmt.Errorf("%w: Skill 名称 %q 匹配到多个目录（%s）", ErrInvalidSkill, requestedName, strings.Join(limitStrings(basenameMatches, 8), "、"))
 	}
 
 	frontMatterMatches := make([]string, 0, 1)
 	for _, candidate := range candidates {
-		definitionPath := filepath.Join(
-			root,
-			filepath.FromSlash(candidate),
-			SkillDefinitionFileName,
-		)
+		definitionPath := filepath.Join(root, filepath.FromSlash(candidate), SkillDefinitionFileName)
 		name, readErr := readRemoteSkillDefinitionName(definitionPath, maxDefinitionBytes)
 		if readErr != nil {
 			continue
@@ -330,19 +301,10 @@ func selectRemoteSkillByName(
 		return filepath.Join(root, filepath.FromSlash(frontMatterMatches[0])), nil
 	}
 	if len(frontMatterMatches) > 1 {
-		return "", fmt.Errorf(
-			"%w: Skill name=%q 匹配到多个 SKILL.md（%s）",
-			ErrInvalidSkill,
-			requestedName,
-			strings.Join(limitStrings(frontMatterMatches, 8), "、"),
-		)
+		return "", fmt.Errorf("%w: Skill name=%q 匹配到多个 SKILL.md（%s）", ErrInvalidSkill, requestedName, strings.Join(limitStrings(frontMatterMatches, 8), "、"))
 	}
 
-	return "", fmt.Errorf(
-		"%w: ZIP 中未找到名为 %q 的 Skill；可改用 skill_path 明确指定目录",
-		ErrSkillNotFound,
-		requestedName,
-	)
+	return "", fmt.Errorf("%w: ZIP 中未找到名为 %q 的 Skill；可改用 skill_path 明确指定目录", ErrSkillNotFound, requestedName)
 }
 
 func readRemoteSkillDefinitionName(definitionPath string, maxDefinitionBytes int64) (string, error) {

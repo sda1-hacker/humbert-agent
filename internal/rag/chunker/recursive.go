@@ -45,28 +45,17 @@ func splitBySeparators(
 		}
 
 		// 把分隔符放回切分结果，确保所有单元拼接后无损恢复原文。
-		pieces := make(
-			[]string,
-			0,
-			len(splits)+len(matches),
-		)
+		pieces := make([]string, 0, len(splits)+len(matches))
 
 		for i, part := range splits {
 
 			if part != "" {
-				pieces = append(
-					pieces,
-					part,
-				)
+				pieces = append(pieces, part)
 			}
 
-			if i < len(matches) &&
-				matches[i] != "" {
+			if i < len(matches) && matches[i] != "" {
 
-				pieces = append(
-					pieces,
-					matches[i],
-				)
+				pieces = append(pieces, matches[i])
 			}
 		}
 
@@ -80,11 +69,7 @@ func splitBySeparators(
 		remainingSeparators :=
 			separators[index+1:]
 
-		result := make(
-			[]string,
-			0,
-			len(pieces),
-		)
+		result := make([]string, 0, len(pieces))
 
 		for _, piece := range pieces {
 

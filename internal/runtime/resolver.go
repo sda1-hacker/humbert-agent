@@ -142,7 +142,7 @@ func (r *Resolver) ResolveTurn(
 	}
 	budget := contextSnapshot.Budget
 	handlers, contextHandler, err := r.buildAgentHandlers(ctx, accounting, base.modelRoles, base.skills, base.scope,
-		manifest.ExposedToolNames, budget, base.toolTokenEstimate, base.session.ID, contextSnapshot.Instruction, base.model.ProviderType)
+		manifest.ExposedToolNames, budget, base.toolTokenEstimate, base.session.ID, contextSnapshot.Instruction)
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +238,7 @@ func (r *Resolver) buildContextSnapshot(ctx context.Context, base resolvedContex
 		ContextWindow:     base.model.ContextWindow,
 		MaxOutputTokens:   base.model.MaxOutputTokens,
 		ToolTokenEstimate: base.toolTokenEstimate,
-		ReasoningPolicy:   reasoningReplayPolicyForProvider(base.model.ProviderType),
+		ReasoningPolicy:   reasoningReplayPolicyForModel(base.model),
 	})
 }
 
@@ -311,7 +311,7 @@ func (r *Resolver) ManualCompact(ctx context.Context, sessionID string) (ManualC
 		CompactionContextWindow:   compactModel.ContextWindow,
 		CompactionMaxOutputTokens: compactModel.MaxOutputTokens,
 		Reason:                    contextengine.CompactionReasonManual,
-		ReasoningPolicy:           reasoningReplayPolicyForProvider(base.model.ProviderType),
+		ReasoningPolicy:           reasoningReplayPolicyForModel(base.model),
 		Force:                     true,
 	})
 	if compactErr != nil && !errors.Is(compactErr, contextengine.ErrNothingToCompact) {
@@ -471,10 +471,7 @@ func runtimeManifestFromBase(base resolvedContextBase) RuntimeManifest {
 		MCPTools:         append([]humbertmcp.RuntimeToolSnapshot(nil), base.mcp.AuditTools...),
 		MCPToolNames:     append([]string(nil), base.mcp.ToolNames...),
 		ExposedToolNames: base.toolNames(),
-		Workspace: RuntimeWorkspaceManifest{
-			Mode:    string(base.scope.Workspace.Mode),
-			RootDir: base.scope.Workspace.RootDir,
-		},
+		Workspace:        RuntimeWorkspaceManifest{Mode: string(base.scope.Workspace.Mode), RootDir: base.scope.Workspace.RootDir},
 		Sandbox: RuntimeSandboxManifest{
 			Profile:       string(base.scope.Sandbox.Profile),
 			NetworkMode:   string(base.scope.Sandbox.NetworkMode),

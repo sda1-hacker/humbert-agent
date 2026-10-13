@@ -154,17 +154,9 @@ func skillGitEnvironment(gitPath string) []string {
 func gitExecutableCandidates(goos, programFiles, programFilesX86 string) []string {
 	switch goos {
 	case "darwin":
-		return []string{
-			"/opt/homebrew/bin/git",
-			"/usr/local/bin/git",
-			"/usr/bin/git",
-		}
+		return []string{"/opt/homebrew/bin/git", "/usr/local/bin/git", "/usr/bin/git"}
 	case "linux":
-		return []string{
-			"/usr/local/bin/git",
-			"/usr/bin/git",
-			"/bin/git",
-		}
+		return []string{"/usr/local/bin/git", "/usr/bin/git", "/bin/git"}
 	case "windows":
 		values := make([]string, 0, 4)
 		for _, root := range []string{programFiles, programFilesX86} {
@@ -172,10 +164,7 @@ func gitExecutableCandidates(goos, programFiles, programFilesX86 string) []strin
 			if root == "" {
 				continue
 			}
-			values = append(values,
-				filepath.Join(root, "Git", "cmd", "git.exe"),
-				filepath.Join(root, "Git", "bin", "git.exe"),
-			)
+			values = append(values, filepath.Join(root, "Git", "cmd", "git.exe"), filepath.Join(root, "Git", "bin", "git.exe"))
 		}
 		return values
 	default:

@@ -62,6 +62,10 @@ ResolveApproval: permission decision → Resume(checkpoint) → 同样三种出�
 
 `Snapshot` 的模型、工具、消息与安全配置在 `ResolveTurn` 结束后不应就地修改；只允许运行计数等受控状态随着调用变化。`Executor.consumeEvents` 可能收到多个消息片段，只有合成完整的 Assistant Step 后才调用 `persistAssistantMessage`。ToolCall 与 ToolResult 使用稳定 ID 对齐；失败时要检查是否已有部分终态消息写入，不能在重试时盲目再追加用户输入。
 
+System Instruction 只包含稳定的策略、工作区、时区和用户配置，不注入每轮变化的秒级墙钟时间。Context 投影在每条原始用户消息末尾附加该 Entry 的固定 `sent_at`；子 Agent 使用轻量运行记录中的固定 StartedAt。重放不重写旧时间，原始 JSONL／用户正文也不修改，因此新轮次可以继续复用历史前缀。实时准确时间仍使用 `get_current_time`。相同工具结果的归档引用同样保持稳定；摘要、配置／能力变更或图片重放窗口变化仍可能合法地改变前缀，不保证供应商缓存命中率。
+
+`reasoningReplayPolicyForModel` 使用冻结的 Provider 类型和 ModelName。MiMo 选择 Include，当前窗口中的历史和同轮 thinking 都保留；主／子 Agent 中间件和手动压缩使用同一策略。Ollama 保持 Auto，OpenAI 和未知兼容模型保持 Omit。Include 不绕过上下文预算，也不重新加载压缩前全部历史；原始 thinking 一直保存在 Transcript。
+
 `resolvedContextBase` 嵌入唯一的 `capabilitySet`，工具、Skills、MCP 与授权 Scope 不再复制成平行字段。模型可见名称由最终描述符统一生成，主 Agent Manifest 和子 Agent 校验共用该投影。`materializeOutput` 统一流读取、合并与关闭；Assistant 入口保留失败前的文本供上层恢复，普通消息入口在失败时丢弃半截 ToolResult。取消、审核拦截与持久化仍由 `consumeEvents` 明确判断。
 
 `Service.Close` 取消活动运行并等待 worker，审批等待者也要收敛。Task 的运行上限属于 `ExecutionLimits`，普通聊天没有任务上限。任何在 Service 外直接调用 `Executor` 的新入口都可能绕过 Session reservation 和快照冻结，应优先通过 Runtime Service 扩展。
@@ -78,4 +82,4 @@ ResolveApproval: permission decision → Resume(checkpoint) → 同样三种出�
 
 终态事件发布前已完成必要持久化、取消旧上下文、通知生命周期观察者并同时释放运行索引和 Session reservation。同步订阅者可立即预约下一轮；旧清理按 RequestID 校验，不能删除新运行占用。初始化失败也通知观察者，回收解析阶段已持有的 MCP 连接。
 
-Provider 的短小 reasoning 策略已并入 `model_roles.go`，原 `reasoning_policy.go` 只保留 package 声明，可手动删除。没有增加第二套执行器或状态机。
+Provider 的短小 reasoning 策略已并入 `model_roles.go`；原来仅保留 package 声明的 `reasoning_policy.go` 已移除。没有增加第二套执行器或状态机。

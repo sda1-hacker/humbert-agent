@@ -51,10 +51,7 @@ func BridgeImagesForTextModel(
 		return cloneMessages(messages), nil
 	}
 
-	response, err := visionModel.Generate(ctx, []*schema.Message{
-		schema.SystemMessage(visionSystemPrompt),
-		{Role: schema.User, UserInputMultiContent: visionParts},
-	})
+	response, err := visionModel.Generate(ctx, []*schema.Message{schema.SystemMessage(visionSystemPrompt), {Role: schema.User, UserInputMultiContent: visionParts}})
 	if err != nil {
 		return nil, fmt.Errorf("调用视觉辅助模型失败: %w", err)
 	}
@@ -82,10 +79,7 @@ func BridgeImagesForTextModel(
 		parts := make([]schema.MessageInputPart, 0, len(message.UserInputMultiContent))
 		for _, part := range message.UserInputMultiContent {
 			if part.Type == schema.ChatMessagePartTypeImageURL {
-				parts = append(parts, schema.MessageInputPart{
-					Type: schema.ChatMessagePartTypeText,
-					Text: visionImagePlaceholder(part),
-				})
+				parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: visionImagePlaceholder(part)})
 				continue
 			}
 			parts = append(parts, part)
@@ -106,10 +100,7 @@ func buildVisionRequestParts(messages []*schema.Message, requestText string) ([]
 		requestText = "用户没有提供额外文字问题。请描述图片中对当前任务最重要、可以确认的信息。"
 	}
 
-	parts := []schema.MessageInputPart{{
-		Type: schema.ChatMessagePartTypeText,
-		Text: "当前用户请求：\n" + strings.TrimSpace(requestText) + "\n\n请观察下面的图片，并仅返回可确认的视觉事实。",
-	}}
+	parts := []schema.MessageInputPart{{Type: schema.ChatMessagePartTypeText, Text: "当前用户请求：\n" + strings.TrimSpace(requestText) + "\n\n请观察下面的图片，并仅返回可确认的视觉事实。"}}
 	imageCount := 0
 	for _, message := range messages {
 		if message == nil || message.Role != schema.User {
@@ -124,10 +115,7 @@ func buildVisionRequestParts(messages []*schema.Message, requestText string) ([]
 			if name := extraString(part.Extra, "name"); name != "" {
 				label += "（" + name + "）"
 			}
-			parts = append(parts,
-				schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: label + "："},
-				part,
-			)
+			parts = append(parts, schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: label + "："}, part)
 		}
 	}
 	return parts, imageCount
@@ -194,10 +182,7 @@ func appendTextToUserMessage(message *schema.Message, text string) {
 		return
 	}
 	if len(message.UserInputMultiContent) > 0 {
-		message.UserInputMultiContent = append(message.UserInputMultiContent, schema.MessageInputPart{
-			Type: schema.ChatMessagePartTypeText,
-			Text: text,
-		})
+		message.UserInputMultiContent = append(message.UserInputMultiContent, schema.MessageInputPart{Type: schema.ChatMessagePartTypeText, Text: text})
 		return
 	}
 	if strings.TrimSpace(message.Content) == "" {

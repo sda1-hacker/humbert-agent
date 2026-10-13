@@ -219,28 +219,14 @@ func embedTexts(
 			return nil, err
 		}
 
-		vectors, err := embedder.EmbedStrings(
-			ctx,
-			texts[start:end],
-			opts...,
-		)
+		vectors, err := embedder.EmbedStrings(ctx, texts[start:end], opts...)
 
 		if err != nil {
-			return nil, fmt.Errorf(
-				"embed documents [%d:%d]: %w",
-				start,
-				end,
-				err,
-			)
+			return nil, fmt.Errorf("embed documents [%d:%d]: %w", start, end, err)
 		}
 
 		if len(vectors) != end-start {
-			return nil, fmt.Errorf(
-				"%w: embedder returned %d vectors for %d texts",
-				ErrInvalidEmbedding,
-				len(vectors),
-				end-start,
-			)
+			return nil, fmt.Errorf("%w: embedder returned %d vectors for %d texts", ErrInvalidEmbedding, len(vectors), end-start)
 		}
 
 		result = append(result, vectors...)
@@ -258,12 +244,7 @@ func embedTexts(
 // 但我们在 Go 侧仍先转换成 float32 输入。
 func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 	if len(vector) != EmbeddingDimensions {
-		return pgvector.HalfVector{}, fmt.Errorf(
-			"%w: expected %d dimensions, got %d",
-			ErrInvalidEmbedding,
-			EmbeddingDimensions,
-			len(vector),
-		)
+		return pgvector.HalfVector{}, fmt.Errorf("%w: expected %d dimensions, got %d", ErrInvalidEmbedding, EmbeddingDimensions, len(vector))
 	}
 
 	values := make([]float32, len(vector))
@@ -271,11 +252,7 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 
 	for i, value := range vector {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
-			return pgvector.HalfVector{}, fmt.Errorf(
-				"%w: vector[%d] is not finite",
-				ErrInvalidEmbedding,
-				i,
-			)
+			return pgvector.HalfVector{}, fmt.Errorf("%w: vector[%d] is not finite", ErrInvalidEmbedding, i)
 		}
 
 		// IEEE-754 binary16 最大有限值约为 65504。
@@ -284,12 +261,7 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 		// 这主要用于防止异常模型输出在 half precision
 		// 转换时变成 Inf。
 		if math.Abs(value) > 65504 {
-			return pgvector.HalfVector{}, fmt.Errorf(
-				"%w: vector[%d]=%f exceeds half precision range",
-				ErrInvalidEmbedding,
-				i,
-				value,
-			)
+			return pgvector.HalfVector{}, fmt.Errorf("%w: vector[%d]=%f exceeds half precision range", ErrInvalidEmbedding, i, value)
 		}
 
 		values[i] = float32(value)

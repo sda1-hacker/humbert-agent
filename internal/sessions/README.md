@@ -61,6 +61,6 @@ sequenceDiagram
 
 原 `contextartifact` 的实现已并入本包。`Service.Archive` 实现 Tools 的 ResultArchiver 接口，`ReadContextArtifact` 实现资源工具的最小读取接口；同一个 Service 同时提供历史、附件和结果归档，不再构造独立 Store 或通过 SessionDirectoryResolver 绕回会话服务。
 
-每次归档创建独立 `artifact_<uuid>.json`，保留版本 1、SessionID、ToolName、全文、Unicode 字符数和 UTC 时间；路径仍为会话内 `context-artifacts/`。读取验证版本、ID、会话归属以及真实目录/文件，格式和已有资源引用保持兼容。文档写入后不再修改，独立 UUID 与 atomicfile 原子落盘足以隔离并发写入，因此移除跨会话全局写锁；没有增加缓存或第二份会话索引。
+归档以版本、SessionID、ToolName 和全文的 SHA-256 生成稳定 `artifact_<hash>.json`，相同结果重放或清理时复用引用，避免随机 resource_id 破坏模型的 KV cache 前缀，并减少重复落盘。保留版本 1、会话身份、全文、Unicode 字符数和 UTC 时间；路径仍为会话内 `context-artifacts/`。读取验证版本、ID、会话归属以及真实目录/文件，旧 UUID 引用继续可读。文档内容不可变，相同归档并发提交的内容一致，atomicfile 保证原子落盘；没有增加跨会话全局锁或第二份索引。
 
 JSONL 仍记录可见工具事务与引用，归档保存完整结果，两者不是同一份协议。归档随 Session 目录删除；已删除会话不能再创建归档。后端测试使用真实 SessionStore 验证归档读写、身份拒绝、删除与并发首次创建目录。

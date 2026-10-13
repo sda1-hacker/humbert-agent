@@ -74,10 +74,7 @@ func resolveStdioExecutable(command string) (string, error) {
 			return candidate, nil
 		}
 	}
-	return "", fmt.Errorf(
-		"找不到 stdio MCP 启动命令 %q；桌面应用的 PATH 可能与 Terminal 不同，请改用可执行文件绝对路径或确认该命令已安装",
-		command,
-	)
+	return "", fmt.Errorf("找不到 stdio MCP 启动命令 %q；桌面应用的 PATH 可能与 Terminal 不同，请改用可执行文件绝对路径或确认该命令已安装", command)
 }
 
 func validateKnownStdioArgs(args []string, workingDirectory string) error {
@@ -96,10 +93,7 @@ func validateKnownStdioArgs(args []string, workingDirectory string) error {
 	// Humbert 当前 officialmcp Client 没有向 filesystem server 注入 MCP Roots，
 	// 因此使用 reference filesystem server 时至少需要一个 CLI allowed path。
 	if packageIndex+1 >= len(args) {
-		return fmt.Errorf(
-			"Filesystem MCP 缺少允许目录；请在 %s 后至少再填写一个真实存在的目录，并保证参数每行一个",
-			filesystemMCPPackage,
-		)
+		return fmt.Errorf("Filesystem MCP 缺少允许目录；请在 %s 后至少再填写一个真实存在的目录，并保证参数每行一个", filesystemMCPPackage)
 	}
 
 	foundPath := false
@@ -384,10 +378,7 @@ func enrichStdioConnectError(server humbertmcp.Server, err error, sandboxed bool
 		command = strings.TrimSpace(server.Stdio.Command)
 	}
 	base := strings.ToLower(filepath.Base(command))
-	hints := []string{
-		"请先在系统终端使用相同 command/args 验证 Server 能否保持运行并完成 MCP initialize",
-		"stdio Server 的普通日志必须写 stderr，stdout 只能输出 MCP JSON-RPC",
-	}
+	hints := []string{"请先在系统终端使用相同 command/args 验证 Server 能否保持运行并完成 MCP initialize", "stdio Server 的普通日志必须写 stderr，stdout 只能输出 MCP JSON-RPC"}
 	if strings.Contains(strings.ToLower(err.Error()), "eof") {
 		hints = append(hints, "initialize: EOF 表示子进程在握手完成前已经退出，通常是启动参数、运行环境或 Sandbox 可见目录导致")
 	}
@@ -411,18 +402,7 @@ func enrichStdioConnectError(server humbertmcp.Server, err error, sandboxed bool
 	}
 	detail := strings.TrimSpace(childStderr)
 	if detail != "" {
-		return fmt.Errorf(
-			"连接 stdio MCP Server %q 失败: %w；子进程 stderr: %s；排查建议：%s",
-			server.Name,
-			err,
-			detail,
-			strings.Join(hints, "；"),
-		)
+		return fmt.Errorf("连接 stdio MCP Server %q 失败: %w；子进程 stderr: %s；排查建议：%s", server.Name, err, detail, strings.Join(hints, "；"))
 	}
-	return fmt.Errorf(
-		"连接 stdio MCP Server %q 失败: %w；排查建议：%s",
-		server.Name,
-		err,
-		strings.Join(hints, "；"),
-	)
+	return fmt.Errorf("连接 stdio MCP Server %q 失败: %w；排查建议：%s", server.Name, err, strings.Join(hints, "；"))
 }

@@ -440,13 +440,7 @@ func (e *CorruptionError) Error() string {
 		return ErrCorrupted.Error()
 	}
 
-	return fmt.Sprintf(
-		"%s: line=%d offset=%d reason=%s",
-		ErrCorrupted.Error(),
-		e.Line,
-		e.Offset,
-		e.Reason,
-	)
+	return fmt.Sprintf("%s: line=%d offset=%d reason=%s", ErrCorrupted.Error(), e.Line, e.Offset, e.Reason)
 }
 
 // Unwrap 允许调用方使用 errors.Is(err, transcript.ErrCorrupted)。

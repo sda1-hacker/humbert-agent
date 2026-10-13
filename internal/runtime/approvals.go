@@ -106,8 +106,7 @@ func (s *Service) registerInterruptedRun(active *activeRun, interrupted *Interru
 	info := interrupted.Info
 	// Agent-as-Tool 的审批会携带子 Agent ID，因此不能再强制等于父 Snapshot AgentID。
 	// Request/Run/Session 必须严格匹配；AgentID 非空且来自受信 Tool Guard 的冻结 Scope。
-	if info.RequestID != active.RequestID || info.RunID != active.RunID ||
-		info.SessionID != active.SessionID || strings.TrimSpace(info.AgentID) == "" {
+	if info.RequestID != active.RequestID || info.RunID != active.RunID || info.SessionID != active.SessionID || strings.TrimSpace(info.AgentID) == "" {
 		return errors.New("Approval Interrupt 身份与当前 Runtime Snapshot 不一致")
 	}
 
@@ -198,11 +197,7 @@ func (s *Service) awaitApproval(active *activeRun, request approval.Request, don
 		}
 		s.approvals.Cancel(request.ID)
 		s.approvals.Forget(request.ID)
-		s.finishRun(
-			active,
-			ExecutionResult{},
-			fmt.Errorf("Approval 超时前检查 Runtime Checkpoint 失败: %w", checkpointErr),
-		)
+		s.finishRun(active, ExecutionResult{}, fmt.Errorf("Approval 超时前检查 Runtime Checkpoint 失败: %w", checkpointErr))
 		return
 	}
 

@@ -143,10 +143,7 @@ func (s *PermissionService) State(sessionID string) (PermissionStateDTO, error) 
 		// Permission 设置本身是安全恢复入口。即使 MCP Store 损坏，也必须允许用户
 		// 查看并撤销既有规则，因此 MCP 展示名称解析失败时降级为占位名称。
 		mcpServerNames = map[string]string{}
-		s.deps.Logger.Warn(ctx, "读取 Permission Rule MCP Server 展示名称失败",
-			"operation", "permission.rule.mcp_names",
-			"error", mcpNamesErr,
-		)
+		s.deps.Logger.Warn(ctx, "读取 Permission Rule MCP Server 展示名称失败", "operation", "permission.rule.mcp_names", "error", mcpNamesErr)
 	}
 
 	sessionID = strings.TrimSpace(sessionID)

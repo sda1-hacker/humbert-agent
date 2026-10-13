@@ -79,12 +79,7 @@ func NewManager(
 		return nil, errors.New("Skills Root 不是目录")
 	}
 
-	return &Manager{
-		rootDir:        absolute,
-		config:         cfg,
-		logger:         logger,
-		sourceRegistry: sourceRegistry,
-	}, nil
+	return &Manager{rootDir: absolute, config: cfg, logger: logger, sourceRegistry: sourceRegistry}, nil
 }
 
 // RegisterRemoteSourceResolver 为当前 Manager 注册一个额外的远程 Skill 来源。
@@ -156,20 +151,8 @@ func (m *Manager) List(ctx context.Context) ([]Info, error) {
 		path := filepath.Join(m.rootDir, entry.Name())
 		pkg, inspectErr := inspectPackage(ctx, path, m.config, true)
 		if inspectErr != nil {
-			result = append(result, Info{
-				Name:          entry.Name(),
-				DirectoryName: entry.Name(),
-				RootDir:       path,
-				Valid:         false,
-				Error:         logging.SafeErrorText(inspectErr, 1024),
-			})
-			m.logger.Debug(
-				ctx,
-				"发现无效 Skill Package",
-				"operation", "skill.scan.invalid",
-				"skill_directory", entry.Name(),
-				"error", inspectErr,
-			)
+			result = append(result, Info{Name: entry.Name(), DirectoryName: entry.Name(), RootDir: path, Valid: false, Error: logging.SafeErrorText(inspectErr, 1024)})
+			m.logger.Debug(ctx, "发现无效 Skill Package", "operation", "skill.scan.invalid", "skill_directory", entry.Name(), "error", inspectErr)
 			continue
 		}
 		result = append(result, pkg.Info)

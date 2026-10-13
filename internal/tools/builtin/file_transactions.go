@@ -105,8 +105,7 @@ func (v fileVersion) check(ctx context.Context, root *os.Root, path string) erro
 	if v.info == nil && errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	if err != nil || v.info == nil || !os.SameFile(v.info, info) ||
-		v.info.Size() != info.Size() || v.info.Mode() != info.Mode() || !v.info.ModTime().Equal(info.ModTime()) {
+	if err != nil || v.info == nil || !os.SameFile(v.info, info) || v.info.Size() != info.Size() || v.info.Mode() != info.Mode() || !v.info.ModTime().Equal(info.ModTime()) {
 		return fmt.Errorf("%w: %s", errFileChanged, path)
 	}
 	if v.content != nil {

@@ -43,10 +43,7 @@ func projectActiveBranch(
 ) (projectionResult, error) {
 	branch := document.ActiveBranch
 	if len(branch) == 0 {
-		return projectionResult{
-			Messages:       []*schema.Message{},
-			RecentMessages: []*schema.Message{},
-		}, nil
+		return projectionResult{Messages: []*schema.Message{}, RecentMessages: []*schema.Message{}}, nil
 	}
 
 	var latestIndex int
@@ -90,11 +87,7 @@ func projectActiveBranch(
 			firstKeptIndex = findEntryIndex(branch, latest.FirstKeptEntryID)
 		}
 		if firstKeptIndex < 0 || firstKeptIndex >= latestIndex {
-			return projectionResult{}, fmt.Errorf(
-				"Compaction Entry %s 的 firstKeptEntryId %s 不在有效历史区域",
-				latest.ID,
-				latest.FirstKeptEntryID,
-			)
+			return projectionResult{}, fmt.Errorf("Compaction Entry %s 的 firstKeptEntryId %s 不在有效历史区域", latest.ID, latest.FirstKeptEntryID)
 		}
 		startIndex = firstKeptIndex
 		result.Window.StartEntryID = latest.FirstKeptEntryID
@@ -130,7 +123,7 @@ func projectActiveBranch(
 		}
 
 		effectivePolicy := reasoningPolicyForIndex(policy, index, latestUserIndex)
-		message := applyReasoningReplayPolicy(decoded.Message, effectivePolicy)
+		message := WithMessageTimestamp(applyReasoningReplayPolicy(decoded.Message, effectivePolicy), entry.Timestamp)
 		message.Extra = cloneExtra(message.Extra)
 		message.Extra[entryIDKey] = entry.ID
 		result.RecentMessages = append(result.RecentMessages, message)

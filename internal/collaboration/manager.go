@@ -15,7 +15,9 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 
+	"github.com/cloudwego/eino/schema"
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
+	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 )
 
@@ -96,8 +98,7 @@ func (m *Manager) RunAgent(ctx context.Context, input RunInput) (RunOutput, erro
 			ToolCallID: callID, ChildAgentID: input.ChildAgentID, Task: input.Task,
 			Status: StatusRunning, StartedAt: now, UpdatedAt: now,
 		}
-	} else if record.ParentAgentID != input.ParentScope.AgentID ||
-		record.ParentSessionID != input.ParentScope.SessionID ||
+	} else if record.ParentAgentID != input.ParentScope.AgentID || record.ParentSessionID != input.ParentScope.SessionID ||
 		record.ParentRequestID != input.ParentScope.RequestID ||
 		record.ParentRunID != input.ParentScope.RunID ||
 		record.ToolCallID != callID ||
@@ -135,7 +136,9 @@ func (m *Manager) RunAgent(ctx context.Context, input RunInput) (RunOutput, erro
 	if !ok {
 		return RunOutput{}, m.fail(ctx, record, errors.New("Eino AgentTool 不支持 InvokableRun"))
 	}
-	arguments, err := json.Marshal(map[string]string{"request": input.Task})
+	// 审批恢复复用轻量运行记录的 StartedAt，不能重新把墙钟时间写进子 Agent 前缀。
+	request := contextengine.WithMessageTimestamp(schema.UserMessage(input.Task), record.StartedAt.Format(time.RFC3339Nano))
+	arguments, err := json.Marshal(map[string]string{"request": request.Content})
 	if err != nil {
 		return RunOutput{}, m.fail(ctx, record, err)
 	}

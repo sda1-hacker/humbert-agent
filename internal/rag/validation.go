@@ -65,13 +65,7 @@ func ValidateIngestionBatch(batch IngestionBatch) error {
 		}
 
 		if strings.TrimSpace(record.Content) == "" || record.StartRune < 0 || record.EndRune <= record.StartRune || record.EndRune > sourceRunes {
-			return fmt.Errorf(
-				"%w: chunk %q has invalid rune range [%d,%d)",
-				ErrInvalidIngestionBatch,
-				record.ID,
-				record.StartRune,
-				record.EndRune,
-			)
+			return fmt.Errorf("%w: chunk %q has invalid rune range [%d,%d)", ErrInvalidIngestionBatch, record.ID, record.StartRune, record.EndRune)
 		}
 
 		if _, exists := ids[record.ID]; exists {
@@ -91,12 +85,7 @@ func ValidateIngestionBatch(batch IngestionBatch) error {
 
 	for _, parent := range batch.Parents {
 		if parent.ChunkType != ChunkTypeParentText {
-			return fmt.Errorf(
-				"%w: parent %q has chunk type %q",
-				ErrInvalidIngestionBatch,
-				parent.ID,
-				parent.ChunkType,
-			)
+			return fmt.Errorf("%w: parent %q has chunk type %q", ErrInvalidIngestionBatch, parent.ID, parent.ChunkType)
 		}
 
 		if err := validateRecord(parent); err != nil {
@@ -111,12 +100,7 @@ func ValidateIngestionBatch(batch IngestionBatch) error {
 
 	for _, child := range batch.Children {
 		if child.ChunkType != ChunkTypeText {
-			return fmt.Errorf(
-				"%w: child %q has chunk type %q",
-				ErrInvalidIngestionBatch,
-				child.ID,
-				child.ChunkType,
-			)
+			return fmt.Errorf("%w: child %q has chunk type %q", ErrInvalidIngestionBatch, child.ID, child.ChunkType)
 		}
 
 		if err := validateRecord(child); err != nil {
@@ -128,12 +112,7 @@ func ValidateIngestionBatch(batch IngestionBatch) error {
 		}
 
 		if _, exists := parentIDs[child.ParentChunkID]; !exists {
-			return fmt.Errorf(
-				"%w: child %q -> %q",
-				ErrUnknownParentChunk,
-				child.ID,
-				child.ParentChunkID,
-			)
+			return fmt.Errorf("%w: child %q -> %q", ErrUnknownParentChunk, child.ID, child.ParentChunkID)
 		}
 		parent := parentIDs[child.ParentChunkID]
 		if child.StartRune < parent.StartRune || child.EndRune > parent.EndRune {

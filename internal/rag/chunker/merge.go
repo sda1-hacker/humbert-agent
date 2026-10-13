@@ -28,17 +28,13 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 		// 合并阶段再次限制异常长单元，避免依赖上游完全正确。
 
-		if unitLen >
-			absoluteMaxChunkSize {
+		if unitLen > absoluteMaxChunkSize {
 
 			// 当前已经积累一些内容：
 			//
 			// 先输出。
 			if len(current) > 0 {
-				chunks = append(
-					chunks,
-					buildChunk(current, len(chunks)),
-				)
+				chunks = append(chunks, buildChunk(current, len(chunks)))
 				current = nil
 				curLen = 0
 			}
@@ -52,8 +48,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 			offset := 0
 
-			for offset <
-				len(runes) {
+			for offset < len(runes) {
 				end := offset + absoluteMaxChunkSize
 
 				if end > len(runes) {
@@ -71,15 +66,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 				chunkText := string(runes[offset:end])
 
-				chunks = append(
-					chunks,
-					Chunk{
-						Content: chunkText,
-						Seq:     len(chunks),
-						Start:   unit.start + offset,
-						End:     unit.start + end,
-					},
-				)
+				chunks = append(chunks, Chunk{Content: chunkText, Seq: len(chunks), Start: unit.start + offset, End: unit.start + end})
 				offset = end
 			}
 			continue
@@ -94,10 +81,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 		// 新表开始前输出当前块，避免混合两张表的表头。
 
 		if headerTracker.headerEndedThisUnit && len(current) > 0 {
-			chunks = append(
-				chunks,
-				buildChunk(current, len(chunks)),
-			)
+			chunks = append(chunks, buildChunk(current, len(chunks)))
 			current = nil
 			curLen = 0
 		}
@@ -116,16 +100,12 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 		// 预算为可能补充的表头预留空间。
 
-		if curLen+unitLen+headersLen > chunkSize &&
-			len(current) > 0 {
+		if curLen+unitLen+headersLen > chunkSize && len(current) > 0 {
 			// ---------------------------------------------------------
 			// 3.1 输出当前 Chunk。
 			// ---------------------------------------------------------
 
-			chunks = append(
-				chunks,
-				buildChunk(current, len(chunks)),
-			)
+			chunks = append(chunks, buildChunk(current, len(chunks)))
 
 			// ---------------------------------------------------------
 			// 3.2 从刚刚输出的 Chunk 尾部计算 Semantic Overlap。
@@ -156,8 +136,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 				overlapText := unitsText(current)
 
-				if !headerAlreadyPresent(headers, overlapText, unit.text) &&
-					!headerColumnMismatch(headers, unit.text) {
+				if !headerAlreadyPresent(headers, overlapText, unit.text) && !headerColumnMismatch(headers, unit.text) {
 
 					// 补充的表头不占新的原文范围，因此起止位置相同。
 
@@ -167,11 +146,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 						startPosition = current[0].start
 					}
 
-					headerUnit := splitUnit{
-						text:  headers,
-						start: startPosition,
-						end:   startPosition,
-					}
+					headerUnit := splitUnit{text: headers, start: startPosition, end: startPosition}
 
 					current = append([]splitUnit{headerUnit}, current...)
 
@@ -191,10 +166,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 		if curLen+unitLen > absoluteMaxChunkSize {
 
 			if len(current) > 0 {
-				chunks = append(
-					chunks,
-					buildChunk(current, len(chunks)),
-				)
+				chunks = append(chunks, buildChunk(current, len(chunks)))
 				current = nil
 				curLen = 0
 			}
@@ -214,9 +186,7 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 	// =============================================================
 
 	if len(current) > 0 {
-		chunks = append(chunks,
-			buildChunk(current, len(chunks)),
-		)
+		chunks = append(chunks, buildChunk(current, len(chunks)))
 	}
 
 	return chunks
@@ -230,12 +200,7 @@ func buildChunk(units []splitUnit, seq int) Chunk {
 		builder.WriteString(unit.text)
 	}
 
-	return Chunk{
-		Content: builder.String(),
-		Seq:     seq,
-		Start:   units[0].start,
-		End:     units[len(units)-1].end,
-	}
+	return Chunk{Content: builder.String(), Seq: seq, Start: units[0].start, End: units[len(units)-1].end}
 }
 
 // headerAlreadyPresent 判断正文或重叠部分是否已经包含表头，避免重复补充。
@@ -244,8 +209,7 @@ func headerAlreadyPresent(headers string, overlapText string, unitText string) b
 	// 最快路径：
 	//
 	// 完整 Header 已经存在。
-	if strings.Contains(overlapText, headers) ||
-		strings.Contains(unitText, headers) {
+	if strings.Contains(overlapText, headers) || strings.Contains(unitText, headers) {
 		return true
 	}
 
@@ -257,8 +221,7 @@ func headerAlreadyPresent(headers string, overlapText string, unitText string) b
 		return false
 	}
 
-	return strings.Contains(overlapText, columnRow) ||
-		strings.Contains(unitText, columnRow)
+	return strings.Contains(overlapText, columnRow) || strings.Contains(unitText, columnRow)
 }
 
 // headerColumnRow 从 Header 中找到真正的“列名行”。

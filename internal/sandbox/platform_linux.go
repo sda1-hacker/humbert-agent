@@ -18,10 +18,7 @@ const bubblewrapProbeTimeout = 3 * time.Second
 func probeNativeCapability() Capability {
 	path, err := exec.LookPath("bwrap")
 	if err != nil {
-		return Capability{
-			Platform: "linux", Backend: "bubblewrap", Available: false,
-			Reason: "未找到 bwrap；请安装 bubblewrap", ProcessTree: true,
-		}
+		return Capability{Platform: "linux", Backend: "bubblewrap", Available: false, Reason: "未找到 bwrap；请安装 bubblewrap", ProcessTree: true}
 	}
 
 	// 不能只用 LookPath 判断 Bubblewrap 可用：部分发行版/容器虽然安装了 bwrap，
@@ -35,10 +32,7 @@ func probeNativeCapability() Capability {
 		}
 	}
 
-	capability := Capability{
-		Platform: "linux", Backend: filepath.Base(path), Available: true,
-		Filesystem: true, ProcessTree: true, Network: true,
-	}
+	capability := Capability{Platform: "linux", Backend: filepath.Base(path), Available: true, Filesystem: true, ProcessTree: true, Network: true}
 	if err := probeBubblewrap(path, true); err != nil {
 		// 文件隔离仍然可用；只是 NetworkNone 不能被可靠兑现。Runner 会在用户请求
 		// NetworkNone 时 fail-closed，而不会静默退回宿主网络。
@@ -100,14 +94,7 @@ func prepareNativeCommand(policy EffectivePolicy, executable string, rawArgs []s
 	if err != nil {
 		return "", nil, nil, false, err
 	}
-	args := []string{
-		"--die-with-parent",
-		"--new-session",
-		"--unshare-pid",
-		"--unshare-ipc",
-		"--unshare-uts",
-		"--cap-drop", "ALL",
-	}
+	args := []string{"--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--cap-drop", "ALL"}
 	view := policy.NativeFilesystem()
 
 	if policy.Profile == ProfileFullAccess {

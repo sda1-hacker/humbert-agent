@@ -64,10 +64,7 @@ func NewWorkspaceQuery(
 	if workspaceManager == nil {
 		return nil, errors.New("WorkspaceView WorkspaceManager 不能为空")
 	}
-	return &WorkspaceQuery{
-		agents:     agentService,
-		workspaces: workspaceManager,
-	}, nil
+	return &WorkspaceQuery{agents: agentService, workspaces: workspaceManager}, nil
 }
 
 // Overview 返回当前 Agent Workspace 的总览。

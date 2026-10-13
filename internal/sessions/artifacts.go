@@ -2,14 +2,14 @@ package sessions
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/sda1-hacker/humbert-agent/internal/atomicfile"
 )
@@ -29,7 +29,8 @@ type contextArtifact struct {
 }
 
 // Archive 保存不可变的完整工具结果，实现 Tools 的 ResultArchiver 契约。
-// 每次创建独立 UUID 文档，不读取/修改旧结果；原子落盘已保证完整性，无需全局写锁。
+// 同一 Session、Tool 与原文复用稳定内容引用，避免历史 Reduction 生成随机 ID 破坏模型缓存。
+// 原子落盘已保证完整性，无需全局写锁；旧 UUID 引用继续可以读取。
 // 目录直接由 SessionService 解析，归档和附件随同一 Session 删除。
 func (s *Service) Archive(ctx context.Context, sessionID string, toolName string, content string) (string, error) {
 	if ctx == nil {
@@ -42,13 +43,30 @@ func (s *Service) Archive(ctx context.Context, sessionID string, toolName string
 	if sessionID == "" {
 		return "", errors.New("Session ID 不能为空")
 	}
-	id := "artifact_" + uuid.NewString()
+	toolName = strings.TrimSpace(toolName)
+	identity, err := json.Marshal(struct {
+		Version                      int
+		SessionID, ToolName, Content string
+	}{contextArtifactVersion, sessionID, toolName, content})
+	if err != nil {
+		return "", fmt.Errorf("编码 Context Artifact 身份失败: %w", err)
+	}
+	id := fmt.Sprintf("artifact_%x", sha256.Sum256(identity))
 	path, err := s.contextArtifactPath(ctx, sessionID, id)
 	if err != nil {
 		return "", err
 	}
+	var existing contextArtifact
+	if err := atomicfile.ReadJSON(ctx, path, &existing); err == nil {
+		if existing.Version != contextArtifactVersion || existing.ID != id || existing.SessionID != sessionID || existing.ToolName != toolName || existing.Content != content {
+			return "", errors.New("Context Artifact 内容与稳定身份不一致")
+		}
+		return id, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("读取已有 Context Artifact 失败: %w", err)
+	}
 	document := contextArtifact{
-		Version: contextArtifactVersion, ID: id, SessionID: sessionID, ToolName: strings.TrimSpace(toolName),
+		Version: contextArtifactVersion, ID: id, SessionID: sessionID, ToolName: toolName,
 		Content: content, Chars: len([]rune(content)), CreatedAt: time.Now().UTC(),
 	}
 	if err := atomicfile.WriteJSON(ctx, path, 0o600, document); err != nil {

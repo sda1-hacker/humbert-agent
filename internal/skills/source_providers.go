@@ -79,9 +79,7 @@ func (skillsShSourceResolver) Resolve(
 		return RemoteSkillSource{}, errors.New("skills.sh Pack 暂不支持；请安装单个 Skill 详情页")
 	}
 	if len(segments) != 3 {
-		return RemoteSkillSource{}, errors.New(
-			"skills.sh 地址必须是单个 GitHub Skill 详情页，例如 https://skills.sh/owner/repo/skill",
-		)
+		return RemoteSkillSource{}, errors.New("skills.sh 地址必须是单个 GitHub Skill 详情页，例如 https://skills.sh/owner/repo/skill")
 	}
 
 	owner, err := normalizeRepositoryPathSegment(segments[0], "GitHub", "owner")
@@ -98,21 +96,12 @@ func (skillsShSourceResolver) Resolve(
 	}
 
 	return RemoteSkillSource{
-		DownloadURL: &url.URL{
-			Scheme: "https",
-			Host:   "api.github.com",
-			Path:   "/repos/" + owner + "/" + repository + "/zipball",
-		},
+		DownloadURL: &url.URL{Scheme: "https", Host: "api.github.com", Path: "/repos/" + owner + "/" + repository + "/zipball"},
 		OriginalURL: parsed.String(),
 		SkillPath:   explicitSkillPath,
 		SkillName:   skillName,
 		Provider:    "skills.sh",
-		Metadata: map[string]string{
-			"repository_provider": "github",
-			"repository_owner":    owner,
-			"repository_name":     repository,
-			"skill_slug":          skillName,
-		},
+		Metadata:    map[string]string{"repository_provider": "github", "repository_owner": owner, "repository_name": repository, "skill_slug": skillName},
 	}, nil
 }
 
@@ -167,9 +156,7 @@ func (githubSourceResolver) Resolve(
 			pathFromURL = strings.Join(segments[4:], "/")
 		}
 	default:
-		return RemoteSkillSource{}, errors.New(
-			"GitHub Skill 地址只支持仓库根地址、/tree/<ref>/<path> 或明确 ZIP URL",
-		)
+		return RemoteSkillSource{}, errors.New("GitHub Skill 地址只支持仓库根地址、/tree/<ref>/<path> 或明确 ZIP URL")
 	}
 
 	skillPath := explicitSkillPath
@@ -180,32 +167,20 @@ func (githubSourceResolver) Resolve(
 		}
 	}
 
-	downloadURL := &url.URL{
-		Scheme: "https",
-		Host:   "api.github.com",
-		Path:   "/repos/" + owner + "/" + repository + "/zipball",
-	}
+	downloadURL := &url.URL{Scheme: "https", Host: "api.github.com", Path: "/repos/" + owner + "/" + repository + "/zipball"}
 	// Git 是 GitHub Repository 的主 transport。只有机器没有 Git 或 Git 获取失败时才会
 	// 使用这里的 Archive fallback。对于已经明确 ref 的 /tree/<ref>/... 地址，直接使用
 	// codeload，不再消耗 GitHub REST API quota；仓库根地址由于不知道默认分支，仍保留
 	// zipball fallback。
 	if ref != "" {
-		downloadURL = &url.URL{
-			Scheme: "https",
-			Host:   "codeload.github.com",
-			Path:   "/" + owner + "/" + repository + "/zip/" + ref,
-		}
+		downloadURL = &url.URL{Scheme: "https", Host: "codeload.github.com", Path: "/" + owner + "/" + repository + "/zip/" + ref}
 	}
 	return RemoteSkillSource{
 		DownloadURL: downloadURL,
 		OriginalURL: parsed.String(),
 		SkillPath:   skillPath,
 		Provider:    "github",
-		Metadata: map[string]string{
-			"repository_owner": owner,
-			"repository_name":  repository,
-			"ref":              ref,
-		},
+		Metadata:    map[string]string{"repository_owner": owner, "repository_name": repository, "ref": ref},
 	}, nil
 }
 
@@ -298,9 +273,7 @@ func (r gitLabSourceResolver) Resolve(
 			pathFromURL = strings.Join(operationSegments[2:], "/")
 		}
 	default:
-		return RemoteSkillSource{}, errors.New(
-			"GitLab Skill 地址只支持项目根地址、/-/tree/<ref>/<path> 或明确 ZIP URL",
-		)
+		return RemoteSkillSource{}, errors.New("GitLab Skill 地址只支持项目根地址、/-/tree/<ref>/<path> 或明确 ZIP URL")
 	}
 
 	skillPath := explicitSkillPath
@@ -315,12 +288,7 @@ func (r gitLabSourceResolver) Resolve(
 	projectPath := strings.Join(projectSegments, "/")
 	plainPath := "/api/v4/projects/" + projectPath + "/repository/archive.zip"
 	rawPath := "/api/v4/projects/" + url.PathEscape(projectPath) + "/repository/archive.zip"
-	downloadURL := &url.URL{
-		Scheme:  "https",
-		Host:    parsed.Host,
-		Path:    plainPath,
-		RawPath: rawPath,
-	}
+	downloadURL := &url.URL{Scheme: "https", Host: parsed.Host, Path: plainPath, RawPath: rawPath}
 	if ref != "" {
 		query := downloadURL.Query()
 		query.Set("sha", ref)
@@ -332,11 +300,7 @@ func (r gitLabSourceResolver) Resolve(
 		OriginalURL: parsed.String(),
 		SkillPath:   skillPath,
 		Provider:    "gitlab",
-		Metadata: map[string]string{
-			"repository_host": parsed.Hostname(),
-			"repository_path": projectPath,
-			"ref":             ref,
-		},
+		Metadata:    map[string]string{"repository_host": parsed.Hostname(), "repository_path": projectPath, "ref": ref},
 	}, nil
 }
 
@@ -392,9 +356,7 @@ func (giteeSourceResolver) Resolve(
 			pathFromURL = strings.Join(segments[4:], "/")
 		}
 	default:
-		return RemoteSkillSource{}, errors.New(
-			"Gitee Skill 地址只支持仓库根地址、/tree/<ref>/<path> 或明确 ZIP URL",
-		)
+		return RemoteSkillSource{}, errors.New("Gitee Skill 地址只支持仓库根地址、/tree/<ref>/<path> 或明确 ZIP URL")
 	}
 
 	skillPath := explicitSkillPath
@@ -405,11 +367,7 @@ func (giteeSourceResolver) Resolve(
 		}
 	}
 
-	downloadURL := &url.URL{
-		Scheme: "https",
-		Host:   "gitee.com",
-		Path:   "/api/v5/repos/" + owner + "/" + repository + "/zipball",
-	}
+	downloadURL := &url.URL{Scheme: "https", Host: "gitee.com", Path: "/api/v5/repos/" + owner + "/" + repository + "/zipball"}
 	if ref != "" {
 		query := downloadURL.Query()
 		query.Set("ref", ref)
@@ -420,11 +378,7 @@ func (giteeSourceResolver) Resolve(
 		OriginalURL: parsed.String(),
 		SkillPath:   skillPath,
 		Provider:    "gitee",
-		Metadata: map[string]string{
-			"repository_owner": owner,
-			"repository_name":  repository,
-			"ref":              ref,
-		},
+		Metadata:    map[string]string{"repository_owner": owner, "repository_name": repository, "ref": ref},
 	}, nil
 }
 
@@ -448,9 +402,7 @@ func (directArchiveSourceResolver) Resolve(
 		OriginalURL: parsed.String(),
 		SkillPath:   explicitSkillPath,
 		Provider:    "https_zip",
-		Metadata: map[string]string{
-			"source_host": parsed.Hostname(),
-		},
+		Metadata:    map[string]string{"source_host": parsed.Hostname()},
 	}, nil
 }
 

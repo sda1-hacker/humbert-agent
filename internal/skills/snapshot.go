@@ -93,10 +93,7 @@ func (m *Manager) ResolveRuntimeSnapshot(
 				copyValue := *value
 				result[key] = &copyValue
 			}
-			result["file"] = &schema.ParameterInfo{
-				Type: schema.String,
-				Desc: "可选。读取该 Skill 包内的相对文本资源，例如 references/api.md。首次加载 Skill 指令时不要传此字段。",
-			}
+			result["file"] = &schema.ParameterInfo{Type: schema.String, Desc: "可选。读取该 Skill 包内的相对文本资源，例如 references/api.md。首次加载 Skill 指令时不要传此字段。"}
 			return result, nil
 		},
 		BuildContent: snapshot.buildContent,
@@ -145,10 +142,7 @@ func (b *snapshotBackend) List(ctx context.Context) ([]skill.FrontMatter, error)
 		if !exists {
 			continue
 		}
-		result = append(result, skill.FrontMatter{
-			Name:        pkg.Info.Name,
-			Description: pkg.Info.Description,
-		})
+		result = append(result, skill.FrontMatter{Name: pkg.Info.Name, Description: pkg.Info.Description})
 	}
 	return result, nil
 }
@@ -166,10 +160,7 @@ func (b *snapshotBackend) Get(ctx context.Context, name string) (skill.Skill, er
 		return skill.Skill{}, fmt.Errorf("%w: %s", ErrSkillNotFound, name)
 	}
 	return skill.Skill{
-		FrontMatter: skill.FrontMatter{
-			Name:        pkg.Info.Name,
-			Description: pkg.Info.Description,
-		},
+		FrontMatter:   skill.FrontMatter{Name: pkg.Info.Name, Description: pkg.Info.Description},
 		Content:       pkg.Content,
 		BaseDirectory: pkg.Info.RootDir,
 	}, nil

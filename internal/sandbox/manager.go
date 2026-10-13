@@ -36,11 +36,7 @@ func NewManager(config Config, homeDir string) (*Manager, error) {
 	}
 	protected := defaultProtectedRules(filepath.Clean(absolute))
 	capability := probeNativeCapability()
-	manager := &Manager{
-		config:         config,
-		protectedRules: protected,
-		capability:     capability,
-	}
+	manager := &Manager{config: config, protectedRules: protected, capability: capability}
 	manager.runner = NewRunner(manager)
 	return manager, nil
 }
@@ -186,9 +182,7 @@ func protectedRulesFor(appHome, userHome string) []PathRule {
 	} {
 		rules = appendProtectedPathRuleCandidates(rules, candidate, RuleSourceProtected)
 	}
-	for _, candidate := range []string{
-		filepath.Join(appHome, "config.yaml"),
-	} {
+	for _, candidate := range []string{filepath.Join(appHome, "config.yaml")} {
 		rules = appendProtectedPathRuleCandidates(rules, candidate, RuleSourceProtectedFile)
 	}
 

@@ -102,21 +102,12 @@ func configurePlatformProcess(cmd *exec.Cmd, policy EffectivePolicy) (func(), er
 	// 这不是文件系统 namespace，因此 Capability.Filesystem 仍然保持 false；这里的目的
 	// 是降低 FullAccess/显式 unsafe 进程的权限上限，而不是伪装成 Workspace 隔离。
 	var restricted syscall.Token
-	r1, _, callErr := procCreateRestrictedToken.Call(
-		uintptr(current), uintptr(disableMaxPrivilege),
-		0, 0,
-		0, 0,
-		0, 0,
-		uintptr(unsafe.Pointer(&restricted)),
-	)
+	r1, _, callErr := procCreateRestrictedToken.Call(uintptr(current), uintptr(disableMaxPrivilege), 0, 0, 0, 0, 0, 0, uintptr(unsafe.Pointer(&restricted)))
 	if r1 == 0 {
 		return nil, fmt.Errorf("CreateRestrictedToken 失败: %w", callErr)
 	}
 
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Token:         restricted,
-		CreationFlags: createNewProcessGroup,
-	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Token: restricted, CreationFlags: createNewProcessGroup}
 	return func() { _ = restricted.Close() }, nil
 }
 
@@ -147,11 +138,7 @@ func attachPlatformProcess(cmd *exec.Cmd, policy EffectivePolicy) (func() error,
 		return nil, nil, fmt.Errorf("SetInformationJobObject(KILL_ON_JOB_CLOSE) 失败: %w", callErr)
 	}
 
-	process, _, callErr := procOpenProcess.Call(
-		uintptr(processSetQuota|processTerminate),
-		0,
-		uintptr(uint32(cmd.Process.Pid)),
-	)
+	process, _, callErr := procOpenProcess.Call(uintptr(processSetQuota|processTerminate), 0, uintptr(uint32(cmd.Process.Pid)))
 	if process == 0 {
 		closeJob()
 		return nil, nil, fmt.Errorf("OpenProcess 失败: %w", callErr)

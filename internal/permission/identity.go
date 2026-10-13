@@ -50,8 +50,7 @@ type CapabilityIdentity struct {
 }
 
 func (i CapabilityIdentity) Empty() bool {
-	return i.Version == 0 && i.Kind == "" && strings.TrimSpace(i.Tool) == "" &&
-		strings.TrimSpace(i.SandboxFingerprint) == "" && strings.TrimSpace(i.Command) == "" &&
+	return i.Version == 0 && i.Kind == "" && strings.TrimSpace(i.Tool) == "" && strings.TrimSpace(i.SandboxFingerprint) == "" && strings.TrimSpace(i.Command) == "" &&
 		strings.TrimSpace(i.Executable) == "" && strings.TrimSpace(i.SkillName) == "" &&
 		strings.TrimSpace(i.InvocationFingerprint) == "" &&
 		strings.TrimSpace(i.SkillIdentity) == "" && strings.TrimSpace(i.Script) == "" &&

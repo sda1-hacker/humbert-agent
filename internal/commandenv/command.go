@@ -17,8 +17,7 @@ func Path() string {
 	dirs := filepath.SplitList(os.Getenv("PATH"))
 	if runtime.GOOS != "windows" {
 		home, _ := os.UserHomeDir()
-		dirs = append(dirs, "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/go/bin",
-			"/usr/bin", "/bin", "/usr/sbin", "/sbin")
+		dirs = append(dirs, "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin", "/usr/local/go/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin")
 		if home != "" {
 			for _, name := range []string{".local/bin", ".cargo/bin", "go/bin", ".volta/bin", ".asdf/shims", ".local/share/mise/shims", ".pyenv/shims"} {
 				dirs = append(dirs, filepath.Join(home, name))

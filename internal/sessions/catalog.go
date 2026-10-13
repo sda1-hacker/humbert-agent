@@ -75,8 +75,7 @@ func (c *sessionCatalog) get(ctx context.Context, id string) (Session, error) {
 	var value Session
 	var archived int
 	var created, updated int64
-	err := c.db.QueryRowContext(ctx, `SELECT id, agent_id, title, archived, cwd, created_at, updated_at FROM sessions WHERE id=?`, id).
-		Scan(&value.ID, &value.AgentID, &value.Title, &archived, &value.CWD, &created, &updated)
+	err := c.db.QueryRowContext(ctx, `SELECT id, agent_id, title, archived, cwd, created_at, updated_at FROM sessions WHERE id=?`, id).Scan(&value.ID, &value.AgentID, &value.Title, &archived, &value.CWD, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrSessionNotFound
 	}

@@ -136,10 +136,7 @@ func BuildPresentation(request Request) (Presentation, error) {
 		return Presentation{
 			Title:       "请求写入文件",
 			Description: "该操作会修改当前 Agent Workspace 中的文件。长期授权只在当前安全沙盒身份不变时复用。",
-			Fields: []PresentationField{
-				{Label: "文件", Value: safeField(input.Path)},
-				{Label: "模式", Value: "创建或覆盖文件"},
-			},
+			Fields:      []PresentationField{{Label: "文件", Value: safeField(input.Path)}, {Label: "模式", Value: "创建或覆盖文件"}},
 		}, nil
 
 	case "edit_file":
@@ -263,19 +260,14 @@ func BuildPresentation(request Request) (Presentation, error) {
 		return Presentation{
 			Title:       "请求执行 Skill 脚本",
 			Description: "该操作会执行当前 Turn 已冻结的 Skill 脚本。长期授权会绑定 Skill 内容身份、规范化脚本路径与当前安全沙盒。",
-			Fields: []PresentationField{
-				{Label: "Skill", Value: safeField(input.Skill)},
-				{Label: "脚本", Value: safeField(script)},
-			},
+			Fields:      []PresentationField{{Label: "Skill", Value: safeField(input.Skill)}, {Label: "脚本", Value: safeField(script)}},
 		}, nil
 
 	default:
 		return Presentation{
 			Title:       "请求执行工具",
 			Description: "该工具需要用户确认。为避免外部工具参数泄露敏感信息，当前版本默认隐藏原始参数。长期授权只在当前安全能力身份不变时复用。",
-			Fields: []PresentationField{
-				{Label: "工具", Value: safeField(request.ToolName)},
-			},
+			Fields:      []PresentationField{{Label: "工具", Value: safeField(request.ToolName)}},
 		}, nil
 	}
 }
@@ -309,10 +301,7 @@ func buildSafeArgumentPreview(arguments string) []PresentationField {
 	}
 	fields := make([]PresentationField, 0, len(keys)+1)
 	for _, key := range keys {
-		fields = append(fields, PresentationField{
-			Label: safeField(key),
-			Value: safePreviewValue(object[key], key, 0),
-		})
+		fields = append(fields, PresentationField{Label: safeField(key), Value: safePreviewValue(object[key], key, 0)})
 	}
 	if len(object) > len(keys) {
 		fields = append(fields, PresentationField{Label: "其他参数", Value: fmt.Sprintf("另有 %d 项已折叠", len(object)-len(keys))})
@@ -387,8 +376,7 @@ func sensitiveArgumentKey(key string) bool {
 		"credential", "credentials", "privatekey", "secretkey":
 		return true
 	default:
-		return strings.HasSuffix(normalized, "token") || strings.HasSuffix(normalized, "password") ||
-			strings.HasSuffix(normalized, "secret") || strings.HasSuffix(normalized, "apikey")
+		return strings.HasSuffix(normalized, "token") || strings.HasSuffix(normalized, "password") || strings.HasSuffix(normalized, "secret") || strings.HasSuffix(normalized, "apikey")
 	}
 }
 

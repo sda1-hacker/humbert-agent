@@ -19,14 +19,7 @@ type Builder struct {
 
 // DefaultBuilder 返回当前推荐的检索文本构造规则。
 func DefaultBuilder() Builder {
-	return Builder{
-		TitleKeys: []string{
-			"title",
-			"_title",
-			"file_name",
-		},
-		ContextHeaderKey: "rag_context_header",
-	}
+	return Builder{TitleKeys: []string{"title", "_title", "file_name"}, ContextHeaderKey: "rag_context_header"}
 }
 
 // Build 拼接标题、标题路径与正文；返回值用于模型输入，不用于原文坐标映射。

@@ -8,9 +8,7 @@ import (
 	"sync/atomic"
 )
 
-var ErrClosed = errors.New(
-	"事件总线已关闭",
-)
+var ErrClosed = errors.New("事件总线已关闭")
 
 // Handler 表示一个同步事件处理函数。
 //
@@ -46,11 +44,7 @@ type Bus struct {
 
 // New 创建新的 EventBus。
 func New() *Bus {
-	return &Bus{
-		handlers: make(
-			map[string]map[uint64]Handler,
-		),
-	}
+	return &Bus{handlers: make(map[string]map[uint64]Handler)}
 }
 
 // Subscribe 订阅指定 Topic。
@@ -61,15 +55,11 @@ func (b *Bus) Subscribe(
 	handler Handler,
 ) (func(), error) {
 	if topic == "" {
-		return nil, errors.New(
-			"事件主题不能为空",
-		)
+		return nil, errors.New("事件主题不能为空")
 	}
 
 	if handler == nil {
-		return nil, errors.New(
-			"事件 Handler 不能为空",
-		)
+		return nil, errors.New("事件 Handler 不能为空")
 	}
 
 	b.mu.Lock()
@@ -102,16 +92,10 @@ func (b *Bus) Subscribe(
 				return
 			}
 
-			delete(
-				handlers,
-				id,
-			)
+			delete(handlers, id)
 
 			if len(handlers) == 0 {
-				delete(
-					b.handlers,
-					topic,
-				)
+				delete(b.handlers, topic)
 			}
 		})
 	}
@@ -131,10 +115,7 @@ func (b *Bus) Publish(
 	payload any,
 ) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf(
-			"发布事件被取消: %w",
-			err,
-		)
+		return fmt.Errorf("发布事件被取消: %w", err)
 	}
 
 	b.mu.RLock()
@@ -148,17 +129,10 @@ func (b *Bus) Publish(
 	topicHandlers :=
 		b.handlers[topic]
 
-	handlers := make(
-		[]Handler,
-		0,
-		len(topicHandlers),
-	)
+	handlers := make([]Handler, 0, len(topicHandlers))
 
 	for _, handler := range topicHandlers {
-		handlers = append(
-			handlers,
-			handler,
-		)
+		handlers = append(handlers, handler)
 	}
 
 	b.mu.RUnlock()
@@ -168,31 +142,15 @@ func (b *Bus) Publish(
 	for index, handler := range handlers {
 
 		if err := ctx.Err(); err != nil {
-			return fmt.Errorf(
-				"发布事件被取消: %w",
-				err,
-			)
+			return fmt.Errorf("发布事件被取消: %w", err)
 		}
 
-		if err := callHandler(
-			ctx,
-			handler,
-			payload,
-		); err != nil {
-			publishErrors = append(
-				publishErrors,
-				fmt.Errorf(
-					"事件 Handler #%d 执行失败: %w",
-					index,
-					err,
-				),
-			)
+		if err := callHandler(ctx, handler, payload); err != nil {
+			publishErrors = append(publishErrors, fmt.Errorf("事件 Handler #%d 执行失败: %w", index, err))
 		}
 	}
 
-	return errors.Join(
-		publishErrors...,
-	)
+	return errors.Join(publishErrors...)
 }
 
 func callHandler(
@@ -202,17 +160,11 @@ func callHandler(
 ) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf(
-				"事件 Handler panic: %v",
-				recovered,
-			)
+			err = fmt.Errorf("事件 Handler panic: %v", recovered)
 		}
 	}()
 
-	handler(
-		ctx,
-		payload,
-	)
+	handler(ctx, payload)
 
 	return nil
 }
@@ -229,7 +181,5 @@ func (b *Bus) Close() {
 	b.closed = true
 
 	b.handlers =
-		make(
-			map[string]map[uint64]Handler,
-		)
+		make(map[string]map[uint64]Handler)
 }

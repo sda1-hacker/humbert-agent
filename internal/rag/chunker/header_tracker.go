@@ -29,21 +29,15 @@ const markdownTableHookPriority = 15
 var defaultHeaderHooks = []headerTrackerHook{
 	{
 		// 表头必须同时包含列名行和 Markdown 分隔行。
-		startPattern: regexp.MustCompile(
-			`(?si)^\s*` +
-				`(?:\|[^|\n]*)+[\r\n]+` +
-				`\s*(?:\|\s*:?-{3,}:?\s*)+\|?[\r\n]+$`,
-		),
+		startPattern: regexp.MustCompile(`(?si)^\s*` + `(?:\|[^|\n]*)+[\r\n]+` + `\s*(?:\|\s*:?-{3,}:?\s*)+\|?[\r\n]+$`),
 
 		// 结束规则：
 		// 1. 空白
 		// 或：
 		// 2. 当前内容不是以 "|" 或 whitespace 开头
 		// 意味着已经离开 Markdown Table。
-		endPattern: regexp.MustCompile(
-			`(?si)^\s*$|^\s*[^|\s].*$`,
-		),
-		priority: markdownTableHookPriority,
+		endPattern: regexp.MustCompile(`(?si)^\s*$|^\s*[^|\s].*$`),
+		priority:   markdownTableHookPriority,
 	},
 }
 
@@ -53,9 +47,7 @@ var defaultHeaderHooks = []headerTrackerHook{
 // | 大阪 | 10000 |
 // 注意它只负责判断“是不是 Table Row”，
 // 不判断是不是 Header Separator。
-var tableRowPattern = regexp.MustCompile(
-	`(?m)^\s*(?:\|[^|\n]*)+\|\s*$`,
-)
+var tableRowPattern = regexp.MustCompile(`(?m)^\s*(?:\|[^|\n]*)+\|\s*$`)
 
 // headerTracker 跟踪当前有效的表头，在跨块时补充列名。
 type headerTracker struct {
@@ -158,8 +150,7 @@ func (ht *headerTracker) update(split string) {
 	// 空表头使用下一条真实表格行补齐列名，并保留原分隔行。
 	for priority := range ht.pendingExtend {
 		if _, active :=
-			ht.activeHeaders[priority]; active &&
-			tableRowPattern.MatchString(split) {
+			ht.activeHeaders[priority]; active && tableRowPattern.MatchString(split) {
 			separator := extractSeparatorLine(ht.activeHeaders[priority])
 			ht.activeHeaders[priority] = split + separator
 		}
@@ -227,20 +218,13 @@ func (ht *headerTracker) getHeaders() string {
 
 	for priority, text := range ht.activeHeaders {
 
-		entries = append(
-			entries,
-			entry{
-				priority: priority,
-				text:     text,
-			},
-		)
+		entries = append(entries, entry{priority: priority, text: text})
 	}
 
 	sort.Slice(
 		entries,
 		func(i, j int) bool {
-			return entries[i].priority >
-				entries[j].priority
+			return entries[i].priority > entries[j].priority
 		},
 	)
 

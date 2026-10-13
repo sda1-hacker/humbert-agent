@@ -272,10 +272,7 @@ func (f *RunSkillScriptFactory) run(
 	}
 	message := ""
 	if processResult.TimedOut {
-		message = fmt.Sprintf(
-			"Skill 脚本执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时。",
-			timeout,
-		)
+		message = fmt.Sprintf("Skill 脚本执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时。", timeout)
 	} else if terminationReason == "signaled" {
 		message = "Skill 脚本进程被操作系统信号异常终止。"
 		if detail := strings.TrimSpace(processResult.TerminationDetail); detail != "" {

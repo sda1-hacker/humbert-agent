@@ -16,17 +16,11 @@ import (
 )
 
 var (
-	bearerPattern = regexp.MustCompile(
-		`(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+`,
-	)
+	bearerPattern = regexp.MustCompile(`(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+`)
 
-	secretKVPattern = regexp.MustCompile(
-		`(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|cookie)\s*[:=]\s*)[^\s,;]+`,
-	)
+	secretKVPattern = regexp.MustCompile(`(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|cookie)\s*[:=]\s*)[^\s,;]+`)
 
-	apiKeyPattern = regexp.MustCompile(
-		`\bsk-[A-Za-z0-9_-]{12,}\b`,
-	)
+	apiKeyPattern = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{12,}\b`)
 )
 
 // Logger 是 Humbert 业务代码统一使用的结构化日志组件。
@@ -52,17 +46,9 @@ type Logger struct {
 func NewBootstrap() *Logger {
 	level := slog.LevelInfo
 
-	handler := slog.NewTextHandler(
-		os.Stderr,
-		&slog.HandlerOptions{
-			Level: level,
-		},
-	)
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 
-	return &Logger{
-		logger: slog.New(handler),
-		level:  level,
-	}
+	return &Logger{logger: slog.New(handler), level: level}
 }
 
 // New 创建正式应用 Logger。
@@ -79,90 +65,48 @@ func New(
 	}
 
 	if strings.TrimSpace(logFile) == "" {
-		return nil, fmt.Errorf(
-			"日志文件路径不能为空",
-		)
+		return nil, fmt.Errorf("日志文件路径不能为空")
 	}
 
-	if err := os.MkdirAll(
-		filepath.Dir(logFile),
-		0700,
-	); err != nil {
-		return nil, fmt.Errorf(
-			"创建日志目录失败: %w",
-			err,
-		)
+	if err := os.MkdirAll(filepath.Dir(logFile), 0700); err != nil {
+		return nil, fmt.Errorf("创建日志目录失败: %w", err)
 	}
 
-	file, err := os.OpenFile(
-		logFile,
-		os.O_CREATE|
-			os.O_APPEND|
-			os.O_WRONLY,
-		0600,
-	)
+	file, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"打开日志文件失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("打开日志文件失败: %w", err)
 	}
 
 	if err := file.Chmod(0600); err != nil {
 		_ = file.Close()
 
-		return nil, fmt.Errorf(
-			"设置日志文件权限失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("设置日志文件权限失败: %w", err)
 	}
 
-	writer := io.MultiWriter(
-		os.Stderr,
-		file,
-	)
+	writer := io.MultiWriter(os.Stderr, file)
 
-	options := &slog.HandlerOptions{
-		Level: level,
-	}
+	options := &slog.HandlerOptions{Level: level}
 
 	var handler slog.Handler
 
-	switch strings.ToLower(
-		strings.TrimSpace(cfg.Format),
-	) {
+	switch strings.ToLower(strings.TrimSpace(cfg.Format)) {
 	case "json":
-		handler = slog.NewJSONHandler(
-			writer,
-			options,
-		)
+		handler = slog.NewJSONHandler(writer, options)
 
 	case "text":
-		handler = slog.NewTextHandler(
-			writer,
-			options,
-		)
+		handler = slog.NewTextHandler(writer, options)
 
 	default:
 		_ = file.Close()
 
-		return nil, fmt.Errorf(
-			"不支持的日志格式: %q",
-			cfg.Format,
-		)
+		return nil, fmt.Errorf("不支持的日志格式: %q", cfg.Format)
 	}
 
-	return &Logger{
-		logger: slog.New(handler),
-		file:   file,
-		level:  level,
-	}, nil
+	return &Logger{logger: slog.New(handler), file: file, level: level}, nil
 }
 
 func parseLevel(value string) (slog.Level, error) {
-	switch strings.ToLower(
-		strings.TrimSpace(value),
-	) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "debug":
 		return slog.LevelDebug, nil
 
@@ -176,10 +120,7 @@ func parseLevel(value string) (slog.Level, error) {
 		return slog.LevelError, nil
 
 	default:
-		return 0, fmt.Errorf(
-			"不支持的日志级别: %q",
-			value,
-		)
+		return 0, fmt.Errorf("不支持的日志级别: %q", value)
 	}
 }
 
@@ -202,11 +143,7 @@ func (l *Logger) Debug(
 	message string,
 	attrs ...any,
 ) {
-	l.logger.DebugContext(
-		ctx,
-		message,
-		sanitizeAttrs(attrs)...,
-	)
+	l.logger.DebugContext(ctx, message, sanitizeAttrs(attrs)...)
 }
 
 // Info 输出 Info 级别结构化日志。
@@ -215,11 +152,7 @@ func (l *Logger) Info(
 	message string,
 	attrs ...any,
 ) {
-	l.logger.InfoContext(
-		ctx,
-		message,
-		sanitizeAttrs(attrs)...,
-	)
+	l.logger.InfoContext(ctx, message, sanitizeAttrs(attrs)...)
 }
 
 // Warn 输出 Warn 级别结构化日志。
@@ -228,11 +161,7 @@ func (l *Logger) Warn(
 	message string,
 	attrs ...any,
 ) {
-	l.logger.WarnContext(
-		ctx,
-		message,
-		sanitizeAttrs(attrs)...,
-	)
+	l.logger.WarnContext(ctx, message, sanitizeAttrs(attrs)...)
 }
 
 // Error 输出 Error 级别结构化日志。
@@ -241,19 +170,12 @@ func (l *Logger) Error(
 	message string,
 	attrs ...any,
 ) {
-	l.logger.ErrorContext(
-		ctx,
-		message,
-		sanitizeAttrs(attrs)...,
-	)
+	l.logger.ErrorContext(ctx, message, sanitizeAttrs(attrs)...)
 }
 
 // Duration 生成统一 duration_ms 字段。
 func Duration(start time.Time) slog.Attr {
-	return slog.Int64(
-		"duration_ms",
-		time.Since(start).Milliseconds(),
-	)
+	return slog.Int64("duration_ms", time.Since(start).Milliseconds())
 }
 
 // SafeErrorText 将 error 转换成允许进入日志和前端错误消息的文本。
@@ -265,10 +187,7 @@ func SafeErrorText(
 		return ""
 	}
 
-	return RedactText(
-		err.Error(),
-		maxLength,
-	)
+	return RedactText(err.Error(), maxLength)
 }
 
 // RedactText 对常见 Token、API Key、Password、Cookie 等信息进行脱敏。
@@ -279,26 +198,15 @@ func RedactText(
 	value string,
 	maxLength int,
 ) string {
-	value = bearerPattern.ReplaceAllString(
-		value,
-		"${1}[REDACTED]",
-	)
+	value = bearerPattern.ReplaceAllString(value, "${1}[REDACTED]")
 
-	value = secretKVPattern.ReplaceAllString(
-		value,
-		"${1}[REDACTED]",
-	)
+	value = secretKVPattern.ReplaceAllString(value, "${1}[REDACTED]")
 
-	value = apiKeyPattern.ReplaceAllString(
-		value,
-		"[REDACTED]",
-	)
+	value = apiKeyPattern.ReplaceAllString(value, "[REDACTED]")
 
-	if maxLength > 0 &&
-		len(value) > maxLength {
+	if maxLength > 0 && len(value) > maxLength {
 		value =
-			value[:maxLength] +
-				"...[TRUNCATED]"
+			value[:maxLength] + "...[TRUNCATED]"
 	}
 
 	return value
@@ -311,26 +219,17 @@ func RedactText(
 func sanitizeAttrs(
 	attrs []any,
 ) []any {
-	result := make(
-		[]any,
-		len(attrs),
-	)
+	result := make([]any, len(attrs))
 
 	for index, value := range attrs {
 		switch typed := value.(type) {
 		case string:
 			result[index] =
-				RedactText(
-					typed,
-					4096,
-				)
+				RedactText(typed, 4096)
 
 		case error:
 			result[index] =
-				SafeErrorText(
-					typed,
-					4096,
-				)
+				SafeErrorText(typed, 4096)
 
 		case slog.Attr:
 			result[index] =
@@ -348,13 +247,7 @@ func sanitizeAttr(
 	attr slog.Attr,
 ) slog.Attr {
 	if attr.Value.Kind() == slog.KindString {
-		return slog.String(
-			attr.Key,
-			RedactText(
-				attr.Value.String(),
-				4096,
-			),
-		)
+		return slog.String(attr.Key, RedactText(attr.Value.String(), 4096))
 	}
 
 	return attr
@@ -372,18 +265,11 @@ func (l *Logger) Close() error {
 		}
 
 		if err := l.file.Sync(); err != nil {
-			closeErr = fmt.Errorf(
-				"同步日志文件失败: %w",
-				err,
-			)
+			closeErr = fmt.Errorf("同步日志文件失败: %w", err)
 		}
 
-		if err := l.file.Close(); err != nil &&
-			closeErr == nil {
-			closeErr = fmt.Errorf(
-				"关闭日志文件失败: %w",
-				err,
-			)
+		if err := l.file.Close(); err != nil && closeErr == nil {
+			closeErr = fmt.Errorf("关闭日志文件失败: %w", err)
 		}
 	})
 

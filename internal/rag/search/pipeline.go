@@ -51,10 +51,7 @@ type Config struct {
 
 // DefaultConfig 默认返回五条结果，并在提供父块读取器时扩展上下文。
 func DefaultConfig() Config {
-	return Config{
-		FinalTopK:     5,
-		ExpandParents: true,
-	}
+	return Config{FinalTopK: 5, ExpandParents: true}
 }
 
 // Response 不只返回最终结果，
@@ -106,12 +103,7 @@ func NewPipeline(
 		cfg.FinalTopK = DefaultConfig().FinalTopK
 	}
 
-	return &Pipeline{
-		retrieve:     retrieve,
-		reranker:     reranker,
-		parentLoader: parentLoader,
-		config:       cfg,
-	}, nil
+	return &Pipeline{retrieve: retrieve, reranker: reranker, parentLoader: parentLoader, config: cfg}, nil
 }
 
 // Validate 拒绝负数结果数量和超时。
@@ -171,12 +163,7 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 	}
 
 	if len(candidates) == 0 {
-		return Response{
-			Retrieval: diagnostics,
-			Rerank: rerank.Diagnostics{
-				Outcome: rerank.OutcomeNoCandidates,
-			},
-		}, nil
+		return Response{Retrieval: diagnostics, Rerank: rerank.Diagnostics{Outcome: rerank.OutcomeNoCandidates}}, nil
 	}
 
 	var response Response
@@ -193,11 +180,7 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 	} else {
 		response.Results = slices.Clone(candidates)
 
-		response.Rerank = rerank.Diagnostics{
-			Applied:        false,
-			Outcome:        rerank.OutcomeNoModel,
-			CandidateCount: len(candidates),
-		}
+		response.Rerank = rerank.Diagnostics{Applied: false, Outcome: rerank.OutcomeNoModel, CandidateCount: len(candidates)}
 	}
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
@@ -217,9 +200,7 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 		response.Results[i].ContextSourceHeader = response.Results[i].ContextHeader
 	}
 
-	if !p.config.ExpandParents ||
-		p.parentLoader == nil ||
-		len(response.Results) == 0 {
+	if !p.config.ExpandParents || p.parentLoader == nil || len(response.Results) == 0 {
 
 		return p.finalize(response), nil
 	}
@@ -280,8 +261,7 @@ func (p *Pipeline) finalize(response Response) Response {
 		response.Results = collapseSameContext(response.Results)
 	}
 
-	if p.config.FinalTopK > 0 &&
-		len(response.Results) > p.config.FinalTopK {
+	if p.config.FinalTopK > 0 && len(response.Results) > p.config.FinalTopK {
 
 		response.Results = response.Results[:p.config.FinalTopK]
 	}

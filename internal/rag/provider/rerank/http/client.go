@@ -52,9 +52,7 @@ type Config struct {
 
 // DefaultConfig 返回精排服务的默认请求超时。
 func DefaultConfig() Config {
-	return Config{
-		Timeout: defaultTimeout,
-	}
+	return Config{Timeout: defaultTimeout}
 }
 
 // Validate 检查服务地址、模型与请求超时。
@@ -113,9 +111,7 @@ func NewClient(cfg Config) (*Client, error) {
 			timeout = defaultTimeout
 		}
 
-		client = &http.Client{
-			Timeout: timeout,
-		}
+		client = &http.Client{Timeout: timeout}
 	}
 
 	headers := make(map[string]string, len(cfg.Headers))
@@ -176,12 +172,7 @@ func (c *Client) Score(ctx context.Context, query string, passages []string) ([]
 		return nil, fmt.Errorf("marshal rerank request: %w", err)
 	}
 
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		c.endpoint,
-		bytes.NewReader(body),
-	)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create rerank request: %w", err)
 	}
@@ -194,8 +185,7 @@ func (c *Client) Score(ctx context.Context, query string, passages []string) ([]
 	}
 
 	for key, value := range c.headers {
-		if strings.EqualFold(key, "Authorization") ||
-			strings.EqualFold(key, "Content-Type") {
+		if strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "Content-Type") {
 			continue
 		}
 
@@ -217,8 +207,7 @@ func (c *Client) Score(ctx context.Context, query string, passages []string) ([]
 		return nil, ErrResponseBodyTooLarge
 	}
 
-	if response.StatusCode < http.StatusOK ||
-		response.StatusCode >= http.StatusMultipleChoices {
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 
 		message := strings.TrimSpace(string(rawBody))
 
@@ -226,11 +215,7 @@ func (c *Client) Score(ctx context.Context, query string, passages []string) ([]
 			message = message[:1000]
 		}
 
-		return nil, fmt.Errorf(
-			"rerank http status %d: %s",
-			response.StatusCode,
-			message,
-		)
+		return nil, fmt.Errorf("rerank http status %d: %s", response.StatusCode, message)
 	}
 
 	var decoded rerankResponse
@@ -242,12 +227,7 @@ func (c *Client) Score(ctx context.Context, query string, passages []string) ([]
 	// 因为 request.top_n == len(passages)，
 	// 所以必须拿回每一个 Passage 的分数。
 	if len(decoded.Results) != len(passages) {
-		return nil, fmt.Errorf(
-			"%w: expected %d results, got %d",
-			ErrInvalidResponse,
-			len(passages),
-			len(decoded.Results),
-		)
+		return nil, fmt.Errorf("%w: expected %d results, got %d", ErrInvalidResponse, len(passages), len(decoded.Results))
 	}
 
 	scores := make([]float64, len(passages))
@@ -255,32 +235,16 @@ func (c *Client) Score(ctx context.Context, query string, passages []string) ([]
 
 	for _, item := range decoded.Results {
 		if item.Index < 0 || item.Index >= len(passages) {
-			return nil, fmt.Errorf(
-				"%w: result index %d out of range",
-				ErrInvalidResponse,
-				item.Index,
-			)
+			return nil, fmt.Errorf("%w: result index %d out of range", ErrInvalidResponse, item.Index)
 		}
 
 		if seen[item.Index] {
-			return nil, fmt.Errorf(
-				"%w: duplicate result index %d",
-				ErrInvalidResponse,
-				item.Index,
-			)
+			return nil, fmt.Errorf("%w: duplicate result index %d", ErrInvalidResponse, item.Index)
 		}
 
-		if math.IsNaN(item.RelevanceScore) ||
-			math.IsInf(item.RelevanceScore, 0) ||
-			item.RelevanceScore < 0 ||
-			item.RelevanceScore > 1 {
+		if math.IsNaN(item.RelevanceScore) || math.IsInf(item.RelevanceScore, 0) || item.RelevanceScore < 0 || item.RelevanceScore > 1 {
 
-			return nil, fmt.Errorf(
-				"%w: result[%d]=%v",
-				ErrInvalidScore,
-				item.Index,
-				item.RelevanceScore,
-			)
+			return nil, fmt.Errorf("%w: result[%d]=%v", ErrInvalidScore, item.Index, item.RelevanceScore)
 		}
 
 		scores[item.Index] = item.RelevanceScore
@@ -289,11 +253,7 @@ func (c *Client) Score(ctx context.Context, query string, passages []string) ([]
 
 	for index, found := range seen {
 		if !found {
-			return nil, fmt.Errorf(
-				"%w: missing result index %d",
-				ErrInvalidResponse,
-				index,
-			)
+			return nil, fmt.Errorf("%w: missing result index %d", ErrInvalidResponse, index)
 		}
 	}
 

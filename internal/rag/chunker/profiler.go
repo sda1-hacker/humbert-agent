@@ -99,20 +99,13 @@ func (p *DocProfile) DominantHeadingLevel() int {
 
 // HeuristicMarkerTotal 返回启发式结构信号的总数。
 func (p *DocProfile) HeuristicMarkerTotal() int {
-	return p.NumberedSectionCount +
-		p.GermanChapterCount +
-		p.EnglishChapterCount +
-		p.ChineseChapterCount +
-		p.AllCapsShortLineCount +
-		p.VisualSepCount +
+	return p.NumberedSectionCount + p.GermanChapterCount + p.EnglishChapterCount + p.ChineseChapterCount + p.AllCapsShortLineCount + p.VisualSepCount +
 		p.FormFeedCount
 }
 
 // ProfileDocument 扫描文档结构，统计标题、章节、表格、代码及分页信号。
 func ProfileDocument(text string) *DocProfile {
-	profile := &DocProfile{
-		MdHeadingCounts: make(map[int]int),
-	}
+	profile := &DocProfile{MdHeadingCounts: make(map[int]int)}
 
 	if text == "" {
 		return profile
@@ -275,10 +268,6 @@ func detectProfileLanguages(profile *DocProfile, text string) {
 
 	// 混合语言启用全部已支持的章节识别规则。
 	if lang == LangMixed {
-		profile.DetectedLangs = []string{
-			LangEnglish,
-			LangGerman,
-			LangChinese,
-		}
+		profile.DetectedLangs = []string{LangEnglish, LangGerman, LangChinese}
 	}
 }

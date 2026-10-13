@@ -48,11 +48,7 @@ func (p EffectivePolicy) Fingerprint() (string, error) {
 
 	rules := make([]fingerprintPathRule, 0, len(p.PathRules))
 	for _, rule := range p.PathRules {
-		rules = append(rules, fingerprintPathRule{
-			Root:   normalizeFingerprintPath(rule.Root),
-			Access: rule.Access,
-			Source: rule.Source,
-		})
+		rules = append(rules, fingerprintPathRule{Root: normalizeFingerprintPath(rule.Root), Access: rule.Access, Source: rule.Source})
 	}
 	sort.SliceStable(rules, func(i, j int) bool {
 		if rules[i].Root != rules[j].Root {

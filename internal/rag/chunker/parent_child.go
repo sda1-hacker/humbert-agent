@@ -75,8 +75,7 @@ func splitParentChild(
 			prefix = strings.TrimSuffix(parent.Content, body)
 		}
 		for i := range subs {
-			if prefix != "" && !headerAlreadyPresent(prefix, subs[i].Content, "") &&
-				!headerColumnMismatch(prefix, subs[i].Content) {
+			if prefix != "" && !headerAlreadyPresent(prefix, subs[i].Content, "") && !headerColumnMismatch(prefix, subs[i].Content) {
 				subs[i].Content = prefix + subs[i].Content
 			}
 		}
@@ -99,10 +98,7 @@ func splitParentChild(
 
 			// 合并父块外层标题和子块局部标题，去掉连接处重复行。
 
-			sub.ContextHeader = mergeBreadcrumbs(
-				parent.ContextHeader,
-				sub.ContextHeader,
-			)
+			sub.ContextHeader = mergeBreadcrumbs(parent.ContextHeader, sub.ContextHeader)
 
 			// 补充父块表头与标题路径后，再检查完整子块的近似预算。
 			for _, part := range enforceTokenTarget(text, []Chunk{sub}, childCfg) {
@@ -113,10 +109,7 @@ func splitParentChild(
 		}
 	}
 
-	return ParentChildResult{
-		Parents:  newParents,
-		Children: children,
-	}, diag
+	return ParentChildResult{Parents: newParents, Children: children}, diag
 }
 
 // mergeBreadcrumbs 合并父子标题路径，并去除连接处重复的标题行。
@@ -132,10 +125,7 @@ func mergeBreadcrumbs(parent, child string) string {
 	parentLines := strings.Split(parent, "\n")
 	childLines := strings.Split(child, "\n")
 
-	if len(parentLines) > 0 &&
-		len(childLines) > 0 &&
-		strings.TrimSpace(parentLines[len(parentLines)-1]) ==
-			strings.TrimSpace(childLines[0]) {
+	if len(parentLines) > 0 && len(childLines) > 0 && strings.TrimSpace(parentLines[len(parentLines)-1]) == strings.TrimSpace(childLines[0]) {
 
 		childLines = childLines[1:]
 	}

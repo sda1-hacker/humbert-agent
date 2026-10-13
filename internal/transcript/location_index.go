@@ -597,9 +597,7 @@ func messageEntryPageFromIndex(
 	if start > 0 && len(entries) > 0 {
 		nextBeforeID = entries[0].ID
 	}
-	return MessageEntryPage{
-		Entries: entries, StartIndex: start, HasMore: start > 0, NextBeforeID: nextBeforeID,
-	}, nil
+	return MessageEntryPage{Entries: entries, StartIndex: start, HasMore: start > 0, NextBeforeID: nextBeforeID}, nil
 }
 
 // contextWindowIndex 推导可重建的压缩窗口，JSONL 节点仍是唯一事实来源。

@@ -49,20 +49,10 @@ func GuardInvokableTool(
 		return nil, fmt.Errorf("%w: Tool %q Info 不能为空", ErrInvalidTool, descriptor.Name)
 	}
 	if info.Name != descriptor.Name {
-		return nil, fmt.Errorf(
-			"%w: Descriptor Name=%q 与 Eino Tool Name=%q 不一致",
-			ErrInvalidTool,
-			descriptor.Name,
-			info.Name,
-		)
+		return nil, fmt.Errorf("%w: Descriptor Name=%q 与 Eino Tool Name=%q 不一致", ErrInvalidTool, descriptor.Name, info.Name)
 	}
 
-	return &guardedInvokableTool{
-		tool:       instance,
-		descriptor: descriptor,
-		scope:      scope,
-		authorizer: authorizer,
-	}, nil
+	return &guardedInvokableTool{tool: instance, descriptor: descriptor, scope: scope, authorizer: authorizer}, nil
 }
 
 // guardedInvokableTool 是所有 Capability 的统一 Permission Boundary。
@@ -221,10 +211,7 @@ func (t *guardedInvokableTool) resumeInvocation(
 		return "", fmt.Errorf("恢复 Tool %q Capability Identity 失败: %w", t.descriptor.Name, err)
 	}
 	if !info.Identity.EqualExact(currentIdentity) {
-		return "", fmt.Errorf(
-			"Tool %q 安全身份在审批后发生变化，已拒绝执行；请重新发起调用并再次确认",
-			t.descriptor.Name,
-		)
+		return "", fmt.Errorf("Tool %q 安全身份在审批后发生变化，已拒绝执行；请重新发起调用并再次确认", t.descriptor.Name)
 	}
 
 	return t.invokeRealTool(ctx, state.Arguments, options...)

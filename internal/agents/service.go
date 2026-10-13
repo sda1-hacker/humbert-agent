@@ -388,8 +388,7 @@ func (s *Service) resumeDeletion(ctx context.Context, state DeletionState) error
 		return err
 	}
 	if s.logger != nil {
-		s.logger.Info(ctx, "Agent 已删除", "operation", "agent.delete", "agent_id", state.AgentID,
-			"workspace_mode", string(mode))
+		s.logger.Info(ctx, "Agent 已删除", "operation", "agent.delete", "agent_id", state.AgentID, "workspace_mode", string(mode))
 	}
 	return nil
 }

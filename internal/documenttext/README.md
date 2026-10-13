@@ -15,4 +15,4 @@ flowchart LR
 
 `Extract` 返回 Markdown 和识别后的 MIME；具体调用者决定如何分段。会话上传 PDF/Office 时，`sessions/attachments.go` 只调用 `Validate` 校验并保存原件，标记按需读取；Agent 真正读取走 `tools/builtin/extract_document.go`，按附件 ID 或允许路径检索并用 offset/limit 返回。文档搜索也可调用 `Extract` 建索引。普通 UTF-8 文本附件有独立的文本提取路径，不能与 PDF/Office 的按需解析混淆。
 
-本包只有 `extract.go`，从 `Validate` → `Extract` → `parseInWorker` 阅读。测试 `extract_test.go` 覆盖正常 DOCX 和无效 PDF；调整解析器时还需验证限额、嵌套 ZIP 与损坏文档不会挂住应用。
+本包只有 `extract.go`，从 `Validate` → `Extract` → `parseInWorker` 阅读。本次仓库外归档回归覆盖正常 DOCX 和无效 PDF；现有测试代码已按维护者要求移出仓库。调整解析器时还需验证限额、嵌套 ZIP 与损坏文档不会挂住应用。

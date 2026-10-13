@@ -125,11 +125,7 @@ type Config struct {
 
 // DefaultConfig 返回推荐的 RAG Loader 默认配置。
 func DefaultConfig() Config {
-	return Config{
-		ExcludeHeadersAndFooters: true,
-		NormalizeLineEndings:     true,
-		IDGenerator:              DefaultIDGenerator,
-	}
+	return Config{ExcludeHeadersAndFooters: true, NormalizeLineEndings: true, IDGenerator: DefaultIDGenerator}
 }
 
 // Loader 实现 Eino 文档加载接口，将本地文件解析为完整 Markdown。
@@ -194,13 +190,7 @@ func (l *Loader) Load(
 		id = DefaultIDGenerator(src)
 	}
 
-	return []*schema.Document{
-		{
-			ID:       id,
-			Content:  markdown,
-			MetaData: metadata,
-		},
-	}, nil
+	return []*schema.Document{{ID: id, Content: markdown, MetaData: metadata}}, nil
 }
 
 // validateSource 验证 Eino Source 是否是当前 Loader 可以处理的本地文件。
@@ -260,8 +250,7 @@ func SupportedExtension(ext string) bool {
 func isRemoteURI(uri string) bool {
 	lower := strings.ToLower(strings.TrimSpace(uri))
 
-	return strings.HasPrefix(lower, "http://") ||
-		strings.HasPrefix(lower, "https://")
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 // buildMetadata 保存文件来源、标题、格式、大小与解析诊断。

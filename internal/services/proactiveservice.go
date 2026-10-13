@@ -130,11 +130,7 @@ func (s *ProactiveService) UpdateSettings(value ProactiveSettingsDTO) (Proactive
 			return ProactiveSettingsDTO{}, fmt.Errorf("事件 %s 配置的处理 Agent 不存在或不可用: %w", kind, err)
 		}
 	}
-	updated, err := s.deps.Proactive.UpdateSettings(ctx, settings)
-	if err != nil {
-		return ProactiveSettingsDTO{}, fmt.Errorf("保存主动助手设置失败: %w", err)
-	}
-	return proactiveSettingsDTO(updated), nil
+	return dtoResult("保存主动助手设置失败: %w", proactiveSettingsDTO)(s.deps.Proactive.UpdateSettings(ctx, settings))
 }
 
 func (s *ProactiveService) Status() (ProactiveStatusDTO, error) {

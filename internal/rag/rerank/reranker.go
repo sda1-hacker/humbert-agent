@@ -143,11 +143,7 @@ func NewEngine(scorer Scorer, cfg Config) *Engine {
 	err := cfg.Validate()
 	cfg = normalizeConfig(cfg)
 
-	return &Engine{
-		scorer:    scorer,
-		config:    cfg,
-		configErr: err,
-	}
+	return &Engine{scorer: scorer, config: cfg, configErr: err}
 }
 
 // RerankCandidates 保留通过阈值的候选池，供父块分组后统一截断；此路径不执行 MMR 多样性选择。
@@ -167,11 +163,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	}
 	query = strings.TrimSpace(query)
 
-	diag := Diagnostics{
-		CandidateCount:     len(candidates),
-		Threshold:          e.config.Threshold,
-		EffectiveThreshold: e.config.Threshold,
-	}
+	diag := Diagnostics{CandidateCount: len(candidates), Threshold: e.config.Threshold, EffectiveThreshold: e.config.Threshold}
 
 	// 精排不可用时保留召回顺序，统一设置降级诊断。
 	fallback := func(outcome Outcome, message string) Result {
@@ -220,8 +212,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	}
 
 	if err != nil {
-		if errors.Is(err, context.Canceled) ||
-			errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 
 			return Result{}, err
 		}
@@ -257,10 +248,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	// 首次阈值没有结果时，仅降低一次阈值，并保持配置的最低值。
 
 	if len(selected) == 0 && e.config.Threshold > e.config.DegradeFloor {
-		degraded := math.Max(
-			e.config.Threshold*e.config.DegradeFactor,
-			e.config.DegradeFloor,
-		)
+		degraded := math.Max(e.config.Threshold*e.config.DegradeFactor, e.config.DegradeFloor)
 
 		selected = indicesAboveThreshold(modelScores, degraded)
 		diag.EffectiveThreshold = degraded
@@ -275,8 +263,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	if len(selected) == 0 {
 		bestIndex := indexOfMax(modelScores)
 
-		if bestIndex >= 0 &&
-			modelScores[bestIndex] >= e.config.FallbackMinScore {
+		if bestIndex >= 0 && modelScores[bestIndex] >= e.config.FallbackMinScore {
 
 			selected = []int{bestIndex}
 			outcome = OutcomeFallbackTop1
@@ -285,9 +272,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 			diag.Outcome = OutcomeAllBelowThreshold
 			diag.ResultCount = 0
 
-			return Result{
-				Diagnostics: diag,
-			}, nil
+			return Result{Diagnostics: diag}, nil
 		}
 	}
 
@@ -306,11 +291,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 		item.SourceWeight = sourceWeight
 		item.Reranked = true
 
-		item.Score = clamp01(
-			e.config.ModelWeight*modelScore +
-				e.config.BaseWeight*baseScore +
-				e.config.SourceWeight*sourceWeight,
-		)
+		item.Score = clamp01(e.config.ModelWeight*modelScore + e.config.BaseWeight*baseScore + e.config.SourceWeight*sourceWeight)
 
 		scored = append(scored, item)
 		passageByChunkID[item.ChunkID] = passages[index]
@@ -324,22 +305,13 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 		return scored[i].ChunkID < scored[j].ChunkID
 	})
 
-	final := applyMMR(
-		scored,
-		passageByChunkID,
-		e.config.TopK,
-		e.config.MMRLambda,
-	)
+	final := applyMMR(scored, passageByChunkID, e.config.TopK, e.config.MMRLambda)
 
 	diag.Applied = true
 	diag.Outcome = outcome
 	diag.ResultCount = len(final)
 
-	return Result{
-		Scored:      scored,
-		Results:     final,
-		Diagnostics: diag,
-	}, nil
+	return Result{Scored: scored, Results: final, Diagnostics: diag}, nil
 }
 
 // DefaultPassageBuilder 复用统一文本构造规则，将标题、标题路径与子块正文交给精排模型。
@@ -392,23 +364,16 @@ func applyMMR(
 			candidateTokens := getTokens(candidate)
 
 			for _, chosen := range selected {
-				redundancy := jaccard(
-					candidateTokens,
-					getTokens(chosen),
-				)
+				redundancy := jaccard(candidateTokens, getTokens(chosen))
 
 				if redundancy > maxRedundancy {
 					maxRedundancy = redundancy
 				}
 			}
 
-			mmrScore := lambda*candidate.Score -
-				(1-lambda)*maxRedundancy
+			mmrScore := lambda*candidate.Score - (1-lambda)*maxRedundancy
 
-			if bestIndex == -1 ||
-				mmrScore > bestMMR ||
-				(mmrScore == bestMMR &&
-					candidate.ChunkID < remaining[bestIndex].ChunkID) {
+			if bestIndex == -1 || mmrScore > bestMMR || (mmrScore == bestMMR && candidate.ChunkID < remaining[bestIndex].ChunkID) {
 
 				bestIndex = i
 				bestMMR = mmrScore
@@ -417,10 +382,7 @@ func applyMMR(
 
 		selected = append(selected, remaining[bestIndex])
 
-		remaining = append(
-			remaining[:bestIndex],
-			remaining[bestIndex+1:]...,
-		)
+		remaining = append(remaining[:bestIndex], remaining[bestIndex+1:]...)
 	}
 
 	return selected
@@ -462,10 +424,7 @@ func tokenSet(text string) map[string]struct{} {
 
 // isCJK 判断字符是否属于当前支持的中日韩文字范围。
 func isCJK(r rune) bool {
-	return unicode.Is(unicode.Han, r) ||
-		unicode.Is(unicode.Hiragana, r) ||
-		unicode.Is(unicode.Katakana, r) ||
-		unicode.Is(unicode.Hangul, r)
+	return unicode.Is(unicode.Han, r) || unicode.Is(unicode.Hiragana, r) || unicode.Is(unicode.Katakana, r) || unicode.Is(unicode.Hangul, r)
 }
 
 // jaccard 计算两个 token 集合的交并比，空集合返回零。
@@ -596,9 +555,7 @@ func normalizeConfig(cfg Config) Config {
 	// 三个 Weight 允许调用方显式把其中某一个设成0。
 	//
 	// 只有三个都没有设置时，才恢复默认权重。
-	if cfg.ModelWeight == 0 &&
-		cfg.BaseWeight == 0 &&
-		cfg.SourceWeight == 0 {
+	if cfg.ModelWeight == 0 && cfg.BaseWeight == 0 && cfg.SourceWeight == 0 {
 
 		cfg.ModelWeight = defaults.ModelWeight
 		cfg.BaseWeight = defaults.BaseWeight

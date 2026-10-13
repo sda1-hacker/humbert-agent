@@ -376,13 +376,7 @@ func loadLocked(ctx context.Context, path string, sessionID string) (Document, e
 		return Document{}, err
 	}
 
-	return Document{
-		Header:        header,
-		Entries:       entries,
-		ActiveBranch:  activeBranch,
-		LeafID:        leafID,
-		ContextWindow: contextWindowIndex(activeBranch),
-	}, nil
+	return Document{Header: header, Entries: entries, ActiveBranch: activeBranch, LeafID: leafID, ContextWindow: contextWindowIndex(activeBranch)}, nil
 }
 
 func buildActiveBranch(entryByID map[string]Entry, leafID string) ([]Entry, error) {

@@ -96,20 +96,11 @@ func (m *Manager) resolveRuntimeProjection(
 				inputSchema = cloneJSONMap(cached.InputSchema)
 			}
 			descriptor := humberttools.Descriptor{
-				Name: exposedName,
-				Risk: ToolRisk(server, rawName),
-				MCPOrigin: &humberttools.MCPOrigin{
-					ServerID:          server.ID,
-					ServerName:        server.Name,
-					ServerFingerprint: ServerFingerprint(server),
-					RawToolName:       rawName,
-				},
+				Name:      exposedName,
+				Risk:      ToolRisk(server, rawName),
+				MCPOrigin: &humberttools.MCPOrigin{ServerID: server.ID, ServerName: server.Name, ServerFingerprint: ServerFingerprint(server), RawToolName: rawName},
 			}
-			result.Tools = append(result.Tools, projectedMCPTool{
-				name:        exposedName,
-				description: description,
-				inputSchema: inputSchema,
-			})
+			result.Tools = append(result.Tools, projectedMCPTool{name: exposedName, description: description, inputSchema: inputSchema})
 			result.Descriptors = append(result.Descriptors, descriptor)
 			result.ToolNames = append(result.ToolNames, exposedName)
 		}

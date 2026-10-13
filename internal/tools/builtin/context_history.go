@@ -137,12 +137,7 @@ func (f *SessionHistoryFactory) search(ctx context.Context, scope humberttools.S
 		if text == "" || !strings.Contains(strings.ToLower(text), query) {
 			return true
 		}
-		matches = append(matches, SessionHistoryMatch{
-			EntryID:   entry.ID,
-			Role:      role,
-			Timestamp: entry.Timestamp,
-			Snippet:   historySnippet(text, 600),
-		})
+		matches = append(matches, SessionHistoryMatch{EntryID: entry.ID, Role: role, Timestamp: entry.Timestamp, Snippet: historySnippet(text, 600)})
 		return len(matches) < limit
 	}
 	if indexed, ok := f.repository.(indexedHistoryRepository); ok {

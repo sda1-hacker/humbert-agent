@@ -202,11 +202,7 @@ func (s *TaskService) Create(request SaveTaskRequest) (TaskDTO, error) {
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.deps.Tasks.Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
-	if err != nil {
-		return TaskDTO{}, fmt.Errorf("创建任务失败: %w", err)
-	}
-	return taskDTO(value), nil
+	return dtoResult("创建任务失败: %w", taskDTO)(s.deps.Tasks.Create(ctx, tasks.CreateInput{AgentID: request.AgentID, Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)}))
 }
 
 func (s *TaskService) Update(id string, request SaveTaskRequest) (TaskDTO, error) {
@@ -216,22 +212,14 @@ func (s *TaskService) Update(id string, request SaveTaskRequest) (TaskDTO, error
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	value, err := s.deps.Tasks.Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)})
-	if err != nil {
-		return TaskDTO{}, fmt.Errorf("更新任务失败: %w", err)
-	}
-	return taskDTO(value), nil
+	return dtoResult("更新任务失败: %w", taskDTO)(s.deps.Tasks.Update(ctx, id, tasks.UpdateInput{Name: request.Name, Prompt: request.Prompt, Execution: tasks.ExecutionType(request.Execution), ConversationMode: tasks.ConversationMode(request.ConversationMode), Status: tasks.TaskStatus(request.Status), Schedule: schedule, Limits: limitsFromDTO(request.Limits)}))
 }
 
 // SetStatus 立即暂停或恢复任务计划，不会覆盖其它尚未保存的编辑字段。
 func (s *TaskService) SetStatus(id string, request TaskStatusRequest) (TaskDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.deps.Tasks.SetStatus(ctx, id, tasks.TaskStatus(request.Status))
-	if err != nil {
-		return TaskDTO{}, fmt.Errorf("切换任务状态失败: %w", err)
-	}
-	return taskDTO(value), nil
+	return dtoResult("切换任务状态失败: %w", taskDTO)(s.deps.Tasks.SetStatus(ctx, id, tasks.TaskStatus(request.Status)))
 }
 
 func (s *TaskService) Archive(id string) error {
@@ -292,21 +280,13 @@ func (s *TaskService) clearSessionRules(sessionIDs []string) {
 func (s *TaskService) RunNow(id string) (TaskRunDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	value, err := s.deps.Tasks.RunNow(ctx, id)
-	if err != nil {
-		return TaskRunDTO{}, fmt.Errorf("启动任务失败: %w", err)
-	}
-	return taskRunDTO(value), nil
+	return dtoResult("启动任务失败: %w", taskRunDTO)(s.deps.Tasks.RunNow(ctx, id))
 }
 
 func (s *TaskService) CancelRun(id string) (TaskRunDTO, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	value, err := s.deps.Tasks.CancelRun(ctx, id)
-	if err != nil {
-		return TaskRunDTO{}, fmt.Errorf("取消任务运行失败: %w", err)
-	}
-	return taskRunDTO(value), nil
+	return dtoResult("取消任务运行失败: %w", taskRunDTO)(s.deps.Tasks.CancelRun(ctx, id))
 }
 
 func scheduleFromDTO(value TaskScheduleDTO) (tasks.Schedule, error) {

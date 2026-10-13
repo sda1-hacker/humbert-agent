@@ -67,72 +67,42 @@ func NewManager(
 	logger *logging.Logger,
 ) (*Manager, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"初始化 Workspace Manager 被取消: %w",
-			err,
-		)
+		return nil, fmt.Errorf("初始化 Workspace Manager 被取消: %w", err)
 	}
 
 	if logger == nil {
-		return nil, errors.New(
-			"Workspace Manager Logger 不能为空",
-		)
+		return nil, errors.New("Workspace Manager Logger 不能为空")
 	}
 
 	managedRoot =
-		strings.TrimSpace(
-			managedRoot,
-		)
+		strings.TrimSpace(managedRoot)
 
 	if managedRoot == "" {
-		return nil, errors.New(
-			"Managed Workspace Root 不能为空",
-		)
+		return nil, errors.New("Managed Workspace Root 不能为空")
 	}
 
 	absoluteRoot, err :=
-		filepath.Abs(
-			filepath.Clean(
-				managedRoot,
-			),
-		)
+		filepath.Abs(filepath.Clean(managedRoot))
 
 	if err != nil {
-		return nil, fmt.Errorf(
-			"解析 Managed Workspace Root 失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("解析 Managed Workspace Root 失败: %w", err)
 	}
 
 	if err :=
-		os.MkdirAll(
-			absoluteRoot,
-			managedDirectoryMode,
-		); err != nil {
+		os.MkdirAll(absoluteRoot, managedDirectoryMode); err != nil {
 
-		return nil, fmt.Errorf(
-			"创建 Managed Workspace Root 失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("创建 Managed Workspace Root 失败: %w", err)
 	}
 
 	info, err :=
-		os.Stat(
-			absoluteRoot,
-		)
+		os.Stat(absoluteRoot)
 
 	if err != nil {
-		return nil, fmt.Errorf(
-			"检查 Managed Workspace Root 失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("检查 Managed Workspace Root 失败: %w", err)
 	}
 
 	if !info.IsDir() {
-		return nil, fmt.Errorf(
-			"%w: Managed Workspace Root 不是目录",
-			ErrUnsafeWorkspace,
-		)
+		return nil, fmt.Errorf("%w: Managed Workspace Root 不是目录", ErrUnsafeWorkspace)
 	}
 
 	// managedRoot 属于应用可信配置。
@@ -140,32 +110,16 @@ func NewManager(
 	// 如果用户自己把 ~/.humbert-agent 放在 symlink 中，
 	// 这里解析成最终物理路径即可。
 	resolvedRoot, err :=
-		filepath.EvalSymlinks(
-			absoluteRoot,
-		)
+		filepath.EvalSymlinks(absoluteRoot)
 
 	if err != nil {
-		return nil, fmt.Errorf(
-			"解析 Managed Workspace Root 真实路径失败: %w",
-			err,
-		)
+		return nil, fmt.Errorf("解析 Managed Workspace Root 真实路径失败: %w", err)
 	}
 
 	manager :=
-		&Manager{
-			logger: logger,
+		&Manager{logger: logger, managedRoot: resolvedRoot}
 
-			managedRoot: resolvedRoot,
-		}
-
-	logger.Info(
-		ctx,
-		"Workspace Manager 已初始化",
-		"operation",
-		"workspace.initialize",
-		"managed_root",
-		resolvedRoot,
-	)
+	logger.Info(ctx, "Workspace Manager 已初始化", "operation", "workspace.initialize", "managed_root", resolvedRoot)
 
 	return manager, nil
 }
@@ -185,18 +139,13 @@ func (m *Manager) ManagedPath(
 	agentID string,
 ) (string, error) {
 	normalizedAgentID, err :=
-		normalizeAgentID(
-			agentID,
-		)
+		normalizeAgentID(agentID)
 
 	if err != nil {
 		return "", err
 	}
 
-	return filepath.Join(
-		m.managedRoot,
-		normalizedAgentID,
-	), nil
+	return filepath.Join(m.managedRoot, normalizedAgentID), nil
 }
 
 // Validate 校验 Workspace 配置。
@@ -220,10 +169,7 @@ func (m *Manager) Validate(
 	configuredPath string,
 ) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf(
-			"校验 Workspace 被取消: %w",
-			err,
-		)
+		return fmt.Errorf("校验 Workspace 被取消: %w", err)
 	}
 
 	if err := m.ensureOpen(); err != nil {
@@ -231,9 +177,7 @@ func (m *Manager) Validate(
 	}
 
 	if _, err :=
-		normalizeAgentID(
-			agentID,
-		); err != nil {
+		normalizeAgentID(agentID); err != nil {
 
 		return err
 	}
@@ -251,19 +195,12 @@ func (m *Manager) Validate(
 
 	case ModeCustom:
 		_, _, err :=
-			resolveCustomPath(
-				ctx,
-				configuredPath,
-			)
+			resolveCustomPath(ctx, configuredPath)
 
 		return err
 
 	default:
-		return fmt.Errorf(
-			"%w: %q",
-			ErrInvalidMode,
-			mode,
-		)
+		return fmt.Errorf("%w: %q", ErrInvalidMode, mode)
 	}
 }
 
@@ -290,10 +227,7 @@ func (m *Manager) Resolve(
 ) (Workspace, error) {
 	if err := ctx.Err(); err != nil {
 		return Workspace{},
-			fmt.Errorf(
-				"解析 Workspace 被取消: %w",
-				err,
-			)
+			fmt.Errorf("解析 Workspace 被取消: %w", err)
 	}
 
 	if err := m.ensureOpen(); err != nil {
@@ -301,9 +235,7 @@ func (m *Manager) Resolve(
 	}
 
 	normalizedAgentID, err :=
-		normalizeAgentID(
-			agentID,
-		)
+		normalizeAgentID(agentID)
 
 	if err != nil {
 		return Workspace{}, err
@@ -319,57 +251,31 @@ func (m *Manager) Resolve(
 	switch normalizedMode {
 	case ModeManaged:
 		rootDir, err :=
-			m.ensureManagedWorkspace(
-				ctx,
-				normalizedAgentID,
-			)
+			m.ensureManagedWorkspace(ctx, normalizedAgentID)
 
 		if err != nil {
 			return Workspace{},
 				err
 		}
 
-		return Workspace{
-			AgentID: normalizedAgentID,
-
-			Mode: ModeManaged,
-
-			ConfiguredPath: "",
-
-			RootDir: rootDir,
-		}, nil
+		return Workspace{AgentID: normalizedAgentID, Mode: ModeManaged, ConfiguredPath: "", RootDir: rootDir}, nil
 
 	case ModeCustom:
 		configured,
 			resolved,
 			err :=
-			resolveCustomPath(
-				ctx,
-				configuredPath,
-			)
+			resolveCustomPath(ctx, configuredPath)
 
 		if err != nil {
 			return Workspace{},
 				err
 		}
 
-		return Workspace{
-			AgentID: normalizedAgentID,
-
-			Mode: ModeCustom,
-
-			ConfiguredPath: configured,
-
-			RootDir: resolved,
-		}, nil
+		return Workspace{AgentID: normalizedAgentID, Mode: ModeCustom, ConfiguredPath: configured, RootDir: resolved}, nil
 
 	default:
 		return Workspace{},
-			fmt.Errorf(
-				"%w: %q",
-				ErrInvalidMode,
-				mode,
-			)
+			fmt.Errorf("%w: %q", ErrInvalidMode, mode)
 	}
 }
 
@@ -390,10 +296,7 @@ func (m *Manager) OpenRoot(
 	value Workspace,
 ) (*os.Root, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf(
-			"打开 Workspace 被取消: %w",
-			err,
-		)
+		return nil, fmt.Errorf("打开 Workspace 被取消: %w", err)
 	}
 
 	if err := m.ensureOpen(); err != nil {
@@ -401,98 +304,59 @@ func (m *Manager) OpenRoot(
 	}
 
 	agentID, err :=
-		normalizeAgentID(
-			value.AgentID,
-		)
+		normalizeAgentID(value.AgentID)
 
 	if err != nil {
 		return nil, err
 	}
 
 	mode, err :=
-		normalizeMode(
-			value.Mode,
-		)
+		normalizeMode(value.Mode)
 
 	if err != nil {
 		return nil, err
 	}
 
 	rootDir :=
-		filepath.Clean(
-			strings.TrimSpace(
-				value.RootDir,
-			),
-		)
+		filepath.Clean(strings.TrimSpace(value.RootDir))
 
-	if rootDir == "" ||
-		!filepath.IsAbs(
-			rootDir,
-		) {
+	if rootDir == "" || !filepath.IsAbs(rootDir) {
 
-		return nil, fmt.Errorf(
-			"%w: RootDir 必须是绝对路径",
-			ErrInvalidPath,
-		)
+		return nil, fmt.Errorf("%w: RootDir 必须是绝对路径", ErrInvalidPath)
 	}
 
 	switch mode {
 	case ModeManaged:
 		expected, err :=
-			m.ManagedPath(
-				agentID,
-			)
+			m.ManagedPath(agentID)
 
 		if err != nil {
 			return nil, err
 		}
 
-		if filepath.Clean(expected) !=
-			rootDir {
+		if filepath.Clean(expected) != rootDir {
 
-			return nil, fmt.Errorf(
-				"%w: Managed Workspace Root 与 Agent ID 不匹配",
-				ErrUnsafeWorkspace,
-			)
+			return nil, fmt.Errorf("%w: Managed Workspace Root 与 Agent ID 不匹配", ErrUnsafeWorkspace)
 		}
 
 		info, err :=
-			os.Lstat(
-				rootDir,
-			)
+			os.Lstat(rootDir)
 
 		if err != nil {
-			if errors.Is(
-				err,
-				fs.ErrNotExist,
-			) {
-				return nil, fmt.Errorf(
-					"%w: Managed Workspace 不存在: %w",
-					ErrUnavailable,
-					err,
-				)
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fmt.Errorf("%w: Managed Workspace 不存在: %w", ErrUnavailable, err)
 			}
 
-			return nil, fmt.Errorf(
-				"检查 Managed Workspace 失败: %w",
-				err,
-			)
+			return nil, fmt.Errorf("检查 Managed Workspace 失败: %w", err)
 		}
 
-		if info.Mode()&
-			os.ModeSymlink != 0 {
+		if info.Mode()&os.ModeSymlink != 0 {
 
-			return nil, fmt.Errorf(
-				"%w: Managed Workspace 不允许是符号链接",
-				ErrUnsafeWorkspace,
-			)
+			return nil, fmt.Errorf("%w: Managed Workspace 不允许是符号链接", ErrUnsafeWorkspace)
 		}
 
 		if !info.IsDir() {
-			return nil, fmt.Errorf(
-				"%w: Managed Workspace 不是目录",
-				ErrUnsafeWorkspace,
-			)
+			return nil, fmt.Errorf("%w: Managed Workspace 不是目录", ErrUnsafeWorkspace)
 		}
 
 	case ModeCustom:
@@ -501,53 +365,31 @@ func (m *Manager) OpenRoot(
 		// 这里仍然再次检查目录存在性，因为外置磁盘可能在
 		// Snapshot 创建后被拔出。
 		info, err :=
-			os.Stat(
-				rootDir,
-			)
+			os.Stat(rootDir)
 
 		if err != nil {
-			return nil, fmt.Errorf(
-				"%w: Custom Workspace 无法访问: %w",
-				ErrUnavailable,
-				err,
-			)
+			return nil, fmt.Errorf("%w: Custom Workspace 无法访问: %w", ErrUnavailable, err)
 		}
 
 		if !info.IsDir() {
-			return nil, fmt.Errorf(
-				"%w: Custom Workspace 已经不是目录",
-				ErrUnavailable,
-			)
+			return nil, fmt.Errorf("%w: Custom Workspace 已经不是目录", ErrUnavailable)
 		}
 
 	default:
-		return nil, fmt.Errorf(
-			"%w: %q",
-			ErrInvalidMode,
-			mode,
-		)
+		return nil, fmt.Errorf("%w: %q", ErrInvalidMode, mode)
 	}
 
 	root, err :=
-		os.OpenRoot(
-			rootDir,
-		)
+		os.OpenRoot(rootDir)
 
 	if err != nil {
-		return nil, fmt.Errorf(
-			"%w: 打开 Workspace Root 失败: %w",
-			ErrUnavailable,
-			err,
-		)
+		return nil, fmt.Errorf("%w: 打开 Workspace Root 失败: %w", ErrUnavailable, err)
 	}
 
 	if err := ctx.Err(); err != nil {
 		_ = root.Close()
 
-		return nil, fmt.Errorf(
-			"打开 Workspace 被取消: %w",
-			err,
-		)
+		return nil, fmt.Errorf("打开 Workspace 被取消: %w", err)
 	}
 
 	return root, nil
@@ -629,92 +471,52 @@ func (m *Manager) ensureManagedWorkspace(
 	agentID string,
 ) (string, error) {
 	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf(
-			"准备 Managed Workspace 被取消: %w",
-			err,
-		)
+		return "", fmt.Errorf("准备 Managed Workspace 被取消: %w", err)
 	}
 
 	root, err :=
-		os.OpenRoot(
-			m.managedRoot,
-		)
+		os.OpenRoot(m.managedRoot)
 
 	if err != nil {
-		return "", fmt.Errorf(
-			"打开 Managed Workspace Root 失败: %w",
-			err,
-		)
+		return "", fmt.Errorf("打开 Managed Workspace Root 失败: %w", err)
 	}
 
 	defer root.Close()
 
 	info, err :=
-		root.Lstat(
-			agentID,
-		)
+		root.Lstat(agentID)
 
 	if err != nil {
-		if !errors.Is(
-			err,
-			fs.ErrNotExist,
-		) {
-			return "", fmt.Errorf(
-				"检查 Managed Agent Workspace 失败: %w",
-				err,
-			)
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("检查 Managed Agent Workspace 失败: %w", err)
 		}
 
 		if err :=
-			root.Mkdir(
-				agentID,
-				managedDirectoryMode,
-			); err != nil {
+			root.Mkdir(agentID, managedDirectoryMode); err != nil {
 
-			if !errors.Is(
-				err,
-				fs.ErrExist,
-			) {
-				return "", fmt.Errorf(
-					"创建 Managed Agent Workspace 失败: %w",
-					err,
-				)
+			if !errors.Is(err, fs.ErrExist) {
+				return "", fmt.Errorf("创建 Managed Agent Workspace 失败: %w", err)
 			}
 		}
 
 		info, err =
-			root.Lstat(
-				agentID,
-			)
+			root.Lstat(agentID)
 
 		if err != nil {
-			return "", fmt.Errorf(
-				"重新检查 Managed Agent Workspace 失败: %w",
-				err,
-			)
+			return "", fmt.Errorf("重新检查 Managed Agent Workspace 失败: %w", err)
 		}
 	}
 
-	if info.Mode()&
-		os.ModeSymlink != 0 {
+	if info.Mode()&os.ModeSymlink != 0 {
 
-		return "", fmt.Errorf(
-			"%w: Managed Agent Workspace 不允许是符号链接",
-			ErrUnsafeWorkspace,
-		)
+		return "", fmt.Errorf("%w: Managed Agent Workspace 不允许是符号链接", ErrUnsafeWorkspace)
 	}
 
 	if !info.IsDir() {
-		return "", fmt.Errorf(
-			"%w: Managed Agent Workspace 不是目录",
-			ErrUnsafeWorkspace,
-		)
+		return "", fmt.Errorf("%w: Managed Agent Workspace 不是目录", ErrUnsafeWorkspace)
 	}
 
-	return filepath.Join(
-		m.managedRoot,
-		agentID,
-	), nil
+	return filepath.Join(m.managedRoot, agentID), nil
 }
 
 // resolveCustomPath 校验用户选择的 Custom Workspace。

@@ -649,8 +649,7 @@ func validate(cfg *Config) error {
 	if contextConfig.KeepRecentRatio <= 0 || contextConfig.KeepRecentRatio >= 1 {
 		return errors.New("runtime.context.keep_recent_ratio 必须位于 0-1 之间")
 	}
-	if contextConfig.KeepRecentMinTokens < 256 ||
-		contextConfig.KeepRecentMaxTokens < contextConfig.KeepRecentMinTokens {
+	if contextConfig.KeepRecentMinTokens < 256 || contextConfig.KeepRecentMaxTokens < contextConfig.KeepRecentMinTokens {
 		return errors.New("runtime.context.keep_recent_min_tokens/max_tokens 配置无效")
 	}
 	if contextConfig.SerializerMaxChars < 256 || contextConfig.SerializerMaxChars > 65536 {
@@ -667,8 +666,7 @@ func validate(cfg *Config) error {
 	if skillConfig.MaxAssetBytes < 1024 || skillConfig.MaxAssetBytes > 64*1024*1024 {
 		return errors.New("runtime.skills.max_asset_bytes 必须位于 1024-67108864 之间")
 	}
-	if skillConfig.MaxPackageBytes < skillConfig.MaxDefinitionBytes ||
-		skillConfig.MaxPackageBytes < skillConfig.MaxAssetBytes ||
+	if skillConfig.MaxPackageBytes < skillConfig.MaxDefinitionBytes || skillConfig.MaxPackageBytes < skillConfig.MaxAssetBytes ||
 		skillConfig.MaxPackageBytes > 256*1024*1024 {
 		return errors.New("runtime.skills.max_package_bytes 必须不小于单文件上限且不能超过 268435456")
 	}
@@ -707,12 +705,8 @@ func validate(cfg *Config) error {
 		return err
 	}
 
-	if cfg.Security.MaxFileBytes <= 0 ||
-		cfg.Security.MaxFileBytes > maxAllowedFileBytes {
-		return fmt.Errorf(
-			"security.max_file_bytes 必须位于 1-%d 之间",
-			maxAllowedFileBytes,
-		)
+	if cfg.Security.MaxFileBytes <= 0 || cfg.Security.MaxFileBytes > maxAllowedFileBytes {
+		return fmt.Errorf("security.max_file_bytes 必须位于 1-%d 之间", maxAllowedFileBytes)
 	}
 
 	return nil

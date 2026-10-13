@@ -11,7 +11,8 @@ import (
 // ReasoningReplayPolicy 决定历史 Assistant Thinking 是否继续发送给主模型。
 //
 // Transcript 永远完整保存 Thinking；本策略只影响“当前模型请求看到什么”。Auto
-// 仅适用于明确支持原生 thinking 回放的 Provider；不确定时调用方必须选择 Omit。
+// 仅保留当前用户轮次；Include 保留当前窗口全部 thinking，适用于 MiMo 原生回放。
+// 不确定协议时调用方必须选择 Omit；所有模式都保留预算与压缩边界。
 type ReasoningReplayPolicy string
 
 const (

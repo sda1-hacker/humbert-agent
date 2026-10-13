@@ -1772,9 +1772,9 @@ FinalTopK=5 时，最多 5 条上下文组，但可能有 8 个子块证据。Pr
 
 ## 26. 测试、异常定位和实现限制
 
-### 26.1 测试覆盖了哪些核心约束
+### 26.1 归档用例覆盖的核心约束
 
-| 测试位置 | 关注点 |
+| 归档用例主题 | 关注点 |
 | --- | --- |
 | root 的 service/backend/ingestion/publication 测试 | 原生 Eino 接口、请求校验、解析前预留版本、外部完整发布与版本化父子引用 |
 | chunker 下测试 | 原文覆盖、rune 坐标、保护区域、表头、重叠、标题路径、策略 fallback、父子映射和 token 目标 |
@@ -1790,7 +1790,7 @@ FinalTopK=5 时，最多 5 条上下文组，但可能有 8 个子块证据。Pr
 | search 测试 | 父块先分组后截断、跨版本保护、读取回退、没有扩展时的最终数量 |
 | example 测试 | 配置关系、模型档案、Evidence 去重及父正文不虚增命中 |
 
-多数数据库单元测试使用假的事务/行结果，验证调用和数据约束。真实数据库集成测试位于 indexer/postgres/integration_test.go，受 `HUMBERT_RAG_TEST_DATABASE_URL` 控制，未配置时跳过。
+2026-10-12 按维护者要求移除了现有 Go 测试文件，本次精简用仓库外归档用例再次验证。多数数据库单元用例使用假的事务/行结果，验证调用和数据约束；未配置专用 PostgreSQL 测试地址，5 个真实数据库用例跳过。下表描述归档用例覆盖范围，不表示文件仍在仓库中。
 
 这些集成测试包含生命周期、向量/BM25 搜索、collection 隔离、外部索引发布过滤、父子外键与回滚、旧 schema 升级和并发 attempt 等场景。
 
@@ -1799,15 +1799,15 @@ FinalTopK=5 时，最多 5 条上下文组，但可能有 8 个子块证据。Pr
 ```bash
 cd /Users/sda1_hacker/Desktop/humbert/humbert-agent
 
-go test ./internal/documentparse ./internal/rag/... ./examples/5-rag
+go build ./internal/documentparse ./internal/rag/... ./examples/5-rag
 
-go test -race ./internal/rag/... ./examples/5-rag
+go vet ./internal/documentparse ./internal/rag/... ./examples/5-rag
 
 # 不连接数据库或模型，仅查看示例入口。
 go run ./examples/5-rag --help
 ```
 
-只有正确提供真实测试数据库，才会执行对应 integration 用例。运行 example 的真实文件流程，还需要可用的模型服务和合法 1024 维输出。
+上面的编译与静态检查不替代回归。真实数据库验证需使用专用数据库及针对性用例；运行 example 的真实文件流程还需要可用的模型服务和合法 1024 维输出。
 
 本学习文档是源码分析产物，没有据此宣称某个真实数据库或远程模型已经连通。
 
@@ -1870,7 +1870,7 @@ go run ./examples/5-rag --help
 
 ### 27.1 业务服务与接口
 
-#### [internal/rag/rag.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rag.go:1)
+#### [internal/rag/rag.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rag.go)
 
 业务入口、依赖声明、能力校验、文档管理和资源关闭。
 
@@ -1885,7 +1885,7 @@ go run ./examples/5-rag --help
 | [Service.Close](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rag.go:129) | 函数 | Close 可重复调用，底层资源只释放一次。 |
 | [documentScope](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rag.go:141) | 函数 | documentScope 检查请求上下文并规范化知识库与文档 ID。 |
 
-#### [internal/rag/service.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:1)
+#### [internal/rag/service.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go)
 
 业务数据结构，以及完整文档导入和查询编排。
 
@@ -1900,13 +1900,13 @@ go run ./examples/5-rag --help
 | [IngestResponse](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:152) | 类型 | IngestResponse 各文档的导入结果及父子块总数。 |
 | [SearchRequest](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:161) | 类型 | SearchRequest 是最终查询入口。 |
 | [Service.Ingest](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:173) | 函数 | Ingest 完成解析、切分与索引。业务调用不能覆盖索引范围或 Embedding 模型。 |
-| [Service.Search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:344) | 函数 | Search 选择 Eino 检索器，再复用精排与父块扩展流水线。 |
-| [buildFlatBatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:421) | 函数 | buildFlatBatch 将普通 Split() 结果转换成持久化模型。 |
-| [buildParentChildBatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:454) | 函数 | buildParentChildBatch 转换父子切分结果，保存父块身份与子块的关联关系。 |
-| [buildChunkRecord](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:507) | 函数 | buildChunkRecord 保存正文、原文坐标和来源元数据，不生成模型向量。 |
-| [documentTitle](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:542) | 函数 | documentTitle 按统一标题优先级取值，缺失时使用文档 ID。 |
+| [Service.Search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:328) | 函数 | Search 选择 Eino 检索器，再复用精排与父块扩展流水线。 |
+| [buildFlatBatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:405) | 函数 | buildFlatBatch 将普通 Split() 结果转换成持久化模型。 |
+| [buildParentChildBatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:432) | 函数 | buildParentChildBatch 转换父子切分结果，保存父块身份与子块的关联关系。 |
+| [buildChunkRecord](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:473) | 函数 | buildChunkRecord 保存正文、原文坐标和来源元数据，不生成模型向量。 |
+| [documentTitle](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/service.go:508) | 函数 | documentTitle 按统一标题优先级取值，缺失时使用文档 ID。 |
 
-#### [internal/rag/indexing.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexing.go:1)
+#### [internal/rag/indexing.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexing.go)
 
 版本化块 ID、完整返回 ID 校验及 Eino 索引输入转换。
 
@@ -1918,7 +1918,7 @@ go run ./examples/5-rag --help
 | [WithIngestionBatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexing.go:55) | 函数 | WithIngestionBatch 通过 Eino 实现专属选项传递完整文档批次。 |
 | [IndexDocuments](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexing.go:61) | 函数 | IndexDocuments 只把子块交给索引组件，所有后端接收相同的检索文本。 |
 
-#### [internal/rag/persistence.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/persistence.go:1)
+#### [internal/rag/persistence.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/persistence.go)
 
 原文发布、当前块读取、权威回查及文档生命周期接口。
 
@@ -1929,7 +1929,7 @@ go run ./examples/5-rag --help
 | [PublishedChunkReader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/persistence.go:23) | 类型 | PublishedChunkReader 按文档版本校验外部索引命中，并补全权威正文。 |
 | [DocumentLifecycle](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/persistence.go:28) | 类型 | DocumentLifecycle 与存储实现无关，保留版本预留、取消和删除能力。 |
 
-#### [internal/rag/published.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/published.go:1)
+#### [internal/rag/published.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/published.go)
 
 把任意原生 Retriever 包装成只返回当前已发布版本的组件。
 
@@ -1940,7 +1940,7 @@ go run ./examples/5-rag --help
 | [published.Retrieve](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/published.go:27) | 函数 | Retrieve 执行原生检索，再过滤未发布、已删除和过期版本的分块。 |
 | [published.RetrieveWithDiagnostics](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/published.go:33) | 函数 | 版本过滤保留混合检索的降级诊断，不能让包装隐藏某一路失败的信息。 |
 
-#### [internal/rag/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/validation.go:1)
+#### [internal/rag/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/validation.go)
 
 完整文档批次、内容哈希、块类型、范围和父子关系校验。
 
@@ -1950,7 +1950,7 @@ go run ./examples/5-rag --help
 
 ### 27.2 文件加载与解析
 
-#### [internal/rag/loader/tabula/loader.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:1)
+#### [internal/rag/loader/tabula/loader.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go)
 
 本地文件加载、格式校验、来源 ID、解析元数据与 OCR 警告转换。
 
@@ -1959,17 +1959,17 @@ go run ./examples/5-rag --help
 | [IDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:108) | 类型 | IDGenerator 为解析后的原始文档分配稳定 ID，分块 ID 由后续切分阶段生成。 |
 | [Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:111) | 类型 | Config 控制本地文件解析、页眉页脚过滤、可选 OCR 与原文换行归一化。 |
 | [DefaultConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:127) | 函数 | DefaultConfig 返回推荐的 RAG Loader 默认配置。 |
-| [Loader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:136) | 类型 | Loader 实现 Eino 文档加载接口，将本地文件解析为完整 Markdown。 |
-| [NewLoader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:141) | 函数 | NewLoader 创建一个 Tabula Loader。 |
-| [Loader.Load](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:150) | 函数 | Load 校验本地文件，在受限子进程中解析，返回正文和来源元数据；当前不使用调用级选项。 |
-| [validateSource](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:207) | 函数 | validateSource 验证 Eino Source 是否是当前 Loader 可以处理的本地文件。 |
-| [SupportedExtension](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:244) | 函数 | SupportedExtension 判断格式是否受支持，兼容大小写以及带点或不带点的扩展名。 |
-| [isRemoteURI](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:260) | 函数 | isRemoteURI 判断是否为 HTTP 地址；远程下载应在本地 Loader 之前完成。 |
-| [buildMetadata](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:268) | 函数 | buildMetadata 保存文件来源、标题、格式、大小与解析诊断。 |
-| [warningMetadata](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:300) | 函数 | warningMetadata 将解析警告转成可序列化文本，同时记录是否使用 OCR。 |
-| [DefaultIDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:322) | 函数 | DefaultIDGenerator 根据来源 URI 的 SHA-256 前 128 位生成稳定 ID；内容变化仍对应同一文档。 |
+| [Loader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:132) | 类型 | Loader 实现 Eino 文档加载接口，将本地文件解析为完整 Markdown。 |
+| [NewLoader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:137) | 函数 | NewLoader 创建一个 Tabula Loader。 |
+| [Loader.Load](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:146) | 函数 | Load 校验本地文件，在受限子进程中解析，返回正文和来源元数据；当前不使用调用级选项。 |
+| [validateSource](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:197) | 函数 | validateSource 验证 Eino Source 是否是当前 Loader 可以处理的本地文件。 |
+| [SupportedExtension](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:234) | 函数 | SupportedExtension 判断格式是否受支持，兼容大小写以及带点或不带点的扩展名。 |
+| [isRemoteURI](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:250) | 函数 | isRemoteURI 判断是否为 HTTP 地址；远程下载应在本地 Loader 之前完成。 |
+| [buildMetadata](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:257) | 函数 | buildMetadata 保存文件来源、标题、格式、大小与解析诊断。 |
+| [warningMetadata](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:289) | 函数 | warningMetadata 将解析警告转成可序列化文本，同时记录是否使用 OCR。 |
+| [DefaultIDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/loader/tabula/loader.go:311) | 函数 | DefaultIDGenerator 根据来源 URI 的 SHA-256 前 128 位生成稳定 ID；内容变化仍对应同一文档。 |
 
-#### [internal/documentparse/parser.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/documentparse/parser.go:1)
+#### [internal/documentparse/parser.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/documentparse/parser.go)
 
 临时文件快照、格式预检查、预算、解析子进程和 IPC 协议。
 
@@ -1993,7 +1993,7 @@ go run ./examples/5-rag --help
 
 ### 27.3 核心分块算法
 
-#### [internal/rag/chunker/chunk.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/chunk.go:1)
+#### [internal/rag/chunker/chunk.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/chunk.go)
 
 核心 Chunk、ChildChunk、父子结果及正文/标题路径组合。
 
@@ -2004,7 +2004,7 @@ go run ./examples/5-rag --help
 | [ChildChunk](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/chunk.go:44) | 类型 | ChildChunk 表示父子分块下的子块 |
 | [ParentChildResult](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/chunk.go:53) | 类型 | ParentChildResult 表示父子分块的最终结果 |
 
-#### [internal/rag/chunker/config.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:1)
+#### [internal/rag/chunker/config.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go)
 
 策略常量、默认值、归一化、父子配置派生和切片复制。
 
@@ -2012,12 +2012,12 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [SplitterConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:46) | 类型 | SplitterConfig 定义整个 Chunker 的分块配置。 |
 | [DefaultSeparators](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:73) | 函数 | DefaultSeparators 返回默认递归分隔符。 |
-| [DefaultConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:85) | 函数 | DefaultConfig 返回一份默认 SplitterConfig。 |
-| [NormalizeSplitterConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:94) | 函数 | NormalizeSplitterConfig 对调用者传进来的配置应用基础默认值。 |
-| [DeriveParentChildConfigs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:113) | 函数 | DeriveParentChildConfigs 根据一份基础配置，生成 Parent 和 Child 配置。 |
-| [SplitterConfig.Clone](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:140) | 函数 | Clone 复制配置中的切片，避免父子配置或 Eino 调用选项共享可变数组。 |
+| [DefaultConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:81) | 函数 | DefaultConfig 返回一份默认 SplitterConfig。 |
+| [NormalizeSplitterConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:86) | 函数 | NormalizeSplitterConfig 对调用者传进来的配置应用基础默认值。 |
+| [DeriveParentChildConfigs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:105) | 函数 | DeriveParentChildConfigs 根据一份基础配置，生成 Parent 和 Child 配置。 |
+| [SplitterConfig.Clone](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/config.go:132) | 函数 | Clone 复制配置中的切片，避免父子配置或 Eino 调用选项共享可变数组。 |
 
-#### [internal/rag/chunker/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/validation.go:1)
+#### [internal/rag/chunker/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/validation.go)
 
 拒绝非法分块请求参数。
 
@@ -2025,7 +2025,7 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [SplitterConfig.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/validation.go:6) | 函数 | Validate 检查负数预算、未知策略和空分隔符；零值仍允许使用默认配置。 |
 
-#### [internal/rag/chunker/normalize.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/normalize.go:1)
+#### [internal/rag/chunker/normalize.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/normalize.go)
 
 将 CRLF 和 CR 换行规范化为 LF。
 
@@ -2034,7 +2034,7 @@ go run ./examples/5-rag --help
 | [NormalizeLineEndings](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/normalize.go:10) | 函数 | NormalizeLineEndings 统一文档中的换行符 |
 | [RuneLen](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/normalize.go:26) | 函数 | RuneLen 返回字符串中的 Unicode rune 数量。 |
 
-#### [internal/rag/chunker/strategy.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/strategy.go:1)
+#### [internal/rag/chunker/strategy.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/strategy.go)
 
 高层 Split、自动策略链、回退和策略诊断。
 
@@ -2051,7 +2051,7 @@ go run ./examples/5-rag --help
 | [splitConfigured](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/strategy.go:95) | 函数 | splitConfigured 依次尝试策略；最后一种策略即使质量不达标也保留结果，避免丢失原文。 |
 | [runTier](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/strategy.go:121) | 函数 | runTier 直接调用对应算法，不再通过 init 注册可变函数。 |
 
-#### [internal/rag/chunker/profiler.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:1)
+#### [internal/rag/chunker/profiler.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go)
 
 扫描文档结构与语言信号，计算用于策略选择的画像。
 
@@ -2061,22 +2061,22 @@ go run ./examples/5-rag --help
 | [DocProfile.HeadingDensity](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:71) | 函数 | HeadingDensity 返回标题行数与总行数的比例。 |
 | [DocProfile.DominantHeadingLevel](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:80) | 函数 | DominantHeadingLevel 选择用于划分主章节的标题层级。 |
 | [DocProfile.HeuristicMarkerTotal](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:101) | 函数 | HeuristicMarkerTotal 返回启发式结构信号的总数。 |
-| [ProfileDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:112) | 函数 | ProfileDocument 扫描文档结构，统计标题、章节、表格、代码及分页信号。 |
-| [matchHeading](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:219) | 函数 | matchHeading 判断 Markdown ATX 标题并累计对应层级的数量。 |
-| [calculateLineStats](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:238) | 函数 | calculateLineStats 计算平均行长与总体标准差。 |
-| [detectProfileLanguages](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:263) | 函数 | detectProfileLanguages 仅采样文档前 4096 字节，以限制语言判断的扫描成本。 |
+| [ProfileDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:107) | 函数 | ProfileDocument 扫描文档结构，统计标题、章节、表格、代码及分页信号。 |
+| [matchHeading](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:212) | 函数 | matchHeading 判断 Markdown ATX 标题并累计对应层级的数量。 |
+| [calculateLineStats](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:231) | 函数 | calculateLineStats 计算平均行长与总体标准差。 |
+| [detectProfileLanguages](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/profiler.go:256) | 函数 | detectProfileLanguages 仅采样文档前 4096 字节，以限制语言判断的扫描成本。 |
 
-#### [internal/rag/chunker/patterns.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go:1)
+#### [internal/rag/chunker/patterns.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go)
 
 章节、标题、分页、空白、页脚正则及结构信号优先级。
 
 | 声明（点击定位） | 类别 | 中文职责 |
 | --- | --- | --- |
-| [SentenceSeparators](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go:80) | 函数 | SentenceSeparators 返回适合各语言的句末分隔符；英文要求标点后有空格，避免误切版本号和域名。 |
-| [ChapterPatternsForLangs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go:92) | 函数 | ChapterPatternsForLangs 根据语言提示选择章节正则；未指定或无法识别时启用全部规则。 |
-| [allChapterPatterns](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go:118) | 函数 | allChapterPatterns 统一返回所有章节匹配规则。 |
+| [SentenceSeparators](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go:64) | 函数 | SentenceSeparators 返回适合各语言的句末分隔符；英文要求标点后有空格，避免误切版本号和域名。 |
+| [ChapterPatternsForLangs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go:76) | 函数 | ChapterPatternsForLangs 根据语言提示选择章节正则；未指定或无法识别时启用全部规则。 |
+| [allChapterPatterns](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/patterns.go:102) | 函数 | allChapterPatterns 统一返回所有章节匹配规则。 |
 
-#### [internal/rag/chunker/validator.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/validator.go:1)
+#### [internal/rag/chunker/validator.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/validator.go)
 
 按目标大小评估分块质量，帮助策略链决定是否回退。
 
@@ -2085,7 +2085,7 @@ go run ./examples/5-rag --help
 | [ValidationResult](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/validator.go:24) | 类型 | ValidationResult 保存分块质量是否合格及拒绝原因。 |
 | [ValidateChunks](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/validator.go:39) | 函数 | ValidateChunks 检查空结果、未充分切分、过多小块和严重超长块，供策略回退使用。 |
 
-#### [internal/rag/chunker/splitter.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/splitter.go:1)
+#### [internal/rag/chunker/splitter.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/splitter.go)
 
 递归算法对外入口，组织 unit 构建与合并。
 
@@ -2093,7 +2093,7 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [SplitText](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/splitter.go:4) | 函数 | SplitText 先识别保护区域，再递归切分普通文本，最后合并为带原文范围的块。 |
 
-#### [internal/rag/chunker/recursive.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/recursive.go:1)
+#### [internal/rag/chunker/recursive.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/recursive.go)
 
 按分隔符优先级递归拆分普通正文，并保留分隔符。
 
@@ -2101,17 +2101,17 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [splitBySeparators](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/recursive.go:6) | 函数 | splitBySeparators 按分隔符优先级递归切分，完整保留分隔符以恢复原文。 |
 
-#### [internal/rag/chunker/protected_span.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/protected_span.go:1)
+#### [internal/rag/chunker/protected_span.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/protected_span.go)
 
 保护公式、代码、链接、图片和表格，并转换 byte/rune 范围。
 
 | 声明（点击定位） | 类别 | 中文职责 |
 | --- | --- | --- |
 | [span](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/protected_span.go:13) | 类型 | span 表示文本中的一个区间。 代码块、表格、latex 公式、链接、图片引用这些内容 |
-| [protectedSpans](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/protected_span.go:70) | 函数 | protectedSpans 扫描文本，找到所有不能轻易拆分的区域 --> 找到文本中所有的 protected span |
-| [protectedSpansRune](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/protected_span.go:154) | 函数 | protectedSpansRune 把 byte offset 的 Protected Span 转成 rune offset |
+| [protectedSpans](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/protected_span.go:57) | 函数 | protectedSpans 扫描文本，找到所有不能轻易拆分的区域 --> 找到文本中所有的 protected span |
+| [protectedSpansRune](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/protected_span.go:125) | 函数 | protectedSpansRune 把 byte offset 的 Protected Span 转成 rune offset |
 
-#### [internal/rag/chunker/unit.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/unit.go:1)
+#### [internal/rag/chunker/unit.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/unit.go)
 
 将普通正文与保护区域变成带来源范围的原子 unit。
 
@@ -2120,39 +2120,39 @@ go run ./examples/5-rag --help
 | [splitUnit](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/unit.go:18) | 类型 | splitUnit 保存切分中间单元；范围使用原文字符坐标，合成表头的起止位置相同。 |
 | [buildUnitsWithProtection](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/unit.go:31) | 函数 | buildUnitsWithProtection 递归切分普通区域，保留保护区域，并转换成字符坐标。 |
 
-#### [internal/rag/chunker/merge.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:1)
+#### [internal/rag/chunker/merge.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go)
 
 合并 unit，应用软目标、绝对上限、表头与重叠。
 
 | 声明（点击定位） | 类别 | 中文职责 |
 | --- | --- | --- |
 | [mergeUnits](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:9) | 函数 | mergeUnits 按目标大小合并单元，并处理表头补充、重叠和原文范围。 |
-| [buildChunk](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:226) | 函数 | buildChunk 将若干 splitUnit 合成为最终 Chunk。 |
-| [headerAlreadyPresent](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:242) | 函数 | headerAlreadyPresent 判断正文或重叠部分是否已经包含表头，避免重复补充。 |
-| [headerColumnRow](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:271) | 函数 | headerColumnRow 从 Header 中找到真正的“列名行”。 |
+| [buildChunk](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:196) | 函数 | buildChunk 将若干 splitUnit 合成为最终 Chunk。 |
+| [headerAlreadyPresent](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:207) | 函数 | headerAlreadyPresent 判断正文或重叠部分是否已经包含表头，避免重复补充。 |
+| [headerColumnRow](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/merge.go:234) | 函数 | headerColumnRow 从 Header 中找到真正的“列名行”。 |
 
-#### [internal/rag/chunker/header_tracker.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:1)
+#### [internal/rag/chunker/header_tracker.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go)
 
 跟踪 Markdown 表头、表格终止、列数变化和空表头补充。
 
 | 声明（点击定位） | 类别 | 中文职责 |
 | --- | --- | --- |
 | [headerTrackerHook](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:19) | 类型 | headerTrackerHook 描述一种“上下文 Header”的识别规则。 |
-| [headerTracker](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:61) | 类型 | headerTracker 跟踪当前有效的表头，在跨块时补充列名。 |
-| [newHeaderTracker](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:94) | 函数 | newHeaderTracker 创建 Header Tracker。 |
-| [headerTracker.update](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:104) | 函数 | update 根据当前单元更新表头，返回是否开始新表。 |
-| [headerTracker.getHeaders](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:216) | 函数 | getHeaders 返回当前所有 Active Header。 |
-| [isEmptyTableHeaderRow](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:257) | 函数 | isEmptyTableHeaderRow 判断表头是否没有有效列名。 |
-| [extractSeparatorLine](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:284) | 函数 | extractSeparatorLine 从 Markdown Table Header 中 |
-| [headerTracker.clearTableHeader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:296) | 函数 | clearTableHeader 清除当前 Markdown Table Header。 |
-| [headerTracker.endTableHeaderOnColumnMismatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:303) | 函数 | endTableHeaderOnColumnMismatch 在当前行与表头列数不一致时结束旧表头。 |
-| [splitEndsWithParagraphBreak](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:324) | 函数 | splitEndsWithParagraphBreak 判断文本是否以空行结束。 |
-| [tableRowColumnCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:330) | 函数 | 按管道拆分并处理首尾空列，估算列数；不完整支持转义管道语法。 |
-| [firstTableRowColumnCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:353) | 函数 | firstTableRowColumnCount 从一段文本中找到 |
-| [headerTableColumnCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:371) | 函数 | headerTableColumnCount 从表头中找到真实列数。 |
-| [headerColumnMismatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:386) | 函数 | headerColumnMismatch 判断正文第一行的列数是否与待补充表头冲突。 |
+| [headerTracker](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:53) | 类型 | headerTracker 跟踪当前有效的表头，在跨块时补充列名。 |
+| [newHeaderTracker](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:86) | 函数 | newHeaderTracker 创建 Header Tracker。 |
+| [headerTracker.update](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:96) | 函数 | update 根据当前单元更新表头，返回是否开始新表。 |
+| [headerTracker.getHeaders](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:207) | 函数 | getHeaders 返回当前所有 Active Header。 |
+| [isEmptyTableHeaderRow](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:241) | 函数 | isEmptyTableHeaderRow 判断表头是否没有有效列名。 |
+| [extractSeparatorLine](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:268) | 函数 | extractSeparatorLine 从 Markdown Table Header 中 |
+| [headerTracker.clearTableHeader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:280) | 函数 | clearTableHeader 清除当前 Markdown Table Header。 |
+| [headerTracker.endTableHeaderOnColumnMismatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:287) | 函数 | endTableHeaderOnColumnMismatch 在当前行与表头列数不一致时结束旧表头。 |
+| [splitEndsWithParagraphBreak](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:308) | 函数 | splitEndsWithParagraphBreak 判断文本是否以空行结束。 |
+| [tableRowColumnCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:314) | 函数 | 按管道拆分并处理首尾空列，估算列数；不完整支持转义管道语法。 |
+| [firstTableRowColumnCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:337) | 函数 | firstTableRowColumnCount 从一段文本中找到 |
+| [headerTableColumnCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:355) | 函数 | headerTableColumnCount 从表头中找到真实列数。 |
+| [headerColumnMismatch](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/header_tracker.go:370) | 函数 | headerColumnMismatch 判断正文第一行的列数是否与待补充表头冲突。 |
 
-#### [internal/rag/chunker/overlap.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:1)
+#### [internal/rag/chunker/overlap.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go)
 
 从尾部按段落/行/句子边界提取有来源坐标的自然重叠。
 
@@ -2162,11 +2162,10 @@ go run ./examples/5-rag --help
 | [unitsText](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:26) | 函数 | unitsText 把 splitUnit 文本按顺序拼起来。 |
 | [computeOverlap](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:35) | 函数 | computeOverlap 在空间预算内选择上一块的连续原文尾部，优先从语义边界开始。 |
 | [semanticOverlapWindow](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:109) | 函数 | semanticOverlapWindow 提取连续原文尾部；合成表头和不连续区间会阻断窗口。 |
-| [findSemanticOverlapBoundary](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:178) | 函数 | findSemanticOverlapBoundary 是方便测试和内部使用的入口。 |
-| [findSemanticOverlapBoundaryEndingAtOrAfter](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:184) | 函数 | findSemanticOverlapBoundaryEndingAtOrAfter 查找指定位置之后的段落、换行或句末边界。 |
-| [trimUnitsPrefix](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:324) | 函数 | trimUnitsPrefix 从 []splitUnit 开头删除 prefixLen 个 source rune。 |
+| [findSemanticOverlapBoundaryEndingAtOrAfter](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:171) | 函数 | findSemanticOverlapBoundaryEndingAtOrAfter 查找指定位置之后的段落、换行或句末边界。 |
+| [trimUnitsPrefix](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/overlap.go:301) | 函数 | trimUnitsPrefix 从 []splitUnit 开头删除 prefixLen 个 source rune。 |
 
-#### [internal/rag/chunker/heading_hierarchy.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_hierarchy.go:1)
+#### [internal/rag/chunker/heading_hierarchy.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_hierarchy.go)
 
 维护六级标题状态，输出路径并清理旧深层标题。
 
@@ -2180,7 +2179,7 @@ go run ./examples/5-rag --help
 | [HeadingHierarchy.Depth](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_hierarchy.go:92) | 函数 | Depth 返回当前最深有效 Heading Level。 |
 | [HeadingHierarchy.Reset](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_hierarchy.go:97) | 函数 | Reset 清空整个 Heading 上下文。 |
 
-#### [internal/rag/chunker/heading_splitter.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:1)
+#### [internal/rag/chunker/heading_splitter.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go)
 
 按章节切分、定位子标题路径，并合并同路径小块。
 
@@ -2188,15 +2187,15 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [headingBoundary](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:6) | 类型 | headingBoundary 保存章节起点；文档前言使用空标题。 |
 | [splitByHeadings](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:12) | 函数 | splitByHeadings 按主要标题层级划分章节，过大章节交给递归切分。 |
-| [findHeadingBoundaries](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:113) | 函数 | findHeadingBoundaries 查找主要标题层级及更高层级的章节起点，忽略代码块。 |
-| [observeDeeperHeadings](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:173) | 函数 | observeDeeperHeadings 更新章节内部更深层标题的上下文。 |
-| [sectionBreadcrumb](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:206) | 类型 | sectionBreadcrumb 表示: 从 runeStart 开始，后面的内容进入 breadcrumb 所描述的标题上下文。 |
-| [buildSectionBreadcrumbIndex](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:212) | 函数 | buildSectionBreadcrumbIndex 记录长章节内标题上下文的变化位置。 |
-| [breadcrumbAtOffset](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:274) | 函数 | breadcrumbAtOffset 查找指定字符位置生效的标题路径。 |
-| [coalesceTinyHeadingChunks](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:289) | 函数 | coalesceTinyHeadingChunks 合并相邻小块，仅合并原文连续且上下文兼容的片段。 |
-| [commonHeadingPrefix](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:350) | 函数 | commonHeadingPrefix 返回两条标题路径共有的完整标题行。 |
+| [findHeadingBoundaries](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:107) | 函数 | findHeadingBoundaries 查找主要标题层级及更高层级的章节起点，忽略代码块。 |
+| [observeDeeperHeadings](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:164) | 函数 | observeDeeperHeadings 更新章节内部更深层标题的上下文。 |
+| [sectionBreadcrumb](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:197) | 类型 | sectionBreadcrumb 表示: 从 runeStart 开始，后面的内容进入 breadcrumb 所描述的标题上下文。 |
+| [buildSectionBreadcrumbIndex](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:203) | 函数 | buildSectionBreadcrumbIndex 记录长章节内标题上下文的变化位置。 |
+| [breadcrumbAtOffset](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:257) | 函数 | breadcrumbAtOffset 查找指定字符位置生效的标题路径。 |
+| [coalesceTinyHeadingChunks](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:272) | 函数 | coalesceTinyHeadingChunks 合并相邻小块，仅合并原文连续且上下文兼容的片段。 |
+| [commonHeadingPrefix](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter.go:330) | 函数 | commonHeadingPrefix 返回两条标题路径共有的完整标题行。 |
 
-#### [internal/rag/chunker/heuristic_splitter.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:1)
+#### [internal/rag/chunker/heuristic_splitter.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go)
 
 扫描非标准章节信号、累计结构块和对齐重叠。
 
@@ -2205,27 +2204,27 @@ go run ./examples/5-rag --help
 | [boundary](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:9) | 类型 | boundary 保存结构边界的字符位置与优先级；同一位置保留最可信的信号。 |
 | [splitByHeuristics](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:15) | 函数 | splitByHeuristics 根据章节、分页和分隔线划分结构块，再按大小合并与递归拆分。 |
 | [findHeuristicBoundaries](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:129) | 函数 | findHeuristicBoundaries 查找章节、分页、全大写标题、页脚及空白分隔信号。 |
-| [dropBoundsInsideSpans](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:270) | 函数 | dropBoundsInsideSpans 删除严格位于保护区域内部的边界，保留区域两端。 |
-| [allRuneIndices](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:303) | 函数 | allRuneIndices 返回指定文本所有出现位置的字符偏移，供结构边界计算使用。 |
-| [appendChunk](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:324) | 函数 | appendChunk 追加原文区间对应的分块，并更新顺序编号。 |
-| [appendOversizeBlock](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:352) | 函数 | appendOversizeBlock 递归拆分过大结构块，将局部坐标转换成整篇原文坐标。 |
-| [applyOverlapAligned](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:386) | 函数 | applyOverlapAligned 计算下一块的重叠起点，优先对齐结构或换行边界，并保证前进。 |
+| [dropBoundsInsideSpans](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:249) | 函数 | dropBoundsInsideSpans 删除严格位于保护区域内部的边界，保留区域两端。 |
+| [allRuneIndices](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:282) | 函数 | allRuneIndices 返回指定文本所有出现位置的字符偏移，供结构边界计算使用。 |
+| [appendChunk](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:303) | 函数 | appendChunk 追加原文区间对应的分块，并更新顺序编号。 |
+| [appendOversizeBlock](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:326) | 函数 | appendOversizeBlock 递归拆分过大结构块，将局部坐标转换成整篇原文坐标。 |
+| [applyOverlapAligned](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter.go:360) | 函数 | applyOverlapAligned 计算下一块的重叠起点，优先对齐结构或换行边界，并保证前进。 |
 
-#### [internal/rag/chunker/tokens.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:1)
+#### [internal/rag/chunker/tokens.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go)
 
 语言估计和字符/token 的近似换算。
 
 | 声明（点击定位） | 类别 | 中文职责 |
 | --- | --- | --- |
-| [ApproxTokenCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:25) | 函数 | ApproxTokenCount 根据字符数量与语言比例近似估算 token 数。 |
-| [ApproxTokenCountFromRuneLen](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:34) | 函数 | ApproxTokenCountFromRuneLen 使用已知字符数估算 token，避免重复扫描正文。 |
-| [DetectLanguage](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:54) | 函数 | DetectLanguage 根据字符分布粗略判断语言，用于切分和预算估算。 |
-| [isGermanUmlaut](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:105) | 函数 | isGermanUmlaut 判断是否是典型德语字符。 |
-| [hasGermanWords](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:115) | 函数 | hasGermanWords 只扫描前 512 字节的常见德语词，作为拉丁文本的辅助语言信号。 |
-| [containsLower](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:143) | 函数 | containsLower 执行 ASCII 大小写不敏感查找，不创建全文小写副本。 |
-| [CharsForTokenLimit](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:173) | 函数 | CharsForTokenLimit 将近似 token 预算换算成字符预算。 |
+| [ApproxTokenCount](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:20) | 函数 | ApproxTokenCount 根据字符数量与语言比例近似估算 token 数。 |
+| [ApproxTokenCountFromRuneLen](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:29) | 函数 | ApproxTokenCountFromRuneLen 使用已知字符数估算 token，避免重复扫描正文。 |
+| [DetectLanguage](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:49) | 函数 | DetectLanguage 根据字符分布粗略判断语言，用于切分和预算估算。 |
+| [isGermanUmlaut](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:97) | 函数 | isGermanUmlaut 判断是否是典型德语字符。 |
+| [hasGermanWords](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:107) | 函数 | hasGermanWords 只扫描前 512 字节的常见德语词，作为拉丁文本的辅助语言信号。 |
+| [containsLower](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:126) | 函数 | containsLower 执行 ASCII 大小写不敏感查找，不创建全文小写副本。 |
+| [CharsForTokenLimit](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/tokens.go:156) | 函数 | CharsForTokenLimit 将近似 token 预算换算成字符预算。 |
 
-#### [internal/rag/chunker/budget.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/budget.go:1)
+#### [internal/rag/chunker/budget.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/budget.go)
 
 对加入表头和标题路径后的块执行最终近似 token 目标。
 
@@ -2233,7 +2232,7 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [enforceTokenTarget](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/budget.go:6) | 函数 | enforceTokenTarget 为无法继续切分的段落和保护块提供最终近似预算处理；索引器仍检查完整模型输入。 |
 
-#### [internal/rag/chunker/parent_child.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/parent_child.go:1)
+#### [internal/rag/chunker/parent_child.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/parent_child.go)
 
 父块再切子块、映射全篇坐标、省略重复父块和合并路径。
 
@@ -2242,11 +2241,11 @@ go run ./examples/5-rag --help
 | [SplitParentChild](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/parent_child.go:6) | 函数 | SplitParentChild 先切父块，再切用于检索的子块；完全重复的单一父块不保存。 |
 | [SplitParentChildWithDiagnostics](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/parent_child.go:12) | 函数 | SplitParentChildWithDiagnostics 返回父子分块和父块策略诊断，子块仍独立选择策略。 |
 | [splitParentChild](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/parent_child.go:20) | 函数 | splitParentChild 共用父子切分流程，并将子块范围映射回整篇原文。 |
-| [mergeBreadcrumbs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/parent_child.go:123) | 函数 | mergeBreadcrumbs 合并父子标题路径，并去除连接处重复的标题行。 |
+| [mergeBreadcrumbs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/parent_child.go:116) | 函数 | mergeBreadcrumbs 合并父子标题路径，并去除连接处重复的标题行。 |
 
 ### 27.4 Eino 转换器、文本与模型输入
 
-#### [internal/rag/transformer/chunker/transformer.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:1)
+#### [internal/rag/transformer/chunker/transformer.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go)
 
 把核心 Chunker 适配成原生 Eino Transformer。
 
@@ -2255,16 +2254,16 @@ go run ./examples/5-rag --help
 | [IDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:17) | 类型 | IDGenerator 根据来源文档、输入位置和分块信息生成 ID，供业务定制。 |
 | [Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:24) | 类型 | Config 直接复用核心切分配置，仅额外提供 Eino 文档 ID 生成规则。 |
 | [DefaultConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:30) | 函数 | DefaultConfig 返回基础切分配置；空策略使用递归切分，自动策略需显式设置。 |
-| [Transformer](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:38) | 类型 | Transformer 适配 Eino 文档转换接口，实际分块算法由核心 chunker 实现。 |
-| [NewTransformer](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:43) | 函数 | NewTransformer 复制切片配置并设置默认 ID 生成器，避免调用方修改影响组件。 |
-| [transformerOptions](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:56) | 类型 | transformerOptions 保存当前调用的配置覆盖，不修改组件默认值。 |
-| [WithSplitterConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:62) | 函数 | WithSplitterConfig 为当前 Transform 调用覆盖切分配置，并复制可变切片。 |
-| [WithIDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:71) | 函数 | WithIDGenerator 临时覆盖某一次 Transform 的 ID 生成规则。 |
-| [Transformer.Transform](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:80) | 函数 | Transform 切分输入文档，保留来源元数据；每个输出块使用独立的顶层元数据副本。 |
-| [chunkToDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:138) | 函数 | chunkToDocument 将核心分块转换为 Eino 文档，保留正文、来源身份和字符范围。 |
-| [DefaultIDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:164) | 函数 | DefaultIDGenerator 使用来源 ID 与分块序号生成稳定 ID；来源无 ID 时使用输入位置。 |
+| [Transformer](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:35) | 类型 | Transformer 适配 Eino 文档转换接口，实际分块算法由核心 chunker 实现。 |
+| [NewTransformer](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:40) | 函数 | NewTransformer 复制切片配置并设置默认 ID 生成器，避免调用方修改影响组件。 |
+| [transformerOptions](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:51) | 类型 | transformerOptions 保存当前调用的配置覆盖，不修改组件默认值。 |
+| [WithSplitterConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:57) | 函数 | WithSplitterConfig 为当前 Transform 调用覆盖切分配置，并复制可变切片。 |
+| [WithIDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:66) | 函数 | WithIDGenerator 临时覆盖某一次 Transform 的 ID 生成规则。 |
+| [Transformer.Transform](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:75) | 函数 | Transform 切分输入文档，保留来源元数据；每个输出块使用独立的顶层元数据副本。 |
+| [chunkToDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:125) | 函数 | chunkToDocument 将核心分块转换为 Eino 文档，保留正文、来源身份和字符范围。 |
+| [DefaultIDGenerator](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/transformer/chunker/transformer.go:147) | 函数 | DefaultIDGenerator 使用来源 ID 与分块序号生成稳定 ID；来源无 ID 时使用输入位置。 |
 
-#### [internal/rag/searchcontent/builder.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:1)
+#### [internal/rag/searchcontent/builder.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go)
 
 统一构造标题、标题路径和正文的检索表示。
 
@@ -2272,13 +2271,13 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [Builder](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:11) | 类型 | Builder 为向量、关键词和精排构造统一文本表示，原文范围由正文模型单独保存。 |
 | [DefaultBuilder](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:21) | 函数 | DefaultBuilder 返回当前推荐的检索文本构造规则。 |
-| [Builder.Build](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:33) | 函数 | Build 拼接标题、标题路径与正文；返回值用于模型输入，不用于原文坐标映射。 |
-| [BuildText](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:43) | 函数 | BuildText 将标题、标题路径和正文拼成模型输入，只去除完全相同的部分。 |
-| [Builder.Title](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:55) | 函数 | Title 根据配置依次寻找文档标题。 |
-| [Builder.ContextHeader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:76) | 函数 | ContextHeader 返回 Chunk Breadcrumb。 |
-| [metadataString](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:91) | 函数 | metadataString 只接受字符串元数据，避免把复杂对象意外格式化成检索文本。 |
+| [Builder.Build](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:26) | 函数 | Build 拼接标题、标题路径与正文；返回值用于模型输入，不用于原文坐标映射。 |
+| [BuildText](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:36) | 函数 | BuildText 将标题、标题路径和正文拼成模型输入，只去除完全相同的部分。 |
+| [Builder.Title](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:48) | 函数 | Title 根据配置依次寻找文档标题。 |
+| [Builder.ContextHeader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:69) | 函数 | ContextHeader 返回 Chunk Breadcrumb。 |
+| [metadataString](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/searchcontent/builder.go:84) | 函数 | metadataString 只接受字符串元数据，避免把复杂对象意外格式化成检索文本。 |
 
-#### [internal/rag/embeddinginput/budget.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/budget.go:1)
+#### [internal/rag/embeddinginput/budget.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/budget.go)
 
 完整模型输入预检、批次规划和原生 Embedder 包装。
 
@@ -2294,7 +2293,7 @@ go run ./examples/5-rag --help
 | [Limit](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/budget.go:90) | 函数 | Limit 包装 Eino Embedder，拒绝超长输入并按批请求，不截断原文。 |
 | [limitedEmbedder.EmbedStrings](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/budget.go:95) | 函数 | EmbedStrings 按预算分批生成向量，保持输入顺序并校验向量数量。 |
 
-#### [internal/rag/embeddinginput/profile.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/profile.go:1)
+#### [internal/rag/embeddinginput/profile.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/profile.go)
 
 向量空间配置快照及稳定 SHA-256 身份。
 
@@ -2304,7 +2303,7 @@ go run ./examples/5-rag --help
 | [Profile.JSON](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/profile.go:23) | 函数 | JSON 返回稳定字段顺序的配置快照，供模型档案保存与比较。 |
 | [Profile.ID](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/profile.go:26) | 函数 | ID 根据配置快照计算向量空间标识，防止不同模型混用索引。 |
 
-#### [internal/rag/provider/embedding/openai/embedder.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go:1)
+#### [internal/rag/provider/embedding/openai/embedder.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go)
 
 配置并创建 Eino OpenAI 兼容 Embedder，加入输入预算。
 
@@ -2312,10 +2311,10 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go:24) | 类型 | Config 描述兼容 OpenAI 协议的向量服务及请求设置。 |
 | [DefaultConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go:44) | 函数 | DefaultConfig 返回请求超时等默认设置，模型与凭据由调用方提供。 |
-| [Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go:51) | 函数 | Validate 检查模型、地址、维度与请求超时。 |
-| [New](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go:77) | 函数 | New 校验配置并创建 Eino 原生 Embedder，复用 eino-ext 的协议与回调实现。 |
+| [Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go:49) | 函数 | Validate 检查模型、地址、维度与请求超时。 |
+| [New](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/embedding/openai/embedder.go:75) | 函数 | New 校验配置并创建 Eino 原生 Embedder，复用 eino-ext 的协议与回调实现。 |
 
-#### [internal/rag/provider/rerank/http/client.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:1)
+#### [internal/rag/provider/rerank/http/client.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go)
 
 精排 HTTP 协议、响应预算、分数完整性和输入顺序还原。
 
@@ -2323,17 +2322,17 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:37) | 类型 | Config 描述兼容 Jina 或 Cohere 协议的精排服务，Endpoint 必须是完整请求地址。 |
 | [DefaultConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:54) | 函数 | DefaultConfig 返回精排服务的默认请求超时。 |
-| [Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:61) | 函数 | Validate 检查服务地址、模型与请求超时。 |
-| [Client](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:93) | 类型 | Client 精排 HTTP 客户端，按输入顺序还原服务返回的相关性分数。 |
-| [NewClient](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:102) | 函数 | NewClient 校验配置并创建精排客户端，优先使用调用方提供的 HTTPClient。 |
-| [rerankRequest](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:136) | 类型 | 精排 POST 的 model、query、documents、top_n 请求体。 |
-| [rerankResponse](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:143) | 类型 | 包含 results 数组的精排 JSON 响应。 |
-| [rerankResult](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:147) | 类型 | 单个输入下标 index 与 relevance_score。 |
-| [Client.Score](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:153) | 函数 | Score 请求精排分数，并按响应中的 index 对齐输入顺序；不能直接使用服务返回的排序。 |
+| [Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:59) | 函数 | Validate 检查服务地址、模型与请求超时。 |
+| [Client](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:91) | 类型 | Client 精排 HTTP 客户端，按输入顺序还原服务返回的相关性分数。 |
+| [NewClient](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:100) | 函数 | NewClient 校验配置并创建精排客户端，优先使用调用方提供的 HTTPClient。 |
+| [rerankRequest](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:132) | 类型 | 精排 POST 的 model、query、documents、top_n 请求体。 |
+| [rerankResponse](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:139) | 类型 | 包含 results 数组的精排 JSON 响应。 |
+| [rerankResult](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:143) | 类型 | 单个输入下标 index 与 relevance_score。 |
+| [Client.Score](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client.go:149) | 函数 | Score 请求精排分数，并按响应中的 index 对齐输入顺序；不能直接使用服务返回的排序。 |
 
 ### 27.5 索引组合与 PostgreSQL 写入
 
-#### [internal/rag/indexer/multi.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/multi.go:1)
+#### [internal/rag/indexer/multi.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/multi.go)
 
 顺序组合多个原生 Indexer，保护输入并校验完整 ID 集合。
 
@@ -2343,16 +2342,16 @@ go run ./examples/5-rag --help
 | [NewMulti](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/multi.go:20) | 函数 | NewMulti 将同一批子块依次写入独立向量索引和关键词索引。 |
 | [multi.Store](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/multi.go:33) | 函数 | Store 将同一批分块写入所有索引，保护输入元数据并校验后端保留全部分块 ID。 |
 
-#### [internal/rag/indexer/postgres/pool.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/pool.go:1)
+#### [internal/rag/indexer/postgres/pool.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/pool.go)
 
 创建扩展、连接池和 pgvector 类型注册。
 
 | 声明（点击定位） | 类别 | 中文职责 |
 | --- | --- | --- |
 | [EnsureExtensions](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/pool.go:14) | 函数 | EnsureExtensions 使用普通连接安装 pgvector 与 ParadeDB，再创建注册向量类型的连接池。 |
-| [NewPool](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/pool.go:43) | 函数 | NewPool 创建连接池，并为每条连接注册 pgvector 编解码器；数据库扩展须先安装。 |
+| [NewPool](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/pool.go:40) | 函数 | NewPool 创建连接池，并为每条连接注册 pgvector 编解码器；数据库扩展须先安装。 |
 
-#### [internal/rag/indexer/postgres/health.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/health.go:1)
+#### [internal/rag/indexer/postgres/health.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/health.go)
 
 数据库/扩展最低版本及 schema 历史检查。
 
@@ -2365,7 +2364,7 @@ go run ./examples/5-rag --help
 | [versionAtLeast](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/health.go:50) | 函数 | versionAtLeast 比较三段数字版本；无法识别的版本视为不满足要求。 |
 | [CheckSchema](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/health.go:73) | 函数 | CheckSchema 检查数据库是否完成当前版本的 RAG 迁移。 |
 
-#### [internal/rag/indexer/postgres/schema.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/schema.go:1)
+#### [internal/rag/indexer/postgres/schema.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/schema.go)
 
 文档、块、检索表及 HNSW/BM25 索引定义。
 
@@ -2373,7 +2372,7 @@ go run ./examples/5-rag --help
 | --- | --- | --- |
 | [EnsureSchema](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/schema.go:195) | 函数 | EnsureSchema 为开发环境执行版本化迁移。 |
 
-#### [internal/rag/indexer/postgres/migrations.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/migrations.go:1)
+#### [internal/rag/indexer/postgres/migrations.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/migrations.go)
 
 带咨询锁、事务、版本和 checksum 的迁移。
 
@@ -2383,7 +2382,7 @@ go run ./examples/5-rag --help
 | [initialSchema](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/migrations.go:23) | 函数 | initialSchema 拼接初始表结构与索引语句，用于第一版迁移。 |
 | [Migrate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/migrations.go:64) | 函数 | Migrate 在数据库咨询锁保护下，以一个事务执行带版本和校验和的迁移，保留已识别旧表中的数据。 |
 
-#### [internal/rag/indexer/postgres/indexer.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:1)
+#### [internal/rag/indexer/postgres/indexer.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go)
 
 原生 Store 入口、完整来源识别、预算与 Embedding、halfvec 校验。
 
@@ -2402,11 +2401,11 @@ go run ./examples/5-rag --help
 | [newIndexerWithDatabase](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:99) | 函数 | 使用可替换的内部数据库接口初始化 Indexer；供池封装和测试复用。 |
 | [Indexer.Store](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:109) | 函数 | Store 是唯一索引入口。普通 Eino 文档以“一份原文、一个分块”保存；应用层切分的 |
 | [embedTexts](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:191) | 函数 | embedTexts 按输入预算分批生成向量，校验数量、维度和半精度有效范围。 |
-| [makeHalfVector](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:259) | 函数 | makeHalfVector 校验 Eino float64 embedding， |
-| [marshalMetadata](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:309) | 函数 | marshalMetadata 将元数据编码为 JSON，空元数据仍保存为对象。 |
-| [nullableString](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:323) | 函数 | nullableString 将空字符串映射为数据库 NULL。 |
+| [makeHalfVector](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:245) | 函数 | makeHalfVector 校验 Eino float64 embedding， |
+| [marshalMetadata](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:281) | 函数 | marshalMetadata 将元数据编码为 JSON，空元数据仍保存为对象。 |
+| [nullableString](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/indexer.go:295) | 函数 | nullableString 将空字符串映射为数据库 NULL。 |
 
-#### [internal/rag/indexer/postgres/ingestion.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:1)
+#### [internal/rag/indexer/postgres/ingestion.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go)
 
 原子替换事务、父子批次准备，以及外部索引完成后的正文发布。
 
@@ -2416,10 +2415,10 @@ go run ./examples/5-rag --help
 | [Indexer.storeDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:20) | 函数 | storeDocument 共用唯一的文档替换事务，向量化仅由原生 Store 触发。 |
 | [Indexer.PublishDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:67) | 函数 | PublishDocument 只保存权威原文和分块，可与外部向量库、BM25 库组合。 |
 | [Indexer.replaceStoredDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:96) | 函数 | 同库原子入库和分离索引发布共用同一套事务、版本检查和分块保存规则。 |
-| [prepareStoredChunks](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:203) | 函数 | prepareStoredChunks 预先序列化分块元数据，避免进入事务后才发现编码错误。 |
-| [insertStoredChunk](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:226) | 函数 | insertStoredChunk 在当前事务内保存分块；检索索引仅由子块生成。 |
+| [prepareStoredChunks](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:194) | 函数 | prepareStoredChunks 预先序列化分块元数据，避免进入事务后才发现编码错误。 |
+| [insertStoredChunk](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/ingestion.go:210) | 函数 | insertStoredChunk 在当前事务内保存分块；检索索引仅由子块生成。 |
 
-#### [internal/rag/indexer/postgres/revisions.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/revisions.go:1)
+#### [internal/rag/indexer/postgres/revisions.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/revisions.go)
 
 版本预留、作废、删除墓碑及独立 context 回滚。
 
@@ -2431,7 +2430,7 @@ go run ./examples/5-rag --help
 | [Indexer.DeleteDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/revisions.go:53) | 函数 | DeleteDocument 删除正文并留下墓碑，阻止迟到的入库任务复活文档。 |
 | [Indexer.TombstoneDocument](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/revisions.go:59) | 函数 | TombstoneDocument 原子隐藏正文并返回删除截止版本，供分离索引清理使用。 |
 
-#### [internal/rag/indexer/postgres/profile.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/profile.go:1)
+#### [internal/rag/indexer/postgres/profile.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/profile.go)
 
 collection 模型档案绑定与一致性检查。
 
@@ -2440,7 +2439,7 @@ collection 模型档案绑定与一致性检查。
 | [EnsureCollectionProfile](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/profile.go:17) | 函数 | EnsureCollectionProfile 绑定知识库的向量空间，不推断历史向量模型，也不删除现有索引数据。 |
 | [Indexer.ensureProfile](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/profile.go:57) | 函数 | ensureProfile 校验知识库绑定的向量空间档案，防止更换模型后继续使用旧索引。 |
 
-#### [internal/rag/indexer/postgres/snapshot.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/snapshot.go:1)
+#### [internal/rag/indexer/postgres/snapshot.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/snapshot.go)
 
 正文/索引输入摘要，并入同 attempt 幂等快照。
 
@@ -2448,7 +2447,7 @@ collection 模型档案绑定与一致性检查。
 | --- | --- | --- |
 | [processSnapshot](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/snapshot.go:12) | 函数 | 固定当前版本的实际输入，拒绝同一版本用不同分块或检索文本重试。 |
 
-#### [internal/rag/indexer/postgres/reader.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/reader.go:1)
+#### [internal/rag/indexer/postgres/reader.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/reader.go)
 
 展示当前子块与回查外部命中的当前已发布正文。
 
@@ -2460,7 +2459,7 @@ collection 模型档案绑定与一致性检查。
 
 ### 27.6 结果模型、召回、融合与上下文
 
-#### [internal/rag/retrieval/result.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/result.go:1)
+#### [internal/rag/retrieval/result.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/result.go)
 
 命中、上下文、Evidence、分数和复合身份数据模型。
 
@@ -2473,7 +2472,7 @@ collection 模型档案绑定与一致性检查。
 | [SearchResult.EffectiveChunkID](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/result.go:89) | 函数 | EffectiveChunkID 返回 EffectiveContent 对应的 Chunk ID。 |
 | [SearchResult.IdentityKey](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/result.go:98) | 函数 | IdentityKey 结合知识库、文档、版本和分块 ID 去重；仅有分块 ID 的独立结果仍可使用。 |
 
-#### [internal/rag/retrieval/documents.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/documents.go:1)
+#### [internal/rag/retrieval/documents.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/documents.go)
 
 原生 Eino 文档与内部结果的严格双向映射。
 
@@ -2486,7 +2485,7 @@ collection 模型档案绑定与一致性检查。
 | [number](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/documents.go:120) | 函数 | number 读取数值元数据；缺失视为零，类型错误返回非数供上层拒绝。 |
 | [CloneMetadata](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/documents.go:142) | 函数 | CloneMetadata 返回可写的顶层副本，避免不同分块或检索组件相互修改元数据。 |
 
-#### [internal/rag/retrieval/diagnostics.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/diagnostics.go:1)
+#### [internal/rag/retrieval/diagnostics.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/diagnostics.go)
 
 实际召回通道及错误降级诊断数据。
 
@@ -2495,7 +2494,7 @@ collection 模型档案绑定与一致性检查。
 | [ChannelDiagnostic](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/diagnostics.go:4) | 类型 | ChannelDiagnostic 单路召回失败信息，供混合检索降级诊断使用。 |
 | [Diagnostics](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/diagnostics.go:10) | 类型 | Diagnostics 实际检索方式与通道降级信息。 |
 
-#### [internal/rag/retrieval/rrf.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:1)
+#### [internal/rag/retrieval/rrf.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go)
 
 通道去重、原始排名保留、单路处理与加权 RRF。
 
@@ -2503,17 +2502,17 @@ collection 模型档案绑定与一致性检查。
 | --- | --- | --- |
 | [RRFConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:10) | 类型 | RRFConfig 控制两路召回权重与排名平滑常数；融合分数按理论最大值归一化。 |
 | [DefaultRRFConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:17) | 函数 | DefaultRRFConfig 返回当前推荐默认值。 |
-| [FuseRRF](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:28) | 函数 | FuseRRF 按 Eino 返回的相关性顺序计算加权排名融合。 |
-| [vectorOnlyResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:141) | 函数 | vectorOnlyResults 保留 cosine similarity 本身。 |
-| [keywordOnlyResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:155) | 函数 | keywordOnlyResults 保留关键词召回顺序，并按当前结果最大分数归一化，不改写原始关键词分数。 |
-| [Limit](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:187) | 函数 | Limit 截取最终 TopK。 返回新的 slice header，底层 SearchResult 不会被修改。 |
-| [normalizeRRFConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:195) | 函数 | 仅在整个 RRFConfig 为零时恢复默认，保留显式单路权重。 |
-| [RRFConfig.Effective](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:205) | 函数 | Effective 补齐排名平滑常数和默认权重。 |
-| [RRFConfig.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:208) | 函数 | Validate 检查排名常数与权重，拒绝负数和非有限值。 |
-| [sortResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:220) | 函数 | 按分数降序排列，同分按分块 ID 升序，保证结果稳定。 |
-| [prepareRankedChannel](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:231) | 函数 | 同一路重复命中保留第一个，即排名最高的结果。 |
+| [FuseRRF](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:24) | 函数 | FuseRRF 按 Eino 返回的相关性顺序计算加权排名融合。 |
+| [vectorOnlyResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:137) | 函数 | vectorOnlyResults 保留 cosine similarity 本身。 |
+| [keywordOnlyResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:151) | 函数 | keywordOnlyResults 保留关键词召回顺序，并按当前结果最大分数归一化，不改写原始关键词分数。 |
+| [Limit](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:183) | 函数 | Limit 截取最终 TopK。 返回新的 slice header，底层 SearchResult 不会被修改。 |
+| [normalizeRRFConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:191) | 函数 | 仅在整个 RRFConfig 为零时恢复默认，保留显式单路权重。 |
+| [RRFConfig.Effective](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:201) | 函数 | Effective 补齐排名平滑常数和默认权重。 |
+| [RRFConfig.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:204) | 函数 | Validate 检查排名常数与权重，拒绝负数和非有限值。 |
+| [sortResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:216) | 函数 | 按分数降序排列，同分按分块 ID 升序，保证结果稳定。 |
+| [prepareRankedChannel](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf.go:227) | 函数 | 同一路重复命中保留第一个，即排名最高的结果。 |
 
-#### [internal/rag/retriever/postgres/retriever.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:1)
+#### [internal/rag/retriever/postgres/retriever.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go)
 
 向量和 BM25 原生 Retriever、调用 options、SQL 与结果扫描。
 
@@ -2525,27 +2524,27 @@ collection 模型档案绑定与一致性检查。
 | [poolQueryer.Query](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:71) | 函数 | Query 将连接池查询适配到内部行读取接口。 |
 | [VectorConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:82) | 类型 | VectorConfig 配置 Dense Retriever。 |
 | [DefaultVectorConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:104) | 函数 | DefaultVectorConfig 返回向量召回的候选数量、维度与默认阈值。 |
-| [VectorRetriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:113) | 类型 | VectorRetriever 使用 pgvector 的半精度向量与 HNSW 索引进行余弦相似度召回。 |
-| [NewVectorRetriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:119) | 函数 | NewVectorRetriever 校验模型和数据库配置，创建 Eino 向量检索器。 |
-| [newVectorRetriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:133) | 函数 | 补默认配置并构造向量 Retriever 的内部实例。 |
-| [VectorRetriever.Retrieve](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:149) | 函数 | 校验调用选项，执行对应通道查询，并转换为原生 Eino 文档。 |
-| [VectorRetriever.searchResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:163) | 函数 | 整理 BM25 检索调用参数，验证范围后查询内部结果。 |
-| [VectorRetriever.search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:200) | 函数 | 执行本通道 SQL、扫描记录，过滤原始分数阈值并保持排序。 |
-| [BM25Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:281) | 类型 | BM25Config 控制关键词召回的知识库范围、数量与原始分数阈值。 |
-| [DefaultBM25Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:294) | 函数 | DefaultBM25Config 返回关键词召回的默认候选数量。 |
-| [BM25Retriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:302) | 类型 | BM25Retriever 通过 ParadeDB 进行关键词召回的 Eino 检索器。 |
-| [NewBM25Retriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:308) | 函数 | NewBM25Retriever 校验配置并绑定 PostgreSQL 连接池。 |
-| [newBM25Retriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:322) | 函数 | 补默认配置并构造 BM25 Retriever 的内部实例。 |
-| [BM25Retriever.Retrieve](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:333) | 函数 | 校验调用选项，执行对应通道查询，并转换为原生 Eino 文档。 |
-| [BM25Retriever.searchResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:346) | 函数 | 整理 BM25 检索调用参数，验证范围后查询内部结果。 |
-| [BM25Retriever.search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:377) | 函数 | 执行本通道 SQL、扫描记录，过滤原始分数阈值并保持排序。 |
-| [scanSearchResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:491) | 函数 | scanSearchResults 将数据库行映射为统一召回结果，保留原始通道分数。 |
-| [validateCommonOptions](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:573) | 函数 | validateCommonOptions 校验 Eino 通用选项，拒绝不支持的子索引和查询表达式。 |
-| [validateTopK](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:607) | 函数 | validateTopK 限制数据库请求的候选数量，防止无界召回。 |
-| [filterByScore](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:621) | 函数 | filterByScore 保留达到原始通道阈值的结果并限制数量，保持数据库排序。 |
-| [toHalfVector](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:650) | 函数 | toHalfVector 校验维度、有限值、半精度范围和非零向量，再转换为数据库向量类型。 |
+| [VectorRetriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:109) | 类型 | VectorRetriever 使用 pgvector 的半精度向量与 HNSW 索引进行余弦相似度召回。 |
+| [NewVectorRetriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:115) | 函数 | NewVectorRetriever 校验模型和数据库配置，创建 Eino 向量检索器。 |
+| [newVectorRetriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:129) | 函数 | 补默认配置并构造向量 Retriever 的内部实例。 |
+| [VectorRetriever.Retrieve](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go) | 函数 | 校验调用选项，执行对应通道查询，并转换为原生 Eino 文档。 |
+| [VectorRetriever.searchResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go) | 函数 | 整理 BM25 检索调用参数，验证范围后查询内部结果。 |
+| [VectorRetriever.search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go) | 函数 | 执行本通道 SQL、扫描记录，过滤原始分数阈值并保持排序。 |
+| [BM25Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:243) | 类型 | BM25Config 控制关键词召回的知识库范围、数量与原始分数阈值。 |
+| [DefaultBM25Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:256) | 函数 | DefaultBM25Config 返回关键词召回的默认候选数量。 |
+| [BM25Retriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:261) | 类型 | BM25Retriever 通过 ParadeDB 进行关键词召回的 Eino 检索器。 |
+| [NewBM25Retriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:267) | 函数 | NewBM25Retriever 校验配置并绑定 PostgreSQL 连接池。 |
+| [newBM25Retriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:281) | 函数 | 补默认配置并构造 BM25 Retriever 的内部实例。 |
+| [BM25Retriever.Retrieve](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go) | 函数 | 校验调用选项，执行对应通道查询，并转换为原生 Eino 文档。 |
+| [BM25Retriever.searchResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go) | 函数 | 整理 BM25 检索调用参数，验证范围后查询内部结果。 |
+| [BM25Retriever.search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go) | 函数 | 执行本通道 SQL、扫描记录，过滤原始分数阈值并保持排序。 |
+| [scanSearchResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:425) | 函数 | scanSearchResults 将数据库行映射为统一召回结果，保留原始通道分数。 |
+| [validateCommonOptions](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:494) | 函数 | validateCommonOptions 校验 Eino 通用选项，拒绝不支持的子索引和查询表达式。 |
+| [validateTopK](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:526) | 函数 | validateTopK 限制数据库请求的候选数量，防止无界召回。 |
+| [filterByScore](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:535) | 函数 | filterByScore 保留达到原始通道阈值的结果并限制数量，保持数据库排序。 |
+| [toHalfVector](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/retriever.go:560) | 函数 | toHalfVector 校验维度、有限值、半精度范围和非零向量，再转换为数据库向量类型。 |
 
-#### [internal/rag/retriever/postgres/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go:1)
+#### [internal/rag/retriever/postgres/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go)
 
 TopK、维度和通道阈值的合法性检查。
 
@@ -2554,10 +2553,10 @@ TopK、维度和通道阈值的合法性检查。
 | [finite](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go:9) | 函数 | finite 判断分数是否为有限数值。 |
 | [optionalTopK](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go:12) | 函数 | optionalTopK 检查调用级候选数量，零值由组件补齐默认值。 |
 | [validateDimensions](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go:20) | 函数 | validateDimensions 确认向量维度与当前数据库列一致。 |
-| [VectorConfig.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go:28) | 函数 | Validate 检查检索数量、阈值、维度或模型输入预算。 |
-| [BM25Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go:39) | 函数 | Validate 检查检索数量、阈值、维度或模型输入预算。 |
+| [VectorConfig.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go) | 函数 | Validate 检查检索数量、阈值、维度或模型输入预算。 |
+| [BM25Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/validation.go) | 函数 | Validate 检查检索数量、阈值、维度或模型输入预算。 |
 
-#### [internal/rag/retriever/postgres/context_loader.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:1)
+#### [internal/rag/retriever/postgres/context_loader.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go)
 
 按 collection 批量读取父块及去重父 ID。
 
@@ -2565,11 +2564,11 @@ TopK、维度和通道阈值的合法性检查。
 | --- | --- | --- |
 | [ParentLoader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:15) | 类型 | ParentLoader 绑定知识库范围，批量读取已发布父块用于上下文扩展。 |
 | [NewParentLoader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:21) | 函数 | NewParentLoader 校验连接池和知识库 ID，创建父块读取器。 |
-| [newParentLoader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:43) | 函数 | 根据内部查询接口构造父块读取器，便于数据库测试。 |
-| [ParentLoader.LoadParents](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:54) | 函数 | LoadParents 使用一次查询读取所有父块，避免逐条子块查询数据库。 |
-| [uniqueStrings](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:156) | 函数 | uniqueStrings 去除空值与重复 ID，保留首次出现顺序。 |
+| [newParentLoader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:38) | 函数 | 根据内部查询接口构造父块读取器，便于数据库测试。 |
+| [ParentLoader.LoadParents](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:46) | 函数 | LoadParents 使用一次查询读取所有父块，避免逐条子块查询数据库。 |
+| [uniqueStrings](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/postgres/context_loader.go:124) | 函数 | uniqueStrings 去除空值与重复 ID，保留首次出现顺序。 |
 
-#### [internal/rag/retriever/hybrid.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/hybrid.go:1)
+#### [internal/rag/retriever/hybrid.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/hybrid.go)
 
 并发两路召回、超时与失败策略、option 传播及融合。
 
@@ -2587,7 +2586,7 @@ TopK、维度和通道阈值的合法性检查。
 | [Hybrid.Retrieve](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/hybrid.go:110) | 函数 | Retrieve 并发召回两路结果，执行 RRF 融合并返回原生 Eino 文档。 |
 | [Hybrid.RetrieveWithDiagnostics](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/hybrid.go:116) | 函数 | RetrieveWithDiagnostics 附加失败诊断，普通调用仍使用 Eino 的 Retrieve 方法。 |
 
-#### [internal/rag/rerank/reranker.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:1)
+#### [internal/rag/rerank/reranker.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go)
 
 精排阈值、组合分、故障回退、诊断与独立 MMR。
 
@@ -2602,21 +2601,21 @@ TopK、维度和通道阈值的合法性检查。
 | [Result](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:121) | 类型 | Result 保存一次完整 Rerank 的输出。 |
 | [Engine](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:135) | 类型 | Engine 模型精排引擎，负责评分、阈值处理和排序。 |
 | [NewEngine](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:142) | 函数 | NewEngine 保存配置与校验结果；配置错误在执行时返回。 |
-| [Engine.RerankCandidates](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:154) | 函数 | RerankCandidates 保留通过阈值的候选池，供父块分组后统一截断；此路径不执行 MMR 多样性选择。 |
-| [Engine.Rerank](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:161) | 函数 | Rerank 执行评分、过滤、排序与独立调用的 MMR 选择。普通模型错误退回召回顺序，取消和超时直接返回。 |
-| [DefaultPassageBuilder](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:346) | 函数 | DefaultPassageBuilder 复用统一文本构造规则，将标题、标题路径与子块正文交给精排模型。 |
-| [applyMMR](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:352) | 函数 | applyMMR 使用相关性与文本集合的 Jaccard 相似度选择尽量不重复的结果，不修改相关性分数。 |
-| [tokenSet](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:430) | 函数 | tokenSet 将拉丁字母和数字按词归一化，将中日韩字符按单字收集，用于轻量相似度计算。 |
-| [isCJK](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:464) | 函数 | isCJK 判断字符是否属于当前支持的中日韩文字范围。 |
-| [jaccard](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:472) | 函数 | jaccard 计算两个 token 集合的交并比，空集合返回零。 |
-| [sourceWeight](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:495) | 函数 | sourceWeight 优先读取结果中的来源权重，再读取元数据中的可选权重。 |
-| [indicesAboveThreshold](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:525) | 函数 | indicesAboveThreshold 返回达到相关性阈值的输入位置，保持原顺序。 |
-| [indexOfMax](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:538) | 函数 | indexOfMax 返回最高分位置，同分时保留第一个。 |
-| [fallbackResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:555) | 函数 | fallbackResults 保留召回排序并标记未精排，按独立调用的 TopK 截断。 |
-| [clamp01](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:571) | 函数 | clamp01 将有效分数限制在零到一之间。 |
-| [normalizeConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:585) | 函数 | normalizeConfig 补齐候选数量、默认权重与模型输入构造函数。 |
+| [Engine.RerankCandidates](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:150) | 函数 | RerankCandidates 保留通过阈值的候选池，供父块分组后统一截断；此路径不执行 MMR 多样性选择。 |
+| [Engine.Rerank](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:157) | 函数 | Rerank 执行评分、过滤、排序与独立调用的 MMR 选择。普通模型错误退回召回顺序，取消和超时直接返回。 |
+| [DefaultPassageBuilder](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:318) | 函数 | DefaultPassageBuilder 复用统一文本构造规则，将标题、标题路径与子块正文交给精排模型。 |
+| [applyMMR](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:324) | 函数 | applyMMR 使用相关性与文本集合的 Jaccard 相似度选择尽量不重复的结果，不修改相关性分数。 |
+| [tokenSet](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:392) | 函数 | tokenSet 将拉丁字母和数字按词归一化，将中日韩字符按单字收集，用于轻量相似度计算。 |
+| [isCJK](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:426) | 函数 | isCJK 判断字符是否属于当前支持的中日韩文字范围。 |
+| [jaccard](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:431) | 函数 | jaccard 计算两个 token 集合的交并比，空集合返回零。 |
+| [sourceWeight](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:454) | 函数 | sourceWeight 优先读取结果中的来源权重，再读取元数据中的可选权重。 |
+| [indicesAboveThreshold](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:484) | 函数 | indicesAboveThreshold 返回达到相关性阈值的输入位置，保持原顺序。 |
+| [indexOfMax](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:497) | 函数 | indexOfMax 返回最高分位置，同分时保留第一个。 |
+| [fallbackResults](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:514) | 函数 | fallbackResults 保留召回排序并标记未精排，按独立调用的 TopK 截断。 |
+| [clamp01](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:530) | 函数 | clamp01 将有效分数限制在零到一之间。 |
+| [normalizeConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker.go:544) | 函数 | normalizeConfig 补齐候选数量、默认权重与模型输入构造函数。 |
 
-#### [internal/rag/rerank/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/validation.go:1)
+#### [internal/rag/rerank/validation.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/validation.go)
 
 精排数量、阈值、组合权重和 lambda 校验。
 
@@ -2624,7 +2623,7 @@ TopK、维度和通道阈值的合法性检查。
 | --- | --- | --- |
 | [Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/validation.go:9) | 函数 | Validate 检查候选数量、阈值、权重和 MMR 参数是否合法。 |
 
-#### [internal/rag/search/eino.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/eino.go:1)
+#### [internal/rag/search/eino.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/eino.go)
 
 Eino 检索器适配、诊断传播、context 等待与结果转换。
 
@@ -2633,7 +2632,7 @@ Eino 检索器适配、诊断传播、context 等待与结果转换。
 | [diagnosticRetriever](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/eino.go:14) | 类型 | 带诊断的检索器仍然实现原生 Retriever，普通 eino-ext 组件无需实现此能力。 |
 | [NewEinoPipeline](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/eino.go:19) | 函数 | NewEinoPipeline 在组件边界转换一次数据，后续引用、精排与父块扩展使用内部结果。 |
 
-#### [internal/rag/search/pipeline.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:1)
+#### [internal/rag/search/pipeline.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go)
 
 候选精排、父块扩展、版本验证、Evidence 分组和最终数量。
 
@@ -2643,20 +2642,20 @@ Eino 检索器适配、诊断传播、context 等待与结果转换。
 | [ParentLoader](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:31) | 类型 | ParentLoader 负责批量加载 Parent Chunk。 |
 | [Config](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:36) | 类型 | Config 控制检索超时、最终数量与父块扩展策略。 |
 | [DefaultConfig](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:53) | 函数 | DefaultConfig 默认返回五条结果，并在提供父块读取器时扩展上下文。 |
-| [Response](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:65) | 类型 | Response 不只返回最终结果， 也保留 Rerank Diagnostics。 |
-| [Diagnostic](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:74) | 类型 | Diagnostic 流程阶段与可恢复问题的说明。 |
-| [Pipeline](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:80) | 类型 | Pipeline 召回、可选精排与父块扩展组成的检索流程。 |
-| [NewPipeline](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:89) | 函数 | NewPipeline 校验配置并组合检索函数、精排引擎与父块读取器。 |
-| [Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:118) | 函数 | Validate 拒绝负数结果数量和超时。 |
-| [NewPipelineWithDiagnostics](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:126) | 函数 | NewPipelineWithDiagnostics 接收带通道诊断的检索函数，保留失败降级信息。 |
-| [Pipeline.Search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:141) | 函数 | Search 执行召回、可选精排、父块扩展与最终选择；当前统一流程不执行 MMR 或问题改写。 |
-| [Pipeline.finalize](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:278) | 函数 | finalize 按需合并父块并统一截断最终结果，保留子块命中证据。 |
-| [uniqueParentIDs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:295) | 函数 | uniqueParentIDs 收集不重复的父块 ID，供批量读取。 |
-| [collapseSameContext](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:316) | 函数 | collapseSameContext 按最终上下文身份分组，聚合全部命中子块的引用证据。 |
+| [Response](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:62) | 类型 | Response 不只返回最终结果， 也保留 Rerank Diagnostics。 |
+| [Diagnostic](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:71) | 类型 | Diagnostic 流程阶段与可恢复问题的说明。 |
+| [Pipeline](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:77) | 类型 | Pipeline 召回、可选精排与父块扩展组成的检索流程。 |
+| [NewPipeline](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:86) | 函数 | NewPipeline 校验配置并组合检索函数、精排引擎与父块读取器。 |
+| [Config.Validate](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:110) | 函数 | Validate 拒绝负数结果数量和超时。 |
+| [NewPipelineWithDiagnostics](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:118) | 函数 | NewPipelineWithDiagnostics 接收带通道诊断的检索函数，保留失败降级信息。 |
+| [Pipeline.Search](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:133) | 函数 | Search 执行召回、可选精排、父块扩展与最终选择；当前统一流程不执行 MMR 或问题改写。 |
+| [Pipeline.finalize](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:259) | 函数 | finalize 按需合并父块并统一截断最终结果，保留子块命中证据。 |
+| [uniqueParentIDs](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:275) | 函数 | uniqueParentIDs 收集不重复的父块 ID，供批量读取。 |
+| [collapseSameContext](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline.go:296) | 函数 | collapseSameContext 按最终上下文身份分组，聚合全部命中子块的引用证据。 |
 
 ### 27.7 迁移命令与真实文档实验
 
-#### [cmd/rag-migrate/main.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/cmd/rag-migrate/main.go:1)
+#### [cmd/rag-migrate/main.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/cmd/rag-migrate/main.go)
 
 读取迁移环境变量，安装扩展并执行 schema 迁移。
 
@@ -2665,7 +2664,7 @@ Eino 检索器适配、诊断传播、context 等待与结果转换。
 | [main](/Users/sda1_hacker/Desktop/humbert/humbert-agent/cmd/rag-migrate/main.go:14) | 函数 | 调用迁移流程，安全打印错误并设置退出码。 |
 | [run](/Users/sda1_hacker/Desktop/humbert/humbert-agent/cmd/rag-migrate/main.go:20) | 函数 | 读取 HUMBERT_RAG_DATABASE_URL，创建扩展、池并执行迁移。 |
 
-#### [examples/5-rag/main.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/examples/5-rag/main.go:1)
+#### [examples/5-rag/main.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/examples/5-rag/main.go)
 
 单文件包含真实文档实验的全部运行代码：主流程、配置、组件组装、模型档案、指标与结果展示。
 
@@ -2687,28 +2686,10 @@ Eino 检索器适配、诊断传播、context 等待与结果转换。
 
 ### 27.8 测试与说明文档入口
 
-生产代码中的不变量，应结合测试阅读。各目录的 `*_test.go` 与同目录生产文件相邻；下面是最适合优先阅读的代表入口。
+生产代码中的不变量需要行为回归验证。现有测试代码已移出仓库，原测试文件链接在此删除；归档验证范围见第 26.1 节，当前说明文档如下。
 
 | 路径 | 阅读重点 |
-| --- | --- | --- |
-| [internal/rag/backend_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/backend_test.go:1) | 不修改 Eino 原生接口也能替换组件。 |
-| [internal/rag/publication_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/publication_test.go:1) | 完整外部写入后发布、返回 ID 校验和当前版本过滤。 |
-| [internal/rag/ingestion_regression_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/ingestion_regression_test.go:1) | 解析前稳定 ID 与版本预留。 |
-| [internal/rag/chunker/regression_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/regression_test.go:1) | 表头与来源坐标、连续正文覆盖和零重叠父子派生。 |
-| [internal/rag/chunker/heading_splitter_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heading_splitter_test.go:1) | 标题路径、长章节内子标题和禁止跨顶层标题合并。 |
-| [internal/rag/chunker/heuristic_splitter_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/chunker/heuristic_splitter_test.go:1) | 结构边界、保护区与重叠。 |
-| [internal/documentparse/parser_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/documentparse/parser_test.go:1) | 预算和解析子进程的真实文件行为。 |
-| [internal/rag/embeddinginput/budget_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/embeddinginput/budget_test.go:1) | 先检查全部输入，再请求模型。 |
-| [internal/rag/indexer/postgres/regression_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/regression_test.go:1) | 非法输入在远程调用前拒绝、旧任务不能删除当前版本、档案与快照。 |
-| [internal/rag/indexer/postgres/integration_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/indexer/postgres/integration_test.go:1) | 真实 PG 事务、扩展搜索、隔离、生命周期与迁移。 |
-| [internal/rag/retrieval/documents_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/documents_test.go:1) | 元数据及整数版本转换。 |
-| [internal/rag/retrieval/rrf_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retrieval/rrf_test.go:1) | 输入排名、复合身份和单路分数。 |
-| [internal/rag/retriever/hybrid_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/retriever/hybrid_test.go:1) | 并发召回、独立超时和降级诊断。 |
-| [internal/rag/provider/rerank/http/client_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/provider/rerank/http/client_test.go:1) | HTTP 结果按输入下标还原与完整评分约束。 |
-| [internal/rag/rerank/reranker_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/rerank/reranker_test.go:1) | 阈值、组合分与独立 MMR。 |
-| [internal/rag/search/pipeline_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/pipeline_test.go:1) | 父上下文分组和最后 TopK。 |
-| [internal/rag/search/regression_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/search/regression_test.go:1) | 取消、父块读取回退及跨版本混合保护。 |
-| [examples/5-rag/main_test.go](/Users/sda1_hacker/Desktop/humbert/humbert-agent/examples/5-rag/main_test.go:1) | 配置约束、模型档案及子块 Evidence 评测，父正文不凭空增加召回。 |
+| --- | --- |
 | [internal/rag/README.md](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/README.md:1) | 模块入口和用法概览。 |
 | [internal/rag/BACKENDS.md](/Users/sda1_hacker/Desktop/humbert/humbert-agent/internal/rag/BACKENDS.md:1) | 原子索引与外部分离索引的组装边界。 |
 | [examples/5-rag/README.md](/Users/sda1_hacker/Desktop/humbert/humbert-agent/examples/5-rag/README.md:1) | 真实文件运行及调参操作。 |

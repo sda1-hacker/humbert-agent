@@ -50,12 +50,7 @@ func NewService(
 	workspaceManager *workspace.Manager,
 	logger *logging.Logger,
 ) *Service {
-	return &Service{
-		store:      store,
-		agents:     agentService,
-		workspaces: workspaceManager,
-		logger:     logger,
-	}
+	return &Service{store: store, agents: agentService, workspaces: workspaceManager, logger: logger}
 }
 
 // List 返回指定 Agent 的全部 Session。
@@ -123,38 +118,20 @@ func (s *Service) Create(ctx context.Context, input CreateSessionInput) (Session
 
 	var value Session
 	err = s.agents.WithActiveAgent(ctx, agentID, func(agentInfo agents.AgentInfo) error {
-		agentWorkspace, resolveErr := s.workspaces.Resolve(
-			ctx,
-			agentInfo.Agent.ID,
-			agentInfo.Agent.WorkspaceMode,
-			agentInfo.Agent.WorkspacePath,
-		)
+		agentWorkspace, resolveErr := s.workspaces.Resolve(ctx, agentInfo.Agent.ID, agentInfo.Agent.WorkspaceMode, agentInfo.Agent.WorkspacePath)
 		if resolveErr != nil {
 			return fmt.Errorf("解析 Agent Workspace 失败: %w", resolveErr)
 		}
 
 		now := time.Now().UTC()
-		value = Session{
-			ID:        uuid.NewString(),
-			AgentID:   agentID,
-			Title:     title,
-			CWD:       agentWorkspace.RootDir,
-			CreatedAt: now,
-			UpdatedAt: now,
-		}
+		value = Session{ID: uuid.NewString(), AgentID: agentID, Title: title, CWD: agentWorkspace.RootDir, CreatedAt: now, UpdatedAt: now}
 		return s.store.CreateSession(ctx, value)
 	})
 	if err != nil {
 		return Session{}, err
 	}
 
-	s.logger.Info(
-		ctx,
-		"Session 已创建",
-		"operation", "session.create",
-		"session_id", value.ID,
-		"agent_id", value.AgentID,
-	)
+	s.logger.Info(ctx, "Session 已创建", "operation", "session.create", "session_id", value.ID, "agent_id", value.AgentID)
 	return value, nil
 }
 
@@ -195,13 +172,7 @@ func (s *Service) Delete(ctx context.Context, sessionID string) error {
 		return err
 	}
 
-	s.logger.Info(
-		ctx,
-		"Session 已删除",
-		"operation", "session.delete",
-		"session_id", sessionID,
-		"agent_id", session.AgentID,
-	)
+	s.logger.Info(ctx, "Session 已删除", "operation", "session.delete", "session_id", sessionID, "agent_id", session.AgentID)
 	return nil
 }
 
@@ -287,10 +258,7 @@ func (s *Service) AppendToolResult(
 		return Message{}, fmt.Errorf("%w: AppendToolResult 只接受 tool role，实际为 %q", ErrInvalidMessageRole, message.Role)
 	}
 
-	return s.append(ctx, sessionID, message, transcript.EncodeOptions{
-		Details: cloneRawJSON(persistence.Details),
-		IsError: persistence.IsError,
-	})
+	return s.append(ctx, sessionID, message, transcript.EncodeOptions{Details: cloneRawJSON(persistence.Details), IsError: persistence.IsError})
 }
 
 // Messages 返回当前 Active Branch 上最近的消息记录。

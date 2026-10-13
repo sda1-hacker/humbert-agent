@@ -275,12 +275,7 @@ func (b *Backend) connectStdio(ctx context.Context, server humbertmcp.Server, po
 	}
 	command = resolvedCommand
 	ensureResolvedStdioCommandOnPath(environment, command)
-	applySandboxedStdioLauncherDefaults(
-		environment,
-		server,
-		command,
-		policy != nil && policy.Profile != sandbox.ProfileFullAccess,
-	)
+	applySandboxedStdioLauncherDefaults(environment, server, command, policy != nil && policy.Profile != sandbox.ProfileFullAccess)
 
 	cleanups := make([]func(), 0, 2)
 	cleanup := func() {
