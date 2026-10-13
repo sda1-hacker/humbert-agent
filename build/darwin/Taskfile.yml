@@ -129,10 +129,26 @@ tasks:
 
   package:dmg:
     summary: Packages the application into a styled `.dmg`
+    platforms: [darwin]
     deps:
-      - task: package
+      - task: build
     cmds:
-      - task: create:dmg
+      - |
+        set -eu
+        mkdir -p "{{.BIN_DIR}}"
+        # DMG 中间 .app 只存在于临时目录，避免安装后仍统计项目里的打包副本。
+        dmg_stage="$(mktemp -d "{{.BIN_DIR}}/.dmg-stage.XXXXXX")"
+        trap 'rm -rf "$dmg_stage"' EXIT
+        cp "{{.BIN_DIR}}/{{.APP_NAME}}" "$dmg_stage/{{.APP_NAME}}"
+        wails3 task darwin:create:app:bundle APP_NAME="{{.APP_NAME}}" BIN_DIR="$dmg_stage"
+        wails3 task darwin:create:dmg APP_NAME="{{.APP_NAME}}" BIN_DIR="$dmg_stage" \
+          DMG_BACKGROUND="{{.DMG_BACKGROUND | default ""}}" \
+          DMG_VOLUME_ICON="{{.DMG_VOLUME_ICON | default ""}}" \
+          DMG_FILE_ICON="{{.DMG_FILE_ICON | default ""}}" \
+          DMG_WINDOW_WIDTH="{{.DMG_WINDOW_WIDTH | default ""}}" \
+          DMG_WINDOW_HEIGHT="{{.DMG_WINDOW_HEIGHT | default ""}}" \
+          DMG_FILES="{{.DMG_FILES | default ""}}"
+        mv -f "$dmg_stage/{{.APP_NAME}}.dmg" "{{.BIN_DIR}}/{{.APP_NAME}}.dmg"
 
   create:dmg:
     summary: Creates a configurable `.dmg` from the `.app` bundle
