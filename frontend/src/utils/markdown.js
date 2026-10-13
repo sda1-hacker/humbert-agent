@@ -13,6 +13,45 @@ export function safeInlineImageUrl(value) {
     return /^data:image\/(?:png|jpe?g|gif|webp);base64,/i.test(url) ? url : "";
 }
 
+const mathDelimiters = [
+    { left: "$$", right: "$$", display: true },
+    { left: "\\[", right: "\\]", display: true },
+    { left: "\\(", right: "\\)", display: false },
+    { left: "$", right: "$", display: false },
+];
+
+function isEscaped(text, index) {
+    let slashes = 0;
+    while (index > 0 && text[--index] === "\\") slashes += 1;
+    return slashes % 2 === 1;
+}
+
+function readMath(text, start) {
+    if (isEscaped(text, start)) return null;
+    const delimiter = mathDelimiters.find((item) => text.startsWith(item.left, start));
+    if (!delimiter) return null;
+    const singleDollar = delimiter.left === "$";
+    const contentStart = start + delimiter.left.length;
+    if (singleDollar && (!text[contentStart] || /\s|\$/.test(text[contentStart]) || text[start - 1] === "$")) return null;
+
+    let depth = 0;
+    for (let end = contentStart; end < text.length; end += 1) {
+        if (!delimiter.display && text[end] === "\n") return null;
+        if (depth === 0 && text.startsWith(delimiter.right, end)) {
+            // 单美元符号采用紧贴内容的边界，避免把 $10 和 $20 之类的金额配成公式。
+            if (singleDollar && (/\s/.test(text[end - 1]) || /[\d$]/.test(text[end + 1] || ""))) return null;
+            const body = text.slice(contentStart, end);
+            if (!body.trim()) return null;
+            return { type: "math", text: body, raw: text.slice(start, end + delimiter.right.length), display: delimiter.display };
+        }
+        if (text[end] === "\\") end += 1;
+        else if (text[end] === "{") depth += 1;
+        else if (text[end] === "}") depth = Math.max(0, depth - 1);
+    }
+    // 流式消息尚未闭合时保留原文，不把公式里的下划线、星号解释为 Markdown。
+    return singleDollar && /^\d/.test(text[contentStart]) ? null : { type: "text", text: text.slice(start) };
+}
+
 export function parseInline(source) {
     const text = String(source ?? "");
     const tokens = [];
@@ -30,6 +69,18 @@ export function parseInline(source) {
 
     while (index < text.length) {
         const rest = text.slice(index);
+        const slashes = rest.match(/^\\{2,}/)?.[0].length || 0;
+        if (slashes) {
+            const length = slashes - slashes % 2;
+            tokens.push({ type: "text", text: rest.slice(0, length) }); index += length; continue;
+        }
+        if ((rest.startsWith("\\$") || rest.startsWith("\\|")) && !isEscaped(text, index)) {
+            tokens.push({ type: "text", text: rest[1] }); index += 2; continue;
+        }
+        const math = readMath(text, index);
+        if (math) {
+            tokens.push(math); index += (math.raw || math.text).length; continue;
+        }
         let matched = false;
         for (const pattern of patterns) {
             const match = rest.match(pattern.re);
@@ -46,7 +97,8 @@ export function parseInline(source) {
                 const url = safeUrl(match[2]);
                 tokens.push(url ? { type: "link", text: match[1], url } : { type: "text", text: match[0] });
             } else {
-                tokens.push({ type: pattern.type, text: match[1] });
+                tokens.push({ type: pattern.type, text: match[1],
+                    ...(pattern.type === "code" ? {} : { children: parseInline(match[1]) }) });
             }
             index += match[0].length;
             matched = true;
@@ -54,7 +106,7 @@ export function parseInline(source) {
         }
         if (matched) continue;
 
-        const nextSpecial = rest.slice(1).search(/[!\[`*_~]/);
+        const nextSpecial = rest.slice(1).search(/[!\\\[`*_~$]/);
         const length = nextSpecial < 0 ? rest.length : nextSpecial + 1;
         tokens.push({ type: "text", text: rest.slice(0, length) });
         index += length;
@@ -65,8 +117,25 @@ export function parseInline(source) {
 function splitTableRow(line) {
     let value = line.trim();
     if (value.startsWith("|")) value = value.slice(1);
-    if (value.endsWith("|")) value = value.slice(0, -1);
-    return value.split("|").map((cell) => cell.trim());
+    if (value.endsWith("|") && !isEscaped(value, value.length - 1)) value = value.slice(0, -1);
+    const cells = [];
+    let start = 0;
+    for (let index = 0; index < value.length; index += 1) {
+        if (value[index] === "\\" && value[index + 1] === "\\") { index += 1; continue; }
+        if (value[index] === "`" && !isEscaped(value, index)) {
+            const end = value.indexOf("`", index + 1);
+            if (end > index) { index = end; continue; }
+        }
+        if (value[index] === "$" || value[index] === "\\") {
+            const math = readMath(value, index);
+            if (math?.type === "math") { index += math.raw.length - 1; continue; }
+        }
+        if (value[index] === "|" && !isEscaped(value, index)) {
+            cells.push(value.slice(start, index).trim()); start = index + 1;
+        }
+    }
+    cells.push(value.slice(start).trim());
+    return cells;
 }
 
 function isTableSeparator(line) {
@@ -75,7 +144,10 @@ function isTableSeparator(line) {
 }
 
 export function parseMarkdown(source) {
-    const lines = String(source ?? "").replace(/\r\n?/g, "\n").split("\n");
+    const text = String(source ?? "").replace(/\r\n?/g, "\n");
+    const lines = text.split("\n");
+    let offset = 0;
+    const offsets = lines.map((line) => { const start = offset; offset += line.length + 1; return start; });
     const blocks = [];
     let i = 0;
 
@@ -83,15 +155,31 @@ export function parseMarkdown(source) {
         const line = lines[i];
         if (!line.trim()) { i += 1; continue; }
 
-        const fence = line.match(/^\s*```([^`]*)$/);
+        const fence = line.match(/^\s*(`{3,}|~{3,})([^`]*)$/);
         if (fence) {
-            const language = fence[1].trim();
+            const language = fence[2].trim();
+            const closingFence = new RegExp(`^\\s*${fence[1][0]}{${fence[1].length},}\\s*$`);
             const body = [];
             i += 1;
-            while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { body.push(lines[i]); i += 1; }
+            while (i < lines.length && !closingFence.test(lines[i])) { body.push(lines[i]); i += 1; }
             if (i < lines.length) i += 1;
             blocks.push({ type: "code", language, text: body.join("\n") });
             continue;
+        }
+
+        const trimmed = line.trimStart();
+        if (/^(\$\$|\\\[)/.test(trimmed)) {
+            const start = offsets[i] + line.length - trimmed.length;
+            const math = readMath(text, start);
+            if (math?.type === "math") {
+                const end = start + math.raw.length;
+                const nextLine = text.indexOf("\n", end);
+                if (!text.slice(end, nextLine < 0 ? text.length : nextLine).trim()) {
+                    blocks.push(math);
+                    while (i < lines.length && offsets[i] < end) i += 1;
+                    continue;
+                }
+            }
         }
 
         const heading = line.match(/^\s*(#{1,6})\s+(.+)$/);
@@ -138,7 +226,8 @@ export function parseMarkdown(source) {
         const paragraph = [line.trim()];
         i += 1;
         while (i < lines.length && lines[i].trim()) {
-            if (/^\s*```/.test(lines[i]) || /^\s*(#{1,6})\s+/.test(lines[i]) || /^\s*>/.test(lines[i]) || /^\s*([-+*]|\d+\.)\s+/.test(lines[i])) break;
+            if (/^\s*(`{3,}|~{3,})/.test(lines[i]) || /^\s*(#{1,6})\s+/.test(lines[i]) || /^\s*>/.test(lines[i]) || /^\s*([-+*]|\d+\.)\s+/.test(lines[i])) break;
+            if (/^\s*(\$\$|\\\[)/.test(lines[i])) break;
             if (i + 1 < lines.length && lines[i].includes("|") && isTableSeparator(lines[i + 1])) break;
             paragraph.push(lines[i].trim()); i += 1;
         }

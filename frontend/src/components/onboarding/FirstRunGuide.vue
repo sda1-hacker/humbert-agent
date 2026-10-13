@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { IconCheck, IconDown, IconLeft } from "@arco-design/web-vue/es/icon";
 import { useModelStore } from "../../stores/models.js";
 import { useAgentStore } from "../../stores/agents.js";
 import { listBuiltinTools } from "../../api/agents.js";
@@ -114,90 +115,199 @@ async function finish() {
 <template>
   <main class="guide">
     <section class="guide-card">
-      <header>
+      <header class="guide-header">
         <span class="eyebrow">HUMBERT · 首次使用</span>
         <h1>配置你的 Agent 助手</h1>
         <p>连接模型、验证可用性，再创建一个带独立工作区的助手。</p>
       </header>
 
       <nav class="steps" aria-label="配置步骤">
-        <span v-for="(label, index) in steps" :key="label" :class="{ active: step === index, done: step > index }">
-          <b>{{ index + 1 }}</b>{{ label }}
-        </span>
+        <ol>
+          <li v-for="(label, index) in steps" :key="label"
+              :class="{ active: step === index, done: step > index }"
+              :aria-current="step === index ? 'step' : undefined">
+            <span class="step-number">
+              <IconCheck v-if="step > index" aria-hidden="true" />
+              <template v-else>{{ index + 1 }}</template>
+            </span>
+            <span class="step-label">{{ $t(label) }}</span>
+          </li>
+        </ol>
       </nav>
 
-      <div v-if="step === 0" class="body">
+      <div v-if="step === 0" class="body" :aria-busy="busy">
         <h2>连接供应商</h2>
-        <p>已有供应商可以直接使用，也可以创建新的连接。API Key 仅保存到本机凭据存储。</p>
-        <label v-if="models.providers.length">已有供应商
-          <select v-model="providerID"><option v-for="item in models.providers" :key="item.id" :value="item.id">{{ item.name }}</option></select>
-        </label>
-        <button v-if="providerID" class="secondary" :disabled="busy" @click="advance(1)">使用此供应商</button>
+        <p class="step-description">已有供应商可以直接使用，也可以创建新的连接。API Key 仅保存到本机凭据存储。</p>
+        <div v-if="models.providers.length" class="field">
+          <span>已有供应商</span>
+          <a-select v-model="providerID" :disabled="busy" aria-label="已有供应商">
+            <a-option v-for="item in models.providers" :key="item.id" :value="item.id">{{ item.name }}</a-option>
+          </a-select>
+        </div>
+        <a-button v-if="providerID" type="outline" :disabled="busy" @click="advance(1)">使用此供应商</a-button>
         <div v-if="models.providers.length" class="divider">或新建供应商</div>
-        <label>名称<input v-model="provider.name" placeholder="例如：我的模型服务" autocomplete="off"></label>
-        <label>类型<select v-model="provider.type"><option value="openai">OpenAI</option><option value="openai_compatible">OpenAI 兼容接口</option><option value="ollama">Ollama</option></select></label>
-        <label>Base URL
-          <input v-model="provider.baseURL" :placeholder="provider.type === 'openai' ? '默认 https://api.openai.com/v1' : provider.type === 'ollama' ? '默认 http://127.0.0.1:11434' : 'https://example.com/v1'" autocomplete="off">
+        <div class="pair provider-fields">
+          <label class="field">名称
+            <a-input v-model="provider.name" :disabled="busy" placeholder="例如：我的模型服务" autocomplete="off" />
+          </label>
+          <div class="field">
+            <span>类型</span>
+            <a-select v-model="provider.type" :disabled="busy" aria-label="类型">
+              <a-option value="openai">OpenAI</a-option>
+              <a-option value="openai_compatible">OpenAI 兼容接口</a-option>
+              <a-option value="ollama">Ollama</a-option>
+            </a-select>
+          </div>
+        </div>
+        <label class="field">Base URL
+          <a-input v-model="provider.baseURL" :disabled="busy"
+                   :placeholder="provider.type === 'openai' ? $t('默认 https://api.openai.com/v1') : provider.type === 'ollama' ? $t('默认 http://127.0.0.1:11434') : 'https://example.com/v1'"
+                   autocomplete="off" />
         </label>
-        <label v-if="provider.type !== 'ollama'">API Key
-          <input v-model="provider.apiKey" type="password" autocomplete="new-password" placeholder="仅用于当前供应商连接">
+        <label v-if="provider.type !== 'ollama'" class="field">API Key
+          <a-input-password v-model="provider.apiKey" :disabled="busy" autocomplete="new-password" placeholder="仅用于当前供应商连接" />
         </label>
-        <button class="primary" :disabled="busy" @click="createProvider">{{ busy ? '正在保存…' : '保存并继续' }}</button>
+        <a-button class="primary-action" type="primary" :loading="busy" :disabled="busy" @click="createProvider">{{ $t(busy ? '正在保存…' : '保存并继续') }}</a-button>
       </div>
 
-      <div v-else-if="step === 1" class="body">
+      <div v-else-if="step === 1" class="body" :aria-busy="busy">
         <h2>选择对话模型</h2>
-        <p>填写服务商实际使用的模型标识。其余参数可以先使用默认值，之后在设置中调整。</p>
-        <label v-if="models.enabledModels.length">已有模型
-          <select v-model="modelID"><option v-for="item in models.enabledModels" :key="item.id" :value="item.id">{{ item.displayName }} · {{ item.providerName }}</option></select>
-        </label>
-        <button v-if="modelID" class="secondary" :disabled="busy" @click="advance(2)">使用此模型</button>
+        <p class="step-description">填写服务商实际使用的模型标识。其余参数可以先使用默认值，之后在设置中调整。</p>
+        <div v-if="models.enabledModels.length" class="field">
+          <span>已有模型</span>
+          <a-select v-model="modelID" :disabled="busy" aria-label="已有模型">
+            <a-option v-for="item in models.enabledModels" :key="item.id" :value="item.id">{{ item.displayName }} · {{ item.providerName }}</a-option>
+          </a-select>
+        </div>
+        <a-button v-if="modelID" type="outline" :disabled="busy" @click="advance(2)">使用此模型</a-button>
         <div v-if="models.enabledModels.length" class="divider">或新建模型</div>
-        <label>供应商<select v-model="providerID"><option v-for="item in models.providers" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
-        <label>模型标识<input v-model="model.name" placeholder="填写 API 使用的 model name" autocomplete="off"></label>
-        <details class="advanced"><summary>高级选项：上下文与输出预算</summary>
+        <div class="field">
+          <span>供应商</span>
+          <a-select v-model="providerID" :disabled="busy" aria-label="供应商">
+            <a-option v-for="item in models.providers" :key="item.id" :value="item.id">{{ item.name }}</a-option>
+          </a-select>
+        </div>
+        <label class="field">模型标识
+          <a-input v-model="model.name" :disabled="busy" placeholder="填写 API 使用的 model name" autocomplete="off" />
+        </label>
+        <details class="advanced">
+          <summary><IconDown aria-hidden="true" />高级选项：上下文与输出预算</summary>
           <p>若服务商提供了具体数值，请在这里填写；过高的数值可能导致请求被模型拒绝。</p>
-          <div class="pair"><label>Context Window<input v-model.number="model.contextWindow" type="number" min="4096"></label><label>最大输出 Token<input v-model.number="model.maxOutputTokens" type="number" min="256"></label></div>
+          <div class="pair">
+            <label class="field">Context Window
+              <a-input-number v-model="model.contextWindow" :disabled="busy" :min="4096" :max="2097152" />
+            </label>
+            <label class="field">最大输出 Token
+              <a-input-number v-model="model.maxOutputTokens" :disabled="busy" :min="256" />
+            </label>
+          </div>
         </details>
-        <button class="primary" :disabled="busy" @click="createModel">{{ busy ? '正在保存…' : '创建并继续' }}</button>
+        <a-button class="primary-action" type="primary" :loading="busy" :disabled="busy" @click="createModel">{{ $t(busy ? '正在保存…' : '创建并继续') }}</a-button>
       </div>
 
-      <div v-else-if="step === 2" class="body">
+      <div v-else-if="step === 2" class="body" :aria-busy="busy">
         <h2>连接与能力诊断</h2>
-        <p>对 {{ selectedModel?.displayName || '所选模型' }} 发送一条短消息，可能产生少量 Token 费用。</p>
-        <button class="primary" :disabled="busy || !modelID" @click="diagnose">{{ busy ? '正在连接…' : diagnostic ? '重新诊断' : '开始诊断' }}</button>
+        <p class="step-description">对 {{ selectedModel?.displayName || $t('所选模型') }} 发送一条短消息，可能产生少量 Token 费用。</p>
+        <a-button class="primary-action" type="primary" :loading="busy" :disabled="busy || !modelID" @click="diagnose">{{ $t(busy ? '正在连接…' : diagnostic ? '重新诊断' : '开始诊断') }}</a-button>
         <div v-if="diagnostic" class="diagnostic" :class="{ failure: !diagnostic.success }" role="status">
           <strong>{{ diagnostic.summary }}</strong><span v-if="diagnostic.durationMS"> · {{ diagnostic.durationMS }} ms</span>
           <p>{{ diagnostic.action }}</p>
-          <p v-if="diagnostic.success">工具调用：{{ diagnostic.toolsSupported ? '配置显示支持，尚未实测' : '当前配置未启用' }}</p>
+          <p v-if="diagnostic.success">工具调用：{{ $t(diagnostic.toolsSupported ? '配置显示支持，尚未实测' : '当前配置未启用') }}</p>
         </div>
-        <button v-if="diagnostic?.success" class="primary" @click="advance(3)">继续创建助手</button>
-        <button class="secondary" @click="emit('open-settings', ['credential', 'network', 'endpoint', 'timeout'].includes(diagnostic?.category) ? 'providers' : 'models')">打开相关设置</button>
+        <a-button v-if="diagnostic?.success" type="primary" :disabled="busy" @click="advance(3)">继续创建助手</a-button>
+        <a-button type="outline" :disabled="busy" @click="emit('open-settings', ['credential', 'network', 'endpoint', 'timeout'].includes(diagnostic?.category) ? 'providers' : 'models')">打开相关设置</a-button>
       </div>
 
-      <div v-else class="body">
-        <h2>{{ needsAgent ? '创建默认助手' : '准备就绪' }}</h2>
-        <p>{{ needsAgent ? '助手会使用所选模型和独立管理的工作区。创建后可在 Agent 设置中启用工具、Skills 和安全权限。' : '已有助手，可以开始对话。' }}</p>
-        <label v-if="needsAgent">助手名称<input v-model="agentName" maxlength="100" autocomplete="off"></label>
-        <details v-if="needsAgent && diagnostic?.toolsSupported && builtinTools.length" class="advanced"><summary>内置工具：默认启用常用能力</summary>
-          <label class="tool-choice"><input v-model="enableTools" type="checkbox">启用常用工具（文件、网页搜索、浏览器和提醒；浏览器需要安装 Chrome）</label>
+      <div v-else class="body" :aria-busy="busy">
+        <h2>{{ $t(needsAgent ? '创建默认助手' : '准备就绪') }}</h2>
+        <p class="step-description">{{ $t(needsAgent ? '助手会使用所选模型和独立管理的工作区。创建后可在 Agent 设置中启用工具、Skills 和安全权限。' : '已有助手，可以开始对话。') }}</p>
+        <label v-if="needsAgent" class="field">助手名称
+          <a-input v-model="agentName" :disabled="busy" :max-length="100" autocomplete="off" />
+        </label>
+        <details v-if="needsAgent && diagnostic?.toolsSupported && builtinTools.length" class="advanced">
+          <summary><IconDown aria-hidden="true" />内置工具：默认启用常用能力</summary>
+          <a-checkbox v-model="enableTools" class="tool-choice" :disabled="busy">启用常用工具（文件、网页搜索、浏览器和提醒；浏览器需要安装 Chrome）</a-checkbox>
         </details>
-        <button class="primary" :disabled="busy" @click="finish">{{ busy ? '正在创建…' : needsAgent ? '创建并开始对话' : '开始对话' }}</button>
+        <a-button class="primary-action" type="primary" :loading="busy" :disabled="busy" @click="finish">{{ $t(busy ? '正在创建…' : needsAgent ? '创建并开始对话' : '开始对话') }}</a-button>
       </div>
 
       <p v-if="error" class="error" role="alert">{{ error }}</p>
-      <footer><button v-if="step > 0" class="back" :disabled="busy" @click="advance(step - 1)">上一步</button><span>配置可以随时在设置中修改</span></footer>
+      <footer>
+        <a-button v-if="step > 0" type="text" :disabled="busy" @click="advance(step - 1)">
+          <template #icon><IconLeft /></template>上一步
+        </a-button>
+        <span>配置可以随时在设置中修改</span>
+      </footer>
     </section>
   </main>
 </template>
 
 <style scoped>
-.guide{height:100%;overflow:auto;display:grid;place-items:center;padding:32px;background:var(--h-bg)}
-.guide-card{width:min(760px,100%);padding:36px;border:1px solid var(--h-border);border-radius:18px;background:var(--h-surface);box-shadow:0 14px 40px rgba(0,0,0,.06)}
-.eyebrow{font-size:11px;letter-spacing:.15em;color:var(--h-text-muted);font-weight:700}
-h1{font-size:28px;margin:10px 0 6px}h2{font-size:19px;margin:0 0 8px}p{color:var(--h-text-muted);line-height:1.55;margin:0 0 18px}
-.steps{display:flex;gap:8px;margin:28px 0 30px}.steps span{display:flex;align-items:center;gap:6px;flex:1;color:var(--h-text-muted);font-size:12px}.steps b{width:25px;height:25px;border-radius:50%;display:grid;place-items:center;background:var(--h-bg);border:1px solid var(--h-border)}.steps .active{color:var(--h-text)}.steps .active b,.steps .done b{background:var(--h-accent);color:white;border-color:var(--h-accent)}
-.body{display:grid;gap:12px}.body>p{margin-bottom:4px}label{display:grid;gap:6px;color:var(--h-text);font-size:13px;font-weight:600}input,select{width:100%;height:38px;border:1px solid var(--h-border);border-radius:8px;padding:0 10px;background:var(--h-bg);color:var(--h-text);font:inherit}input:focus,select:focus{outline:2px solid var(--h-accent);outline-offset:1px}.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}.divider{color:var(--h-text-muted);font-size:12px;text-align:center;margin:3px 0}button{justify-self:start;min-height:36px;border-radius:8px;padding:0 15px;cursor:pointer;font:inherit}.primary{background:var(--h-accent);border:1px solid var(--h-accent);color:white}.secondary,.back{background:transparent;border:1px solid var(--h-border);color:var(--h-text)}button:disabled{opacity:.6;cursor:wait}.diagnostic{border:1px solid var(--h-success);border-radius:10px;padding:14px;background:var(--h-bg)}.diagnostic.failure{border-color:var(--h-danger)}.diagnostic p{margin:6px 0 0}.error{color:var(--h-danger);margin:18px 0 0}footer{display:flex;align-items:center;justify-content:space-between;margin-top:28px;color:var(--h-text-muted);font-size:12px}@media(max-width:650px){.guide{padding:12px;place-items:start center}.guide-card{padding:22px}.steps{flex-wrap:wrap}.steps span{min-width:40%}.pair{grid-template-columns:1fr}}
-.tool-choice{display:flex;align-items:center;gap:9px;font-weight:400}.tool-choice input{width:auto;height:auto}
-.advanced{border:1px solid var(--h-border);border-radius:8px;padding:10px 12px}.advanced summary{cursor:pointer;font-size:13px;color:var(--h-text)}.advanced p{margin:10px 0;font-size:12px}
+.guide {
+  height: 100%; overflow: auto; display: flex; padding: 32px 24px; background: var(--h-bg);
+}
+.guide-card {
+  width: min(720px, 100%); min-width: 0; margin: auto; padding: 32px;
+  border: 1px solid var(--h-border); border-radius: 12px; background: var(--h-surface);
+}
+.eyebrow { font-size: 11px; letter-spacing: .12em; color: var(--h-text-muted); font-weight: 600; }
+h1 { font-size: 26px; font-weight: 600; line-height: 1.35; margin: 12px 0 10px; }
+h2 { font-size: 18px; font-weight: 600; line-height: 1.4; margin: 0; }
+p { color: var(--h-text-muted); line-height: 1.65; margin: 0; }
+.guide-header p { font-size: 13px; }
+.steps { margin: 28px 0; padding-bottom: 24px; border-bottom: 1px solid var(--h-border); }
+.steps ol { display: flex; align-items: center; gap: 12px; list-style: none; padding: 0; margin: 0; }
+.steps li { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--h-text-muted); font-size: 12px; }
+.steps li:not(:last-child) { flex: 1; }
+.steps li:not(:last-child)::after { content: ""; flex: 1; min-width: 8px; height: 1px; margin-left: 4px; background: var(--h-border); }
+.step-number {
+  width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center;
+  border: 1px solid var(--h-border); border-radius: 50%; background: var(--h-bg); font-weight: 500;
+}
+.step-label { line-height: 1.4; }
+.steps .active { color: var(--h-accent); font-weight: 600; }
+.steps .active .step-number { border-color: var(--h-accent); background: var(--h-accent); color: var(--h-surface); }
+.steps .done .step-number { border-color: var(--h-accent-border); background: var(--h-accent-soft); color: var(--h-accent); }
+.steps .done::after { background: var(--h-accent-border) !important; }
+.body { display: grid; gap: 16px; }
+.step-description { font-size: 13px; margin: -8px 0 2px; }
+.field { display: grid; gap: 7px; min-width: 0; color: var(--h-text-secondary); font-size: 13px; font-weight: 500; }
+.field :deep(.arco-input-wrapper),
+.field :deep(.arco-select-view-single),
+.field :deep(.arco-input-number) { width: 100%; min-height: 38px; font-weight: 400; }
+.field :deep(.arco-select-view-single) { height: 38px; }
+.field :deep(.arco-input-number .arco-input-wrapper) { min-height: 36px; }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.provider-fields { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+.divider { display: flex; align-items: center; gap: 12px; color: var(--h-text-muted); font-size: 12px; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--h-border); }
+.body > .arco-btn { justify-self: start; min-height: 36px; }
+.primary-action { margin-top: 4px; }
+.diagnostic { border: 1px solid var(--h-success); border-radius: var(--h-radius-md); padding: 14px 16px; background: var(--h-success-soft); }
+.diagnostic.failure { border-color: var(--h-danger-border); background: var(--h-danger-soft); }
+.diagnostic p { font-size: 13px; margin-top: 6px; }
+.error { color: var(--h-danger); font-size: 13px; margin-top: 18px; }
+.advanced { border: 1px solid var(--h-border); border-radius: var(--h-radius-md); padding: 12px 14px; }
+.advanced summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-size: 13px; color: var(--h-text-secondary); }
+.advanced summary::-webkit-details-marker { display: none; }
+.advanced summary :deep(.arco-icon) { flex-shrink: 0; transform: rotate(-90deg); transition: transform 120ms ease; color: var(--h-text-muted); }
+.advanced[open] summary :deep(.arco-icon) { transform: rotate(0); }
+.advanced summary:focus-visible { outline: 2px solid var(--h-accent-border); outline-offset: 4px; border-radius: 2px; }
+.advanced p { margin: 12px 0; font-size: 12px; }
+.tool-choice { margin-top: 14px; align-items: flex-start; }
+.tool-choice :deep(.arco-checkbox-label) { white-space: normal; line-height: 1.6; font-size: 13px; }
+footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 28px; padding-top: 20px;
+  border-top: 1px solid var(--h-border); color: var(--h-text-muted); font-size: 12px;
+}
+footer > span { margin-left: auto; text-align: right; }
+@media (max-width: 600px) {
+  .guide { padding: 16px 12px; }
+  .guide-card { padding: 24px 20px; }
+  h1 { font-size: 23px; }
+  .steps ol { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+  .steps li::after { display: none; }
+  .pair { grid-template-columns: minmax(0, 1fr); }
+  footer { gap: 8px; }
+}
 </style>

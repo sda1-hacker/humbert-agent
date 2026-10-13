@@ -1,9 +1,10 @@
 <script setup>
-import { computed, ref } from "vue";
+import { computed, defineAsyncComponent, ref } from "vue";
 import MarkdownInline from "./MarkdownInline.vue";
 import { parseMarkdown } from "../../utils/markdown.js";
 
 const props = defineProps({ content: { type: String, default: "" } });
+const MathFormula = defineAsyncComponent(() => import("./MathFormula.vue"));
 const blocks = computed(() => parseMarkdown(props.content));
 const copiedIndex = ref(-1);
 
@@ -25,6 +26,7 @@ async function copyCode(text, index) {
     <template v-for="(block, index) in blocks" :key="index">
       <component :is="`h${block.level}`" v-if="block.type === 'heading'" class="md-heading"><MarkdownInline :tokens="block.inline" /></component>
       <p v-else-if="block.type === 'paragraph'" class="md-paragraph"><MarkdownInline :tokens="block.inline" /></p>
+      <MathFormula v-else-if="block.type === 'math'" :text="block.text" :raw="block.raw" :display="true" />
       <blockquote v-else-if="block.type === 'quote'" class="md-quote">
         <MarkdownRenderer :content="block.text || ''" />
       </blockquote>

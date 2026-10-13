@@ -505,6 +505,8 @@ a {
 .arco-select-option {
     border-radius: 6px;
 
+    background: var(--h-surface) !important;
+
     color: var(--h-text-secondary) !important;
 }
 
