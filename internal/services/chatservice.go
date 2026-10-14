@@ -124,6 +124,9 @@ func (s *ChatService) ServiceShutdown() error {
 // 方法只等待 Runtime 完成 Snapshot/Message/Run 初始化，
 // 不等待模型完整回复。
 func (s *ChatService) StartTurn(request StartTurnRequest) (agentruntime.StartTurnResult, error) {
+	if err := humanUIWrite(); err != nil {
+		return agentruntime.StartTurnResult{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), s.contextOperationTimeout())
 	defer cancel()
 	result, err := s.deps.Runtime.StartTurn(ctx, agentruntime.StartTurnInput{
@@ -192,6 +195,9 @@ func (s *ChatService) CompactContext(sessionID string) (agentruntime.ManualCompa
 // Tool 或后续模型回复。真实执行结果继续通过 humbert:runtime:event 返回，因此前端按钮不会
 // 被长时间模型调用阻塞。
 func (s *ChatService) ResolveApproval(request ResolveApprovalRequest) (agentruntime.ResolveApprovalResult, error) {
+	if err := humanUIWrite(); err != nil {
+		return agentruntime.ResolveApprovalResult{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 

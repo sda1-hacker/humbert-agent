@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,7 +188,7 @@ func (f *RunSkillScriptFactory) run(
 	if err := validateCommandArguments(input.Args, f.limits); err != nil {
 		return nil, fmt.Errorf("run_skill_script args 无效: %w", err)
 	}
-	executable, err := commandenv.Resolve(command, scope.Workspace.RootDir)
+	executable, err := sandbox.ResolveCommand(command, scope.Workspace.RootDir)
 	if err != nil {
 		return nil, fmt.Errorf("找不到 Skill 脚本解释器 %q: %w", command, err)
 	}

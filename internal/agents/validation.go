@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
+	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
@@ -115,7 +117,7 @@ func normalizeBuiltinToolSelection(values []string) ([]string, error) {
 	result := make([]string, 0, len(values))
 	for _, raw := range values {
 		name := strings.TrimSpace(raw)
-		if name == "" {
+		if humberttools.CurrentBuiltinName(name) == "" {
 			continue
 		}
 		if len(name) > 64 {
@@ -134,6 +136,33 @@ func normalizeBuiltinToolSelection(values []string) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+// preserveGitActionSelection 防止保存新版 UI 的 git 勾选时扩大旧 Profile 的动作范围。
+// 取消 Git 并保存后再启用，才会改为完整的三个查询动作。
+func preserveGitActionSelection(previous, selected []string) []string {
+	if !slices.Contains(selected, "git") || slices.Contains(previous, "git") {
+		return selected
+	}
+	legacy := make([]string, 0, 3)
+	for _, name := range previous {
+		if name != "git" && humberttools.CurrentBuiltinName(name) == "git" {
+			legacy = append(legacy, name)
+		}
+	}
+	if len(legacy) == 0 {
+		return selected
+	}
+	result := make([]string, 0, len(selected)+len(legacy))
+	for _, name := range selected {
+		if name == "git" {
+			result = append(result, legacy...)
+		} else {
+			result = append(result, name)
+		}
+	}
+	sort.Strings(result)
+	return slices.Compact(result)
 }
 
 // normalizeSandboxPolicy 校验并去重额外目录；空策略继续继承应用默认值，不能在保存时

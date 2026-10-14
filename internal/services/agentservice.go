@@ -13,6 +13,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
+	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
@@ -98,6 +99,7 @@ type BuiltinToolDTO struct {
 	Risk     string `json:"risk"`
 	Category string `json:"category"`
 	Label    string `json:"label"`
+	OptIn    bool   `json:"optIn,omitempty"`
 }
 
 // SandboxStatusDTO 描述当前平台实际可用的原生隔离能力及全局默认值。
@@ -232,6 +234,9 @@ func (s *AgentService) GetAgent(id string) (AgentDTO, error) {
 
 // CreateAgent 创建 Agent。
 func (s *AgentService) CreateAgent(request CreateAgentRequest) (AgentDTO, error) {
+	if err := humanUIWrite(); err != nil {
+		return AgentDTO{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 
 	defer cancel()
@@ -279,6 +284,9 @@ func (s *AgentService) CreateAgent(request CreateAgentRequest) (AgentDTO, error)
 
 // UpdateAgent 修改 Agent。
 func (s *AgentService) UpdateAgent(id string, request UpdateAgentRequest) (AgentDTO, error) {
+	if err := humanUIWrite(); err != nil {
+		return AgentDTO{}, err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), agentServiceTimeout)
 
 	defer cancel()
@@ -398,6 +406,7 @@ func (s *AgentService) ListBuiltinTools() []BuiltinToolDTO {
 			Risk:     string(descriptor.Risk),
 			Category: builtinToolCategory(descriptor.Name),
 			Label:    builtinToolLabel(descriptor.Name),
+			OptIn:    descriptor.OptIn,
 		})
 	}
 	return result
@@ -587,7 +596,7 @@ func (s *AgentService) toDTOWithCatalog(value agents.AgentInfo, catalog []Builti
 
 		EnabledSkills: append([]string(nil), value.Agent.EnabledSkills...),
 
-		EnabledBuiltinTools:    value.Agent.EnabledBuiltinTools,
+		EnabledBuiltinTools:    humberttools.CurrentBuiltinNames(value.Agent.EnabledBuiltinTools),
 		BuiltinToolsConfigured: value.Agent.EnabledBuiltinTools != nil,
 		AvailableBuiltinTools:  append([]BuiltinToolDTO{}, catalog...),
 		Sandbox:                sandboxPolicyDTO(value.Agent.Sandbox),
@@ -637,7 +646,7 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 		}
 	}
 	for _, raw := range values {
-		name := strings.TrimSpace(raw)
+		name := humberttools.CurrentBuiltinName(raw)
 		if name == "" {
 			continue
 		}
@@ -650,11 +659,11 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 
 func builtinToolCategory(name string) string {
 	switch name {
-	case "list_files", "read_file", "write_file", "edit_file", "glob_files", "grep_files", "apply_patch", "copy_file", "move_file", "delete_file":
+	case "list_files", "read_file", "write_file", "edit_file", "glob_files", "grep_files":
 		return "files"
-	case "run_command":
+	case "run_command", "computer":
 		return "execution"
-	case "git_status", "git_diff", "git_log":
+	case "git":
 		return "git"
 	case "web_search", "web_fetch", "browser":
 		return "web"
@@ -662,7 +671,7 @@ func builtinToolCategory(name string) string {
 		return "skills"
 	case "list_agents", "run_agent":
 		return "collaboration"
-	case "get_current_time", "update_plan", "schedule_task":
+	case "schedule_task":
 		return "agent"
 	default:
 		return "other"
@@ -672,11 +681,11 @@ func builtinToolCategory(name string) string {
 func builtinToolLabel(name string) string {
 	labels := map[string]string{
 		"list_files": "列出文件", "read_file": "读取文件", "write_file": "写入文件", "edit_file": "编辑文件",
-		"glob_files": "按名称查找文件", "grep_files": "搜索文件内容", "apply_patch": "批量应用补丁",
-		"copy_file": "复制文件", "move_file": "移动文件", "delete_file": "删除文件", "run_command": "执行本地命令",
-		"git_status": "Git 状态", "git_diff": "Git Diff", "git_log": "Git 历史", "web_search": "网页搜索",
-		"web_fetch": "读取网页", "browser": "浏览网页与截图", "install_skill": "安装 Skill", "get_current_time": "当前时间", "update_plan": "更新计划", "schedule_task": "安排提醒或任务",
+		"glob_files": "按名称查找文件", "grep_files": "搜索文件内容", "run_command": "执行本地命令",
+		"git": "查看 Git", "web_search": "网页搜索",
+		"web_fetch": "读取网页", "browser": "浏览网页与截图", "install_skill": "安装 Skill", "schedule_task": "安排提醒或任务",
 		"list_agents": "查看可用 Agent", "run_agent": "调用专业 Agent",
+		"computer": "操作桌面应用",
 	}
 	if label := labels[name]; label != "" {
 		return label

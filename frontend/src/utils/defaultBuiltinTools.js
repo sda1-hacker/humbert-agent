@@ -1,8 +1,8 @@
-// 新建 Agent 只预选常用能力；其余工具仍可在 Agent 设置中逐项开启。
+// 新建 Agent 默认开启常用能力；用户仍可在设置中逐项关闭。
 const defaultNames = new Set([
   "list_files", "glob_files", "grep_files", "read_file",
   "write_file", "edit_file", "web_search", "web_fetch", "browser",
-  "get_current_time", "schedule_task",
+  "schedule_task", "computer", "install_skill", "list_agents", "run_agent",
 ]);
 
 export function defaultBuiltinTools(catalog) {

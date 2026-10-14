@@ -14,6 +14,9 @@ import * as schema$0 from "../../../../cloudwego/eino/schema/models.js";
 import * as approval$0 from "../approval/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as models$0 from "../models/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as sandbox$0 from "../sandbox/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -705,6 +708,13 @@ export class BuiltinToolDTO {
              * @type {string}
              */
             this["label"] = "";
+        }
+        if (/** @type {any} */(false)) {
+            /**
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["optIn"] = undefined;
         }
 
         Object.assign(this, $$source);
@@ -1817,68 +1827,12 @@ export class MessagePageDTO {
 /**
  * ModelCapabilitiesDTO 是 Runtime 经过 Auto 推断 + Override 后的有效能力。
  */
-export class ModelCapabilitiesDTO {
-    /**
-     * Creates a new ModelCapabilitiesDTO instance.
-     * @param {Partial<ModelCapabilitiesDTO>} [$$source = {}] - The source object to create the ModelCapabilitiesDTO.
-     */
-    constructor($$source = {}) {
-        if (!("tools" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["tools"] = false;
-        }
-        if (!("vision" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["vision"] = false;
-        }
-        if (!("files" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["files"] = false;
-        }
-        if (!("reasoning" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["reasoning"] = false;
-        }
-        if (!("json" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["json"] = false;
-        }
-        if (!("audio" in $$source)) {
-            /**
-             * @member
-             * @type {boolean}
-             */
-            this["audio"] = false;
-        }
+export const ModelCapabilitiesDTO = models$0.Capabilities;
 
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new ModelCapabilitiesDTO instance from a string or object.
-     * @param {any} [$$source = {}]
-     * @returns {ModelCapabilitiesDTO}
-     */
-    static createFrom($$source = {}) {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new ModelCapabilitiesDTO(/** @type {Partial<ModelCapabilitiesDTO>} */($$parsedSource));
-    }
-}
+/**
+ * ModelCapabilitiesDTO 是 Runtime 经过 Auto 推断 + Override 后的有效能力。
+ * @typedef {models$0.Capabilities} ModelCapabilitiesDTO
+ */
 
 /**
  * ModelCapabilityConfigDTO 是用户对模型能力的三态覆盖配置。
@@ -5855,7 +5809,7 @@ const $$createType21 = $Create.Array($$createType20);
 const $$createType22 = MessageDTO.createFrom;
 const $$createType23 = $Create.Array($$createType22);
 const $$createType24 = ModelCapabilityConfigDTO.createFrom;
-const $$createType25 = ModelCapabilitiesDTO.createFrom;
+const $$createType25 = models$0.Capabilities.createFrom;
 const $$createType26 = ProviderDTO.createFrom;
 const $$createType27 = $Create.Array($$createType26);
 const $$createType28 = ModelDTO.createFrom;

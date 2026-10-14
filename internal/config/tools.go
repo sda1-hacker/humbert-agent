@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/viper"
 
-	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
+	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 )
 
 const (
@@ -332,7 +332,7 @@ func SafeCommandEnvironment() []string {
 
 		value, ok := os.LookupEnv(key)
 		if key == "PATH" {
-			value, ok = commandenv.Path(), true
+			value, ok = sandbox.CommandPath(), true
 		}
 
 		if !ok || strings.ContainsRune(value, '\x00') {

@@ -253,7 +253,7 @@ func (s *Service) Update(ctx context.Context, id string, input UpdateInput) (Age
 			current.EnabledMCPTools = cloneMCPSelections(mcpTools)
 		}
 		if input.EnabledBuiltinTools != nil {
-			current.EnabledBuiltinTools = cloneStringsPreserveNil(builtinTools)
+			current.EnabledBuiltinTools = cloneStringsPreserveNil(preserveGitActionSelection(current.EnabledBuiltinTools, builtinTools))
 		}
 		if input.Sandbox != nil {
 			current.Sandbox = policy
@@ -336,7 +336,7 @@ func (s *Service) UpdateSecurity(ctx context.Context, id string, names []string,
 		return AgentInfo{}, err
 	}
 	return s.mutateProfile(ctx, id, func(a *Agent) error {
-		a.EnabledBuiltinTools, a.Sandbox = append([]string{}, tools...), normalized
+		a.EnabledBuiltinTools, a.Sandbox = append([]string{}, preserveGitActionSelection(a.EnabledBuiltinTools, tools)...), normalized
 		return nil
 	})
 }

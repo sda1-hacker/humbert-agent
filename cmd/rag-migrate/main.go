@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/indexer/postgres"
+	ragindexer "github.com/sda1-hacker/humbert-agent/internal/rag/indexer"
 )
 
 func main() {
@@ -24,17 +24,17 @@ func run() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	if err := postgres.EnsureExtensions(ctx, dsn); err != nil {
+	if err := ragindexer.EnsureExtensions(ctx, dsn); err != nil {
 		return err
 	}
-	pool, err := postgres.NewPool(ctx, dsn)
+	pool, err := ragindexer.NewPool(ctx, dsn)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	if err = postgres.Migrate(ctx, pool); err != nil {
+	if err = ragindexer.Migrate(ctx, pool); err != nil {
 		return err
 	}
-	fmt.Printf("RAG schema ready: version %d\n", postgres.SchemaVersion)
+	fmt.Printf("RAG schema ready: version %d\n", ragindexer.SchemaVersion)
 	return nil
 }

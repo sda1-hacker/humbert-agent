@@ -20,9 +20,9 @@ export function createAgentForm(agent, { tools = [], sandboxStatus = null, defau
     workspacePath: agent?.workspacePath || "",
     workspaceDisplayPath: agent?.workspaceDisplayPath || "",
     availableBuiltinTools: [...available],
-    // 已配置的空集合表示全部禁用；未配置的既有 Agent 保持其默认工具语义。
+    // 已保存的选择（包括空集合）优先于默认值，避免重新勾选用户关闭的工具。
     enabledBuiltinTools: agent
-      ? agent.builtinToolsConfigured ? [...(agent.enabledBuiltinTools || [])] : available.map(tool => tool.name)
+      ? agent.builtinToolsConfigured ? [...(agent.enabledBuiltinTools || [])] : available.filter(tool => !tool.optIn).map(tool => tool.name)
       : defaultBuiltinTools(available),
     builtinToolsConfigured: agent ? Boolean(agent.builtinToolsConfigured) : available.length > 0,
     sandbox: {

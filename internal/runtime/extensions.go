@@ -12,7 +12,6 @@ import (
 
 	einotool "github.com/cloudwego/eino/components/tool"
 
-	"github.com/sda1-hacker/humbert-agent/internal/component"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
 
@@ -27,16 +26,16 @@ type CapabilitySummary struct {
 // 不提供服务查找或热卸载，避免关闭正在被 Turn/checkpoint 使用的连接。
 type extensionRegistry struct {
 	mu        sync.Mutex
-	providers map[string]component.Provider
+	providers map[string]CapabilityProvider
 	sealed    bool
 }
 
 type registeredProvider struct {
 	id       string
-	provider component.Provider
+	provider CapabilityProvider
 }
 
-func (r *extensionRegistry) register(provider component.Provider) error {
+func (r *extensionRegistry) register(provider CapabilityProvider) error {
 	if provider == nil {
 		return errors.New("能力提供者不能为空")
 	}
@@ -53,7 +52,7 @@ func (r *extensionRegistry) register(provider component.Provider) error {
 		return errors.New("Runtime 能力注册已完成，请在 Bootstrap 中注册模块")
 	}
 	if r.providers == nil {
-		r.providers = make(map[string]component.Provider)
+		r.providers = make(map[string]CapabilityProvider)
 	}
 	if _, exists := r.providers[id]; exists {
 		return fmt.Errorf("重复的能力提供者 %q", id)
@@ -79,7 +78,7 @@ func (r *extensionRegistry) snapshot() []registeredProvider {
 }
 
 // RegisterCapabilityProvider 在应用构造期间接入模块，不改变既有 Builtin 默认选择语义。
-func (r *Resolver) RegisterCapabilityProvider(provider component.Provider) error {
+func (r *Resolver) RegisterCapabilityProvider(provider CapabilityProvider) error {
 	if r == nil || r.capabilities == nil {
 		return errors.New("Runtime 能力装配器未初始化")
 	}
@@ -112,8 +111,8 @@ func (r *extensionRegistry) resolve(ctx context.Context, agentID string, scope h
 			}
 			selected[name] = true
 		}
-		request := component.Request{AgentID: agentID, Scope: cloneCapabilityScope(scope), ToolNames: slices.Clone(names)}
-		var contribution component.Contribution
+		request := CapabilityRequest{AgentID: agentID, Scope: cloneCapabilityScope(scope), ToolNames: slices.Clone(names)}
+		var contribution CapabilityContribution
 		if preview {
 			contribution, err = provider.Describe(ctx, request)
 		} else {

@@ -14,6 +14,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
+	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
 
@@ -50,7 +51,7 @@ func (e *Executor) Execute(ctx context.Context, snapshot *Snapshot, checkpointSt
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	events := runner.Run(ctx, snapshot.Messages, adk.WithCheckPointID(snapshot.RunID))
+	events := runner.Run(humberttools.WithRunContext(ctx), snapshot.Messages, adk.WithCheckPointID(snapshot.RunID))
 	return e.consumeEvents(ctx, snapshot, events, emit)
 }
 
@@ -82,7 +83,7 @@ func (e *Executor) Resume(
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	events, err := runner.ResumeWithParams(ctx, snapshot.RunID, &adk.ResumeParams{Targets: map[string]any{interruptID: resumeJSON}})
+	events, err := runner.ResumeWithParams(humberttools.WithRunContext(ctx), snapshot.RunID, &adk.ResumeParams{Targets: map[string]any{interruptID: resumeJSON}})
 	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("恢复 Eino Agent Checkpoint 失败: %w", err)
 	}

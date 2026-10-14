@@ -52,6 +52,20 @@ const sessionStore = useSessionStore();
 
 const runtimeStore = useRuntimeStore();
 
+// 使用现有运行事件投影全局停止入口，切换会话/设置页后仍能接管，不另建状态或轮询。
+const computerSessions = computed(() => Object.entries(runtimeStore.runs)
+    .filter(([, run]) => run.requestID && run.tools?.some((tool) => tool.name === "computer"))
+    .map(([sessionID]) => sessionID));
+const stoppingComputer = ref(false);
+async function stopComputer() {
+  stoppingComputer.value = true;
+  try {
+    const outcomes = await Promise.allSettled(computerSessions.value.map((sessionID) => runtimeStore.cancel(sessionID)));
+    const failed = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failed) Message.error(failed.reason?.message || String(failed.reason));
+  } finally { stoppingComputer.value = false; }
+}
+
 const taskStore = useTaskStore();
 
 const proactiveStore = useProactiveStore();
@@ -449,6 +463,7 @@ onUnmounted(() => {
         @toggle-left="toggleLeftPanel"
         @toggle-right="toggleRightPanel"
     />
+    <a-button v-if="computerSessions.length" class="computer-stop" status="danger" :loading="stoppingComputer" @click="stopComputer">{{ $t('停止桌面任务并接管') }}</a-button>
     <div v-if="taskNotification" class="task-notification" role="status">
       <div><strong>{{ taskNotification.title }}</strong><p>{{ taskNotification.body }}</p></div>
       <a-button size="small" @click="openTask(taskNotification.taskID)">查看任务</a-button>
@@ -533,6 +548,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.computer-stop { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 1100; --wails-draggable: no-drag; }
 .task-notification { position: fixed; right: 20px; bottom: 20px; z-index: 1000; display: flex; align-items: center; gap: 10px; max-width: min(520px, calc(100vw - 40px)); padding: 12px; border: 1px solid var(--h-border); border-radius: 10px; background: var(--h-surface); box-shadow: 0 10px 30px rgba(0,0,0,.14); }
 .task-notification div { min-width: 0; }
 .task-notification p { margin: 4px 0 0; max-height: 4.5em; overflow: hidden; color: var(--h-text-muted); font-size: 12px; }

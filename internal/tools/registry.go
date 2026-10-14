@@ -187,6 +187,10 @@ func (r *Registry) Resolve(ctx context.Context, scope Scope) (ResolvedTools, err
 			known[definition.descriptor.Name] = struct{}{}
 		}
 		for _, name := range scope.EnabledBuiltinTools {
+			name = CurrentBuiltinName(name)
+			if name == "" {
+				continue
+			}
 			if _, ok := known[name]; !ok {
 				return ResolvedTools{}, fmt.Errorf("%w: Agent 选择了不存在的 Builtin Tool %q", ErrToolNotFound, name)
 			}
@@ -204,6 +208,9 @@ func (r *Registry) Resolve(ctx context.Context, scope Scope) (ResolvedTools, err
 			return ResolvedTools{}, fmt.Errorf("解析 Tool Snapshot 被取消: %w", err)
 		}
 		descriptor := definition.descriptor
+		if descriptor.OptIn && scope.EnabledBuiltinTools == nil {
+			continue
+		}
 		if _, blocked := disabled[descriptor.Name]; blocked {
 			continue
 		}

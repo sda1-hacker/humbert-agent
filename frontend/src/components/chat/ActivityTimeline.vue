@@ -136,7 +136,7 @@ function emptyResultText(call) {
       <div v-if="running && !steps.length" class="activity-step__heading activity-step__pending">{{ t('正在分析…') }}</div>
     </div>
     <div v-for="step in verificationSteps" :key="`verification:${step.key}`" class="activity-tool__verification" role="status">
-      {{ t('网页需要安全验证。请在浏览器窗口手动完成，完成后告诉 Agent 继续。') }}
+      {{ t(step.call?.name === 'computer' ? '桌面需要手动验证，请接管并完成后发送新消息继续。' : '网页需要安全验证。请在浏览器窗口手动完成，完成后告诉 Agent 继续。') }}
     </div>
     <BrowserScreenshotCard
         v-for="screenshot in screenshots"
@@ -144,6 +144,7 @@ function emptyResultText(call) {
         :session-id="sessionId"
         :attachment-id="screenshot.attachmentId"
         :name="screenshot.name"
+        :desktop="screenshot.desktop"
     />
   </section>
 </template>

@@ -176,6 +176,8 @@ async function removeAgent() {
       v-model:visible="visible"
       :title="modalTitle"
       :width="700"
+      :modal-style="{ height: '90vh', boxSizing: 'border-box', display: 'inline-flex', flexDirection: 'column' }"
+      :body-style="{ flex: 1, minHeight: 0, overflowY: 'auto' }"
       :mask-closable="!saving"
       :esc-to-close="!saving"
       modal-class="agent-settings-modal"
@@ -511,10 +513,6 @@ async function removeAgent() {
   width: 100%;
   align-items: center;
   justify-content: space-between;
-}
-:deep(.agent-settings-modal .arco-modal-body) {
-  max-height: 72vh;
-  overflow-y: auto;
 }
 @media (max-width: 760px) {
   .model-role-grid {

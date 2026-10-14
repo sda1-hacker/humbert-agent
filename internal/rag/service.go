@@ -13,11 +13,11 @@ import (
 	"github.com/cloudwego/eino/components/indexer"
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
+
 	"github.com/sda1-hacker/humbert-agent/internal/rag/chunker"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/rerank"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/search"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
 // 分块类型区分用于检索的正文块与用于补充上下文的父块。
@@ -104,7 +104,7 @@ type Config struct {
 	// Reranker 可选精排引擎，未提供时保留召回排序。
 	Reranker *rerank.Engine
 	// InputBuilder 向量和关键词共用的检索文本构造规则。
-	InputBuilder searchcontent.Builder
+	InputBuilder retrieval.SearchTextBuilder
 	// ParentLoader 根据知识库创建父块读取器。
 	ParentLoader func(string) (search.ParentLoader, error)
 	// BeforeSearch 检索前执行的可选检查，例如验证模型档案。
@@ -510,7 +510,7 @@ func documentTitle(doc *schema.Document) string {
 		return ""
 	}
 
-	if title := searchcontent.DefaultBuilder().Title(doc); title != "" {
+	if title := retrieval.DefaultSearchTextBuilder().Title(doc); title != "" {
 		return title
 	}
 

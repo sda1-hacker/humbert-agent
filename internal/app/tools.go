@@ -49,6 +49,7 @@ type toolDependencies struct {
 	Sessions           *sessions.Service
 	BrowserProfileRoot string
 	BrowserVision      builtin.BrowserVisionInspector
+	ComputerVision     builtin.ComputerVisionInspector
 }
 
 // buildToolRegistry 是默认工具唯一的装配位置；业务实现仍留在各个 Eino Factory 中。
@@ -106,19 +107,10 @@ func buildToolRegistry(ctx context.Context, configFile string, deps toolDependen
 		if err != nil {
 			return nil, err
 		}
-		for _, factory := range append(factories, builtin.NewDeleteFileFactory()) {
+		for _, factory := range factories {
 			if err := register(factory, nil); err != nil {
 				return nil, err
 			}
-		}
-		if err := register(builtin.NewCopyFileFactory(cfg.Files.MaxWritableFileBytes, reader)); err != nil {
-			return nil, err
-		}
-		if err := register(builtin.NewMoveFileFactory(cfg.Files.MaxWritableFileBytes)); err != nil {
-			return nil, err
-		}
-		if err := register(builtin.NewApplyPatchFactory(cfg.Files.MaxWritableFileBytes)); err != nil {
-			return nil, err
 		}
 	}
 	if deps.BrowserProfileRoot == "" {
@@ -127,6 +119,9 @@ func buildToolRegistry(ctx context.Context, configFile string, deps toolDependen
 	browser := builtin.NewBrowserFactory(filepath.Clean(deps.BrowserProfileRoot), deps.BrowserVision)
 	browser.SetAttachmentWriter(deps.Sessions)
 	if err := register(browser, nil); err != nil {
+		return nil, err
+	}
+	if err := register(builtin.NewComputerFactory(deps.Sessions, deps.ComputerVision), nil); err != nil {
 		return nil, err
 	}
 	if cfg.WebSearch.Enabled {
@@ -153,18 +148,9 @@ func buildToolRegistry(ctx context.Context, configFile string, deps toolDependen
 		if err := register(builtin.NewRunSkillScriptFactory(deps.Skills, deps.Workspaces, deps.Sandbox.Runner(), limits, environment)); err != nil {
 			return nil, err
 		}
-		gitBuilders := []func(*sandbox.Runner, []string, int) (humberttools.Factory, error){builtin.NewGitStatusFactory, builtin.NewGitDiffFactory, builtin.NewGitLogFactory}
-		for _, build := range gitBuilders {
-			if err := register(build(deps.Sandbox.Runner(), environment, cfg.Command.MaxOutputBytes)); err != nil {
-				return nil, err
-			}
+		if err := register(builtin.NewGitFactory(deps.Sandbox.Runner(), environment, cfg.Command.MaxOutputBytes)); err != nil {
+			return nil, err
 		}
-	}
-	if err := register(builtin.NewCurrentTimeFactory(), nil); err != nil {
-		return nil, err
-	}
-	if err := register(builtin.NewUpdatePlanFactory(), nil); err != nil {
-		return nil, err
 	}
 	descriptors := registry.List()
 	names := make([]string, 0, len(descriptors))

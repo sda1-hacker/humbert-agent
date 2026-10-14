@@ -11,9 +11,9 @@ import (
 	"unicode"
 
 	"github.com/cloudwego/eino/schema"
+
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
 // Scorer 按输入片段顺序返回精排分数；返回数量须与片段数一致。
@@ -317,7 +317,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 // DefaultPassageBuilder 复用统一文本构造规则，将标题、标题路径与子块正文交给精排模型。
 func DefaultPassageBuilder(result retrieval.SearchResult) string {
 	doc := &schema.Document{MetaData: result.Metadata}
-	return searchcontent.BuildText(searchcontent.DefaultBuilder().Title(doc), result.ContextHeader, result.Content)
+	return retrieval.BuildSearchText(retrieval.DefaultSearchTextBuilder().Title(doc), result.ContextHeader, result.Content)
 }
 
 // applyMMR 使用相关性与文本集合的 Jaccard 相似度选择尽量不重复的结果，不修改相关性分数。

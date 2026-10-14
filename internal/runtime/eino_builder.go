@@ -15,7 +15,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
-	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
 
@@ -31,17 +30,17 @@ func buildChatModelAgent(ctx context.Context, snapshot *Snapshot, description st
 		Name:          snapshot.AgentName, Description: description,
 		Instruction: snapshot.Instruction,
 		Model:       trackModel(snapshot.Model, snapshot),
-		Handlers:    append([]adk.ChatModelAgentMiddleware(nil), snapshot.AgentHandlers...),
+		Handlers:    append(append([]adk.ChatModelAgentMiddleware(nil), snapshot.AgentHandlers...), &fixedToolDefinitions{}),
 		ToolsConfig: adk.ToolsConfig{
 			ToolsNodeConfig: compose.ToolsNodeConfig{Tools: snapshot.Tools, ExecuteSequentially: true, ToolCallMiddlewares: []compose.ToolMiddleware{{Invokable: buildToolLifecycleMiddleware(snapshot)}}},
 		},
 	})
 }
 
-// buildAgentHandlers 固定“Skills → Eino Reduction → Context Compaction”的处理顺序。
+// buildAgentHandlers 固定“Eino Reduction → Context Compaction”的处理顺序。
 // 子 Agent 使用独立的 Context 标识，但辅助模型调用仍计入父运行预算。
 func (r *Resolver) buildAgentHandlers(ctx context.Context, accounting *Snapshot, roles resolvedModelRoles,
-	skillSnapshot skills.RuntimeSnapshot, scope humberttools.Scope, names []string, budget contextengine.Budget,
+	scope humberttools.Scope, names []string, budget contextengine.Budget,
 	toolTokens int, contextID, instruction string,
 ) ([]adk.ChatModelAgentMiddleware, *contextengine.MidRunCompactor, error) {
 	compactModel := compactionModel(roles)
@@ -51,15 +50,11 @@ func (r *Resolver) buildAgentHandlers(ctx context.Context, accounting *Snapshot,
 	if err != nil {
 		return nil, nil, fmt.Errorf("创建 MidRun Context Middleware 失败: %w", err)
 	}
-	handlers := make([]adk.ChatModelAgentMiddleware, 0, 3)
-	if skillSnapshot.Enabled() {
-		handlers = append(handlers, skillSnapshot.Middleware())
-	}
 	reduction, err := r.capabilities.tools.Reduction(ctx, scope, names, budget.SoftThresholdTokens*3/4, handler.Count)
 	if err != nil {
 		return nil, nil, err
 	}
-	return append(handlers, reduction, handler), handler, nil
+	return []adk.ChatModelAgentMiddleware{reduction, handler}, handler, nil
 }
 
 // BuildChildAgent 为 run_agent 构建一次性的独立 Eino Runtime。
@@ -88,20 +83,20 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 	capabilities, err := r.capabilities.resolve(ctx, childInfo.Agent, humberttools.Scope{
 		RequestID: input.ParentScope.RequestID, RunID: input.ParentScope.RunID, SessionID: input.ParentScope.SessionID,
 		AgentID: input.ParentScope.AgentID, Workspace: input.ParentScope.Workspace, Sandbox: input.ParentScope.Sandbox,
-		DisabledBuiltinTools: []string{collaboration.ListAgentsToolName, collaboration.RunAgentToolName, "session_history", "install_skill", "schedule_task"},
+		DisabledBuiltinTools: []string{collaboration.ListAgentsToolName, collaboration.RunAgentToolName, "session_history", "install_skill", "schedule_task", "computer"},
 		ToolResultMaxChars:   toolResultMaxCharsForContext(modelSnapshot.ContextWindow),
 	}, false)
 	if err != nil {
 		return collaboration.BuiltAgent{}, err
 	}
 	resolvedTools, skillSnapshot := capabilities.tools, capabilities.skills
-	descriptors, toolScope := capabilities.descriptors, capabilities.scope
+	toolScope := capabilities.scope
 	exposedNames := capabilities.toolNames()
 	if err := validateToolCapability(modelSnapshot, modelRoleChat, exposedNames); err != nil {
 		return collaboration.BuiltAgent{}, err
 	}
 
-	instruction := buildRuntimeInstruction(childInfo.Agent.Name, childInfo.Agent.Instruction, input.ParentScope.Workspace, descriptors, time.Now())
+	instruction := buildRuntimeInstruction(childInfo.Agent.Name, childInfo.Agent.Instruction, input.ParentScope.Workspace, time.Now())
 	instruction, err = r.withUserPreferences(ctx, instruction)
 	if err != nil {
 		return collaboration.BuiltAgent{}, err
@@ -136,7 +131,7 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 	eventSnapshot.Instruction = instruction
 	eventSnapshot.Tools = childTools
 	eventSnapshot.MaxIterations = r.maxIterations
-	handlers, _, err := r.buildAgentHandlers(ctx, eventSnapshot, roles, skillSnapshot, toolScope,
+	handlers, _, err := r.buildAgentHandlers(ctx, eventSnapshot, roles, toolScope,
 		exposedNames, budget, toolTokens,
 		input.ParentScope.SessionID+"/subagent/"+childInfo.Agent.ID, instruction)
 	if err != nil {

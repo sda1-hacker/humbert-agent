@@ -53,6 +53,29 @@ func BuildPresentation(request Request) (Presentation, error) {
 	}
 
 	switch request.ToolName {
+	case "computer":
+		var input struct {
+			Action   string `json:"action"`
+			WindowID string `json:"window_id"`
+			Text     string `json:"text"`
+			Key      string `json:"key"`
+			X        *int   `json:"x"`
+			Y        *int   `json:"y"`
+		}
+		if err := json.Unmarshal([]byte(request.Arguments), &input); err != nil {
+			return Presentation{}, fmt.Errorf("解析 computer 审批参数失败: %w", err)
+		}
+		fields := []PresentationField{{Label: "操作", Value: safeField(input.Action)}, {Label: "窗口", Value: safeField(input.WindowID)}}
+		if input.X != nil && input.Y != nil {
+			fields = append(fields, PresentationField{Label: "截图坐标", Value: fmt.Sprintf("%d, %d", *input.X, *input.Y)})
+		}
+		if input.Key != "" {
+			fields = append(fields, PresentationField{Label: "快捷键", Value: safeField(input.Key)})
+		}
+		if input.Action == "type" {
+			fields = append(fields, PresentationField{Label: "输入内容", Value: fmt.Sprintf("%d 字符（内容已隐藏）", len([]rune(input.Text)))})
+		}
+		return Presentation{Title: "请求操作桌面", Description: "这是真实桌面操作，可能影响应用中的文件、账号和网络，不受文件或网络沙盒隔离。截图将保存为本会话附件并发送给视觉模型。可复用允许只在本轮同一窗口生效；Wayland 为系统授权的桌面画面，键盘权限属于整个桌面。停止任务可接管。", Fields: fields}, nil
 	case "browser":
 		var input struct {
 			Action   string `json:"action"`
@@ -158,19 +181,6 @@ func BuildPresentation(request Request) (Presentation, error) {
 				{Label: "原文本长度", Value: fmt.Sprintf("%d 字符", len([]rune(input.OldText)))},
 				{Label: "新文本长度", Value: fmt.Sprintf("%d 字符", len([]rune(input.NewText)))},
 			},
-		}, nil
-
-	case "delete_file":
-		var input struct {
-			Path string `json:"path"`
-		}
-		if err := json.Unmarshal([]byte(request.Arguments), &input); err != nil {
-			return Presentation{}, fmt.Errorf("解析 delete_file 审批参数失败: %w", err)
-		}
-		return Presentation{
-			Title:       "请求删除文件",
-			Description: "该操作会删除当前 Agent Workspace 中的文件。",
-			Fields:      []PresentationField{{Label: "文件", Value: safeField(input.Path)}},
 		}, nil
 
 	case "install_skill":

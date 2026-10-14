@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/sda1-hacker/humbert-agent/internal/documentparse"
 )
 
 const maxInputBytes = 12 << 20
@@ -50,7 +48,7 @@ func Validate(ctx context.Context, name, mimeType string, data []byte) (string, 
 		if !bytes.HasPrefix(data, []byte("%PDF-")) {
 			return "", errors.New("PDF 文件签名无效")
 		}
-	} else if err := preflightOffice(data); err != nil {
+	} else if err := preflightOffice(data, ext); err != nil {
 		return "", err
 	}
 	return want, nil
@@ -98,7 +96,7 @@ func Extract(ctx context.Context, name, mimeType string, data []byte) (string, s
 }
 
 func parseInWorker(ctx context.Context, path string) (string, error) {
-	result, err := documentparse.ExtractFile(ctx, path, documentparse.Options{
+	result, err := ExtractFile(ctx, path, ParserOptions{
 		MaxInputBytes: maxInputBytes, MaxOutputBytes: maxOutputBytes,
 		MaxExpandedBytes: maxOfficeExpandedBytes, MaxArchiveEntries: 2048,
 		Timeout: parseTimeout, IncludePageNumbers: strings.EqualFold(filepath.Ext(path), ".pdf"),
@@ -106,7 +104,7 @@ func parseInWorker(ctx context.Context, path string) (string, error) {
 	return result.Markdown, err
 }
 
-func preflightOffice(data []byte) error {
+func preflightOffice(data []byte, ext string) error {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return fmt.Errorf("Office ZIP 结构无效: %w", err)
@@ -114,6 +112,8 @@ func preflightOffice(data []byte) error {
 	if len(archive.File) > 2048 {
 		return errors.New("Office 文件内部条目过多")
 	}
+	mainPart := map[string]string{".docx": "word/document.xml", ".xlsx": "xl/workbook.xml", ".pptx": "ppt/presentation.xml"}[ext]
+	var hasContentTypes, hasMainPart bool
 	var total uint64
 	for _, file := range archive.File {
 		if file.Mode()&os.ModeSymlink != 0 {
@@ -126,6 +126,12 @@ func preflightOffice(data []byte) error {
 			return errors.New("Office 文件解压后超过 64 MiB 限制")
 		}
 		total += file.UncompressedSize64
+		hasContentTypes = hasContentTypes || file.Name == "[Content_Types].xml"
+		hasMainPart = hasMainPart || file.Name == mainPart
+	}
+	// 仅有 ZIP 签名不足以证明 Office 格式，避免任意 ZIP 或不同 Office 类型被当成可读文档。
+	if !hasContentTypes || !hasMainPart {
+		return errors.New("Office 文件缺少当前格式必需的内容类型或主文档结构")
 	}
 	return nil
 }

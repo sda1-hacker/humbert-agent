@@ -4,6 +4,7 @@ import {
 } from "vue";
 
 import { Message } from "../../utils/uiMessage.js";
+import { t } from "../../i18n/index.js";
 
 import {
   selectSandboxDirectory,
@@ -44,6 +45,14 @@ const effectiveProfile = computed(() =>
 const effectiveNetwork = computed(() =>
     props.sandbox?.networkMode || props.sandboxStatus?.defaultNetworkMode || "public",
 );
+
+const computerEnabled = computed(() => props.enabledBuiltinTools.includes("computer"));
+const computerAllowed = computed(() => effectiveProfile.value === "full_access" && effectiveNetwork.value === "all");
+
+function allowComputer() {
+  // 工具勾选不会偷偷扩大沙盒；用户需要在说明旁明确选择桌面访问范围。
+  patchSandbox({ profile: "full_access", networkMode: "all" });
+}
 
 const followsGlobal = computed(() =>
     !props.sandbox?.profile &&
@@ -178,6 +187,13 @@ function removeWritablePath(index) {
       <span>{{ localProgramHint }}</span>
     </div>
 
+    <div v-if="computerEnabled" class="local-program-note">
+      <strong>{{ t('桌面操作') }}</strong>
+      <span>{{ t('桌面操作可影响应用中的文件、账号和网络，无法由文件沙盒隔离；截图会发送给视觉模型。需要明确允许不受限制的访问，并授予系统截图与控制权限。') }}</span>
+      <a-button v-if="!computerAllowed" size="small" @click="allowComputer">{{ t('允许桌面操作') }}</a-button>
+      <span v-else>{{ t('桌面访问已允许；操作确认仍会生效。') }}</span>
+    </div>
+
     <details class="advanced-panel">
       <summary>高级设置</summary>
 
@@ -245,7 +261,7 @@ function removeWritablePath(index) {
           <div>
             <div class="security-label">内置工具</div>
             <div class="security-help">
-              只在需要精细控制 Agent 能力时调整。文件保护和操作确认仍会继续生效。
+              新建 Agent 默认开启桌面操作、技能安装和 Agent 协作，可在下方逐项关闭。文件保护和操作确认仍会继续生效。
             </div>
           </div>
 
@@ -256,7 +272,7 @@ function removeWritablePath(index) {
                 class="builtin-tools__grid"
             >
               <a-checkbox v-for="tool in group.tools" :key="tool.name" :value="tool.name">
-                <span>{{ tool.label || tool.name }}</span>
+                <span>{{ t(tool.label || tool.name) }}</span>
               </a-checkbox>
             </a-checkbox-group>
           </div>

@@ -1,0 +1,259 @@
+package rerank
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+)
+
+const (
+	defaultTimeout      = 30 * time.Second
+	maxResponseBodySize = 4 << 20 // 4 MiB
+)
+
+var (
+	ErrMissingEndpoint      = errors.New("rerank http: missing endpoint")
+	ErrMissingModel         = errors.New("rerank http: missing model")
+	ErrInvalidEndpoint      = errors.New("rerank http: invalid endpoint")
+	ErrEmptyQuery           = errors.New("rerank http: empty query")
+	ErrInvalidResponse      = errors.New("rerank http: invalid response")
+	ErrInvalidScore         = errors.New("rerank http: invalid relevance score")
+	ErrResponseBodyTooLarge = errors.New("rerank http: response body too large")
+)
+
+var _ Scorer = (*HTTPClient)(nil)
+
+// HTTPConfig 描述兼容 Jina 或 Cohere 协议的精排服务，Endpoint 必须是完整请求地址。
+type HTTPConfig struct {
+	Endpoint string
+	APIKey   string
+	Model    string
+
+	Timeout time.Duration
+
+	HTTPClient *http.Client
+
+	// Headers 用于企业 Gateway 等场景。
+	//
+	// Authorization / Content-Type 由 Adapter 自己负责，
+	// 不建议通过这里覆盖。
+	Headers map[string]string
+}
+
+// DefaultHTTPConfig 返回精排服务的默认请求超时。
+func DefaultHTTPConfig() HTTPConfig {
+	return HTTPConfig{Timeout: defaultTimeout}
+}
+
+// Validate 检查服务地址、模型与请求超时。
+func (c HTTPConfig) Validate() error {
+	endpoint := strings.TrimSpace(c.Endpoint)
+
+	if endpoint == "" {
+		return ErrMissingEndpoint
+	}
+
+	parsed, err := url.ParseRequestURI(endpoint)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidEndpoint, err)
+	}
+
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("%w: unsupported scheme %q", ErrInvalidEndpoint, parsed.Scheme)
+	}
+
+	if parsed.Host == "" {
+		return fmt.Errorf("%w: missing host", ErrInvalidEndpoint)
+	}
+
+	if strings.TrimSpace(c.Model) == "" {
+		return ErrMissingModel
+	}
+
+	if c.Timeout < 0 {
+		return fmt.Errorf("rerank http: invalid timeout %s", c.Timeout)
+	}
+
+	return nil
+}
+
+// HTTPClient 精排 HTTP 客户端，按输入顺序还原服务返回的相关性分数。
+type HTTPClient struct {
+	endpoint string
+	apiKey   string
+	model    string
+	client   *http.Client
+	headers  map[string]string
+}
+
+// NewHTTPClient 校验配置并创建精排客户端，优先使用调用方提供的 HTTPClient。
+func NewHTTPClient(cfg HTTPConfig) (*HTTPClient, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	client := cfg.HTTPClient
+
+	if client == nil {
+		timeout := cfg.Timeout
+
+		if timeout == 0 {
+			timeout = defaultTimeout
+		}
+
+		client = &http.Client{Timeout: timeout}
+	}
+
+	headers := make(map[string]string, len(cfg.Headers))
+
+	for key, value := range cfg.Headers {
+		headers[key] = value
+	}
+
+	return &HTTPClient{
+		endpoint: strings.TrimSpace(cfg.Endpoint),
+		apiKey:   strings.TrimSpace(cfg.APIKey),
+		model:    strings.TrimSpace(cfg.Model),
+		client:   client,
+		headers:  headers,
+	}, nil
+}
+
+type rerankRequest struct {
+	Model     string   `json:"model"`
+	Query     string   `json:"query"`
+	Documents []string `json:"documents"`
+	TopN      int      `json:"top_n"`
+}
+
+type rerankResponse struct {
+	Results []rerankResult `json:"results"`
+}
+
+type rerankResult struct {
+	Index          int     `json:"index"`
+	RelevanceScore float64 `json:"relevance_score"`
+}
+
+// Score 请求精排分数，并按响应中的 index 对齐输入顺序；不能直接使用服务返回的排序。
+func (c *HTTPClient) Score(ctx context.Context, query string, passages []string) ([]float64, error) {
+	query = strings.TrimSpace(query)
+
+	if query == "" {
+		return nil, ErrEmptyQuery
+	}
+
+	if len(passages) == 0 {
+		return []float64{}, nil
+	}
+
+	requestPayload := rerankRequest{
+		Model:     c.model,
+		Query:     query,
+		Documents: passages,
+
+		// Engine 需要每一个 Passage 的 ModelScore，
+		// 所以必须要求 Provider 返回全部结果。
+		TopN: len(passages),
+	}
+
+	body, err := json.Marshal(requestPayload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal rerank request: %w", err)
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create rerank request: %w", err)
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+
+	if c.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+
+	for key, value := range c.headers {
+		if strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "Content-Type") {
+			continue
+		}
+
+		request.Header.Set(key, value)
+	}
+
+	response, err := c.client.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("execute rerank request: %w", err)
+	}
+	defer response.Body.Close()
+
+	rawBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBodySize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read rerank response: %w", err)
+	}
+
+	if len(rawBody) > maxResponseBodySize {
+		return nil, ErrResponseBodyTooLarge
+	}
+
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+
+		message := strings.TrimSpace(string(rawBody))
+
+		if len(message) > 1000 {
+			message = message[:1000]
+		}
+
+		return nil, fmt.Errorf("rerank http status %d: %s", response.StatusCode, message)
+	}
+
+	var decoded rerankResponse
+
+	if err := json.Unmarshal(rawBody, &decoded); err != nil {
+		return nil, fmt.Errorf("%w: decode json: %v", ErrInvalidResponse, err)
+	}
+
+	// 因为 request.top_n == len(passages)，
+	// 所以必须拿回每一个 Passage 的分数。
+	if len(decoded.Results) != len(passages) {
+		return nil, fmt.Errorf("%w: expected %d results, got %d", ErrInvalidResponse, len(passages), len(decoded.Results))
+	}
+
+	scores := make([]float64, len(passages))
+	seen := make([]bool, len(passages))
+
+	for _, item := range decoded.Results {
+		if item.Index < 0 || item.Index >= len(passages) {
+			return nil, fmt.Errorf("%w: result index %d out of range", ErrInvalidResponse, item.Index)
+		}
+
+		if seen[item.Index] {
+			return nil, fmt.Errorf("%w: duplicate result index %d", ErrInvalidResponse, item.Index)
+		}
+
+		if math.IsNaN(item.RelevanceScore) || math.IsInf(item.RelevanceScore, 0) || item.RelevanceScore < 0 || item.RelevanceScore > 1 {
+
+			return nil, fmt.Errorf("%w: result[%d]=%v", ErrInvalidScore, item.Index, item.RelevanceScore)
+		}
+
+		scores[item.Index] = item.RelevanceScore
+		seen[item.Index] = true
+	}
+
+	for index, found := range seen {
+		if !found {
+			return nil, fmt.Errorf("%w: missing result index %d", ErrInvalidResponse, index)
+		}
+	}
+
+	return scores, nil
+}

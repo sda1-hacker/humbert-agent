@@ -16,7 +16,7 @@ import (
 )
 
 // SkillSource 是 Runtime 消费的最小能力接口；无需依赖具体的安装器、Store 或 Manager。
-// Snapshot 仍保留 Eino Skill middleware 与脚本身份，替换实现不能丢失这两者的一致性。
+// Snapshot 仍保留 Eino Skill 工具与脚本身份，替换实现不能丢失这两者的一致性。
 type SkillSource interface {
 	ResolveRuntimeSnapshot(context.Context, []string) (skills.RuntimeSnapshot, error)
 }
@@ -29,7 +29,7 @@ type MCPSource interface {
 }
 
 // capabilitySet 是本轮冻结的能力装配结果。主/子 Agent 和 Context 查询共用它，
-// 模型实际使用的工具与用于 Token 估算的 Schema 分开，保留 Skills 渐进披露语义。
+// 模型工具和预算共用提前准备的定义，Skill 正文继续通过工具结果渐进披露。
 type capabilitySet struct {
 	tools       humberttools.ResolvedTools
 	skills      skills.RuntimeSnapshot
@@ -42,7 +42,7 @@ type capabilitySet struct {
 }
 
 // capabilityAssembler 只协调已有能力来源，不重写它们的安装、连接或授权规则。
-// Skills 必须先冻结，run_skill_script 和 Skill middleware 才能共用相同内容身份。
+// Skills 必须先冻结，run_skill_script 和 Skill 工具才能共用相同内容身份。
 type capabilityAssembler struct {
 	tools      *humberttools.Registry
 	skills     SkillSource
@@ -60,7 +60,7 @@ func (a *capabilityAssembler) validate() error {
 // resolve 在相同的已验证 Scope 内组装能力；preview 只使用 MCP 本地 Schema 投影。
 func (a *capabilityAssembler) resolve(ctx context.Context, profile agents.Agent, toolScope humberttools.Scope, bestEffortMCP bool) (capabilitySet, error) {
 	// Skill Snapshot 先于 Builtin Tool Resolve 冻结。run_skill_script 依赖当前 Turn 的
-	// enabled_skills + revision，必须与 Eino Skill Middleware 使用同一份内容身份。
+	// enabled_skills + revision，必须与 Eino Skill 工具使用同一份内容身份。
 	skillSnapshot, err := a.resolveSkills(ctx, profile.EnabledSkills)
 	if err != nil {
 		return capabilitySet{}, fmt.Errorf("解析 Agent Skill Snapshot 失败: %w", err)
@@ -84,7 +84,7 @@ func (a *capabilityAssembler) resolve(ctx context.Context, profile agents.Agent,
 	}
 
 	// 先在 Humbert Capability 层完成所有模型侧 Tool Name 冲突检查，再做 Schema Token
-	// 估算。Skill Middleware 会动态注入固定名称 `skill`，因此它也必须参与同一套 fail-closed
+	// 估算。Skill 的固定工具名 `skill`，因此它也必须参与同一套 fail-closed
 	// 规则，不能依赖“Builtin 目前恰好没有同名 Tool”的隐含前提。
 	descriptors, err := mergeRuntimeDescriptors(resolvedTools.Descriptors, mcpSnapshot.Descriptors)
 	if err != nil {
@@ -97,9 +97,7 @@ func (a *capabilityAssembler) resolve(ctx context.Context, profile agents.Agent,
 		}
 	}
 
-	// Eino Skill Middleware 在 Agent 创建阶段动态注入 skill 工具，因此它不属于 Humbert
-	// 全局 Tool Registry。Context 预算仍必须把这个 schema 算进去，否则启用 Skill 后 UI
-	// 和自动压缩阈值会低估真实 Provider Input。
+	// Skill 不属于全局 Tool Registry，执行与预算都在本轮初始化时包含它的定义。
 	estimateTools := mergeRuntimeTools(resolvedTools.Tools, mcpSnapshot.Tools)
 	if skillSnapshot.Enabled() {
 		estimateTools = append(estimateTools, skillSnapshot.ToolDefinition())
@@ -115,6 +113,10 @@ func (a *capabilityAssembler) resolve(ctx context.Context, profile agents.Agent,
 	}
 	estimateTools = mergeRuntimeTools(estimateTools, extraTools)
 	executable := mergeRuntimeTools(mergeRuntimeTools(resolvedTools.Tools, mcpSnapshot.Tools), extraTools)
+	// Skills 与其余工具一起提前绑定；正文通过 ToolResult 返回，不在运行中增加定义。
+	if skillSnapshot.Enabled() {
+		executable = append(executable, skillSnapshot.ToolDefinition())
+	}
 
 	return capabilitySet{
 		tools: resolvedTools, skills: skillSnapshot, mcp: mcpSnapshot, scope: toolScope,

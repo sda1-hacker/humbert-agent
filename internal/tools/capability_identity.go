@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 	"github.com/sda1-hacker/humbert-agent/internal/permission"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
@@ -52,6 +51,16 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 	}
 
 	switch descriptor.Name {
+	case "computer":
+		var input struct {
+			Action   string `json:"action"`
+			WindowID string `json:"window_id"`
+		}
+		if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+			return permission.CapabilityIdentity{}, fmt.Errorf("解析 computer 授权目标失败: %w", err)
+		}
+		// 可复用授权只覆盖本轮同一个 OS 窗口，不能拿“截图允许”去操作任意应用。
+		identity.InvocationFingerprint = fmt.Sprintf("computer1:%x", sha256.Sum256([]byte(scope.RunID+"\x00"+input.WindowID)))
 	case "run_command":
 		var input struct {
 			Command          string   `json:"command"`
@@ -70,12 +79,12 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		if err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command 工作目录身份失败: %w", err)
 		}
-		executable, err := commandenv.Resolve(input.Command, decision.CanonicalPath)
+		executable, err := sandbox.ResolveCommand(input.Command, decision.CanonicalPath)
 		if err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("解析 run_command 可执行文件身份失败: %w", err)
 		}
 		identity.Kind = permission.CapabilityCommand
-		identity.Command = commandenv.Name(input.Command)
+		identity.Command = sandbox.CommandName(input.Command)
 		identity.Executable = executable
 		invocation, err := json.Marshal(struct {
 			Args             []string `json:"args"`
@@ -107,14 +116,14 @@ func buildCapabilityIdentity(descriptor Descriptor, scope Scope, arguments strin
 		if skillIdentity == "" {
 			return permission.CapabilityIdentity{}, fmt.Errorf("Skill %q 不在当前 Turn 的冻结身份中", skillName)
 		}
-		command := commandenv.Name(scope.SkillScriptCommands[skillName][script])
+		command := sandbox.CommandName(scope.SkillScriptCommands[skillName][script])
 		if command == "" {
 			return permission.CapabilityIdentity{}, fmt.Errorf("Skill %q 脚本 %q 没有冻结的运行时命令身份", skillName, script)
 		}
-		if err := commandenv.Validate(command); err != nil {
+		if err := sandbox.ValidateCommand(command); err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("Skill %q 脚本运行时命令无效: %w", skillName, err)
 		}
-		executable, err := commandenv.Resolve(command, policy.WorkspaceRoot)
+		executable, err := sandbox.ResolveCommand(command, policy.WorkspaceRoot)
 		if err != nil {
 			return permission.CapabilityIdentity{}, fmt.Errorf("解析 Skill %q 脚本解释器身份失败: %w", skillName, err)
 		}

@@ -7,27 +7,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sda1-hacker/humbert-agent/internal/component"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 )
 
 type BootstrapOption func(*bootstrapOptions)
 type bootstrapOptions struct {
-	modules []component.Installer
+	modules []agentruntime.ModuleInstaller
 }
 
 // WithModules 为 Bootstrap 追加模块，既有模块及桌面服务无需修改。
-func WithModules(installers ...component.Installer) BootstrapOption {
+func WithModules(installers ...agentruntime.ModuleInstaller) BootstrapOption {
 	return func(options *bootstrapOptions) { options.modules = append(options.modules, installers...) }
 }
 
 type mountedModule struct {
-	component.Module
+	agentruntime.Module
 	startAttempted bool
 }
 type moduleManager struct{ modules []*mountedModule }
 
-func (m *moduleManager) install(ctx context.Context, host component.Host, resolver *agentruntime.Resolver, installers []component.Installer) error {
+func (m *moduleManager) install(ctx context.Context, host agentruntime.ModuleHost, resolver *agentruntime.Resolver, installers []agentruntime.ModuleInstaller) error {
 	ids := make(map[string]bool)
 	for _, install := range installers {
 		if install == nil {

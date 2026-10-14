@@ -9,6 +9,7 @@ const props = defineProps({
   sessionId: { type: String, default: "" },
   attachmentId: { type: String, default: "" },
   name: { type: String, default: "" },
+  desktop: { type: Boolean, default: false },
 });
 
 const card = ref(null);
@@ -67,7 +68,7 @@ onUnmounted(() => observer?.disconnect());
         :title="t('图片预览')"
         @click="previewVisible = true"
     >
-      <img :src="imageURL" :alt="t('网页截图')" loading="lazy" />
+      <img :src="imageURL" :alt="t(desktop ? '桌面截图' : '网页截图')" loading="lazy" />
     </button>
     <div v-else class="browser-screenshot__placeholder">
       {{ t(loadState === 'failed' ? '无法显示截图预览' : '正在读取预览…') }}
@@ -76,7 +77,7 @@ onUnmounted(() => observer?.disconnect());
       <span :title="name">{{ name }}</span>
       <a v-if="imageURL" :href="imageURL" :download="name || 'browser-screenshot.png'">{{ t('下载') }}</a>
     </div>
-    <ImagePreviewDialog v-model:visible="previewVisible" :src="imageURL" :name="t('网页截图')" />
+    <ImagePreviewDialog v-model:visible="previewVisible" :src="imageURL" :name="t(desktop ? '桌面截图' : '网页截图')" />
   </div>
 </template>
 

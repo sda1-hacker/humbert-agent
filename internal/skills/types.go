@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cloudwego/eino/adk"
 	einotool "github.com/cloudwego/eino/components/tool"
 
 	"github.com/sda1-hacker/humbert-agent/internal/config"
@@ -208,26 +207,15 @@ type RuntimeSnapshot struct {
 
 	toolDefinition einotool.BaseTool
 
-	middleware adk.ChatModelAgentMiddleware
-
 	config config.SkillConfig
 }
 
 // Enabled 表示当前 Turn 是否真正启用了至少一个 Skill。
 func (s RuntimeSnapshot) Enabled() bool {
-	return len(s.Names) > 0 && s.middleware != nil
+	return len(s.Names) > 0 && s.toolDefinition != nil
 }
 
-// Middleware 返回已经绑定当前 Snapshot Backend 的 Eino Skill Middleware。
-//
-// 返回值只允许追加到当前 Runtime Snapshot 的 Handlers，不应该缓存到 Application 级别，
-// 否则后续 Agent Skill 配置变化会污染正在执行或未来 Turn。
-func (s RuntimeSnapshot) Middleware() adk.ChatModelAgentMiddleware {
-	return s.middleware
-}
-
-// ToolDefinition 返回与 Eino Middleware 实际注入的 skill Tool 等价的只读 ToolInfo。
-// ContextEngine 使用它估算 Tool Schema Token；它本身不可执行。
+// ToolDefinition 返回 Eino 原生 skill 工具，执行与预算共用同一个已冻结定义。
 func (s RuntimeSnapshot) ToolDefinition() einotool.BaseTool {
 	return s.toolDefinition
 }

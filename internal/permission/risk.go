@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
+	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 )
 
 // routineOperation 只自动放行能明确识别的常规操作；未知命令交给用户确认。
@@ -17,7 +17,11 @@ func routineOperation(request Request) bool {
 		return false
 	}
 	switch request.ToolName {
-	case "delete_file", "move_file", "install_skill", "schedule_task", "run_skill_script":
+	case "computer":
+		// 仅状态、窗口元数据和主动交还控制不需要风险确认；截图也包含私人内容。
+		action, _ := args["action"].(string)
+		return action == "status" || action == "windows" || action == "release"
+	case "install_skill", "schedule_task", "run_skill_script":
 		return false
 	}
 	// 内置只读工具不应因为目标在工作区之外就被当成风险操作。
@@ -36,7 +40,7 @@ func routineOperation(request Request) bool {
 		return true
 	}
 	switch request.ToolName {
-	case "write_file", "edit_file", "apply_patch", "copy_file", "update_plan":
+	case "write_file", "edit_file":
 		return true
 	}
 	return false
@@ -99,8 +103,8 @@ func routineCommand(request Request, input map[string]any) bool {
 	if !request.NativeSandbox {
 		return false
 	}
-	name := commandenv.Name(request.Identity.Command)
-	resolved, err := commandenv.Resolve(name, "")
+	name := sandbox.CommandName(request.Identity.Command)
+	resolved, err := sandbox.ResolveCommand(name, "")
 	if err != nil || resolved != request.Identity.Executable || insideWorkspace(resolved, request.WorkspaceRoot) {
 		return false
 	}

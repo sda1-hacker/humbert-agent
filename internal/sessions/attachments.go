@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
@@ -126,7 +127,7 @@ func (s *Service) appendUserInput(ctx context.Context, sessionID string, input U
 			}
 		}
 
-		id := uuid.NewString()
+		id := newAttachmentID(name, mimeType)
 		path := filepath.Join(attachmentDir, id)
 		if err := writeAttachmentFile(path, data); err != nil {
 			cleanup()
@@ -388,7 +389,7 @@ func (s *Service) readAttachmentBytes(ctx context.Context, sessionID, id string)
 		return nil, err
 	}
 	id = strings.TrimSpace(id)
-	if id == "" || strings.ContainsAny(id, `/\\`) {
+	if !filepath.IsLocal(id) || strings.ContainsAny(id, `/\\`) {
 		return nil, errors.New("Attachment ID 非法")
 	}
 	directory, err := s.store.SessionDirectory(ctx, sessionID)
@@ -548,11 +549,48 @@ func writeAttachmentFile(path string, data []byte) error {
 		_ = os.Remove(path)
 		return err
 	}
+	// 原件先同步，再由调用方提交消息引用，避免消息已落盘而附件仍只在写入缓存中。
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
 	if err := file.Close(); err != nil {
 		_ = os.Remove(path)
 		return err
 	}
 	return nil
+}
+
+// newAttachmentID 同时作为磁盘文件名：UUID 防止重名，后缀保留可识别的原文件名与格式。
+// 只清理文件名，不转码或压缩原件；历史裸 UUID 仍由同一读取路径直接读取。
+func newAttachmentID(name, mimeType string) string {
+	name = strings.Trim(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || strings.ContainsRune(`/\\:*?"<>|`, r) {
+			return '_'
+		}
+		return r
+	}, name), " .")
+	if name == "" {
+		name = "attachment"
+	}
+	ext := filepath.Ext(name)
+	if ext == "" {
+		// 粘贴图片可能没有扩展名，按已经校验过的实际 MIME 补齐。
+		ext = map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif",
+			"image/webp": ".webp", "image/bmp": ".bmp", "image/tiff": ".tiff", "image/x-icon": ".ico"}[mimeType]
+		name += ext
+	}
+	if len(ext) > 32 {
+		ext = ""
+	}
+	stem := strings.TrimSuffix(name, ext)
+	// 按 UTF-8 字节限制文件名长度，保留完整字符和常用扩展名；显示名仍在消息元数据中。
+	for len(stem)+len(ext) > 255-37 {
+		_, size := utf8.DecodeLastRuneInString(stem)
+		stem = stem[:len(stem)-size]
+	}
+	return uuid.NewString() + "-" + stem + ext
 }
 
 // ReadAttachment 供 Desktop 历史消息按需预览图片/下载文件内容。
@@ -569,6 +607,7 @@ func (s *Service) SaveToolImage(ctx context.Context, sessionID, name, mimeType s
 	if int64(len(data)) > maxAttachmentBytes {
 		return "", errors.New("工具图片超过 12 MiB 限制")
 	}
+	mimeType = normalizeAttachmentMIME(mimeType)
 	if err := validateImageAttachment(name, mimeType, data); err != nil {
 		return "", err
 	}
@@ -580,7 +619,7 @@ func (s *Service) SaveToolImage(ctx context.Context, sessionID, name, mimeType s
 	if err := ensureAttachmentDirectory(attachmentDir); err != nil {
 		return "", err
 	}
-	id := uuid.NewString()
+	id := newAttachmentID(name, mimeType)
 	if err := writeAttachmentFile(filepath.Join(attachmentDir, id), data); err != nil {
 		return "", fmt.Errorf("保存工具图片失败: %w", err)
 	}

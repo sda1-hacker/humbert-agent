@@ -2,6 +2,7 @@ package permission
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -418,6 +419,20 @@ func newestRuleWithAction(sessionRules []Rule, agentRules []Rule, action Action)
 }
 
 func ruleMatches(rule Rule, request Request) bool {
+	// Git 合并只改变模型入口；旧规则仍按具体动作匹配，不能丢失已有 Deny 或扩大 Allow。
+	if request.ToolName == "git" && request.Identity.Kind == CapabilityBuiltin && rule.ToolName != "git" {
+		var input struct {
+			Action string `json:"action"`
+		}
+		if json.Unmarshal([]byte(request.Arguments), &input) != nil {
+			return false
+		}
+		action := strings.ToLower(strings.TrimSpace(input.Action))
+		if (action != "status" && action != "diff" && action != "log") || rule.ToolName != "git_"+action {
+			return false
+		}
+		request.ToolName, request.Identity.Tool = rule.ToolName, rule.ToolName
+	}
 	if rule.AgentID != request.AgentID || rule.ToolName != request.ToolName {
 		return false
 	}

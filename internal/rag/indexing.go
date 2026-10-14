@@ -6,8 +6,8 @@ import (
 
 	"github.com/cloudwego/eino/components/indexer"
 	"github.com/cloudwego/eino/schema"
+
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
 // qualifyChunkIDs 让不同版本的分块拥有独立 ID。
@@ -58,7 +58,7 @@ func WithIngestionBatch(batch IngestionBatch) indexer.Option {
 
 // IndexDocuments 只把子块交给索引组件，所有后端接收相同的检索文本。
 // Content 是标题、面包屑和正文组成的检索表示；原文单独保存供引用和评测使用。
-func IndexDocuments(batch IngestionBatch, builder searchcontent.Builder) []*schema.Document {
+func IndexDocuments(batch IngestionBatch, builder retrieval.SearchTextBuilder) []*schema.Document {
 	docs := make([]*schema.Document, 0, len(batch.Children))
 	for _, c := range batch.Children {
 		m := retrieval.CloneMetadata(c.Metadata)

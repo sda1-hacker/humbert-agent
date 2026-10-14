@@ -15,7 +15,6 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 
-	"github.com/sda1-hacker/humbert-agent/internal/commandenv"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
@@ -228,7 +227,7 @@ func (f *RunCommandFactory) run(
 		return nil, fmt.Errorf("run_command working_directory 无效: %w", err)
 	}
 
-	executable, err := commandenv.Resolve(command, workingDirectory)
+	executable, err := sandbox.ResolveCommand(command, workingDirectory)
 	if err != nil {
 		return nil, fmt.Errorf("run_command: %w", err)
 	}
@@ -321,7 +320,7 @@ func cloneStringSlice(
 }
 
 func normalizeCommandName(command string) string { return strings.TrimSpace(command) }
-func validateCommandName(command string) error   { return commandenv.Validate(command) }
+func validateCommandName(command string) error   { return sandbox.ValidateCommand(command) }
 
 func validateCommandArguments(
 	args []string,

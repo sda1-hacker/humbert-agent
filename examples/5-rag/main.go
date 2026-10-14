@@ -33,20 +33,16 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/components/document"
-	"github.com/sda1-hacker/humbert-agent/internal/documentparse"
+
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"github.com/sda1-hacker/humbert-agent/internal/rag"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/chunker"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/embeddinginput"
-	indexerpostgres "github.com/sda1-hacker/humbert-agent/internal/rag/indexer/postgres"
-	tabulaloader "github.com/sda1-hacker/humbert-agent/internal/rag/loader/tabula"
-	embeddingopenai "github.com/sda1-hacker/humbert-agent/internal/rag/provider/embedding/openai"
-	rerankhttp "github.com/sda1-hacker/humbert-agent/internal/rag/provider/rerank/http"
+	ragembedding "github.com/sda1-hacker/humbert-agent/internal/rag/embedding"
+	ragindexer "github.com/sda1-hacker/humbert-agent/internal/rag/indexer"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/rerank"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retriever"
-	retrieverpostgres "github.com/sda1-hacker/humbert-agent/internal/rag/retriever/postgres"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/search"
-	"github.com/sda1-hacker/humbert-agent/internal/rag/searchcontent"
 )
 
 // 一、主流程：真实文件导入 → 人工标注 → 检索 → 指标。
@@ -109,8 +105,8 @@ func main() {
 	// 解析器把实际 OCR 使用情况和警告保存为来源元数据，可从子块读取。
 	if len(chunks) > 0 {
 		metadata := chunks[0].Metadata
-		fmt.Printf("解析元数据：解析器=%v，报告使用 OCR=%v\n", metadata[tabulaloader.MetaParser], metadata[tabulaloader.MetaOCRUsed])
-		if warnings := metadata[tabulaloader.MetaParserWarnings]; warnings != nil {
+		fmt.Printf("解析元数据：解析器=%v，报告使用 OCR=%v\n", metadata[rag.MetaParser], metadata[rag.MetaOCRUsed])
+		if warnings := metadata[rag.MetaParserWarnings]; warnings != nil {
 			fmt.Printf("解析警告：%v\n", warnings)
 		}
 	}
@@ -197,7 +193,7 @@ func exampleConfig(filePath string) (postgresConfig, rag.IngestRequest, []string
 	// 一、数据库和文档解析。数据库及扩展的安装文件需要提前准备好。
 	cfg.DatabaseURL = envOr("RAG_DATABASE_URL", "postgres://postgres:postgres@127.0.0.1:5432/rag_example?sslmode=disable")
 	cfg.EnsureSchema = true // 自动创建扩展和表，不会自动创建数据库。
-	cfg.Loader.ParseOptions = documentparse.DefaultOptions()
+	cfg.Loader.ParseOptions = documenttext.DefaultOptions()
 	cfg.Loader.ParseOptions.Timeout = time.Minute
 	cfg.Loader.ParseOptions.MaxInputBytes = 32 << 20     // 原文件最大 32 MiB。
 	cfg.Loader.ParseOptions.MaxOutputBytes = 32 << 20    // 解析后的正文最大 32 MiB。
@@ -217,7 +213,7 @@ func exampleConfig(filePath string) (postgresConfig, rag.IngestRequest, []string
 	cfg.Embedding.ModelRevision = "" // 同名模型换了权重时填写新版本，并使用新知识库。
 	cfg.Embedding.Dimensions = 0     // 不发送 dimensions 参数，实际输出仍必须是 1024 维。
 	cfg.Embedding.Timeout = 30 * time.Second
-	cfg.Embedding.InputBudget = embeddinginput.Budget{
+	cfg.Embedding.InputBudget = ragembedding.Budget{
 		MaxInputTokens: 8192,  // 单条完整输入上限，包含标题、标题路径和正文。
 		MaxBatchTokens: 65536, // 每批输入总量上限，需按实际模型调整。
 		CountTokens:    nil,   // 默认按 UTF-8 字节数保守估算，可替换成模型分词器。
@@ -274,7 +270,7 @@ func exampleConfig(filePath string) (postgresConfig, rag.IngestRequest, []string
 	enableRerank := false
 	cfg.Rerank.Disabled = !enableRerank
 	if enableRerank {
-		provider := rerankhttp.DefaultConfig()
+		provider := rerank.DefaultHTTPConfig()
 		provider.Endpoint = os.Getenv("RERANK_ENDPOINT") // 完整请求地址，如服务的 /v1/rerank。
 		provider.APIKey = os.Getenv("RERANK_API_KEY")
 		provider.Model = os.Getenv("RERANK_MODEL")
@@ -324,18 +320,18 @@ type postgresConfig struct {
 	EnsureSchema bool
 
 	// Loader、Embedding、Indexer 分别配置文件解析、向量模型和索引写入。
-	Loader    tabulaloader.Config
-	Embedding embeddingopenai.Config
-	Indexer   indexerpostgres.Config
+	Loader    rag.LoaderConfig
+	Embedding ragembedding.OpenAIConfig
+	Indexer   ragindexer.Config
 
 	// 三种召回共享知识库范围；InputBuilder 统一构造模型与索引文本。
 	Hybrid       retriever.HybridConfig
-	Vector       retrieverpostgres.VectorConfig
-	Keyword      retrieverpostgres.BM25Config
-	InputBuilder searchcontent.Builder
+	Vector       retriever.VectorConfig
+	Keyword      retriever.BM25Config
+	InputBuilder retrieval.SearchTextBuilder
 
 	// 不配置 Provider 时关闭远程精排，保留召回与融合。
-	RerankProvider *rerankhttp.Config
+	RerankProvider *rerank.HTTPConfig
 
 	Rerank rerank.Config // 模型精排、阈值及评分融合。
 	Search search.Config // 最终上下文数量、超时和父块扩展。
@@ -343,24 +339,24 @@ type postgresConfig struct {
 
 // defaultPostgresConfig 返回示例所需的数据库、模型及检索默认参数。
 func defaultPostgresConfig() postgresConfig {
-	embeddingCfg := embeddingopenai.DefaultConfig()
+	embeddingCfg := ragembedding.DefaultOpenAIConfig()
 
 	// 内置 schema 使用 halfvec(1024)。
-	embeddingCfg.Dimensions = indexerpostgres.EmbeddingDimensions
+	embeddingCfg.Dimensions = ragindexer.EmbeddingDimensions
 
 	return postgresConfig{
 		EnsureSchema: false,
 
-		Loader: tabulaloader.DefaultConfig(),
+		Loader: rag.DefaultLoaderConfig(),
 
 		Embedding: embeddingCfg,
 
-		Indexer: indexerpostgres.DefaultConfig(),
+		Indexer: ragindexer.DefaultConfig(),
 
 		Hybrid:       retriever.DefaultHybridConfig(),
-		Vector:       retrieverpostgres.DefaultVectorConfig(),
-		Keyword:      retrieverpostgres.DefaultBM25Config(),
-		InputBuilder: searchcontent.DefaultBuilder(),
+		Vector:       retriever.DefaultVectorConfig(),
+		Keyword:      retriever.DefaultBM25Config(),
+		InputBuilder: retrieval.DefaultSearchTextBuilder(),
 
 		Rerank: rerank.DefaultConfig(),
 
@@ -391,8 +387,8 @@ func (c postgresConfig) Validate() error {
 		return err
 	}
 	// 通用 Hybrid 没有 PG 的 200 条限制；本例使用 PG，组装层要额外检查。
-	if c.Hybrid.TopK > retrieverpostgres.MaxTopK || c.Hybrid.ChannelTopK > retrieverpostgres.MaxTopK {
-		return retrieverpostgres.ErrInvalidTopK
+	if c.Hybrid.TopK > retriever.MaxTopK || c.Hybrid.ChannelTopK > retriever.MaxTopK {
+		return retriever.ErrInvalidTopK
 	}
 	if err := c.Hybrid.Validate(); err != nil {
 		return err
@@ -403,8 +399,8 @@ func (c postgresConfig) Validate() error {
 	if err := c.Search.Validate(); err != nil {
 		return err
 	}
-	if c.Search.FinalTopK > retrieverpostgres.MaxTopK {
-		return fmt.Errorf("rag: final top k exceeds maximum recall size %d", retrieverpostgres.MaxTopK)
+	if c.Search.FinalTopK > retriever.MaxTopK {
+		return fmt.Errorf("rag: final top k exceeds maximum recall size %d", retriever.MaxTopK)
 	}
 	// 候选池必须足以覆盖最终上下文需求；精排启用时也不能过早缩小候选池。
 	if c.Hybrid.TopK > 0 && c.Search.FinalTopK > c.Hybrid.TopK {
@@ -424,12 +420,12 @@ func (c postgresConfig) Validate() error {
 
 	// 省略请求维度时，仍校验实际模型输出与 schema 一致。
 	if c.Embedding.Dimensions > 0 &&
-		c.Embedding.Dimensions != indexerpostgres.EmbeddingDimensions {
+		c.Embedding.Dimensions != ragindexer.EmbeddingDimensions {
 
 		return fmt.Errorf(
 			"%w: postgres=%d embedding=%d",
 			ErrEmbeddingDimensionMismatch,
-			indexerpostgres.EmbeddingDimensions,
+			ragindexer.EmbeddingDimensions,
 			c.Embedding.Dimensions,
 		)
 	}
@@ -457,12 +453,12 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 
 	// 初始化数据库扩展、连接池和表结构。
 	if cfg.EnsureSchema {
-		if err := indexerpostgres.EnsureExtensions(ctx, cfg.DatabaseURL); err != nil {
+		if err := ragindexer.EnsureExtensions(ctx, cfg.DatabaseURL); err != nil {
 			return nil, fmt.Errorf("bootstrap postgres extensions: %w", err)
 		}
 	}
 
-	pool, err := indexerpostgres.NewPool(ctx, cfg.DatabaseURL)
+	pool, err := ragindexer.NewPool(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -478,17 +474,17 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 	}()
 
 	if cfg.EnsureSchema {
-		if err := indexerpostgres.EnsureSchema(ctx, pool); err != nil {
+		if err := ragindexer.EnsureSchema(ctx, pool); err != nil {
 			return nil, fmt.Errorf("ensure rag postgres schema: %w", err)
 		}
 	}
 
-	if err := indexerpostgres.CheckSchema(ctx, pool); err != nil {
+	if err := ragindexer.CheckSchema(ctx, pool); err != nil {
 		return nil, err
 	}
 	// 向量模型只创建一次，文档向量和 query 向量共享同一空间。
 	// 即使只比较 keyword，本例导入仍建立两路索引，因此也需要向量模型。
-	embedder, err := embeddingopenai.New(ctx, cfg.Embedding)
+	embedder, err := ragembedding.NewOpenAI(ctx, cfg.Embedding)
 	if err != nil {
 		return nil, fmt.Errorf("create embedding provider: %w", err)
 	}
@@ -503,7 +499,7 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 	// 要求每次导入先预留版本；较早任务晚完成时不能覆盖较新的文档。
 	indexerCfg.VersionedDocuments = true
 
-	pgIndexer, err := indexerpostgres.NewIndexer(pool, indexerCfg)
+	pgIndexer, err := ragindexer.NewIndexer(pool, indexerCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create postgres indexer: %w", err)
 	}
@@ -514,7 +510,7 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 	var scorer rerank.Scorer
 
 	if cfg.RerankProvider != nil {
-		httpScorer, err := rerankhttp.NewClient(*cfg.RerankProvider)
+		httpScorer, err := rerank.NewHTTPClient(*cfg.RerankProvider)
 		if err != nil {
 			return nil, fmt.Errorf("create rerank provider: %w", err)
 		}
@@ -532,11 +528,11 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 	// 组装向量、BM25 和混合检索器，向量召回复用索引使用的模型。
 	vectorCfg := cfg.Vector
 	vectorCfg.Embedder = embedder
-	vector, err := retrieverpostgres.NewVectorRetriever(pool, vectorCfg)
+	vector, err := retriever.NewVectorRetriever(pool, vectorCfg)
 	if err != nil {
 		return nil, err
 	}
-	keyword, err := retrieverpostgres.NewBM25Retriever(pool, cfg.Keyword)
+	keyword, err := retriever.NewBM25Retriever(pool, cfg.Keyword)
 	if err != nil {
 		return nil, err
 	}
@@ -546,8 +542,8 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 	}
 	// 最后把组件和文档管理能力注入唯一的业务入口 rag.Service。
 	runtime, err := rag.New(ctx, rag.Dependencies{
-		Loader:  tabulaloader.NewLoader(cfg.Loader), // 真实文件解析为完整 Markdown。
-		Indexer: pgIndexer,                          // 子块向量化，并原子保存完整文档及索引。
+		Loader:  rag.NewLoader(cfg.Loader), // 真实文件解析为完整 Markdown。
+		Indexer: pgIndexer,                 // 子块向量化，并原子保存完整文档及索引。
 		Config: rag.Config{
 			Retriever:        hybrid,           // 空 Mode/hybrid 使用的默认检索器。
 			VectorRetriever:  vector,           // semantic 模式使用。
@@ -558,11 +554,11 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 			InputBuilder:     cfg.InputBuilder, // 向量和 BM25 共用的检索文本规则。
 			ParentLoader: func(collection string) (search.ParentLoader, error) {
 				// 按当前请求 collection 读取父块，避免跨知识库补上下文。
-				return retrieverpostgres.NewParentLoader(pool, collection)
+				return retriever.NewParentLoader(pool, collection)
 			},
 			BeforeSearch: func(ctx context.Context, collection string) error {
 				// 查询前验证模型档案；同维度的不同模型也不能混用已有索引。
-				return indexerpostgres.EnsureCollectionProfile(ctx, pool, collection, profile.ID(), profile.JSON())
+				return ragindexer.EnsureCollectionProfile(ctx, pool, collection, profile.ID(), profile.JSON())
 			},
 		},
 		ChunkReader: pgIndexer,  // ListChunks 展示当前已发布子块，供人工标注。
@@ -581,22 +577,22 @@ func newPostgresRAG(ctx context.Context, cfg postgresConfig) (*rag.Service, erro
 // EmbeddingProfile 描述 collection 的向量空间身份，作为稳定 JSON 计算 SHA-256。
 // 模型、实际维度、输入规则改变会产生新档案；密钥和请求超时不进入档案。
 // 同名模型换权重时要修改 ModelRevision 并使用新 collection 重新导入。
-func (c postgresConfig) EmbeddingProfile() embeddinginput.Profile {
+func (c postgresConfig) EmbeddingProfile() ragembedding.Profile {
 	endpoint := strings.TrimRight(strings.TrimSpace(c.Embedding.BaseURL), "/")
 	if endpoint == "" {
 		endpoint = "https://api.openai.com/v1"
 	}
 	builder := c.InputBuilder
 	if len(builder.TitleKeys) == 0 && builder.ContextHeaderKey == "" {
-		builder = searchcontent.DefaultBuilder()
+		builder = retrieval.DefaultSearchTextBuilder()
 	}
-	return embeddinginput.Profile{
+	return ragembedding.Profile{
 		Provider:      "openai-compatible",
 		Endpoint:      endpoint,
 		Model:         strings.TrimSpace(c.Embedding.Model),
 		Revision:      c.Embedding.ModelRevision,
-		Dimensions:    indexerpostgres.EmbeddingDimensions, // 记录实际数据库维度，不是请求参数 0。
-		InputVersion:  "humbert-search-content-v1",         // 标识检索文本构造版本。
+		Dimensions:    ragindexer.EmbeddingDimensions, // 记录实际数据库维度，不是请求参数 0。
+		InputVersion:  "humbert-search-content-v1",    // 标识检索文本构造版本。
 		SearchBuilder: builder,
 	}
 }

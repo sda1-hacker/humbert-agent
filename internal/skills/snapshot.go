@@ -101,7 +101,6 @@ func (m *Manager) ResolveRuntimeSnapshot(
 	if err != nil {
 		return RuntimeSnapshot{}, fmt.Errorf("创建 Eino Skill Middleware 失败: %w", err)
 	}
-	snapshot.middleware = middleware
 	_, agentCtx, err := middleware.BeforeAgent(ctx, &adk.ChatModelAgentContext{})
 	if err != nil {
 		return RuntimeSnapshot{}, err

@@ -27,6 +27,7 @@ Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，�
 - 安装 Node.js、npm 和 Wails 3 CLI（命令名为 wails3）；桌面构建还需要相应平台的 Wails 系统依赖。
 - 模型连接需要可用的服务地址及凭据；使用本机 Ollama 时，需要另行运行 Ollama 服务。
 - browser 工具需要本机 Google Chrome；可通过 HUMBERT_BROWSER_CHROME_PATH 指定其可执行文件。
+- `computer` 工具支持 macOS、Windows、Linux X11/Wayland 的真实桌面截图和键鼠操作，默认关闭。需在 Agent 高级安全设置中勾选“操作桌面应用”并明确允许桌面访问，同时配置视觉模型。macOS 需屏幕录制/辅助功能权限；Wayland 需 RemoteDesktop/ScreenCast Portal、PipeWire 和 GStreamer 的采集/PNG 插件。系统不提供能力时会明确报错。
 
 在仓库根目录运行：
 
@@ -66,11 +67,15 @@ wails3 dev 会启动桌面应用和前端开发服务。构建桌面程序可运
 
 Agent 可使用应用管理的工作区，也可指向用户选择的目录。工作区文件只在聊天右侧展示，并跟随当前 Agent：左边是目录树，右边预览选中的文件。文件两栏及右侧面板宽度均可拖动调整。右侧面板占据独立的布局列，不会覆盖聊天；窄窗口打开右侧时自动收起左侧导航。右侧搜索按钮可检索工作区 PDF、DOCX、XLSX、PPTX 的 Markdown 正文；结果提供相对路径与行号。单次搜索最多遍历 5000 个文件、索引 1000 份文档；超过范围时可缩小工作区。左侧栏可搜索跨会话的用户和助手消息，并跳转到对应消息；归档会话不会删除其记录。可在“设置 → 归档会话”集中查看、解除归档或永久删除，也可在侧边栏展开归档会话。
 
-开启 Agent 的 browser 工具后，首次打开网页会启动由 Humbert 管理的独立可见 Chrome 窗口。用户和 Agent 查看、操作的是同一网页。工具支持 open、snapshot、click、type、scroll、press、back、forward、refresh、show、screenshot 和 close；网页截图以原始 PNG 保存到当前会话的 `attachments/`，并直接显示在聊天中。需要将截图保存到工作区或其他 Sandbox 允许的目录时，Agent 再调用独立的 `copy_file` 工具，用附件 ID 作为来源、目标路径作为文件名；同一轮和后续轮次都使用这条流程。模型支持视觉时，截图还会生成可供 Agent 使用的画面观察文本。每个 Agent 有独立的 Chrome 配置目录，保存在 `~/.humbert-agent/cache/browser-profiles/`，重启后仍保留网站 Cookie；不会借用用户日常 Chrome 的登录信息，清空该目录会重置浏览器状态，备份不包含此目录。网站仍可能要求安全验证。工具识别到验证页后会停止自动交互，提示用户在可见窗口手动完成，随后 Agent 可调用 snapshot 继续；Humbert 不自动识别或点击验证码。要求本机安装 Chrome，也可用 `HUMBERT_BROWSER_CHROME_PATH` 指定路径。网页只允许经过公网地址检查的 HTTP/HTTPS 目标；网页内容视为不可信信息。聊天中的普通链接仍使用系统默认浏览器打开。
+开启 Agent 的 browser 工具后，首次打开网页会启动由 Humbert 管理的独立可见 Chrome 窗口。用户和 Agent 查看、操作的是同一网页。工具支持 open、snapshot、click、type、scroll、press、back、forward、refresh、show、screenshot 和 close；网页截图以原始 PNG 保存到当前会话的 `attachments/`，并直接显示在聊天中。用户可以通过聊天中的下载按钮保存截图原件。模型支持视觉时，截图还会生成可供 Agent 使用的画面观察文本。每个 Agent 有独立的 Chrome 配置目录，保存在 `~/.humbert-agent/cache/browser-profiles/`，重启后仍保留网站 Cookie；不会借用用户日常 Chrome 的登录信息，清空该目录会重置浏览器状态，备份不包含此目录。网站仍可能要求安全验证。工具识别到验证页后会停止自动交互，提示用户在可见窗口手动完成，随后 Agent 可调用 snapshot 继续；Humbert 不自动识别或点击验证码。要求本机安装 Chrome，也可用 `HUMBERT_BROWSER_CHROME_PATH` 指定路径。网页只允许经过公网地址检查的 HTTP/HTTPS 目标；网页内容视为不可信信息。聊天中的普通链接仍使用系统默认浏览器打开。
 
 启用 `run_command` 后可以执行常用本地程序，无需维护程序名白名单。调用不经过 Shell，程序与子进程按本轮 Sandbox 目录权限执行：工作区可以修改，Standard 模式下用户 Home 的普通文件仅可读，凭据、Humbert 会话、日志和敏感缓存仍受保护。每次调用使用独立临时目录。Git 查询与 Skill 脚本采用派生的只读目录策略。受限模式所需的原生隔离不可用时，命令拒绝执行；具体调用仍由权限设置决定是否询问，权限 Allow 不会扩大本轮沙箱范围。
 
 定时与手动任务在左侧“任务”页面管理。
+
+桌面交互使用 `computer windows → screenshot → click/type/key/scroll/drag → 新截图核对`，可选择单个应用窗口或包含菜单、启动器的屏幕。坐标相对本次观察的预览像素，原始截图保存为会话附件。每轮最多 100 次桌面调用，只有一个运行能占用桌面；过期观察、会话串用和取消后的输入都会被拒绝。点击全局“停止桌面任务并接管”可中止运行；macOS/Windows 也支持 Ctrl+Alt+Escape 停止桌面输入。Wayland 的键盘授权属于桌面级，不能宣称按应用隔离。截图会发送给配置的视觉模型，桌面应用的文件和网络行为不受文件沙盒隔离。
+
+浏览器后端使用 Rod，负责 Chrome 启动、协议通信、控件等待和页面输入。桌面输入统一由 RobotGo v1.3.5 执行，包含可逐步取消的 macOS 拖拽；Windows/X11 的窗口尺寸、激活和常规截图也复用库接口。原生适配只保留库未覆盖的窗口身份、权限与遮挡检查、macOS ScreenCaptureKit 单窗口截图，以及 X11 特殊像素格式。Wayland 仍使用同一次系统授权的 RemoteDesktop/ScreenCast Portal，因为 RobotGo 的 libei 后端尚不提供截图能力。审批、会话持久化和视觉观察由 Humbert 统一管理。
 
 ### Skills、MCP 与多 Agent
 
@@ -80,7 +85,7 @@ Skills 使用 SKILL.md 定义能力；MCP 连接器支持 stdio 和 Streamable H
 
 ### 提醒与主动任务
 
-可在任务页面创建手动、一次性或周期任务，也可以在对话中让 Agent 使用 get_current_time 与 schedule_task 安排提醒。通过对话创建任务时，审批卡会展示任务内容、执行方式、时间和时区，确认后才会创建。任务运行可设置时长、模型调用次数、工具调用次数及 Token 限额；运行记录保存状态和结果摘要，执行过程仍记录在对应会话中。
+可在任务页面创建手动、一次性或周期任务，也可以在对话中让 Agent 依据用户消息的发送时间使用 schedule_task 安排提醒。通过对话创建任务时，审批卡会展示任务内容、执行方式、时间和时区，确认后才会创建。任务运行可设置时长、模型调用次数、工具调用次数及 Token 限额；运行记录保存状态和结果摘要，执行过程仍记录在对应会话中。
 
 **定时任务依赖 Humbert 进程运行。** 应用关闭期间不会按时执行；重新启动后，错过的运行按任务的错过策略处理。模型报告的 Token 用量用于限额判断，单次请求可能越过阈值；不同供应商的货币费用不统一计算。
 

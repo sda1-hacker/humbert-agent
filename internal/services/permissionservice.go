@@ -23,6 +23,9 @@ func (s *PermissionService) Mode() (string, error) {
 
 // SetMode 只变更审批模式，保留等待时间；与设置页复用同一持久化和运行时更新入口。
 func (s *PermissionService) SetMode(mode string) (string, error) {
+	if err := humanUIWrite(); err != nil {
+		return "", err
+	}
 	if err := s.validate(); err != nil {
 		return "", err
 	}
@@ -168,6 +171,9 @@ func (s *PermissionService) State(sessionID string) (PermissionStateDTO, error) 
 // 已经 Pending 的 Approval 保留创建时的 ExpiresAt；新超时只作用于后续审批。已有长期或
 // Session Rule 不会被删除；always 模式忽略历史 Allow，显式 Deny 始终优先。
 func (s *PermissionService) UpdateSettings(request UpdatePermissionSettingsRequest) error {
+	if err := humanUIWrite(); err != nil {
+		return err
+	}
 	if err := s.validate(); err != nil {
 		return err
 	}

@@ -428,6 +428,11 @@ func (s *Store) readAgentLocked(ctx context.Context, id string) (Agent, error) {
 	if document.Agent.ID != id {
 		return Agent{}, fmt.Errorf("Agent config.json ID 与目录不一致: file=%s content=%s", id, document.Agent.ID)
 	}
+	// 读取时兼容退役工具，保存时再写回；不在启动过程中迁移或覆盖用户文件。
+	document.Agent.EnabledBuiltinTools, err = normalizeBuiltinToolSelection(document.Agent.EnabledBuiltinTools)
+	if err != nil {
+		return Agent{}, fmt.Errorf("Agent 工具选择无效: %w", err)
+	}
 
 	return document.Agent, nil
 }

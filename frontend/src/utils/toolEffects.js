@@ -30,22 +30,23 @@ function parseToolResultObject(call) {
     }
 }
 
-/** 只识别 Humbert browser 自己返回的结构化人工验证标志。 */
+/** 只识别内置观察工具返回的结构化人工验证标志。 */
 export function browserNeedsHumanVerification(call) {
-    return call?.name === "browser" && call?.status === "completed" &&
+    return ["browser", "computer"].includes(call?.name) && call?.status === "completed" &&
         parseToolResultObject(call).needs_human_verification === true;
 }
 
-/** 从成功的 browser screenshot ToolResult 读取会话附件。 */
+/** 从实际 ToolResult 读取截图附件；computer 的每次动作也会产生核对画面。 */
 export function browserScreenshotOfCall(call) {
-    if (call?.name !== "browser" || call?.status !== "completed" ||
-        parseToolArguments(call?.arguments || "").action !== "screenshot") return null;
+    if (!["browser", "computer"].includes(call?.name) || call?.status !== "completed") return null;
+    if (call.name === "browser" && parseToolArguments(call?.arguments || "").action !== "screenshot") return null;
     const output = parseToolResultObject(call);
     const attachmentId = readStringProperty(output, "screenshot_attachment_id");
     if (!attachmentId) return null;
     return {
         attachmentId,
         name: readStringProperty(output, "screenshot_name") || "browser-screenshot.png",
+        desktop: call.name === "computer",
     };
 }
 

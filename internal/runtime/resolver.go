@@ -141,7 +141,7 @@ func (r *Resolver) ResolveTurn(
 		EventReporter: r.eventReporter, limitState: options.limitState,
 	}
 	budget := contextSnapshot.Budget
-	handlers, contextHandler, err := r.buildAgentHandlers(ctx, accounting, base.modelRoles, base.skills, base.scope,
+	handlers, contextHandler, err := r.buildAgentHandlers(ctx, accounting, base.modelRoles, base.scope,
 		manifest.ExposedToolNames, budget, base.toolTokenEstimate, base.session.ID, contextSnapshot.Instruction)
 	if err != nil {
 		return nil, err
@@ -412,12 +412,12 @@ func (r *Resolver) resolveContextBase(
 		return resolvedContextBase{}, err
 	}
 	skillSnapshot, mcpSnapshot := capabilities.skills, capabilities.mcp
-	descriptors, estimateTools := capabilities.descriptors, capabilities.schemas
+	estimateTools := capabilities.schemas
 	toolTokens, err := r.contextEngine.EstimateTools(ctx, estimateTools)
 	if err != nil {
 		return resolvedContextBase{}, fmt.Errorf("估算 Tool/Skill Schema Context 占用失败: %w", err)
 	}
-	instruction := buildRuntimeInstruction(agentInfo.Agent.Name, agentInfo.Agent.Instruction, agentWorkspace, descriptors, time.Now())
+	instruction := buildRuntimeInstruction(agentInfo.Agent.Name, agentInfo.Agent.Instruction, agentWorkspace, time.Now())
 	instruction, err = r.withUserPreferences(ctx, instruction)
 	if err != nil {
 		return resolvedContextBase{}, err

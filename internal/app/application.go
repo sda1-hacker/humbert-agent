@@ -12,7 +12,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/agents"
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
-	"github.com/sda1-hacker/humbert-agent/internal/component"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/credential"
@@ -261,6 +260,7 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 		// Profile 位于 Cache，不把站点登录信息放进业务数据备份。
 		BrowserProfileRoot: filepath.Join(filepath.Dir(cfg.Paths.ConfigFile), "cache", "browser-profiles"),
 		BrowserVision:      usecases.NewVisionInspector(agentService, modelRegistry).Inspect,
+		ComputerVision:     usecases.NewVisionInspector(agentService, modelRegistry).InspectComputer,
 	}
 	toolRegistry, err := buildToolRegistry(ctx, cfg.Paths.ConfigFile, toolDeps, permissionEngine, logger)
 	if err != nil {
@@ -340,7 +340,7 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 	modules := &moduleManager{}
 	resources.add(closeResources, "Modules", modules.close)
 	resources.add(stopWork, "Modules", modules.stop)
-	if err := modules.install(ctx, component.Host{DataDir: cfg.Paths.HomeDir, Logger: logger, Credentials: credentials, Events: events, Sandbox: sandboxManager}, runtimeResolver, opts.modules); err != nil {
+	if err := modules.install(ctx, agentruntime.ModuleHost{DataDir: cfg.Paths.HomeDir, Logger: logger, Credentials: credentials, Events: events, Sandbox: sandboxManager}, runtimeResolver, opts.modules); err != nil {
 		return nil, err
 	}
 	if err := modules.start(ctx); err != nil {

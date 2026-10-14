@@ -87,6 +87,9 @@ type Descriptor struct {
 	// Internal 表示 Humbert 为运行时可靠性提供的内部只读能力（例如历史检索）。
 	// Internal Tool 不受 Agent 的 enabled_builtin_tools 选择影响，也不在普通能力设置中展示。
 	Internal bool
+
+	// OptIn 可选能力必须由 Agent 明确选择，旧配置的 nil 工具列表不自动启用。
+	OptIn bool
 }
 
 // ModuleOrigin 是模块工具的稳定来源；不是 SDK 配置或凭据。

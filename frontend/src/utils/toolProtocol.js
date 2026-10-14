@@ -192,6 +192,9 @@ export function toolDisplayName(
         browser:
             "浏览网页",
 
+        computer:
+            "操作桌面应用",
+
         list_agents:
             "查看可用 Agent",
 
@@ -450,6 +453,17 @@ export function toolActionLabel(
             }
 
             return t("读取网页");
+        }
+
+        case "computer": {
+            const action = readStringProperty(argumentsObject, "action");
+            const labels = {
+                status: "检查桌面权限", windows: "查看桌面窗口", screenshot: "桌面截图",
+                click: "点击桌面控件", double_click: "双击桌面控件", right_click: "右键点击桌面控件",
+                move: "移动桌面指针", drag: "拖拽桌面控件", type: "输入桌面内容",
+                key: "按下快捷键", scroll: "滚动桌面内容", wait: "等待桌面更新", release: "交还桌面控制",
+            };
+            return t(labels[action] || "操作桌面应用");
         }
 
         case "browser": {

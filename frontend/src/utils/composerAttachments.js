@@ -53,7 +53,7 @@ export function validateComposerAttachments(files, existing = []) {
     const image = isImageAttachment(file), document = DOCUMENT_EXTENSIONS.has(extension(file));
     const text = type.startsWith("text/") || TEXT_TYPES.has(type) ||
       (!type || type === "application/octet-stream") && TEXT_EXTENSIONS.has(extension(file));
-    if (!image && !document && !text) throw new Error(`${name} 暂不支持；当前文件附件仅支持图片、PDF、Office 和 UTF-8 文本`);
+    if (!image && !document && !text) throw new Error(`${name} 暂不支持；当前文件附件支持图片、PDF、DOCX/XLSX/PPTX 和 UTF-8 文本，旧版 DOC/XLS/PPT 请先另存为新格式`);
     if (!image && !document && bytes > MAX_TEXT_BYTES) throw new Error(`${name} 超过文本附件 512 KiB 限制`);
     total += bytes;
     if (total > MAX_TOTAL_BYTES) throw new Error("单条消息附件总大小不能超过 24 MiB");
