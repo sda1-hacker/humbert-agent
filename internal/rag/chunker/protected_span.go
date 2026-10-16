@@ -1,9 +1,12 @@
 package chunker
 
 import (
+	"context"
 	"regexp"
 	"sort"
 	"unicode/utf8"
+
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 )
 
 // span 表示文本中的一个区间。
@@ -19,6 +22,7 @@ type span struct {
 var protectedPatterns = []*regexp.Regexp{
 	// 1. latex 公式
 	regexp.MustCompile(`(?s)\$\$.*?\$\$`),
+	regexp.MustCompile(`(?s)\\\[.*?\\\]`),
 
 	// 2. markdown 图片引用
 	regexp.MustCompile(`!\[[^\]\n]{0,200}\]\([^)\n]{1,500}\)`),
@@ -34,7 +38,7 @@ var protectedPatterns = []*regexp.Regexp{
 	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+" + "\\s*(?:\\|\\s*:?-{3,}:?\\s*)+\\|[\\r\\n]+"),
 
 	// 5. Markdown 普通表格行
-	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|[\\r\\n]+"),
+	regexp.MustCompile("(?m)[ ]*(?:\\|[^|\\n]*)+\\|(?:[\\r\\n]+|$)"),
 
 	// 6. fenced code block 代码块
 	// 例如：
@@ -42,6 +46,7 @@ var protectedPatterns = []*regexp.Regexp{
 	//     fmt.Println("hello")
 	//     ```
 	regexp.MustCompile("(?s)```(?:\\w+)?[\\r\\n].*?```"),
+	regexp.MustCompile("(?s)~~~[^\\r\\n]*[\\r\\n].*?~~~"),
 
 	// 7. Markdown inline code 代码行
 	// 例如：
@@ -54,7 +59,9 @@ var protectedPatterns = []*regexp.Regexp{
 // 所以这个函数返回的 span 也是 byte offset。
 // 如果需要进入 Chunker 的 rune 坐标系统，
 // 则调用 protectedSpansRune()。
-func protectedSpans(text string) []span {
+func protectedSpans(text string) []span { return protectedSpansContext(context.Background(), text) }
+
+func protectedSpansContext(ctx context.Context, text string) []span {
 	// match 是内部临时结构。
 	type match struct {
 		start int
@@ -62,15 +69,24 @@ func protectedSpans(text string) []span {
 	}
 
 	var all []match
+	for _, location := range documenttext.HTMLTableRanges(text) {
+		all = append(all, match{start: location[0], end: location[1]})
+	}
 
 	// ---------------------------------------------------------------------
 	// 每一种 Protected Pattern 都独立扫描一次。
 	// ---------------------------------------------------------------------
 
 	for _, pattern := range protectedPatterns {
+		if ctx.Err() != nil {
+			return nil
+		}
 		locations := pattern.FindAllStringIndex(text, -1)
 
 		for _, loc := range locations {
+			if ctx.Err() != nil {
+				return nil
+			}
 			if len(loc) != 2 {
 				continue
 			}

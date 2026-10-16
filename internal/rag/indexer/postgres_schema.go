@@ -1,15 +1,7 @@
 package indexer
 
-import (
-	"context"
-
-	"github.com/jackc/pgx/v5/pgxpool"
-)
-
-// EmbeddingDimensions 是当前 halfvec 列的固定维度，必须与知识库绑定的模型档案一致。
-const EmbeddingDimensions = 1024
-
-// 文档表保存完整原文，分块表保存父子关系，检索表仅保存可召回子块。
+// 冻结的初始结构；后续迁移将文档表调整为原件引用和管理元数据，正文由分块承载。
+// 以下 SQL 已进入迁移校验和，不能直接改写；结构或分词配置调整必须新增迁移。
 var schemaStatements = []string{
 	`
 CREATE EXTENSION IF NOT EXISTS vector
@@ -173,7 +165,9 @@ WITH (
 )
 `,
 
-	// ParadeDB 关键词检索索引。
+	// BM25 的实际索引：pg_search 为 search_content 等列建立 ParadeDB 索引。
+	// 查询入口是 retriever/postgres_bm25.go，不是 PostgreSQL 自带的 ts_rank。
+	// 此处沿用默认分词配置；中文检索质量需在真实数据库中另行评测。
 	`
 CREATE INDEX IF NOT EXISTS retrieval_index_search_idx
 ON retrieval_index
@@ -190,6 +184,3 @@ WITH (
 )
 `,
 }
-
-// EnsureSchema 为开发环境执行版本化迁移。
-func EnsureSchema(ctx context.Context, pool *pgxpool.Pool) error { return Migrate(ctx, pool) }

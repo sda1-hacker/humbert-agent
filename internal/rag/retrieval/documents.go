@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"github.com/cloudwego/eino/schema"
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 )
 
 // 这些元数据是 RAG 的文档语义，与具体的向量库和 BM25 库无关。
@@ -36,6 +37,9 @@ func Documents(results []SearchResult) []*schema.Document {
 	docs := make([]*schema.Document, 0, len(results))
 	for _, r := range results {
 		m := CloneMetadata(r.Metadata)
+		if len(r.SourceLocators) > 0 {
+			m[documenttext.MetaSourceLocators] = r.SourceLocators
+		}
 		m[MetaCollectionID], m[MetaDocumentID] = r.CollectionID, r.DocumentID
 		// bigint 使用字符串，经过 JSON 或其他数据库时不会丢失精度。
 		m[MetaRevision] = strconv.FormatInt(r.DocumentRevision, 10)
@@ -73,6 +77,7 @@ func Results(docs []*schema.Document) ([]SearchResult, error) {
 			CollectionID: text(m, MetaCollectionID), DocumentID: text(m, MetaDocumentID), DocumentRevision: revision,
 			ParentChunkID: text(m, MetaParentChunkID), ContextHeader: text(m, MetaContextHeader),
 			MatchType: MatchType(text(m, MetaMatchType)), VectorScore: number(m, MetaVectorScore), KeywordScore: number(m, MetaKeywordScore)}
+		r.SourceLocators = Locators(m)
 		for _, field := range []struct {
 			key    string
 			target *int
@@ -87,6 +92,26 @@ func Results(docs []*schema.Document) ([]SearchResult, error) {
 		results = append(results, r)
 	}
 	return results, nil
+}
+
+// Locators 同时接收内存中的类型与数据库 JSON 反序列化后的值；旧文档缺失定位时仍可正常检索。
+func Locators(metadata map[string]any) []documenttext.SourceLocator {
+	value := metadata[documenttext.MetaSourceLocators]
+	if locators, ok := value.([]documenttext.SourceLocator); ok {
+		return append([]documenttext.SourceLocator(nil), locators...)
+	}
+	if value == nil {
+		return nil
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var locators []documenttext.SourceLocator
+	if json.Unmarshal(data, &locators) != nil {
+		return nil
+	}
+	return locators
 }
 
 // Revision 不接受 float64，防止大版本号在 JSON 反序列化后悄悄损失精度。

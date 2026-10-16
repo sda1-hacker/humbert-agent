@@ -9,20 +9,16 @@ import (
 	"io"
 	"math"
 	"net/http"
-	"net/url"
 	"strings"
-	"time"
+
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
 
 const (
-	defaultTimeout      = 30 * time.Second
 	maxResponseBodySize = 4 << 20 // 4 MiB
 )
 
 var (
-	ErrMissingEndpoint      = errors.New("rerank http: missing endpoint")
-	ErrMissingModel         = errors.New("rerank http: missing model")
-	ErrInvalidEndpoint      = errors.New("rerank http: invalid endpoint")
 	ErrEmptyQuery           = errors.New("rerank http: empty query")
 	ErrInvalidResponse      = errors.New("rerank http: invalid response")
 	ErrInvalidScore         = errors.New("rerank http: invalid relevance score")
@@ -30,60 +26,6 @@ var (
 )
 
 var _ Scorer = (*HTTPClient)(nil)
-
-// HTTPConfig 描述兼容 Jina 或 Cohere 协议的精排服务，Endpoint 必须是完整请求地址。
-type HTTPConfig struct {
-	Endpoint string
-	APIKey   string
-	Model    string
-
-	Timeout time.Duration
-
-	HTTPClient *http.Client
-
-	// Headers 用于企业 Gateway 等场景。
-	//
-	// Authorization / Content-Type 由 Adapter 自己负责，
-	// 不建议通过这里覆盖。
-	Headers map[string]string
-}
-
-// DefaultHTTPConfig 返回精排服务的默认请求超时。
-func DefaultHTTPConfig() HTTPConfig {
-	return HTTPConfig{Timeout: defaultTimeout}
-}
-
-// Validate 检查服务地址、模型与请求超时。
-func (c HTTPConfig) Validate() error {
-	endpoint := strings.TrimSpace(c.Endpoint)
-
-	if endpoint == "" {
-		return ErrMissingEndpoint
-	}
-
-	parsed, err := url.ParseRequestURI(endpoint)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidEndpoint, err)
-	}
-
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("%w: unsupported scheme %q", ErrInvalidEndpoint, parsed.Scheme)
-	}
-
-	if parsed.Host == "" {
-		return fmt.Errorf("%w: missing host", ErrInvalidEndpoint)
-	}
-
-	if strings.TrimSpace(c.Model) == "" {
-		return ErrMissingModel
-	}
-
-	if c.Timeout < 0 {
-		return fmt.Errorf("rerank http: invalid timeout %s", c.Timeout)
-	}
-
-	return nil
-}
 
 // HTTPClient 精排 HTTP 客户端，按输入顺序还原服务返回的相关性分数。
 type HTTPClient struct {
@@ -95,21 +37,21 @@ type HTTPClient struct {
 }
 
 // NewHTTPClient 校验配置并创建精排客户端，优先使用调用方提供的 HTTPClient。
-func NewHTTPClient(cfg HTTPConfig) (*HTTPClient, error) {
+func NewHTTPClient(cfg ragconfig.RerankHTTP) (*HTTPClient, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	client := cfg.HTTPClient
-
-	if client == nil {
-		timeout := cfg.Timeout
-
-		if timeout == 0 {
-			timeout = defaultTimeout
+	// 复制客户端避免修改调用方共享状态，并为没有超时的自定义客户端补齐边界。
+	client := http.Client{}
+	if cfg.HTTPClient != nil {
+		client = *cfg.HTTPClient
+	}
+	if client.Timeout == 0 {
+		client.Timeout = cfg.Timeout
+		if client.Timeout == 0 {
+			client.Timeout = ragconfig.DefaultRequestTimeout
 		}
-
-		client = &http.Client{Timeout: timeout}
 	}
 
 	headers := make(map[string]string, len(cfg.Headers))
@@ -122,7 +64,7 @@ func NewHTTPClient(cfg HTTPConfig) (*HTTPClient, error) {
 		endpoint: strings.TrimSpace(cfg.Endpoint),
 		apiKey:   strings.TrimSpace(cfg.APIKey),
 		model:    strings.TrimSpace(cfg.Model),
-		client:   client,
+		client:   &client,
 		headers:  headers,
 	}, nil
 }
@@ -139,8 +81,8 @@ type rerankResponse struct {
 }
 
 type rerankResult struct {
-	Index          int     `json:"index"`
-	RelevanceScore float64 `json:"relevance_score"`
+	Index          *int     `json:"index"`
+	RelevanceScore *float64 `json:"relevance_score"`
 }
 
 // Score 请求精排分数，并按响应中的 index 对齐输入顺序；不能直接使用服务返回的排序。
@@ -206,14 +148,8 @@ func (c *HTTPClient) Score(ctx context.Context, query string, passages []string)
 	}
 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-
-		message := strings.TrimSpace(string(rawBody))
-
-		if len(message) > 1000 {
-			message = message[:1000]
-		}
-
-		return nil, fmt.Errorf("rerank http status %d: %s", response.StatusCode, message)
+		// 服务错误正文可能回显请求或凭据，不放进日志/上层诊断。
+		return nil, fmt.Errorf("rerank http status %d", response.StatusCode)
 	}
 
 	var decoded rerankResponse
@@ -232,21 +168,25 @@ func (c *HTTPClient) Score(ctx context.Context, query string, passages []string)
 	seen := make([]bool, len(passages))
 
 	for _, item := range decoded.Results {
-		if item.Index < 0 || item.Index >= len(passages) {
-			return nil, fmt.Errorf("%w: result index %d out of range", ErrInvalidResponse, item.Index)
+		if item.Index == nil || item.RelevanceScore == nil {
+			return nil, fmt.Errorf("%w: missing index or relevance_score", ErrInvalidResponse)
+		}
+		index, score := *item.Index, *item.RelevanceScore
+		if index < 0 || index >= len(passages) {
+			return nil, fmt.Errorf("%w: result index %d out of range", ErrInvalidResponse, index)
 		}
 
-		if seen[item.Index] {
-			return nil, fmt.Errorf("%w: duplicate result index %d", ErrInvalidResponse, item.Index)
+		if seen[index] {
+			return nil, fmt.Errorf("%w: duplicate result index %d", ErrInvalidResponse, index)
 		}
 
-		if math.IsNaN(item.RelevanceScore) || math.IsInf(item.RelevanceScore, 0) || item.RelevanceScore < 0 || item.RelevanceScore > 1 {
+		if math.IsNaN(score) || math.IsInf(score, 0) || score < 0 || score > 1 {
 
-			return nil, fmt.Errorf("%w: result[%d]=%v", ErrInvalidScore, item.Index, item.RelevanceScore)
+			return nil, fmt.Errorf("%w: result[%d]=%v", ErrInvalidScore, index, score)
 		}
 
-		scores[item.Index] = item.RelevanceScore
-		seen[item.Index] = true
+		scores[index] = score
+		seen[index] = true
 	}
 
 	for index, found := range seen {

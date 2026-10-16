@@ -1,31 +1,20 @@
 package retrieval
 
 import (
-	"fmt"
 	"math"
 	"sort"
+
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
-
-// RRFConfig 控制两路召回权重与排名平滑常数；融合分数按理论最大值归一化。
-type RRFConfig struct {
-	K             int
-	VectorWeight  float64
-	KeywordWeight float64
-}
-
-// DefaultRRFConfig 返回当前推荐默认值。
-func DefaultRRFConfig() RRFConfig {
-	return RRFConfig{K: 60, VectorWeight: 0.7, KeywordWeight: 0.3}
-}
 
 // FuseRRF 按 Eino 返回的相关性顺序计算加权排名融合。
 // 两路分数不需要统一量纲；缺省分数也不影响双路排名。
 // 单路召回保留向量分数或归一化 BM25 分数，同时保留原始分数。
-func FuseRRF(vectorResults, keywordResults []SearchResult, cfg RRFConfig) []SearchResult {
+func FuseRRF(vectorResults, keywordResults []SearchResult, cfg ragconfig.RRF) []SearchResult {
 	if cfg.Validate() != nil {
 		return nil
 	}
-	cfg = normalizeRRFConfig(cfg)
+	cfg = cfg.Effective()
 	if cfg.VectorWeight == 0 {
 		vectorResults = nil
 	}
@@ -186,30 +175,6 @@ func Limit(results []SearchResult, topK int) []SearchResult {
 	}
 
 	return results[:topK]
-}
-
-func normalizeRRFConfig(cfg RRFConfig) RRFConfig {
-	defaults := DefaultRRFConfig()
-	if cfg == (RRFConfig{}) {
-		return defaults
-	}
-
-	return cfg
-}
-
-// Effective 补齐排名平滑常数和默认权重。
-func (c RRFConfig) Effective() RRFConfig { return normalizeRRFConfig(c) }
-
-// Validate 检查排名常数与权重，拒绝负数和非有限值。
-func (c RRFConfig) Validate() error {
-	if c == (RRFConfig{}) {
-		return nil
-	}
-	if c.K < 0 || c.K > 1_000_000 || math.IsNaN(c.VectorWeight) || math.IsNaN(c.KeywordWeight) || math.IsInf(c.VectorWeight, 0) || math.IsInf(c.KeywordWeight, 0) ||
-		c.VectorWeight < 0 || c.KeywordWeight < 0 || c.VectorWeight+c.KeywordWeight <= 0 || math.IsInf(c.VectorWeight+c.KeywordWeight, 0) {
-		return fmt.Errorf("rag RRF: invalid k or weights")
-	}
-	return nil
 }
 
 // 按分数降序排列，同分按分块 ID 升序，保证结果稳定。

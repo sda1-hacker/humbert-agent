@@ -1,8 +1,12 @@
 package chunker
 
 import (
+	"context"
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"sort"
 	"strings"
+
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
 
 // boundary 保存结构边界的字符位置与优先级；同一位置保留最可信的信号。
@@ -12,7 +16,7 @@ type boundary struct {
 }
 
 // splitByHeuristics 根据章节、分页和分隔线划分结构块，再按大小合并与递归拆分。
-func splitByHeuristics(text string, cfg SplitterConfig, _ *DocProfile) []Chunk {
+func splitByHeuristics(ctx context.Context, text string, cfg ragconfig.Splitter, _ *DocProfile) []Chunk {
 	if text == "" {
 		return nil
 	}
@@ -22,16 +26,16 @@ func splitByHeuristics(text string, cfg SplitterConfig, _ *DocProfile) []Chunk {
 
 	// 短文档直接递归切分，避免因结构信号产生过多碎片。
 	if totalRunes <= cfg.ChunkSize {
-		return SplitText(text, cfg)
+		return splitText(ctx, text, cfg)
 	}
 
 	// 第一步：
 	//
 	// 扫描全文，找到所有可能的结构边界。
-	bounds := findHeuristicBoundaries(text, cfg.Languages)
+	bounds := findHeuristicBoundaries(ctx, text, cfg.Languages)
 
 	// 仅删除严格位于代码、公式等保护区域内部的边界，保留区域两端。
-	protected := protectedSpansRune(text, protectedSpans(text))
+	protected := protectedSpansRune(text, protectedSpansContext(ctx, text))
 	if len(protected) > 0 {
 		bounds = dropBoundsInsideSpans(bounds, protected)
 	}
@@ -41,7 +45,7 @@ func splitByHeuristics(text string, cfg SplitterConfig, _ *DocProfile) []Chunk {
 	// 说明 Heuristic Strategy 对当前文档没有帮助，
 	// 直接退回成熟的 Legacy Splitter。
 	if len(bounds) == 0 {
-		return SplitText(text, cfg)
+		return splitText(ctx, text, cfg)
 	}
 
 	// 补充文档末尾边界，让最后一段也进入统一合并循环。
@@ -75,6 +79,9 @@ func splitByHeuristics(text string, cfg SplitterConfig, _ *DocProfile) []Chunk {
 	// 按大小逐个装入结构块，超出预算时输出当前块。
 
 	for i := 1; i < len(bounds); i++ {
+		if ctx.Err() != nil {
+			return nil
+		}
 		nextEnd := bounds[i].runeStart
 
 		// 这里检查单个结构块长度，不是累计块长度。
@@ -92,7 +99,7 @@ func splitByHeuristics(text string, cfg SplitterConfig, _ *DocProfile) []Chunk {
 			}
 
 			// 单独处理这个巨大结构 Block。
-			out = appendOversizeBlock(out, runes, curEnd, nextEnd, cfg, &seq)
+			out = appendOversizeBlock(ctx, out, runes, curEnd, nextEnd, cfg, &seq)
 
 			curEnd = nextEnd
 			chunkStart = nextEnd
@@ -126,7 +133,7 @@ func splitByHeuristics(text string, cfg SplitterConfig, _ *DocProfile) []Chunk {
 }
 
 // findHeuristicBoundaries 查找章节、分页、全大写标题、页脚及空白分隔信号。
-func findHeuristicBoundaries(text string, languages []string) []boundary {
+func findHeuristicBoundaries(ctx context.Context, text string, languages []string) []boundary {
 	var bounds []boundary
 
 	// PDF 换页符是高优先级结构边界。
@@ -143,15 +150,17 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 	chapterPatterns := ChapterPatternsForLangs(languages)
 
 	runePos := 0
-	inFence := false
+	var fence documenttext.Fence
 
 	for i, line := range lines {
+		if ctx.Err() != nil {
+			return nil
+		}
 		trimmed := strings.TrimSpace(line)
 
 		// 代码块内的编号和章节文字不作为结构信号。
-		if strings.HasPrefix(trimmed, "```") {
-			inFence = !inFence
-		} else if !inFence {
+		if fence.Observe(trimmed) {
+		} else if !fence.Active() {
 			added := false
 
 			// 根据语言启用章节规则；未指定语言时尝试全部支持的规则。
@@ -208,10 +217,16 @@ func findHeuristicBoundaries(text string, languages []string) []boundary {
 
 	// 连续空白后的边界转换成字符位置，下一块从实际段落开始。
 
+	byteOffset, runeOffset := 0, 0
 	for _, location := range ExcessiveBlanksPattern.FindAllStringIndex(text, -1) {
-		runeStart := RuneLen(text[:location[1]])
+		if ctx.Err() != nil {
+			return nil
+		}
+		// 每段只扫描一次，避免空行很多时反复从全文开头统计 Unicode 字符。
+		runeOffset += RuneLen(text[byteOffset:location[1]])
+		byteOffset = location[1]
 
-		bounds = append(bounds, boundary{runeStart: runeStart, priority: PrioBlankBlock})
+		bounds = append(bounds, boundary{runeStart: runeOffset, priority: PrioBlankBlock})
 	}
 
 	if len(bounds) == 0 {
@@ -252,24 +267,13 @@ func dropBoundsInsideSpans(bounds []boundary, spans []span) []boundary {
 	}
 
 	result := bounds[:0]
-
-boundaryLoop:
+	index := 0
 	for _, item := range bounds {
-		for _, protected := range spans {
-			// 当前 Protected Span 已经从 Boundary 本身或它后面开始。
-			//
-			// 后面的 span 只会更靠后，
-			// 所以不可能再包含当前 Boundary。
-			if protected.start >= item.runeStart {
-				break
-			}
-
-			// protected.start < boundary < protected.end
-			//
-			// Boundary 严格落在保护区域内部。
-			if item.runeStart < protected.end {
-				continue boundaryLoop
-			}
+		for index < len(spans) && spans[index].end <= item.runeStart {
+			index++
+		}
+		if index < len(spans) && spans[index].start < item.runeStart {
+			continue
 		}
 
 		result = append(result, item)
@@ -324,10 +328,11 @@ func appendChunk(out []Chunk, runes []rune, start, end int, seq *int) []Chunk {
 
 // appendOversizeBlock 递归拆分过大结构块，将局部坐标转换成整篇原文坐标。
 func appendOversizeBlock(
+	ctx context.Context,
 	out []Chunk,
 	runes []rune,
 	start, end int,
-	cfg SplitterConfig,
+	cfg ragconfig.Splitter,
 	seq *int,
 ) []Chunk {
 	if end <= start {
@@ -335,7 +340,7 @@ func appendOversizeBlock(
 	}
 
 	subText := string(runes[start:end])
-	subChunks := SplitText(subText, cfg)
+	subChunks := splitText(ctx, subText, cfg)
 
 	for _, sub := range subChunks {
 		out = append(out, Chunk{
@@ -374,17 +379,9 @@ func applyOverlapAligned(runes []rune, curEnd, overlap int, bounds []boundary) i
 	}
 
 	// 只选择当前块终点之前的边界，否则重叠会始终为空。
-	bestBoundary := -1
-
-	for _, item := range bounds {
-		if item.runeStart >= windowStart && item.runeStart < curEnd && item.runeStart > bestBoundary {
-
-			bestBoundary = item.runeStart
-		}
-	}
-
-	if bestBoundary >= 0 {
-		return bestBoundary
+	index := sort.Search(len(bounds), func(i int) bool { return bounds[i].runeStart >= curEnd }) - 1
+	if index >= 0 && bounds[index].runeStart >= windowStart {
+		return bounds[index].runeStart
 	}
 
 	// 没有结构 Boundary。

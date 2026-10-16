@@ -17,6 +17,9 @@ var (
 
 // ValidateIngestionBatch 在调用模型或存储前检查文档身份、分块范围和父子关系。
 func ValidateIngestionBatch(batch IngestionBatch) error {
+	if batch.Source.Size < 0 || (batch.Source.Path != "" && (!validSourcePath(batch.Source.Path) || batch.Source.Path != batch.Source.Hash+"."+batch.Source.Type || batch.Source.Size == 0)) {
+		return fmt.Errorf("%w: invalid managed source", ErrInvalidIngestionBatch)
+	}
 	if batch.Attempt < 0 {
 		return fmt.Errorf("%w: negative attempt", ErrInvalidIngestionBatch)
 	}

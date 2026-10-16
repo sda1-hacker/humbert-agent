@@ -1,6 +1,8 @@
 package chunker
 
 import (
+	"context"
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"math"
 	"strings"
 )
@@ -104,7 +106,9 @@ func (p *DocProfile) HeuristicMarkerTotal() int {
 }
 
 // ProfileDocument 扫描文档结构，统计标题、章节、表格、代码及分页信号。
-func ProfileDocument(text string) *DocProfile {
+func ProfileDocument(text string) *DocProfile { return profileDocument(context.Background(), text) }
+
+func profileDocument(ctx context.Context, text string) *DocProfile {
 	profile := &DocProfile{MdHeadingCounts: make(map[int]int)}
 
 	if text == "" {
@@ -130,23 +134,25 @@ func ProfileDocument(text string) *DocProfile {
 	// 而 Profiler 的主要目标是判断文档结构。
 	lengths := make([]float64, 0, len(lines))
 
-	inFence := false
+	var fence documenttext.Fence
 	codeChars := 0
 
 	for _, line := range lines {
+		if ctx.Err() != nil {
+			return profile
+		}
 		trimmed := strings.TrimSpace(line)
 
 		// 快速扫描围栏代码，代码内部不统计标题或章节信号。
 
-		if strings.HasPrefix(trimmed, "```") {
-			inFence = !inFence
+		if fence.Observe(trimmed) {
 			profile.HasCode = true
 
 			// 代码区域不参与标题识别与普通行长统计。
 			continue
 		}
 
-		if inFence {
+		if fence.Active() {
 			codeChars += RuneLen(line)
 			continue
 		}

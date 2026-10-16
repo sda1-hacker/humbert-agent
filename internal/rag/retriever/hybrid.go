@@ -6,79 +6,28 @@ import (
 	"fmt"
 	"math"
 	"strings"
-	"time"
 
 	eino "github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
+
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
-
-const (
-	FailureStrict       = "strict"
-	FailureAllowPartial = "allow_partial"
-)
-
-// HybridConfig 只配置召回组合策略，不包含具体后端的维度或分数阈值。
-type HybridConfig struct {
-	// TopK 融合后保留的候选数量，业务入口可通过 Eino 选项覆盖。
-	TopK int
-	// ChannelTopK 每路原始召回数量，至少覆盖本次融合数量。
-	ChannelTopK int
-	// Timeout 整个混合检索的超时，零值使用默认值。
-	Timeout time.Duration
-	// ChannelTimeout 单路召回超时，零值共用整体超时。
-	ChannelTimeout time.Duration
-	// FailurePolicy 默认任一路失败即返回错误；allow_partial 允许保留另一条成功通道。
-	FailurePolicy string
-	// RRF 两路排名融合的权重与平滑参数。
-	RRF retrieval.RRFConfig
-}
-
-// DefaultHybridConfig 返回两路候选数量与 RRF 默认配置。
-func DefaultHybridConfig() HybridConfig {
-	return HybridConfig{TopK: 50, ChannelTopK: 50, RRF: retrieval.DefaultRRFConfig()}
-}
-
-// Validate 检查候选数量、超时、失败策略和融合权重。
-func (c HybridConfig) Validate() error {
-	if c.TopK < 0 || c.ChannelTopK < 0 || c.Timeout < 0 || c.ChannelTimeout < 0 {
-		return errors.New("rag hybrid: negative size or timeout")
-	}
-	if c.FailurePolicy != "" && c.FailurePolicy != FailureStrict && c.FailurePolicy != FailureAllowPartial {
-		return fmt.Errorf("rag hybrid: invalid failure policy %q", c.FailurePolicy)
-	}
-	return c.RRF.Validate()
-}
-
-func (c HybridConfig) effective() HybridConfig {
-	defaults := DefaultHybridConfig()
-	if c.TopK == 0 {
-		c.TopK = defaults.TopK
-	}
-	if c.ChannelTopK == 0 {
-		c.ChannelTopK = defaults.ChannelTopK
-	}
-	if c.Timeout == 0 {
-		c.Timeout = 30 * time.Second
-	}
-	c.RRF = c.RRF.Effective()
-	return c
-}
 
 // Hybrid 只负责并发召回、失败策略和 RRF；两路通道可以来自不同的库。
 type Hybrid struct {
 	vector  eino.Retriever
 	keyword eino.Retriever
-	config  HybridConfig
+	config  ragconfig.Hybrid
 }
 
 // NewHybrid 组合 Eino 原生向量与关键词检索器，不绑定具体索引库。
-func NewHybrid(vector, keyword eino.Retriever, cfg HybridConfig) (*Hybrid, error) {
+func NewHybrid(vector, keyword eino.Retriever, cfg ragconfig.Hybrid) (*Hybrid, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	cfg = cfg.effective()
+	cfg = cfg.Effective()
 	if cfg.RRF.VectorWeight > 0 && vector == nil {
 		return nil, errors.New("rag hybrid: missing vector channel")
 	}
@@ -229,7 +178,7 @@ func (h *Hybrid) RetrieveWithDiagnostics(ctx context.Context, query string, opts
 				if ctx.Err() != nil {
 					return nil, diag, ctx.Err()
 				}
-				if errors.Is(received.err, context.Canceled) || h.config.FailurePolicy != FailureAllowPartial {
+				if errors.Is(received.err, context.Canceled) || h.config.FailurePolicy != ragconfig.FailureAllowPartial {
 					return nil, diag, fmt.Errorf("hybrid %s channel: %w", received.channel, received.err)
 				}
 				diag.Degraded = true

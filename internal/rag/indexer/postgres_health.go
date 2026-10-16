@@ -2,11 +2,14 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
 
 type rowQueryer interface {
@@ -70,13 +73,32 @@ func versionAtLeast(version string, major, minor, patch int) bool {
 }
 
 // CheckSchema 检查数据库是否完成当前版本的 RAG 迁移。
-func CheckSchema(ctx context.Context, db rowQueryer) error {
+func CheckSchema(ctx context.Context, db rowQueryer, dimensions int) error {
 	var version, count int
 	if err := db.QueryRow(ctx, `SELECT COALESCE(MAX(version),0),COUNT(*) FROM rag_schema_migrations`).Scan(&version, &count); err != nil {
 		return fmt.Errorf("rag schema is not initialized; run cmd/rag-migrate: %w", err)
 	}
 	if version != SchemaVersion || count != SchemaVersion {
 		return fmt.Errorf("rag schema version %d, expected %d; run cmd/rag-migrate", version, SchemaVersion)
+	}
+	return checkVectorDimensions(ctx, db, dimensions, false)
+}
+
+// checkVectorDimensions 只检查已有列，不执行 ALTER 或重建索引，避免配置变化破坏已有数据。
+// 仅初始化前允许列不存在；普通导入和查询必须确认数据库与当前模型维度一致。
+func checkVectorDimensions(ctx context.Context, db rowQueryer, dimensions int, allowMissing bool) error {
+	var actual string
+	err := db.QueryRow(ctx, `SELECT format_type(atttypid,atttypmod) FROM pg_attribute
+WHERE attrelid=to_regclass('retrieval_index') AND attname='embedding' AND NOT attisdropped`).Scan(&actual)
+	if allowMissing && errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("检查 PG 向量列失败，请先执行 rag-migrate: %w", err)
+	}
+	expected := fmt.Sprintf("halfvec(%d)", dimensions)
+	if actual != expected {
+		return fmt.Errorf("%w: 数据库列为 %s，embedding.dimensions 要求 %s；请新建数据库并重新导入，程序不会自动改写已有向量", ragconfig.ErrEmbeddingDimensionMismatch, actual, expected)
 	}
 	return nil
 }

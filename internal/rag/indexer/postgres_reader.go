@@ -10,11 +10,41 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
-var _ rag.ChunkReader = (*Indexer)(nil)
-var _ rag.PublishedChunkReader = (*Indexer)(nil)
+var _ rag.ChunkReader = (*DocumentStore)(nil)
+var _ rag.PublishedChunkReader = (*DocumentStore)(nil)
+var _ rag.DocumentTracker = (*DocumentStore)(nil)
+
+// GetDocument 只返回管理字段，最近导入失败时仍返回旧版本的原件信息和发布版本。
+func (p *DocumentStore) GetDocument(ctx context.Context, collectionID, documentID string) (rag.DocumentRecord, error) {
+	var record rag.DocumentRecord
+	if strings.TrimSpace(collectionID) == "" || strings.TrimSpace(documentID) == "" {
+		return record, errors.New("rag: collection/document id required")
+	}
+	db, ok := p.db.(poolDatabase)
+	if !ok {
+		return record, errors.New("rag: document reading requires a PostgreSQL pool")
+	}
+	var metadata []byte
+	err := db.pool.QueryRow(ctx, `SELECT d.collection_id,d.id,d.title,d.document_type,
+d.source_uri,d.file_path,d.file_name,d.file_type,d.file_size,d.file_hash,d.embedding_profile_id,
+COALESCE(h.attempt,d.revision),d.revision,d.content_hash,d.process_config,d.metadata,
+d.parse_status,d.error_message,d.processed_at,d.created_at,d.updated_at,
+d.processing_attempt,d.processing_stage,d.processing_deadline,d.error_code
+FROM documents d LEFT JOIN rag_document_heads h ON h.collection_id=d.collection_id AND h.document_id=d.id
+WHERE d.collection_id=$1 AND d.id=$2`, collectionID, documentID).Scan(
+		&record.CollectionID, &record.ID, &record.Title, &record.Type,
+		&record.URI, &record.Path, &record.Name, &record.SourceFile.Type, &record.Size, &record.Hash, &record.EmbeddingProfileID,
+		&record.Attempt, &record.Revision, &record.ContentHash, &record.ProcessConfig, &metadata,
+		&record.ParseStatus, &record.ErrorMessage, &record.ProcessedAt, &record.CreatedAt, &record.UpdatedAt,
+		&record.ProcessingAttempt, &record.ProcessingStage, &record.ProcessingDeadline, &record.ErrorCode)
+	if err == nil {
+		err = json.Unmarshal(metadata, &record.Metadata)
+	}
+	return record, err
+}
 
 // ListChunks 按原文顺序返回已发布文档的可检索分块，父分块不参与评估。
-func (p *Indexer) ListChunks(ctx context.Context, collectionID, documentID string) ([]rag.ChunkRecord, error) {
+func (p *DocumentStore) ListChunks(ctx context.Context, collectionID, documentID string) ([]rag.ChunkRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -60,7 +90,7 @@ func (p *Indexer) ListChunks(ctx context.Context, collectionID, documentID strin
 
 // ResolveChunks 一次读取外部命中的权威分块，只保留当前已发布版本。
 // 即使外部库尚未删除旧向量、或索引写入后正文发布失败，也不会返回这些内容。
-func (p *Indexer) ResolveChunks(ctx context.Context, collectionID string, hits []retrieval.SearchResult) ([]retrieval.SearchResult, error) {
+func (p *DocumentStore) ResolveChunks(ctx context.Context, collectionID string, hits []retrieval.SearchResult) ([]retrieval.SearchResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -129,6 +159,7 @@ func resolvePublishedChunks(collectionID string, current map[string]retrieval.Se
 		hit.Content, hit.ContextHeader = record.Content, record.ContextHeader
 		hit.ParentChunkID, hit.ChunkIndex = record.ParentChunkID, record.ChunkIndex
 		hit.StartRune, hit.EndRune, hit.Metadata = record.StartRune, record.EndRune, record.Metadata
+		hit.SourceLocators = retrieval.Locators(record.Metadata)
 		hit.ContextContent, hit.ContextChunkID = "", ""
 		hit.Evidence = nil
 		results = append(results, hit)

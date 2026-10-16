@@ -9,9 +9,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 4
+const DocumentSchemaVersion = 3
 
 type migration struct {
 	version    int
@@ -43,6 +46,16 @@ func initialSchema() []string {
 	return out
 }
 
+// vectorSchema 仅为首次初始化替换向量列维度，原始迁移模板保持冻结。
+// 该维度会进入数据库保存的迁移校验和；已有数据库禁止通过改配置自动改变向量空间。
+func vectorSchema(dimensions int) []string {
+	statements := initialSchema()
+	for i, sql := range statements {
+		statements[i] = strings.ReplaceAll(sql, "HALFVEC(1024)", fmt.Sprintf("HALFVEC(%d)", dimensions))
+	}
+	return statements
+}
+
 var lifecycleStatements = []string{
 	`ALTER TABLE documents ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0`,
 	`ALTER TABLE documents ADD COLUMN IF NOT EXISTS content_hash TEXT NOT NULL DEFAULT ''`,
@@ -60,39 +73,146 @@ var lifecycleStatements = []string{
  REFERENCES chunks(collection_id,id) ON DELETE SET NULL (parent_chunk_id)`,
 }
 
+// documentMetadataStatements 参考文档管理表职责：原件引用与状态在主表，正文在 chunks。
+// 旧库存在非空 Markdown 时拒绝自动移除，必须先导出备份；迁移事务会完整回滚。
+// 历史迁移保持冻结，两种装配模式复用同一份新增迁移。
+var documentMetadataStatements = []string{
+	`DO $migration$ BEGIN
+ IF EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='documents'::regclass AND attname='markdown' AND NOT attisdropped) THEN
+  IF EXISTS(SELECT 1 FROM documents WHERE markdown IS NOT NULL AND markdown<>'') THEN
+   RAISE EXCEPTION 'RAG 文档表含有旧版 Markdown 全文，请先导出备份并确认原件可用；迁移不会自动删除正文';
+  END IF;
+ END IF;
+END $migration$`,
+	`DO $migration$ BEGIN
+ IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='documents'::regclass AND attname='parse_status' AND NOT attisdropped) THEN
+  ALTER TABLE documents
+   ADD COLUMN document_type TEXT NOT NULL DEFAULT 'text',
+   ADD COLUMN source_uri TEXT NOT NULL DEFAULT '',
+   ADD COLUMN file_path TEXT NOT NULL DEFAULT '',
+   ADD COLUMN file_name TEXT NOT NULL DEFAULT '',
+   ADD COLUMN file_type TEXT NOT NULL DEFAULT '',
+   ADD COLUMN file_size BIGINT NOT NULL DEFAULT 0 CHECK(file_size>=0),
+   ADD COLUMN file_hash TEXT NOT NULL DEFAULT '',
+   ADD COLUMN embedding_profile_id TEXT NOT NULL DEFAULT '',
+   ADD COLUMN parse_status TEXT NOT NULL DEFAULT 'processing' CHECK(parse_status IN ('processing','completed','failed','cancelled')),
+   ADD COLUMN error_message TEXT NOT NULL DEFAULT '',
+   ADD COLUMN processed_at TIMESTAMPTZ;
+  UPDATE documents SET source_uri=COALESCE(metadata->>'_source',''),file_name=COALESCE(metadata->>'file_name',''),
+   file_type=COALESCE(metadata->>'file_ext',''),file_hash=COALESCE(metadata->>'rag_source_content_hash',''),
+   file_size=CASE WHEN metadata->>'file_size' ~ '^[0-9]{1,18}$' THEN (metadata->>'file_size')::bigint ELSE 0 END,
+   document_type=CASE WHEN COALESCE(metadata->>'file_name','')='' THEN 'text' ELSE 'file' END,
+   parse_status='completed',processed_at=updated_at;
+  UPDATE documents d SET embedding_profile_id=p.profile_id FROM rag_collection_profiles p WHERE p.collection_id=d.collection_id;
+ END IF;
+END $migration$`,
+	`ALTER TABLE documents DROP COLUMN IF EXISTS markdown`,
+	`CREATE INDEX IF NOT EXISTS documents_parse_status_idx ON documents(collection_id,parse_status)`,
+}
+
+// documentWorkflowStatements 只扩展管理状态；历史迁移及其校验和不变。
+// 截止时间来自整次导入的 context，恢复时不能根据 updated_at 猜测任务是否仍存活。
+var documentWorkflowStatements = []string{
+	`ALTER TABLE documents
+ ADD COLUMN processing_attempt BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN processing_stage TEXT NOT NULL DEFAULT '',
+ ADD COLUMN processing_deadline TIMESTAMPTZ,
+ ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`,
+	`UPDATE documents SET processing_attempt=revision,
+ processing_stage=CASE WHEN parse_status='completed' THEN 'completed' ELSE '' END`,
+	`CREATE INDEX documents_processing_deadline_idx ON documents(collection_id,processing_deadline) WHERE parse_status='processing'`,
+}
+
 // Migrate 在数据库咨询锁保护下，以一个事务执行带版本和校验和的迁移，保留已识别旧表中的数据。
-func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+func Migrate(ctx context.Context, pool *pgxpool.Pool, cfg ragconfig.Postgres) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if cfg.Dimensions <= 0 || cfg.Dimensions > ragconfig.PostgresMaxDimensions {
+		return fmt.Errorf("%w: PG 迁移需指定 embedding.dimensions，范围 1..%d", ragconfig.ErrInvalidDimensions, ragconfig.PostgresMaxDimensions)
+	}
+	cfg = cfg.Effective()
+	ctx, cancel := context.WithTimeout(ctx, cfg.MigrationTimeout)
+	defer cancel()
 	if pool == nil {
 		return errors.New("rag migrate: nil pool")
 	}
 	if err := CheckExtensions(ctx, pool); err != nil {
 		return err
 	}
+	if err := checkVectorDimensions(ctx, pool, cfg.Dimensions, true); err != nil {
+		return err
+	}
+	if err := migrate(ctx, pool, "rag_schema_migrations", SchemaVersion, []migration{{1, "initial and legacy adoption", vectorSchema(cfg.Dimensions)}, {2, "profiles and document attempts", lifecycleStatements}, {3, "document metadata and managed sources", documentMetadataStatements}, {4, "document stages and interruption recovery", documentWorkflowStatements}}, cfg); err != nil {
+		return err
+	}
+	return checkVectorDimensions(ctx, pool, cfg.Dimensions, false)
+}
+
+// documentSchema 复用现有文档定义，独立初始化不创建搜索表、索引或数据库扩展。
+func documentSchema() []string {
+	var statements []string
+	for _, sql := range initialSchema() {
+		if !strings.Contains(sql, "retrieval_index") {
+			statements = append(statements, sql)
+		}
+	}
+	statements = append(statements, `ALTER TABLE chunks DROP CONSTRAINT IF EXISTS chunks_parent_fk`)
+	for _, sql := range lifecycleStatements {
+		statements = append(statements, strings.Replace(sql, "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1))
+	}
+	return statements
+}
+
+// MigrateDocuments 只准备权威文档库，供 ES、Milvus 等原生 Eino 组件组合使用。
+func MigrateDocuments(ctx context.Context, pool *pgxpool.Pool, cfg ragconfig.Postgres) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	cfg = cfg.Effective()
+	ctx, cancel := context.WithTimeout(ctx, cfg.MigrationTimeout)
+	defer cancel()
+	if pool == nil {
+		return errors.New("rag migrate: nil pool")
+	}
+	var version int
+	if err := pool.QueryRow(ctx, `SELECT current_setting('server_version_num')::int`).Scan(&version); err != nil {
+		return err
+	}
+	if version < 150000 {
+		return errors.New("rag document store: PostgreSQL 15+ required")
+	}
+	return migrate(ctx, pool, "rag_document_schema_migrations", DocumentSchemaVersion, []migration{{1, "documents and lifecycle", documentSchema()}, {2, "document metadata and managed sources", documentMetadataStatements}, {3, "document stages and interruption recovery", documentWorkflowStatements}}, cfg)
+}
+
+// 两种装配共用迁移事务；迁移模板保持冻结，完整 PG 模式的初始校验和同时固定配置维度。
+func migrate(ctx context.Context, pool *pgxpool.Pool, tableName string, supported int, migrations []migration, cfg ragconfig.Postgres) error {
+	table := pgx.Identifier{tableName}.Sanitize()
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer rollbackTransaction(ctx, tx)
-	if _, err = tx.Exec(ctx, `SET LOCAL statement_timeout='5min'`); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT set_config('statement_timeout',$1,true)`, fmt.Sprintf("%dms", cfg.MigrationTimeout.Milliseconds())); err != nil {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(736842510204)`); err != nil {
 		return err
 	}
-	if _, err = tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS rag_schema_migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,checksum TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`); err != nil {
+	if _, err = tx.Exec(ctx, fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s(version INTEGER PRIMARY KEY,name TEXT NOT NULL,checksum TEXT NOT NULL,applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`, table)); err != nil {
 		return err
 	}
 	var current int
-	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(version),0) FROM rag_schema_migrations`).Scan(&current); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT COALESCE(MAX(version),0) FROM `+table).Scan(&current); err != nil {
 		return err
 	}
-	if current > SchemaVersion {
-		return fmt.Errorf("rag migrate: database version %d is newer than supported %d", current, SchemaVersion)
+	if current > supported {
+		return fmt.Errorf("rag migrate: database version %d is newer than supported %d", current, supported)
 	}
-	for _, m := range []migration{{1, "initial and legacy adoption", initialSchema()}, {2, "profiles and document attempts", lifecycleStatements}} {
+	for _, m := range migrations {
 		checksum := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(m.statements, "\x00"))))
 		var previous string
-		err = tx.QueryRow(ctx, `SELECT checksum FROM rag_schema_migrations WHERE version=$1`, m.version).Scan(&previous)
+		err = tx.QueryRow(ctx, `SELECT checksum FROM `+table+` WHERE version=$1`, m.version).Scan(&previous)
 		if err == nil {
 			if previous != checksum {
 				return fmt.Errorf("rag migrate: migration %d checksum mismatch", m.version)
@@ -103,11 +223,21 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 			return err
 		}
 		for i, sql := range m.statements {
+			// 已由文档模式初始化的相同元数据表可被完整 PG 模式接管。
+			// 使用原语句计算历史校验和，仅在执行时补充幂等性。
+			if strings.HasPrefix(sql, "CREATE TABLE rag_") {
+				sql = strings.Replace(sql, "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1)
+			}
+			if strings.HasPrefix(sql, "ALTER TABLE chunks ADD CONSTRAINT chunks_parent_fk ") {
+				if _, err := tx.Exec(ctx, `ALTER TABLE chunks DROP CONSTRAINT IF EXISTS chunks_parent_fk`); err != nil {
+					return err
+				}
+			}
 			if _, err = tx.Exec(ctx, sql); err != nil {
 				return fmt.Errorf("rag migration %d statement %d: %w", m.version, i+1, err)
 			}
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO rag_schema_migrations(version,name,checksum)VALUES($1,$2,$3)`, m.version, m.name, checksum); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO `+table+`(version,name,checksum)VALUES($1,$2,$3)`, m.version, m.name, checksum); err != nil {
 			return err
 		}
 	}

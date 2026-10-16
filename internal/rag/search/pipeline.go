@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/rerank"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
@@ -21,37 +21,9 @@ var (
 // RetrieveFunc 是精排和引用处理的内部输入；外部 Eino 组件通过 NewEinoPipeline 接入。
 type RetrieveFunc func(ctx context.Context, query string) ([]retrieval.SearchResult, error)
 
-// ParentLoader 负责批量加载 Parent Chunk。
-//
-// PostgreSQL 实现放在：
-//
-//	retriever/postgres/context_loader.go
-//
-// 以后换存储后，只需要换实现。
+// ParentLoader 批量读取父块；更换检索库不影响权威上下文的读取。
 type ParentLoader interface {
 	LoadParents(ctx context.Context, parentChunkIDs []string) (map[string]retrieval.SearchResult, error)
-}
-
-// Config 控制检索超时、最终数量与父块扩展策略。
-type Config struct {
-	// Timeout 检索请求超时，零值由业务入口设置默认值。
-	Timeout time.Duration
-	// FinalTopK 是父块扩展与分组后最多返回的结果数量。
-	FinalTopK int
-
-	// ExpandParents 开启父块上下文扩展，命中子块证据仍独立保留。
-	ExpandParents bool
-
-	// CollapseSameParent 将同一父块的结果合并，保留所有命中子块证据，再限制最终数量。
-	CollapseSameParent bool
-
-	// AllowParentFallback 允许父块读取的普通错误退回子块正文；取消和超时始终返回。
-	AllowParentFallback bool
-}
-
-// DefaultConfig 默认返回五条结果，并在提供父块读取器时扩展上下文。
-func DefaultConfig() Config {
-	return Config{FinalTopK: 5, ExpandParents: true}
 }
 
 // Response 不只返回最终结果，
@@ -63,8 +35,9 @@ type Response struct {
 	Retrieval retrieval.Diagnostics    `json:"retrieval"`
 	Results   []retrieval.SearchResult `json:"results"`
 
-	Rerank      rerank.Diagnostics `json:"rerank"`
-	Diagnostics []Diagnostic       `json:"diagnostics,omitempty"`
+	Rerank        rerank.Diagnostics `json:"rerank"`
+	Diagnostics   []Diagnostic       `json:"diagnostics,omitempty"`
+	ContextTokens int                `json:"context_tokens"`
 }
 
 // Diagnostic 流程阶段与可恢复问题的说明。
@@ -79,7 +52,7 @@ type Pipeline struct {
 	retrieveDiagnostics func(context.Context, string) ([]retrieval.SearchResult, retrieval.Diagnostics, error)
 	reranker            *rerank.Engine
 	parentLoader        ParentLoader
-	config              Config
+	config              ragconfig.Search
 }
 
 // NewPipeline 校验配置并组合检索函数、精排引擎与父块读取器。
@@ -87,7 +60,7 @@ func NewPipeline(
 	retrieve RetrieveFunc,
 	reranker *rerank.Engine,
 	parentLoader ParentLoader,
-	cfg Config,
+	cfg ragconfig.Search,
 ) (*Pipeline, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -96,26 +69,13 @@ func NewPipeline(
 		return nil, ErrNilRetriever
 	}
 
-	if cfg.FinalTopK <= 0 {
-		if cfg.FinalTopK < 0 {
-			return nil, fmt.Errorf("rag search: final top k must be non-negative")
-		}
-		cfg.FinalTopK = DefaultConfig().FinalTopK
-	}
+	cfg = cfg.Effective()
 
 	return &Pipeline{retrieve: retrieve, reranker: reranker, parentLoader: parentLoader, config: cfg}, nil
 }
 
-// Validate 拒绝负数结果数量和超时。
-func (c Config) Validate() error {
-	if c.FinalTopK < 0 || c.Timeout < 0 {
-		return fmt.Errorf("rag search: negative result limit or timeout")
-	}
-	return nil
-}
-
 // NewPipelineWithDiagnostics 接收带通道诊断的检索函数，保留失败降级信息。
-func NewPipelineWithDiagnostics(retrieve func(context.Context, string) ([]retrieval.SearchResult, retrieval.Diagnostics, error), reranker *rerank.Engine, parents ParentLoader, cfg Config) (*Pipeline, error) {
+func NewPipelineWithDiagnostics(retrieve func(context.Context, string) ([]retrieval.SearchResult, retrieval.Diagnostics, error), reranker *rerank.Engine, parents ParentLoader, cfg ragconfig.Search) (*Pipeline, error) {
 	if retrieve == nil {
 		return nil, ErrNilRetriever
 	}
@@ -131,11 +91,7 @@ func NewPipelineWithDiagnostics(retrieve func(context.Context, string) ([]retrie
 
 // Search 执行召回、可选精排、父块扩展与最终选择；当前统一流程不执行 MMR 或问题改写。
 func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
-	timeout := p.config.Timeout
-	if timeout == 0 {
-		timeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, p.config.Timeout)
 	defer cancel()
 	query = strings.TrimSpace(query)
 
@@ -186,29 +142,25 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 		return Response{}, err
 	}
 
-	// 即使没有 Parent Expansion，
-	// 也初始化 Effective Context。
-	//
-	// 这样下游永远可以简单调用：
-	//
-	//     result.EffectiveContent()
+	// 先初始化命中子块上下文，父块缺失或读取降级时仍保留正确的引用范围。
 	for i := range response.Results {
 		response.Results[i].ContextChunkID = response.Results[i].ChunkID
 		response.Results[i].ContextContent = response.Results[i].Content
 		response.Results[i].ContextStartRune = response.Results[i].StartRune
 		response.Results[i].ContextEndRune = response.Results[i].EndRune
 		response.Results[i].ContextSourceHeader = response.Results[i].ContextHeader
+		response.Results[i].ContextSourceLocators = response.Results[i].SourceLocators
 	}
 
 	if !p.config.ExpandParents || p.parentLoader == nil || len(response.Results) == 0 {
 
-		return p.finalize(response), nil
+		return p.finalize(ctx, response)
 	}
 
 	parentIDs := uniqueParentIDs(response.Results)
 
 	if len(parentIDs) == 0 {
-		return p.finalize(response), nil
+		return p.finalize(ctx, response)
 	}
 
 	parents, err := p.parentLoader.LoadParents(ctx, parentIDs)
@@ -218,7 +170,7 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 		}
 		if p.config.AllowParentFallback && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			response.Diagnostics = append(response.Diagnostics, Diagnostic{Stage: "parent_expansion", Message: logging.SafeErrorText(err, 2048)})
-			return p.finalize(response), nil
+			return p.finalize(ctx, response)
 		}
 		return Response{}, fmt.Errorf("load parent context: %w", err)
 	}
@@ -251,24 +203,59 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 		response.Results[i].ContextStartRune = parent.StartRune
 		response.Results[i].ContextEndRune = parent.EndRune
 		response.Results[i].ContextSourceHeader = parent.ContextHeader
+		response.Results[i].ContextSourceLocators = parent.SourceLocators
 	}
-	return p.finalize(response), nil
+	return p.finalize(ctx, response)
 }
 
-// finalize 按需合并父块并统一截断最终结果，保留子块命中证据。
-func (p *Pipeline) finalize(response Response) Response {
+// finalize 先合并相同上下文，再按排名与预算选择完整块，避免截断后引用坐标失真。
+func (p *Pipeline) finalize(ctx context.Context, response Response) (Response, error) {
 	if p.config.CollapseSameParent {
 		response.Results = collapseSameContext(response.Results)
 	}
-
-	if p.config.FinalTopK > 0 && len(response.Results) > p.config.FinalTopK {
-
-		response.Results = response.Results[:p.config.FinalTopK]
+	selected := make([]retrieval.SearchResult, 0, min(len(response.Results), p.config.FinalTopK))
+	count := func(r retrieval.SearchResult) int {
+		text := r.EffectiveContent()
+		if r.ContextSourceHeader != "" {
+			text = r.ContextSourceHeader + "\n\n" + text
+		}
+		return p.config.CountTokens(text)
 	}
-
+	for _, result := range response.Results {
+		if err := ctx.Err(); err != nil {
+			return Response{}, err
+		}
+		tokens := count(result)
+		if tokens < 0 {
+			return Response{}, errors.New("rag search: tokenizer returned a negative count")
+		}
+		remaining := p.config.MaxContextTokens - response.ContextTokens
+		if tokens > remaining && result.EffectiveChunkID() != result.ChunkID {
+			// 父块超出余量时退回实际命中子块，合并时的其他证据不再计为已提供上下文。
+			result.ContextChunkID, result.ContextContent = result.ChunkID, result.Content
+			result.ContextStartRune, result.ContextEndRune = result.StartRune, result.EndRune
+			result.ContextSourceHeader = result.ContextHeader
+			result.ContextSourceLocators = result.SourceLocators
+			result.Evidence = nil
+			tokens = count(result)
+			response.Diagnostics = append(response.Diagnostics, Diagnostic{Stage: "context_budget", Message: "parent exceeded context budget; retained child evidence"})
+		}
+		if tokens < 0 {
+			return Response{}, errors.New("rag search: tokenizer returned a negative count")
+		}
+		if tokens > remaining {
+			response.Diagnostics = append(response.Diagnostics, Diagnostic{Stage: "context_budget", Message: "skipped chunk exceeding remaining context budget"})
+			continue
+		}
+		selected = append(selected, result)
+		response.ContextTokens += tokens
+		if len(selected) == p.config.FinalTopK {
+			break
+		}
+	}
+	response.Results = selected
 	response.Rerank.ResultCount = len(response.Results)
-
-	return response
+	return response, nil
 }
 
 // uniqueParentIDs 收集不重复的父块 ID，供批量读取。
@@ -307,7 +294,7 @@ func collapseSameContext(results []retrieval.SearchResult) []retrieval.SearchRes
 		key := contextIdentity.IdentityKey()
 		evidence := result.Evidence
 		if len(evidence) == 0 {
-			evidence = []retrieval.HitEvidence{{ChunkID: result.ChunkID, StartRune: result.StartRune, EndRune: result.EndRune, Content: result.Content, Score: result.Score}}
+			evidence = []retrieval.HitEvidence{{ChunkID: result.ChunkID, StartRune: result.StartRune, EndRune: result.EndRune, Content: result.Content, Score: result.Score, SourceLocators: result.SourceLocators}}
 		}
 
 		if index, exists := seen[key]; exists {

@@ -36,7 +36,7 @@ func EnsureCollectionProfile(ctx context.Context, pool *pgxpool.Pool, collection
 	err = tx.QueryRow(ctx, `SELECT profile_id FROM rag_collection_profiles WHERE collection_id=$1`, collectionID).Scan(&existing)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var legacy bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM retrieval_index WHERE collection_id=$1)`, collectionID).Scan(&legacy); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM documents WHERE collection_id=$1)`, collectionID).Scan(&legacy); err != nil {
 			return err
 		}
 		if legacy {
@@ -54,7 +54,7 @@ func EnsureCollectionProfile(ctx context.Context, pool *pgxpool.Pool, collection
 }
 
 // ensureProfile 校验知识库绑定的向量空间档案，防止更换模型后继续使用旧索引。
-func (p *Indexer) ensureProfile(ctx context.Context, collectionID string) error {
+func (p *DocumentStore) ensureProfile(ctx context.Context, collectionID string) error {
 	if p.config.ProfileID == "" {
 		return nil
 	}
@@ -63,4 +63,22 @@ func (p *Indexer) ensureProfile(ctx context.Context, collectionID string) error 
 		return errors.New("rag: profile binding requires a PostgreSQL pool")
 	}
 	return EnsureCollectionProfile(ctx, db.pool, collectionID, p.config.ProfileID, p.config.ProfileJSON)
+}
+
+// CheckCollectionProfile 是查询期的只读校验，已绑定的知识库不再每次搜索取得排他咨询锁。
+func CheckCollectionProfile(ctx context.Context, pool *pgxpool.Pool, collectionID, profileID string) error {
+	if pool == nil {
+		return errors.New("rag: nil profile database pool")
+	}
+	if strings.TrimSpace(collectionID) == "" || profileID == "" {
+		return errors.New("rag: missing collection/profile id")
+	}
+	var existing string
+	if err := pool.QueryRow(ctx, `SELECT profile_id FROM rag_collection_profiles WHERE collection_id=$1`, collectionID).Scan(&existing); err != nil {
+		return err
+	}
+	if existing != profileID {
+		return ErrEmbeddingProfileMismatch
+	}
+	return nil
 }

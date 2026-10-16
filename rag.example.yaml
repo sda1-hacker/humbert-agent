@@ -1,0 +1,170 @@
+# RAG 独立配置；从项目根目录运行 example 或 rag-migrate 时默认读取本文件。
+# 也可通过 -config 或 HUMBERT_RAG_CONFIG 指定其他文件，不会自动覆盖用户配置。
+# 优先级：内置预设 < 此 YAML < HUMBERT_RAG_* 环境变量。
+# 例如 HUMBERT_RAG_SEARCH_FINAL_TOP_K=8；超时必须带单位，如 30s、2m。
+# 数据库地址和密钥建议由环境变量提供：
+# HUMBERT_RAG_DATABASE_PASSWORD、HUMBERT_RAG_EMBEDDING_API_KEY、HUMBERT_RAG_RERANK_PROVIDER_API_KEY。
+# 下列是实验示例值，部分覆盖代码默认值；0、false 和省略的含义需按各项说明判断。
+# 未注入 tokenizer 时，向量输入及上下文预算均按 UTF-8 字节数保守估算，不是模型真实 token 数。
+# 数据库连接按字段填写；可分别用 HUMBERT_RAG_DATABASE_HOST/PORT/NAME/USER/PASSWORD/SSLMODE 覆盖。
+# rag-migrate 或 ensure_schema: true 的 ingest 会创建缺失的库，已有库直接复用。
+# PostgreSQL 服务及扩展需预先安装：PostgreSQL 15+、pgvector 0.7+、pg_search 0.25+。
+database:
+  host: "localhost" # 数据库主机；本地服务用 localhost，也可填写 Unix socket 目录。
+  port: 5432 # 数据库端口，默认 5432，范围 1..65535。
+  name: "humbert_rag" # 目标库名，默认 humbert_rag；首次建库通过维护库 postgres，需 CREATEDB 权限。
+  user: "root" # 已存在的 PostgreSQL 角色；初始化不会创建角色或修改密码。
+  password: "123456" # 该角色的密码；无密码认证时填空字符串，建议用环境变量覆盖。
+  sslmode: "disable" # 本地测试用 disable；远程按服务要求配置 require、verify-full 等。
+collection_id: rag-file-example # 逻辑知识库 ID；同一库固定向量模型、版本及输入规则。
+# false：运行 PG 示例前先执行 rag-migrate；true：ingest 自动建库、安装扩展并迁移，query 不初始化。
+# 示例正常调用 Embedding，精排按下面的 rerank 配置选择性开启；不调用回答模型。
+# 独立 cmd/rag-migrate 命令始终按命令执行迁移，不受此开关限制。
+ensure_schema: false
+
+# 数据库操作超时，0 使用代码默认值；正值至少 1ms，不能用 0 关闭超时。
+postgres:
+  connect_timeout: 10s # 单次建连超时；DSN 中的 connect_timeout 优先。
+  statement_timeout: 30s # 普通 SQL 执行超时；DSN 中的 statement_timeout 优先。
+  lock_timeout: 5s # SQL 等待数据库锁的上限；DSN 中的 lock_timeout 优先。
+  extension_timeout: 30s # 安装并检查 vector、pg_search 扩展的总时限。
+  migration_timeout: 5m # 迁移流程时限；迁移事务也用它覆盖普通 SQL 超时。
+
+# 知识库原件存储；空值使用系统用户配置目录下的 humbert-agent/rag/sources。
+# 原格式按 SHA-256 命名并共享，独立于聊天附件；数据库保存相对标识，不保存 Base64。
+source_directory: ""
+
+# 托管原件 → 临时 Markdown → 分块。完整 Markdown 不写入文档主表。
+loader:
+  normalize_line_endings: true # 将 CRLF/CR 统一为 LF，再据此计算分块原文范围。
+  # 与附件解析共用的参数；下列大小均为字节，0 会补默认限制，不代表无限制。
+  parse_options:
+    cache_directory: auto # 系统用户缓存目录；空字符串关闭。同文件+解析参数复用 Markdown，损坏时自动重算。
+    cache_max_bytes: 268435456 # 解析缓存总容量上限（256 MiB）；仅清理该目录中 parse-*.json，原件不会被清理。
+    exclude_headers_and_footers: true # 让 Tabula 过滤页眉页脚；普通文本不受影响。
+    ocr_language: "" # 留空不覆盖库默认语言；如 chi_sim+eng，仍需 ocr 构建支持、Tesseract 及语言包。
+    max_input_bytes: 33554432 # 源文件上限 32 MiB；不是解析后的正文大小。
+    max_output_bytes: 33554432 # 解析结果 Markdown 上限 32 MiB，后续还受 ingest.max_text_bytes 约束。
+    max_expanded_bytes: 268435456 # ZIP 文档声明的解压后总量上限 256 MiB，适用于 docx/xlsx/pptx 等。
+    max_archive_entries: 8192 # ZIP 内部文件条目数上限，不是工作表、幻灯片或页数。
+    timeout: 1m # 单个文件解析总时限，0 用 1m；超时取消读取或终止解析子进程。
+    include_page_numbers: false # 是否在 Markdown 中保留页码标记，不改变源文件。
+
+# 一次导入任务的资源限制，超过限制会停止导入；排队时间也计入总超时。
+ingest:
+  max_concurrent: 2 # 同一 Service 同时执行的导入数，0 用 2；其余任务等待空位。
+  max_chunks: 5000 # 每篇文档最终普通块/子块的数量上限，不计父块；0 用 5000。
+  max_text_bytes: 33554432 # 解析及换行归一化后的正文上限：本例 32 MiB，代码默认 8 MiB。
+  timeout: 10m # 包含排队、解析、切分、向量化和存储；0 用 10m。
+
+# 大小以 Unicode 字符数计算，不是字节数或精确 token 数。
+chunking:
+  parent_child: true # 父块用于补充上下文，仅子块进入向量/BM25 索引；false 直接生成普通块。
+  parent_chunk_size: 2048 # 本例父块目标 2048 字符，代码默认/0 为 4096；父块不套用 token_limit。
+  child_chunk_size: 384 # 子块目标字符数，默认/0 为 384；仅父子模式生效。
+  # 普通切分或推导父子窗口的基础配置。
+  splitter:
+    # auto 自动选择标题/章节策略；heading 优先 Markdown 标题；heuristic 优先章节/分页；recursive 递归切分。
+    # 结构策略失败时递归兜底；省略策略默认 recursive，本例显式启用 auto。
+    strategy: auto
+    chunk_size: 512 # 普通块目标大小，0 用 512；父子模式改用上面两个窗口，结构保护可能产生更大块。
+    # 普通块最大重叠字符数，0 关闭；业务入口最多取块大小的一半。
+    # 父子模式中，正值让子块重叠按 child_chunk_size/5 推导，不直接使用这里的 80。
+    chunk_overlap: 80
+    separators: ["\n\n", "\n", "。"] # 按顺序尝试字面分隔符并保留原文；空列表使用这组默认值。
+    token_limit: 0 # 按语言比例估算的切分目标；0 关闭，完整模型输入仍受 embedding.input_budget 限制。
+    languages: [zh] # zh 中文/en 英文/de 德文/mixed 混合；影响章节规则及 token 估算，首项用于 token 目标。
+
+# 文档和查询共享同一向量模型。更换模型、权重版本或输入拼接规则时使用新知识库重新导入。
+embedding:
+  provider: ollama # openai 使用兼容协议，ollama 使用原生 /api/embed；省略默认 openai。
+  # embeddinggemma-2的维度只支持： 128、256、512、768
+  model: "embeddinggemma-2:740m" # 创建 Embedder 时必填服务实际支持的模型名；不会自动下载模型，可用环境变量提供。
+  model_revision: "" # 手动维护的模型权重版本，参与知识库档案；同名模型更换权重时必须同步修改。
+  # 唯一输出维度：同时用于模型请求、入库、查询、模型档案和首次 PG 建表；完整 PG 模式必须显式填写。
+  # 本例先使用 EmbeddingGemma 2 的 256 维 MRL；该模型还支持 128/512/768，由 Ollama 截断并重新归一化。
+  # 更换模型时按服务能力调整；已有数据库不能靠改此值转换向量，需要新建数据库并重新导入。
+  dimensions: 256
+  retry_attempts: 3 # 当前请求总尝试次数，0 用 3，1 关闭重试，最多 5；不重跑整篇文档。
+  retry_interval: 250ms # 临时网络错误、429/408/指定 5xx 首次退避，随后翻倍至多 10s；总时间仍受 timeout 限制。
+  # 完整输入包含标题、上下文路径和正文；下列不是服务官方的上下文窗口，需按所选模型调整。
+  # 导入时可能继续细分超预算子块；仍超限的输入不会提交模型，查询超限会返回错误。
+  input_budget:
+    max_input_tokens: 8192 # 单条完整输入上限，0 用 8192；未注入 tokenizer 时按 UTF-8 字节数估算。
+    max_batch_tokens: 65536 # 每次请求的输入总预算，0 用 65536；批量条数限制也同时生效。
+  api_key: "" # OpenAI 服务密钥，建议改用 HUMBERT_RAG_EMBEDDING_API_KEY；原生 Ollama 不使用此字段。
+  # base_url 是基础地址，不是完整请求路径。OpenAI 默认 https://api.openai.com/v1；兼容服务通常填写 /v1 地址。
+  # 切换 provider: ollama 后可启用下面的本地地址，不附加 /v1 或 /api/embed。
+  base_url: http://localhost:11434
+  # timeout: 2m # 单次向量请求超时；省略/0 时 OpenAI 为 30s、Ollama 为 2m，不是整篇导入超时。
+  # keep_alive: 0s # 仅 Ollama：省略用服务默认值，0s 请求后卸载，正值指定继续驻留时长。
+
+# 控制向量化批量请求，不改变分块大小。
+indexer:
+  embedding_batch_size: 32 # 本例每次最多 32 个子块，代码默认/0 为 64；同时受单批输入总预算限制。
+
+# 向量和 BM25 共用的文本拼接规则：标题 + 上下文路径 + 正文，去除完全相同的部分。
+input_builder:
+  title_keys: [title, _title, file_name] # 按顺序取第一个非空字符串标题；空列表用这组默认键。
+  context_header_key: rag_context_header # 子块标题路径的元数据键；省略/空字符串使用此默认键。
+
+# 内置 PG 向量检索器。TopK 是候选数，Service/Hybrid 会按本次候选池策略覆盖它。
+vector:
+  top_k: 50 # 独立调用的默认候选数，0 用 50，PG 范围 1..200；不等于最终返回条数。
+  score_threshold: 0 # 余弦相似度下限 0..1，代码默认 0.15；本例显式为 0，仍会过滤负相似度。
+# 内置 PG pg_search BM25 检索器，不调用向量模型。
+keyword:
+  top_k: 50 # 独立调用的默认候选数，0 用 50，PG 范围 1..200；Service/Hybrid 可按请求覆盖。
+  score_threshold: 0 # 非负 BM25 原始分数下限，代码默认 0.30；无固定上界，不能套用向量阈值。
+# 向量 + BM25 并发召回 → RRF 融合候选 → 可选精排 → 最终上下文。
+hybrid:
+  top_k: 30 # 本例融合后保留 30 条，代码默认/0 为 50；本例单路模式也取此候选池大小。
+  channel_top_k: 50 # 每路默认召回数，0 用 50；实际至少取 max(本项, 本次 TopK)，再执行融合截断。
+  timeout: 20s # 双路召回及融合总超时，本例 20s，代码默认/0 为 30s；受外层 search.timeout 约束。
+  channel_timeout: 15s # 单路独立超时；默认/0 不另设上限，只遵循整体及外层时限。
+  failure_policy: strict # strict 任一路失败即失败；allow_partial 允许单路普通错误/超时后使用成功通道。
+  # 整体取消、整体超时不会被 allow_partial 吞掉；两路都失败仍会返回错误。
+  # 按排名融合，单路贡献为 weight/(k+rank)，rank 从 1 开始，不直接相加两路原始分数。
+  rrf:
+    k: 60 # 排名平滑常数，越大越弱化相邻名次差异；范围 0..1000000，默认整组参数为 60/0.7/0.3。
+    vector_weight: 0.7 # 向量通道相对权重，0 关闭该混合通道；不影响单独 semantic 模式。
+    keyword_weight: 0.3 # 关键词通道相对权重，0 关闭该混合通道；不影响单独 keyword 模式。
+    # 权重非负且不要求和为 1；除整组全零表示默认配置外，两路不能同时为 0。
+
+# 精排阈值筛选看模型分；排序再使用模型分、召回分和来源权重的组合分。
+rerank:
+  disabled: true # 默认关闭远程精排并保留召回顺序；改为 false 时必须配置 rerank_provider 的地址及模型。
+  top_k: 5 # 独立 Engine.Rerank 的输出上限，0 用 5；Service.Search 最终条数由 search.final_top_k 决定。
+  max_candidates: 30 # 本例最多评分 30 条，代码默认/0 为 200；启用精排时不得小于最终返回条数。
+  threshold: 0.3 # 模型相关性分数下限，范围 0..1；显式 0 不会补回 0.3，不是组合分阈值。
+  # 初次筛选为空且 threshold > degrade_floor 时，只降低一次阈值到 max(threshold*degrade_factor, degrade_floor)。
+  # 复用已有模型分数，不重新请求模型；本例降级阈值为 0.21。
+  degrade_factor: 0.7 # 一次降级的倍率，范围 0..1，代码默认 0.7。
+  degrade_floor: 0.15 # 降级阈值下限，本例 0.15，代码默认 0.3；不低于 threshold 时不执行降级。
+  fallback_min_score: 0.1 # 两次筛选仍为空时，最佳模型分至少达到此值才保留一条；代码默认 0.15。
+  # 组合分 = model_weight*模型分 + base_weight*召回分 + source_weight*来源值。
+  # 三项各在 0..1 内且总和不超过 1；整组全 0 会补为代码默认的 0.6/0.3/0.1。
+  model_weight: 0.8 # 模型分系数，本例 0.8，代码默认 0.6。
+  base_weight: 0.2 # 召回分系数，本例 0.2，代码默认 0.3；不是 RRF 的通道权重。
+  source_weight: 0 # 来源值系数，本例关闭，代码默认 0.1；来源值由结果或 rag_source_weight 元数据提供，缺失为 0。
+  mmr_lambda: 0.7 # 独立 Rerank 的相关性/去重权衡，0..1，越大越重相关性；Service.Search 不执行 MMR。
+# 可选的精排 HTTP 服务，仅 disabled: false 时必需。下面保持注释，不会实际启用或发请求。
+# rerank_provider:
+#   endpoint: https://example.com/v1/rerank # 完整请求地址，不像 embedding.base_url 那样自动追加路径。
+#   model: your-rerank-model # 服务支持的精排模型名，启用精排时必填。
+#   timeout: 15s # 单次精排 HTTP 请求时限，省略/0 用 30s，仍受 search.timeout 约束。
+#   api_key: "" # 非空时使用 Bearer 鉴权，建议由 HUMBERT_RAG_RERANK_PROVIDER_API_KEY 注入。
+#   headers: {} # 服务额外要求的请求头；如含凭据，避免提交到版本库。
+
+# 最终输出给调用方的上下文，不配置 Agent 对话记忆或上下文压缩。
+search:
+  final_top_k: 5 # 最终最多返回 5 段上下文，0 用 5；合并父块或预算不足时可更少。
+  timeout: 30s # 查询总时限，包含召回、精排、父块扩展和预算筛选；0 用 30s。
+  # 只统计实际返回正文和上下文路径，不包含系统提示词、消息角色、引用包装及输出预留。
+  # 父块超出剩余预算时先退回子块；子块仍超限则跳过，不截断原文破坏引用坐标。
+  max_context_tokens: 16384 # 返回上下文的总预算，0 用 16384；默认计数仍按 UTF-8 字节数估算。
+  expand_parents: true # 命中子块后补充同文档、同版本父块上下文；需装配父块读取器。
+  collapse_same_parent: true # 合并共享上下文的结果并保留子块证据；本例开启，代码默认 false。
+  # 仅控制父块读取发生普通错误时是否保留子块继续；整体取消/超时不会被忽略。
+  # 父块缺失、版本不匹配或预算不足时保留/退回子块，本来就不依赖此开关。
+  allow_parent_fallback: false

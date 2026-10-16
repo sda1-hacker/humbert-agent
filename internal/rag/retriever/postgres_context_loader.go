@@ -2,7 +2,6 @@ package retriever
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -32,14 +31,7 @@ func NewParentLoader(
 		return nil, ErrMissingCollectionID
 	}
 
-	return newParentLoader(poolQueryer{pool: pool}, collectionID), nil
-}
-
-func newParentLoader(
-	db queryer,
-	collectionID string,
-) *ParentLoader {
-	return &ParentLoader{db: db, collectionID: strings.TrimSpace(collectionID)}
+	return &ParentLoader{db: pool, collectionID: collectionID}, nil
 }
 
 // LoadParents 使用一次查询读取所有父块，避免逐条子块查询数据库。
@@ -47,6 +39,9 @@ func (l *ParentLoader) LoadParents(
 	ctx context.Context,
 	parentChunkIDs []string,
 ) (map[string]retrieval.SearchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	ids := uniqueStrings(parentChunkIDs)
 
 	if len(ids) == 0 {
@@ -59,54 +54,18 @@ func (l *ParentLoader) LoadParents(
 		return nil, fmt.Errorf("load parent chunks: %w", err)
 	}
 
-	defer resultRows.Close()
-
-	result := make(map[string]retrieval.SearchResult, len(ids))
-
-	for resultRows.Next() {
-		var (
-			parent retrieval.SearchResult
-
-			parentParentID *string
-			rawMetadata    []byte
-		)
-
-		if err := resultRows.Scan(
-			&parent.ChunkID,
-			&parent.DocumentID,
-			&parent.Content,
-			&parent.ContextHeader,
-			&parent.ChunkIndex,
-			&parent.StartRune,
-			&parent.EndRune,
-			&parentParentID,
-			&rawMetadata,
-		); err != nil {
-			return nil, fmt.Errorf("scan parent chunk: %w", err)
-		}
-
-		if parentParentID != nil {
-			parent.ParentChunkID = *parentParentID
-		}
-
-		if len(rawMetadata) > 0 {
-			if err := json.Unmarshal(rawMetadata, &parent.Metadata); err != nil {
-				return nil, fmt.Errorf("decode parent metadata %q: %w", parent.ChunkID, err)
-			}
-		}
-
-		parent.CollectionID = l.collectionID
-		parent.DocumentRevision, err = retrieval.Revision(parent.Metadata)
-		if err != nil {
-			return nil, err
-		}
+	// 父块不参与排名，复用统一解码以保留文档版本、范围和元数据。
+	parents, err := scanSearchResults(resultRows, l.collectionID, "")
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	result := make(map[string]retrieval.SearchResult, len(parents))
+	for _, parent := range parents {
 		result[parent.ChunkID] = parent
 	}
-
-	if err := resultRows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate parent chunks: %w", err)
-	}
-
 	return result, nil
 }
 
@@ -114,7 +73,8 @@ const parentChunkSQL = `
 SELECT
     c.id, c.document_id, c.content, c.context_header, c.chunk_index,
     c.start_rune, c.end_rune, c.parent_chunk_id,
-    c.metadata || jsonb_build_object('rag_document_revision', d.revision::text)
+    c.metadata || jsonb_build_object('rag_document_revision', d.revision::text),
+    0::float8 AS score
 FROM chunks c
 JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
 WHERE c.collection_id = $1 AND c.id = ANY($2::text[]) AND c.chunk_type='parent_text'

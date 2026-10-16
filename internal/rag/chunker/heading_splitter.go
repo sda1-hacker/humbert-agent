@@ -1,6 +1,13 @@
 package chunker
 
-import "strings"
+import (
+	"context"
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
+	"sort"
+	"strings"
+
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
+)
 
 // headingBoundary 保存章节起点；文档前言使用空标题。
 type headingBoundary struct {
@@ -9,28 +16,28 @@ type headingBoundary struct {
 }
 
 // splitByHeadings 按主要标题层级划分章节，过大章节交给递归切分。
-func splitByHeadings(text string, cfg SplitterConfig, profile *DocProfile) []Chunk {
+func splitByHeadings(ctx context.Context, text string, cfg ragconfig.Splitter, profile *DocProfile) []Chunk {
 	if text == "" {
 		return nil
 	}
 
 	if profile == nil {
-		profile = ProfileDocument(text)
+		profile = profileDocument(ctx, text)
 	}
 
 	// 主要标题层级决定章节切分骨架。
 	primaryLevel := profile.DominantHeadingLevel()
 	if primaryLevel == 0 {
-		return SplitText(text, cfg)
+		return splitText(ctx, text, cfg)
 	}
 
-	boundaries := findHeadingBoundaries(text, primaryLevel)
+	boundaries := findHeadingBoundaries(ctx, text, primaryLevel)
 
 	// 没有真正形成多个 Section。
 	//
 	// 此时 Heading Splitter没有意义，直接退回 Legacy。
 	if len(boundaries) <= 1 {
-		return SplitText(text, cfg)
+		return splitText(ctx, text, cfg)
 	}
 
 	sourceRunes := []rune(text)
@@ -40,6 +47,9 @@ func splitByHeadings(text string, cfg SplitterConfig, profile *DocProfile) []Chu
 	seq := 0
 
 	for i, boundary := range boundaries {
+		if ctx.Err() != nil {
+			return nil
+		}
 		sectionEnd := len(sourceRunes)
 
 		if i+1 < len(boundaries) {
@@ -65,7 +75,7 @@ func splitByHeadings(text string, cfg SplitterConfig, profile *DocProfile) []Chu
 		//
 		// 这是为了下一主 Section 开始时，
 		// hierarchy 状态仍然与真实文档遍历顺序一致。
-		observeDeeperHeadings(sectionRunes, primaryLevel, hierarchy)
+		observeDeeperHeadings(ctx, sectionRunes, primaryLevel, hierarchy)
 
 		if len(sectionRunes) == 0 {
 			continue
@@ -83,8 +93,8 @@ func splitByHeadings(text string, cfg SplitterConfig, profile *DocProfile) []Chu
 
 		// 过大章节复用递归切分的保护区域、表头补充和重叠处理。
 
-		breadcrumbIndex := buildSectionBreadcrumbIndex(sectionRunes, primaryLevel, sectionSeed)
-		subChunks := SplitText(sectionContent, cfg)
+		breadcrumbIndex := buildSectionBreadcrumbIndex(ctx, sectionRunes, primaryLevel, sectionSeed)
+		subChunks := splitText(ctx, sectionContent, cfg)
 
 		for _, sub := range subChunks {
 			chunks = append(chunks, Chunk{
@@ -100,11 +110,11 @@ func splitByHeadings(text string, cfg SplitterConfig, profile *DocProfile) []Chu
 	}
 
 	// 合并相邻小块，减少因标题过密产生的碎片。
-	return coalesceTinyHeadingChunks(chunks, cfg.ChunkSize)
+	return coalesceTinyHeadingChunks(ctx, chunks, cfg.ChunkSize)
 }
 
 // findHeadingBoundaries 查找主要标题层级及更高层级的章节起点，忽略代码块。
-func findHeadingBoundaries(text string, primaryLevel int) []headingBoundary {
+func findHeadingBoundaries(ctx context.Context, text string, primaryLevel int) []headingBoundary {
 	boundaries := []headingBoundary{{runeStart: 0}}
 
 	if text == "" {
@@ -114,14 +124,16 @@ func findHeadingBoundaries(text string, primaryLevel int) []headingBoundary {
 	lines := strings.Split(text, "\n")
 
 	runePos := 0
-	inFence := false
+	var fence documenttext.Fence
 
 	for i, line := range lines {
+		if ctx.Err() != nil {
+			return nil
+		}
 		trimmed := strings.TrimSpace(line)
 
 		// 代码块里的井号是代码内容，不作为 Markdown 标题。
-		if strings.HasPrefix(trimmed, "```") {
-			inFence = !inFence
+		if fence.Observe(trimmed) {
 			runePos += RuneLen(line)
 
 			if i < len(lines)-1 {
@@ -131,7 +143,7 @@ func findHeadingBoundaries(text string, primaryLevel int) []headingBoundary {
 			continue
 		}
 
-		if !inFence {
+		if !fence.Active() {
 			match := MarkdownHeadingPattern.FindStringSubmatch(line)
 
 			if match != nil {
@@ -161,22 +173,24 @@ func findHeadingBoundaries(text string, primaryLevel int) []headingBoundary {
 }
 
 // observeDeeperHeadings 更新章节内部更深层标题的上下文。
-func observeDeeperHeadings(section []rune, primaryLevel int, hierarchy *HeadingHierarchy) {
+func observeDeeperHeadings(ctx context.Context, section []rune, primaryLevel int, hierarchy *HeadingHierarchy) {
 	if len(section) == 0 {
 		return
 	}
 
-	inFence := false
+	var fence documenttext.Fence
 
 	for _, line := range strings.Split(string(section), "\n") {
+		if ctx.Err() != nil {
+			return
+		}
 		trimmed := strings.TrimSpace(line)
 
-		if strings.HasPrefix(trimmed, "```") {
-			inFence = !inFence
+		if fence.Observe(trimmed) {
 			continue
 		}
 
-		if inFence {
+		if fence.Active() {
 			continue
 		}
 
@@ -201,6 +215,7 @@ type sectionBreadcrumb struct {
 
 // buildSectionBreadcrumbIndex 记录长章节内标题上下文的变化位置。
 func buildSectionBreadcrumbIndex(
+	ctx context.Context,
 	section []rune,
 	primaryLevel int,
 	seed HeadingHierarchy,
@@ -217,13 +232,15 @@ func buildSectionBreadcrumbIndex(
 	lines := strings.Split(string(section), "\n")
 
 	runePos := 0
-	inFence := false
+	var fence documenttext.Fence
 
 	for i, line := range lines {
+		if ctx.Err() != nil {
+			return nil
+		}
 		trimmed := strings.TrimSpace(line)
 
-		if strings.HasPrefix(trimmed, "```") {
-			inFence = !inFence
+		if fence.Observe(trimmed) {
 			runePos += RuneLen(line)
 
 			if i < len(lines)-1 {
@@ -233,7 +250,7 @@ func buildSectionBreadcrumbIndex(
 			continue
 		}
 
-		if !inFence {
+		if !fence.Active() {
 			match := MarkdownHeadingPattern.FindStringSubmatch(line)
 
 			if match != nil && len(match[1]) > primaryLevel {
@@ -255,21 +272,15 @@ func buildSectionBreadcrumbIndex(
 
 // breadcrumbAtOffset 查找指定字符位置生效的标题路径。
 func breadcrumbAtOffset(bcs []sectionBreadcrumb, offset int, fallback string) string {
-	breadcrumb := fallback
-
-	for _, item := range bcs {
-		if item.runeStart > offset {
-			break
-		}
-
-		breadcrumb = item.breadcrumb
+	index := sort.Search(len(bcs), func(i int) bool { return bcs[i].runeStart > offset }) - 1
+	if index >= 0 {
+		return bcs[index].breadcrumb
 	}
-
-	return breadcrumb
+	return fallback
 }
 
 // coalesceTinyHeadingChunks 合并相邻小块，仅合并原文连续且上下文兼容的片段。
-func coalesceTinyHeadingChunks(chunks []Chunk, chunkSize int) []Chunk {
+func coalesceTinyHeadingChunks(ctx context.Context, chunks []Chunk, chunkSize int) []Chunk {
 	if len(chunks) <= 1 || chunkSize <= 0 {
 		return chunks
 	}
@@ -288,6 +299,9 @@ func coalesceTinyHeadingChunks(chunks []Chunk, chunkSize int) []Chunk {
 	currentLen := RuneLen(current.Content)
 
 	for i := 1; i < len(chunks); i++ {
+		if ctx.Err() != nil {
+			return nil
+		}
 		next := chunks[i]
 		nextLen := RuneLen(next.Content)
 

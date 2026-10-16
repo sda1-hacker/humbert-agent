@@ -13,6 +13,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
@@ -61,62 +62,6 @@ type Diagnostics struct {
 	Error string `json:"error,omitempty"`
 }
 
-// Config 控制整个 Rerank Pipeline。
-type Config struct {
-	// Disabled 显式关闭 Rerank。
-	Disabled bool
-
-	// TopK 是最终经过 MMR 后最多保留多少结果。
-	TopK int
-
-	// Threshold 是模型相关性分数阈值，不是融合后的排序分数阈值。
-	Threshold float64
-
-	// MaxCandidates 限制单次送给模型的候选数量。
-	MaxCandidates int
-
-	// 高阈值完全没有结果时：
-	//
-	//     newThreshold =
-	//         max(threshold * factor, floor)
-	DegradeFactor float64
-	DegradeFloor  float64
-
-	// 所有 Threshold 都失败以后，
-	// 最高模型分达到这个值时仍保留 Top1。
-	FallbackMinScore float64
-
-	// ModelWeight、BaseWeight、SourceWeight 分别控制模型相关性、召回分数和来源权重的占比。
-	ModelWeight  float64
-	BaseWeight   float64
-	SourceWeight float64
-
-	// MMRLambda 控制独立精排调用中相关性与内容多样性的取舍，越大越重视相关性。
-	MMRLambda float64
-
-	PassageBuilder PassageBuilder
-}
-
-// DefaultConfig 返回精排阈值、候选上限、融合权重和独立精排的 MMR 参数。
-func DefaultConfig() Config {
-	return Config{
-		TopK:             5,
-		Threshold:        0.3,
-		MaxCandidates:    200,
-		DegradeFactor:    0.7,
-		DegradeFloor:     0.3,
-		FallbackMinScore: 0.15,
-
-		ModelWeight:  0.6,
-		BaseWeight:   0.3,
-		SourceWeight: 0.1,
-
-		MMRLambda: 0.7,
-
-		PassageBuilder: DefaultPassageBuilder,
-	}
-}
-
 // Result 保存一次完整 Rerank 的输出。
 type Result struct {
 	// Scored 是通过模型阈值以后，
@@ -133,17 +78,21 @@ type Result struct {
 
 // Engine 模型精排引擎，负责评分、阈值处理和排序。
 type Engine struct {
-	scorer    Scorer
-	config    Config
-	configErr error
+	scorer         Scorer
+	config         ragconfig.Rerank
+	passageBuilder PassageBuilder
+	configErr      error
 }
 
 // NewEngine 保存配置与校验结果；配置错误在执行时返回。
-func NewEngine(scorer Scorer, cfg Config) *Engine {
+func NewEngine(scorer Scorer, cfg ragconfig.Rerank, builder PassageBuilder) *Engine {
 	err := cfg.Validate()
-	cfg = normalizeConfig(cfg)
+	cfg = cfg.Effective()
+	if builder == nil {
+		builder = DefaultPassageBuilder
+	}
 
-	return &Engine{scorer: scorer, config: cfg, configErr: err}
+	return &Engine{scorer: scorer, config: cfg, passageBuilder: builder, configErr: err}
 }
 
 // RerankCandidates 保留通过阈值的候选池，供父块分组后统一截断；此路径不执行 MMR 多样性选择。
@@ -203,7 +152,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 	passages := make([]string, len(candidates))
 
 	for i := range candidates {
-		passages[i] = e.config.PassageBuilder(candidates[i])
+		passages[i] = e.passageBuilder(candidates[i])
 	}
 
 	modelScores, err := e.scorer.Score(ctx, query, passages)
@@ -317,7 +266,7 @@ func (e *Engine) Rerank(ctx context.Context, query string, candidates []retrieva
 // DefaultPassageBuilder 复用统一文本构造规则，将标题、标题路径与子块正文交给精排模型。
 func DefaultPassageBuilder(result retrieval.SearchResult) string {
 	doc := &schema.Document{MetaData: result.Metadata}
-	return retrieval.BuildSearchText(retrieval.DefaultSearchTextBuilder().Title(doc), result.ContextHeader, result.Content)
+	return retrieval.BuildSearchText(retrieval.Title(ragconfig.SearchText{}, doc), result.ContextHeader, result.Content)
 }
 
 // applyMMR 使用相关性与文本集合的 Jaccard 相似度选择尽量不重复的结果，不修改相关性分数。
@@ -538,37 +487,4 @@ func clamp01(value float64) float64 {
 	default:
 		return value
 	}
-}
-
-// normalizeConfig 补齐候选数量、默认权重与模型输入构造函数。
-func normalizeConfig(cfg Config) Config {
-	defaults := DefaultConfig()
-
-	if cfg.TopK <= 0 {
-		cfg.TopK = defaults.TopK
-	}
-
-	if cfg.MaxCandidates <= 0 {
-		cfg.MaxCandidates = defaults.MaxCandidates
-	}
-
-	// 三个 Weight 允许调用方显式把其中某一个设成0。
-	//
-	// 只有三个都没有设置时，才恢复默认权重。
-	if cfg.ModelWeight == 0 && cfg.BaseWeight == 0 && cfg.SourceWeight == 0 {
-
-		cfg.ModelWeight = defaults.ModelWeight
-		cfg.BaseWeight = defaults.BaseWeight
-		cfg.SourceWeight = defaults.SourceWeight
-	}
-
-	if cfg.MMRLambda < 0 || cfg.MMRLambda > 1 {
-		cfg.MMRLambda = defaults.MMRLambda
-	}
-
-	if cfg.PassageBuilder == nil {
-		cfg.PassageBuilder = defaults.PassageBuilder
-	}
-
-	return cfg
 }

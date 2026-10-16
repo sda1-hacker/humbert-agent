@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/cloudwego/eino/components/embedding"
 
@@ -44,28 +45,25 @@ func (p *Indexer) storeDocument(ctx context.Context, batch rag.IngestionBatch, t
 	if err != nil {
 		return err
 	}
-	vectors, err := embedTexts(ctx, embedder, texts, p.config.EmbeddingBatchSize, opts, p.config.InputBudget)
+	halfVectors, err := embedTexts(ctx, embedder, texts, p.config.EmbeddingBatchSize, opts, p.config.InputBudget, p.config.Dimensions)
 	if err != nil {
-		return err
+		return &rag.IngestionError{Stage: rag.StageEmbedding, Err: err}
 	}
-	halfVectors := make([]any, len(vectors))
-	for i, v := range vectors {
-		half, err := makeHalfVector(v)
-		if err != nil {
-			return err
-		}
-		halfVectors[i] = half
+	for i := range children {
 		children[i].searchContent = texts[i]
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return p.replaceStoredDocument(ctx, batch, parents, children, halfVectors)
+	if err := p.replaceStoredDocument(ctx, batch, parents, children, halfVectors); err != nil {
+		return &rag.IngestionError{Stage: rag.StagePublish, Err: err}
+	}
+	return nil
 }
 
-// PublishDocument 只保存权威原文和分块，可与外部向量库、BM25 库组合。
+// PublishDocument 只保存文档元数据和权威分块，可与外部向量库、BM25 库组合。
 // 数据发布前仍在事务内校验预留版本；此入口不调用模型、不写 retrieval_index。
-func (p *Indexer) PublishDocument(ctx context.Context, batch rag.IngestionBatch) error {
+func (p *DocumentStore) PublishDocument(ctx context.Context, batch rag.IngestionBatch) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -94,12 +92,20 @@ func (p *Indexer) PublishDocument(ctx context.Context, batch rag.IngestionBatch)
 }
 
 // 同库原子入库和分离索引发布共用同一套事务、版本检查和分块保存规则。
-func (p *Indexer) replaceStoredDocument(ctx context.Context, batch rag.IngestionBatch,
+func (p *DocumentStore) replaceStoredDocument(ctx context.Context, batch rag.IngestionBatch,
 	preparedParents, preparedChildren []preparedIngestionChunk, halfVectors []any) error {
 	if batch.ContentHash == "" {
 		batch.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(batch.Markdown)))
 	}
-	documentMetadataJSON, err := marshalMetadata(batch.Metadata)
+	metadata := batch.Metadata
+	if batch.Source.Path != "" {
+		// 已提升为独立管理列的文件信息不再在主表 JSON 中重复保存；分块仍保留来源元数据。
+		metadata = maps.Clone(metadata)
+		for _, key := range []string{"_source", "file_name", "file_ext", "file_size", "rag_source_content_hash"} {
+			delete(metadata, key)
+		}
+	}
+	documentMetadataJSON, err := marshalMetadata(metadata)
 	if err != nil {
 		return fmt.Errorf("marshal document metadata: %w", err)
 	}
@@ -118,25 +124,31 @@ func (p *Indexer) replaceStoredDocument(ctx context.Context, batch rag.Ingestion
 		if tag.RowsAffected() != 1 {
 			return ErrStaleIngestion
 		}
+		// 取得版本锁后用新语句检查任务终态和截止时间，避免等锁期间的失败被旧快照漏掉。
+		// 已完成版本仍可按相同快照幂等确认，失败/取消版本则必须重新预留，不能迟到复活。
+		var blocked bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM documents WHERE collection_id=$1 AND id=$2 AND processing_attempt=$3
+AND (parse_status IN ('failed','cancelled') OR (parse_status='processing' AND processing_deadline<=clock_timestamp())))`, batch.CollectionID, batch.DocumentID, batch.Attempt).Scan(&blocked); err != nil {
+			return err
+		}
+		if blocked {
+			return ErrStaleIngestion
+		}
 	}
 
-	// -------------------------------------------------------------------------
-	// 完整 Document 原文在这里正式持久化。
-	//
-	// 这也是为什么前面不能从 Chunks 反向重建 Markdown。
-	// -------------------------------------------------------------------------
-
+	// 主表保存原件引用与处理快照，正文只进入分块；成功状态与分块和索引同时提交。
 	tag, err := tx.Exec(
 		ctx,
 		upsertIngestionDocumentSQL,
 		batch.CollectionID,
 		batch.DocumentID,
 		batch.Title,
-		batch.Markdown,
 		documentMetadataJSON,
 		batch.Attempt,
 		batch.ContentHash,
 		string(batch.ProcessConfig),
+		batch.Source.URI, batch.Source.Path, batch.Source.Name, batch.Source.Type, batch.Source.Size, batch.Source.Hash,
+		p.config.ProfileID,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert ingestion document %q: %w", batch.DocumentID, err)
@@ -145,31 +157,29 @@ func (p *Indexer) replaceStoredDocument(ctx context.Context, batch rag.Ingestion
 		return ErrStaleIngestion
 	}
 
-	// 删除旧 Chunk。
-	//
-	// retrieval_index 通过 FK ON DELETE CASCADE 一起删除。
+	// 替换旧分块时，外键级联删除其向量和 BM25 检索行。
 	if _, err := tx.Exec(ctx, deleteDocumentChunksSQL, batch.CollectionID, batch.DocumentID); err != nil {
 		return fmt.Errorf("delete previous chunks for document %q: %w", batch.DocumentID, err)
 	}
 
-	// Parent 必须先插入。
-	//
-	// 因为 Child.parent_chunk_id 有 FK 指向 chunks。
+	// 先保存父块，满足子块 parent_chunk_id 的外键约束。
 	for _, parent := range preparedParents {
 		if err := insertStoredChunk(ctx, tx, batch.CollectionID, parent); err != nil {
 			return err
 		}
 	}
 
-	// Child 后插入。
 	for i, child := range preparedChildren {
 		if err := insertStoredChunk(ctx, tx, batch.CollectionID, child); err != nil {
 			return err
 		}
 
+		// 分离索引模式只发布原文与分块。
 		if halfVectors == nil {
 			continue
-		} // 分离索引模式只发布原文与分块。
+		}
+		// 同一行同时提供 pgvector 的 embedding 与 ParadeDB 的 search_content。
+		// pg_search 在当前事务中维护 BM25 索引，无需再在 Go 中单独构建倒排索引。
 		if _, err := tx.Exec(
 			ctx,
 			insertRetrievalSQL,
@@ -237,26 +247,54 @@ func insertStoredChunk(
 	return nil
 }
 
-const upsertIngestionDocumentSQL = `
-INSERT INTO documents (
+const deleteDocumentChunksSQL = `
+DELETE FROM chunks
+WHERE collection_id = $1
+  AND document_id = $2
+`
+
+const insertChunkSQL = `
+INSERT INTO chunks (
     collection_id,
     id,
-    title,
-    markdown,
-    metadata,
-    revision,
-    content_hash,
-    process_config
+    document_id,
+    chunk_index,
+    chunk_type,
+    content,
+    context_header,
+    start_rune,
+    end_rune,
+    parent_chunk_id,
+    metadata
 )
 VALUES (
-    $1,
-    $2,
-    $3,
-    $4,
-    $5::jsonb,
-    $6,
-    $7,
-    $8::jsonb
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb
+)
+`
+
+const insertRetrievalSQL = `
+INSERT INTO retrieval_index (
+    collection_id,
+    chunk_id,
+    document_id,
+    search_content,
+    embedding,
+    metadata
+)
+VALUES (
+    $1, $2, $3, $4, $5, $6::jsonb
+)
+`
+
+const upsertIngestionDocumentSQL = `
+INSERT INTO documents (
+    collection_id,id,title,metadata,revision,content_hash,process_config,
+    source_uri,file_path,file_name,file_type,file_size,file_hash,embedding_profile_id,
+    document_type,parse_status,error_message,processed_at,processing_attempt,processing_stage,error_code
+)
+VALUES (
+    $1,$2,$3,$4::jsonb,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,
+    CASE WHEN $10='' THEN 'text' ELSE 'file' END,'completed','',NOW(),$5,'completed',''
 )
 ON CONFLICT (
     collection_id,
@@ -264,11 +302,15 @@ ON CONFLICT (
 )
 DO UPDATE SET
     title = EXCLUDED.title,
-    markdown = EXCLUDED.markdown,
     metadata = EXCLUDED.metadata,
     revision = EXCLUDED.revision,
     content_hash = EXCLUDED.content_hash,
     process_config = EXCLUDED.process_config,
+    source_uri=EXCLUDED.source_uri,file_path=EXCLUDED.file_path,file_name=EXCLUDED.file_name,
+    file_type=EXCLUDED.file_type,file_size=EXCLUDED.file_size,file_hash=EXCLUDED.file_hash,
+    embedding_profile_id=EXCLUDED.embedding_profile_id,document_type=EXCLUDED.document_type,
+    parse_status='completed',error_message='',error_code='',processed_at=NOW(),
+    processing_attempt=EXCLUDED.processing_attempt,processing_stage='completed',processing_deadline=NULL,
     updated_at = NOW()
 WHERE (documents.revision=0 AND EXCLUDED.revision=0)
    OR documents.revision<EXCLUDED.revision

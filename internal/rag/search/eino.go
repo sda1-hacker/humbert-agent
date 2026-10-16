@@ -6,6 +6,8 @@ import (
 
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
+
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/rerank"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
@@ -16,7 +18,7 @@ type diagnosticRetriever interface {
 }
 
 // NewEinoPipeline 在组件边界转换一次数据，后续引用、精排与父块扩展使用内部结果。
-func NewEinoPipeline(component retriever.Retriever, scorer *rerank.Engine, parents ParentLoader, cfg Config, opts ...retriever.Option) (*Pipeline, error) {
+func NewEinoPipeline(component retriever.Retriever, scorer *rerank.Engine, parents ParentLoader, cfg ragconfig.Search, opts ...retriever.Option) (*Pipeline, error) {
 	if component == nil {
 		return nil, ErrNilRetriever
 	}

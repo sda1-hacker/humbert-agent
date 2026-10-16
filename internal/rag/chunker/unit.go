@@ -1,5 +1,7 @@
 package chunker
 
+import "context"
+
 // 把 普通区域 +Protected Span 组合成 []splitUnit
 
 // 表示单个 Protected Span 能保持为一个原子 Unit 的最大 rune 数量。
@@ -29,6 +31,7 @@ type splitUnit struct {
 
 // buildUnitsWithProtection 递归切分普通区域，保留保护区域，并转换成字符坐标。
 func buildUnitsWithProtection(
+	ctx context.Context,
 	text string,
 	protected []span,
 	separators []string,
@@ -62,17 +65,23 @@ func buildUnitsWithProtection(
 	// ---------------------------------------------------------------------
 
 	for _, protectedSpan := range protected {
+		if ctx.Err() != nil {
+			return nil
+		}
 		// A. Protected Span 之前存在普通文本。
 		if protectedSpan.start > bytePos {
 			plainText := text[bytePos:protectedSpan.start]
 
 			// 普通文本可以递归切。
-			parts := splitBySeparators(plainText, separators, chunkSize)
+			parts := splitBySeparatorsContext(ctx, plainText, separators, chunkSize)
 
 			// plainText 在原文中的 rune 起点。
 			runeOffset := runePos
 
 			for _, part := range parts {
+				if ctx.Err() != nil {
+					return nil
+				}
 
 				partRuneLen := RuneLen(part)
 
@@ -103,6 +112,9 @@ func buildUnitsWithProtection(
 			runes := []rune(protectedText)
 			offset := 0
 			for offset < len(runes) {
+				if ctx.Err() != nil {
+					return nil
+				}
 				chunkEnd := offset + maxProtectedUnitSize
 
 				// 最后一块不足 7500，
@@ -154,11 +166,14 @@ func buildUnitsWithProtection(
 
 		remaining := text[bytePos:]
 
-		parts := splitBySeparators(remaining, separators, chunkSize)
+		parts := splitBySeparatorsContext(ctx, remaining, separators, chunkSize)
 
 		runeOffset := runePos
 
 		for _, part := range parts {
+			if ctx.Err() != nil {
+				return nil
+			}
 
 			partRuneLen := RuneLen(part)
 

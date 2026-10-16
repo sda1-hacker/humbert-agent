@@ -6,7 +6,9 @@ import (
 
 	"github.com/cloudwego/eino/components/document"
 	"github.com/cloudwego/eino/schema"
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
@@ -20,41 +22,28 @@ type IDGenerator func(
 	chunk Chunk,
 ) string
 
-// TransformerConfig 直接复用核心切分配置，仅额外提供 Eino 文档 ID 生成规则。
-type TransformerConfig struct {
-	Splitter    SplitterConfig
-	IDGenerator IDGenerator
-}
-
-// DefaultTransformerConfig 返回基础切分配置；空策略使用递归切分，自动策略需显式设置。
-func DefaultTransformerConfig() TransformerConfig {
-	return TransformerConfig{Splitter: DefaultConfig(), IDGenerator: DefaultIDGenerator}
-}
-
 // Transformer 适配 Eino 文档转换接口，实际分块算法由核心 chunker 实现。
 type Transformer struct {
-	config TransformerConfig
+	splitter    ragconfig.Splitter
+	idGenerator IDGenerator
 }
 
 // NewTransformer 复制切片配置并设置默认 ID 生成器，避免调用方修改影响组件。
-func NewTransformer(config TransformerConfig) *Transformer {
-	config.Splitter = config.Splitter.Clone()
-
-	if config.IDGenerator == nil {
-		config.IDGenerator = DefaultIDGenerator
+func NewTransformer(cfg ragconfig.Splitter, generator IDGenerator) *Transformer {
+	if generator == nil {
+		generator = DefaultIDGenerator
 	}
-
-	return &Transformer{config: config}
+	return &Transformer{splitter: cfg.Clone(), idGenerator: generator}
 }
 
 // transformerOptions 保存当前调用的配置覆盖，不修改组件默认值。
 type transformerOptions struct {
-	splitter    SplitterConfig
+	splitter    ragconfig.Splitter
 	idGenerator IDGenerator
 }
 
 // WithSplitterConfig 为当前 Transform 调用覆盖切分配置，并复制可变切片。
-func WithSplitterConfig(cfg SplitterConfig) document.TransformerOption {
+func WithSplitterConfig(cfg ragconfig.Splitter) document.TransformerOption {
 	cfg = cfg.Clone()
 
 	return document.WrapTransformerImplSpecificOptFn(func(options *transformerOptions) {
@@ -83,7 +72,7 @@ func (t *Transformer) Transform(
 
 	// 基于独立配置副本应用本次选项，避免覆盖组件默认值。
 	options := document.GetTransformerImplSpecificOptions(
-		&transformerOptions{splitter: t.config.Splitter.Clone(), idGenerator: t.config.IDGenerator},
+		&transformerOptions{splitter: t.splitter.Clone(), idGenerator: t.idGenerator},
 		opts...,
 	)
 
@@ -106,7 +95,10 @@ func (t *Transformer) Transform(
 		}
 
 		// 算法只处理正文和切分配置，Eino 文档转换由适配器负责。
-		chunks := Split(source.Content, options.splitter.Clone())
+		chunks, _, err := SplitContext(ctx, source.Content, options.splitter.Clone())
+		if err != nil {
+			return nil, err
+		}
 
 		for _, chunk := range chunks {
 			if err := ctx.Err(); err != nil {
@@ -129,6 +121,7 @@ func chunkToDocument(
 	generator IDGenerator,
 ) *schema.Document {
 	metadata := retrieval.CloneMetadata(source.MetaData)
+	documenttext.AttachLocators(metadata, chunk.Start, chunk.End)
 
 	metadata[retrieval.MetaSourceDocumentIndex] = sourceIndex
 	metadata[retrieval.MetaChunkIndex] = chunk.Seq

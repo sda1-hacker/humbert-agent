@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -12,18 +11,15 @@ import (
 	"github.com/cloudwego/eino/components/embedding"
 	"github.com/cloudwego/eino/components/indexer"
 	"github.com/cloudwego/eino/schema"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pgvector/pgvector-go"
 
 	"github.com/sda1-hacker/humbert-agent/internal/rag"
-	ragembedding "github.com/sda1-hacker/humbert-agent/internal/rag/embedding"
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
 
 var _ indexer.Indexer = (*Indexer)(nil)
-
-const DefaultEmbeddingBatchSize = 64
 
 var (
 	ErrMissingCollectionID   = errors.New("postgres indexer: missing collection id")
@@ -36,25 +32,6 @@ var (
 	ErrPinnedEmbedding       = errors.New("postgres indexer: embedding options cannot override a pinned collection profile")
 )
 
-// Config 只包含 PostgreSQL 实现所需的设置，检索文本在应用层统一构造。
-type Config struct {
-	// ProfileID 知识库绑定的向量空间 ID 与配置快照。
-	ProfileID, ProfileJSON string
-	// VersionedDocuments 要求通过预留版本发布，防止旧任务覆盖新文档。
-	VersionedDocuments bool
-	// CollectionID 原生组件的默认知识库范围，可由 WithIndex 指定。
-	CollectionID string
-	// Embedder 用于索引的 Eino 向量模型。
-	Embedder embedding.Embedder
-	// EmbeddingBatchSize 单次请求最多处理的文本条数。
-	EmbeddingBatchSize int
-	// InputBudget 完整检索文本的单条和单批 token 预算。
-	InputBudget ragembedding.Budget
-}
-
-// DefaultConfig 返回默认向量请求批次大小。
-func DefaultConfig() Config { return Config{EmbeddingBatchSize: DefaultEmbeddingBatchSize} }
-
 type storeOptions struct{ embeddingOptions []embedding.Option }
 
 // WithEmbeddingOptions 使用 Eino 实现专属 Option 向模型转发调用参数。
@@ -63,28 +40,18 @@ func WithEmbeddingOptions(opts ...embedding.Option) indexer.Option {
 	return indexer.WrapImplSpecificOptFn(func(o *storeOptions) { o.embeddingOptions = copied })
 }
 
-// 这些内部接口用于测试事务，不是新增的检索库接口。
-type transaction interface {
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-	Commit(context.Context) error
-	Rollback(context.Context) error
-}
-type database interface {
-	Begin(context.Context) (transaction, error)
-}
-type poolDatabase struct{ pool *pgxpool.Pool }
-
-// Begin 将连接池事务适配到内部测试接口。
-func (d poolDatabase) Begin(ctx context.Context) (transaction, error) { return d.pool.Begin(ctx) }
-
-// Indexer Eino 原生索引器，在 PostgreSQL 中保存完整文档和检索索引。
+// Indexer 实现 Eino Store：校验输入、批量向量化，再交给文档存储原子发布。
+// 文档版本、原文保存和删除由 DocumentStore 负责，不在这里另建一套持久化逻辑。
 type Indexer struct {
-	db     database
-	config Config
+	*DocumentStore
+	config ragconfig.Indexer
 }
 
 // NewIndexer 校验配置并绑定连接池，连接池的关闭由组装层负责。
-func NewIndexer(pool *pgxpool.Pool, cfg Config) (*Indexer, error) {
+func NewIndexer(pool *pgxpool.Pool, cfg ragconfig.Indexer) (*Indexer, error) {
+	if cfg.Dimensions <= 0 || cfg.Dimensions > ragconfig.PostgresMaxDimensions {
+		return nil, fmt.Errorf("%w: postgres indexer requires configured dimensions in 1..%d", ragconfig.ErrInvalidDimensions, ragconfig.PostgresMaxDimensions)
+	}
 	if err := cfg.InputBudget.Validate(); err != nil {
 		return nil, err
 	}
@@ -96,15 +63,15 @@ func NewIndexer(pool *pgxpool.Pool, cfg Config) (*Indexer, error) {
 	}
 	return newIndexerWithDatabase(poolDatabase{pool}, cfg), nil
 }
-func newIndexerWithDatabase(db database, cfg Config) *Indexer {
+func newIndexerWithDatabase(db database, cfg ragconfig.Indexer) *Indexer {
 	if cfg.EmbeddingBatchSize == 0 {
-		cfg.EmbeddingBatchSize = DefaultEmbeddingBatchSize
+		cfg.EmbeddingBatchSize = ragconfig.DefaultEmbeddingBatchSize
 	}
-	return &Indexer{db: db, config: cfg}
+	return &Indexer{DocumentStore: &DocumentStore{db: db, config: DocumentConfig{cfg.ProfileID, cfg.ProfileJSON}}, config: cfg}
 }
 
 // Store 是唯一索引入口。普通 Eino 文档以“一份原文、一个分块”保存；应用层切分的
-// 文档通过 WithIngestionBatch 附带完整原文和父块，每个文档版本在一个事务内替换。
+// WithIngestionBatch 附带处理期正文、原件引用和父块；事务只持久化元数据、分块和检索行。
 // 模型调用放在事务前，避免等待网络时占用数据库事务。
 func (p *Indexer) Store(ctx context.Context, docs []*schema.Document, opts ...indexer.Option) ([]string, error) {
 	if err := ctx.Err(); err != nil {
@@ -171,7 +138,7 @@ func (p *Indexer) Store(ctx context.Context, docs []*schema.Document, opts ...in
 		}
 	}
 	for _, d := range docs {
-		batch := rag.IngestionBatch{CollectionID: collection, DocumentID: d.ID, Title: retrieval.DefaultSearchTextBuilder().Title(d), Markdown: d.Content, Metadata: d.MetaData,
+		batch := rag.IngestionBatch{CollectionID: collection, DocumentID: d.ID, Title: retrieval.Title(ragconfig.SearchText{}, d), Markdown: d.Content, Metadata: d.MetaData,
 			Children: []rag.ChunkRecord{{ID: d.ID, DocumentID: d.ID, ChunkType: rag.ChunkTypeText, Content: d.Content, EndRune: utf8.RuneCountInString(d.Content), Metadata: d.MetaData}}}
 		if p.config.VersionedDocuments {
 			revision, err := p.ReserveDocument(ctx, collection, d.ID)
@@ -194,21 +161,18 @@ func embedTexts(
 	texts []string,
 	batchSize int,
 	opts []embedding.Option,
-	budgets ...ragembedding.Budget,
-) ([][]float64, error) {
+	budget ragconfig.Budget,
+	dimensions int,
+) ([]any, error) {
 	if len(texts) == 0 {
 		return nil, nil
 	}
 
 	if batchSize <= 0 {
-		batchSize = DefaultEmbeddingBatchSize
+		batchSize = ragconfig.DefaultEmbeddingBatchSize
 	}
 
-	result := make([][]float64, 0, len(texts))
-	budget := ragembedding.Budget{}
-	if len(budgets) > 0 {
-		budget = budgets[0]
-	}
+	result := make([]any, 0, len(texts))
 	batches, err := budget.Plan(texts, batchSize)
 	if err != nil {
 		return nil, err
@@ -229,22 +193,23 @@ func embedTexts(
 			return nil, fmt.Errorf("%w: embedder returned %d vectors for %d texts", ErrInvalidEmbedding, len(vectors), end-start)
 		}
 
-		result = append(result, vectors...)
+		// 每批立即校验并转换，错误模型不再继续调用；仅保留入库需要的半精度输入。
+		for _, vector := range vectors {
+			half, err := makeHalfVector(vector, dimensions)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, half)
+		}
 	}
 
 	return result, nil
 }
 
-// makeHalfVector 校验 Eino float64 embedding，
-// 然后转换为 pgvector HalfVector。
-//
-// pgvector.NewHalfVector 接收 []float32。
-//
-// PostgreSQL halfvec 最终使用 half precision 存储，
-// 但我们在 Go 侧仍先转换成 float32 输入。
-func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
-	if len(vector) != EmbeddingDimensions {
-		return pgvector.HalfVector{}, fmt.Errorf("%w: expected %d dimensions, got %d", ErrInvalidEmbedding, EmbeddingDimensions, len(vector))
+// makeHalfVector 校验配置维度与数值后交给 pgvector 编码，不在这里改变模型向量。
+func makeHalfVector(vector []float64, dimensions int) (pgvector.HalfVector, error) {
+	if dimensions <= 0 || len(vector) != dimensions {
+		return pgvector.HalfVector{}, fmt.Errorf("%w: expected %d dimensions, got %d", ErrInvalidEmbedding, dimensions, len(vector))
 	}
 
 	values := make([]float32, len(vector))
@@ -255,11 +220,7 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 			return pgvector.HalfVector{}, fmt.Errorf("%w: vector[%d] is not finite", ErrInvalidEmbedding, i)
 		}
 
-		// IEEE-754 binary16 最大有限值约为 65504。
-		//
-		// 正常 Embedding 数值通常远远小于这个值，
-		// 这主要用于防止异常模型输出在 half precision
-		// 转换时变成 Inf。
+		// 超过 binary16 最大有限值会在数据库半精度转换时溢出。
 		if math.Abs(value) > 65504 {
 			return pgvector.HalfVector{}, fmt.Errorf("%w: vector[%d]=%f exceeds half precision range", ErrInvalidEmbedding, i, value)
 		}
@@ -276,67 +237,3 @@ func makeHalfVector(vector []float64) (pgvector.HalfVector, error) {
 
 	return pgvector.NewHalfVector(values), nil
 }
-
-// marshalMetadata 将元数据编码为 JSON，空元数据仍保存为对象。
-func marshalMetadata(metadata map[string]any) (string, error) {
-	if metadata == nil {
-		return "{}", nil
-	}
-
-	data, err := json.Marshal(metadata)
-	if err != nil {
-		return "", err
-	}
-
-	return string(data), nil
-}
-
-// nullableString 将空字符串映射为数据库 NULL。
-func nullableString(value string) any {
-	value = strings.TrimSpace(value)
-
-	if value == "" {
-		return nil
-	}
-
-	return value
-}
-
-const deleteDocumentChunksSQL = `
-DELETE FROM chunks
-WHERE collection_id = $1
-  AND document_id = $2
-`
-
-const insertChunkSQL = `
-INSERT INTO chunks (
-    collection_id,
-    id,
-    document_id,
-    chunk_index,
-    chunk_type,
-    content,
-    context_header,
-    start_rune,
-    end_rune,
-    parent_chunk_id,
-    metadata
-)
-VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb
-)
-`
-
-const insertRetrievalSQL = `
-INSERT INTO retrieval_index (
-    collection_id,
-    chunk_id,
-    document_id,
-    search_content,
-    embedding,
-    metadata
-)
-VALUES (
-    $1, $2, $3, $4, $5, $6::jsonb
-)
-`

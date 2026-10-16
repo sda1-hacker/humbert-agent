@@ -1,6 +1,10 @@
 package retrieval
 
-import "strconv"
+import (
+	"strconv"
+
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
+)
 
 // MatchType 表示一个 Chunk 是通过哪一路 Retriever 命中的。
 type MatchType string
@@ -29,6 +33,8 @@ type SearchResult struct {
 
 	StartRune int `json:"start_rune"`
 	EndRune   int `json:"end_rune"`
+	// SourceLocators 属于实际命中子块；上下文展开后仍可引用原始证据。
+	SourceLocators []documenttext.SourceLocator `json:"source_locators,omitempty"`
 
 	// Score 是当前阶段的排序分数，召回融合后或精排后含义不同。
 	Score float64 `json:"score"`
@@ -60,6 +66,8 @@ type SearchResult struct {
 	ContextStartRune    int    `json:"context_start_rune"`
 	ContextEndRune      int    `json:"context_end_rune"`
 	ContextSourceHeader string `json:"context_source_header,omitempty"`
+	// ContextSourceLocators 对应最终提供的上下文，退回子块时同步回退。
+	ContextSourceLocators []documenttext.SourceLocator `json:"context_source_locators,omitempty"`
 
 	// Evidence 保留父块分组前的全部子块范围，用于引用和评测。
 	Evidence []HitEvidence `json:"evidence,omitempty"`
@@ -69,11 +77,12 @@ type SearchResult struct {
 
 // HitEvidence 原始命中子块正文、分数与范围，父块分组后仍保留引用和评测依据。
 type HitEvidence struct {
-	ChunkID   string  `json:"chunk_id"`
-	StartRune int     `json:"start_rune"`
-	EndRune   int     `json:"end_rune"`
-	Content   string  `json:"content"`
-	Score     float64 `json:"score"`
+	ChunkID        string                       `json:"chunk_id"`
+	StartRune      int                          `json:"start_rune"`
+	EndRune        int                          `json:"end_rune"`
+	Content        string                       `json:"content"`
+	Score          float64                      `json:"score"`
+	SourceLocators []documenttext.SourceLocator `json:"source_locators,omitempty"`
 }
 
 // EffectiveContent 优先返回扩展后的上下文，没有上下文时返回子块正文。

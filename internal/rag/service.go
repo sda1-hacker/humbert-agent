@@ -6,15 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/cloudwego/eino/components/document"
-	"github.com/cloudwego/eino/components/indexer"
 	"github.com/cloudwego/eino/components/retriever"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
+	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/chunker"
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/rerank"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/search"
@@ -58,8 +60,8 @@ type ChunkRecord struct {
 	Metadata map[string]any
 }
 
-// IngestionBatch 是一个完整文档版本，由原子 Indexer 或独立 Publisher 保存。
-// Markdown 必须来自 Loader，不能通过拼接可能重叠的分块重建。
+// IngestionBatch 是一个待发布版本；原子 Indexer 或 Publisher 保存元数据和分块。
+// Markdown 必须来自 Loader，仅用于内存中的范围校验和摘要计算，不写入文档主表。
 type IngestionBatch struct {
 	// Attempt 解析前预留的文档版本；非版本化导入为零。
 	Attempt int64
@@ -75,6 +77,10 @@ type IngestionBatch struct {
 	Title string
 	// Markdown 是 Loader 输出并统一换行后的完整正文。
 	Markdown string
+	// SourceBlocks 只参与导入中的范围裁剪；文档主表与分块中均不保存全文位置列表。
+	SourceBlocks []documenttext.SourceBlock `json:"-"`
+	// Source 是已托管原件的信息；纯文本 Eino Store 可留空。
+	Source SourceFile
 	// Metadata 来源与业务元数据，顶层副本可独立修改。
 	Metadata map[string]any
 	// Parents 仅保存上下文，不进入向量或关键词索引。
@@ -88,9 +94,14 @@ type DocumentVersioner interface {
 	ReserveDocument(context.Context, string, string) (int64, error)
 }
 
-// Config 直接接受 Eino 组件。Retriever 是默认检索器，可以是下面的两路混合结果，
+// Config 是运行时组件装配，数值参数复用 rag/config 的定义，不在这里读取部署配置。
+// Retriever 是默认检索器，可以是下面的两路混合结果，
 // 也可以直接注入 eino-ext 的任意 Retriever；单路组件只在需要对应搜索模式时提供。
 type Config struct {
+	// Ingest 限制并发、文档规模与总时间；入库前检查，避免无界模型请求。
+	Ingest ragconfig.Ingest
+	// InputBudget 与实际 Embedder 共用计数规则，检查标题、路径和正文组成的完整输入。
+	InputBudget ragconfig.Budget
 	// Retriever 默认检索器，通常组合向量和关键词召回。
 	Retriever retriever.Retriever
 	// VectorRetriever 语义检索模式使用的原生 Eino 检索器。
@@ -100,11 +111,11 @@ type Config struct {
 	// RecallTopK 进入精排和父块扩展前的候选数量。
 	RecallTopK int
 	// Search 最终结果数量、超时和父块扩展策略。
-	Search search.Config
+	Search ragconfig.Search
 	// Reranker 可选精排引擎，未提供时保留召回排序。
 	Reranker *rerank.Engine
 	// InputBuilder 向量和关键词共用的检索文本构造规则。
-	InputBuilder retrieval.SearchTextBuilder
+	InputBuilder ragconfig.SearchText
 	// ParentLoader 根据知识库创建父块读取器。
 	ParentLoader func(string) (search.ParentLoader, error)
 	// BeforeSearch 检索前执行的可选检查，例如验证模型档案。
@@ -122,7 +133,7 @@ type IngestRequest struct {
 	Source document.Source
 
 	// Splitter 普通切分或父子切分使用的基础参数。
-	Splitter chunker.SplitterConfig
+	Splitter ragconfig.Splitter
 
 	// ParentChild 指定是否先切父块再切子块；关闭时直接生成普通检索块。
 	ParentChild bool
@@ -146,6 +157,8 @@ type IngestDocumentResult struct {
 	ChunkIDs   []string `json:"chunk_ids,omitempty"`
 
 	Diagnostics *chunker.Diagnostics `json:"diagnostics,omitempty"`
+	// Warnings 表示发布已成功，但旧索引清理等收尾操作未完成，不能据此重新向量化。
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // IngestResponse 各文档的导入结果及父子块总数。
@@ -171,6 +184,16 @@ type SearchRequest struct {
 
 // Ingest 完成解析、切分与索引。业务调用不能覆盖索引范围或 Embedding 模型。
 func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse, error) {
+	return s.ingest(ctx, req, false)
+}
+
+// RetryDocument 用托管原件重新执行失败/取消的导入，沿用稳定 ID 并预留新版本。
+// req 只提供范围与切分参数，忽略 Source；不会自动续传中间块或反复调用模型。
+func (s *Service) RetryDocument(ctx context.Context, req IngestRequest) (IngestResponse, error) {
+	return s.ingest(ctx, req, true)
+}
+
+func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (response IngestResponse, err error) {
 	if s.loader == nil {
 		return IngestResponse{}, ErrMissingLoader
 	}
@@ -194,6 +217,44 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 		return IngestResponse{}, errors.New("rag: negative parent/child size")
 	}
 	req.DocumentID = strings.TrimSpace(req.DocumentID)
+	ctx, finish, err := s.beginIngest(ctx, req)
+	if err != nil {
+		return IngestResponse{}, err
+	}
+	defer finish()
+	var saved *SourceFile
+	if retry {
+		if s.documents == nil || s.sources == nil || req.DocumentID == "" {
+			return IngestResponse{}, errors.New("rag: 重试需要文档 ID、状态存储和托管原件")
+		}
+		if _, err := s.documents.RecoverDocuments(ctx, req.CollectionID); err != nil {
+			return IngestResponse{}, err
+		}
+		record, err := s.documents.GetDocument(ctx, req.CollectionID, req.DocumentID)
+		if err != nil {
+			return IngestResponse{}, err
+		}
+		if record.ParseStatus != DocumentFailed && record.ParseStatus != DocumentCancelled {
+			return IngestResponse{}, errors.New("rag: 只能重试已失败或已取消的导入")
+		}
+		file := record.SourceFile
+		if pending, ok := record.Metadata["rag_pending_source"]; ok {
+			// 缺失或损坏的新原件不能回退为旧版本原件，否则重试会导入错误内容。
+			file = SourceFile{}
+			data, err := json.Marshal(pending)
+			if err != nil {
+				return IngestResponse{}, err
+			}
+			if err := json.Unmarshal(data, &file); err != nil {
+				return IngestResponse{}, err
+			}
+		}
+		req.Source, err = s.sources.Resolve(ctx, file)
+		if err != nil {
+			return IngestResponse{}, err
+		}
+		saved = &file
+	}
 	var attempt int64
 	if s.lifecycle != nil {
 		if req.DocumentID == "" {
@@ -208,8 +269,78 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 			return IngestResponse{}, errors.New("rag: document lifecycle returned invalid version")
 		}
 	}
+	source := req.Source
+	file := SourceFile{URI: source.URI, Name: filepath.Base(source.URI), Type: strings.TrimPrefix(strings.ToLower(filepath.Ext(source.URI)), ".")}
+	if saved != nil {
+		file = *saved
+	}
+	stage := StageSource
+	defer func() {
+		if recover() != nil {
+			// 在业务任务边界收尾，不向持久化或前端泄露 panic 参数、正文或调用栈。
+			err = errors.New("rag: 导入组件发生内部异常")
+		}
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			err = errors.Join(ctx.Err(), context.Cause(ctx), err)
+		}
+		var staged *IngestionError
+		if errors.As(err, &staged) {
+			stage = staged.Stage
+		} else {
+			err = &IngestionError{Stage: stage, Err: err}
+		}
+		if s.documents == nil {
+			return
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), ragconfig.CleanupTimeout)
+		defer cancel()
+		status, code := DocumentFailed, "processing_failed"
+		if errors.Is(err, context.Canceled) {
+			status, code = DocumentCancelled, "cancelled"
+			if errors.Is(err, ErrServiceClosed) {
+				code = "service_closed"
+			}
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			code = "timeout"
+		}
+		// 状态清理独立于已取消请求；数据库再次校验版本，防止迟到错误覆盖新任务。
+		failure := DocumentFailure{Status: status, Stage: stage, Code: code, Message: logging.SafeErrorText(err, 2048)}
+		if stateErr := s.documents.FailDocument(cleanup, req.CollectionID, req.DocumentID, attempt, failure); stateErr != nil {
+			err = errors.Join(err, fmt.Errorf("保存导入状态失败: %w", stateErr))
+		}
+	}()
+	if s.documents != nil {
+		if err := s.documents.StartDocument(ctx, req.CollectionID, req.DocumentID, attempt, file); err != nil {
+			return IngestResponse{}, err
+		}
+	}
+	advance := func(next string) error {
+		stage = next
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if s.documents != nil {
+			return s.documents.AdvanceDocument(ctx, req.CollectionID, req.DocumentID, attempt, next)
+		}
+		return nil
+	}
+	if s.sources != nil && saved == nil {
+		source, file, err = s.sources.Save(ctx, source)
+		if err != nil {
+			return IngestResponse{}, err
+		}
+		if err := s.documents.StartDocument(ctx, req.CollectionID, req.DocumentID, attempt, file); err != nil {
+			return IngestResponse{}, err
+		}
+	}
 
-	sourceDocs, err := s.loader.Load(ctx, req.Source)
+	if err := advance(StageParse); err != nil {
+		return IngestResponse{}, err
+	}
+	sourceDocs, err := s.loader.Load(ctx, source)
 	if err != nil {
 		return IngestResponse{}, fmt.Errorf("load source document: %w", err)
 	}
@@ -217,9 +348,12 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 		return IngestResponse{}, errors.New("rag: one stable DocumentID cannot identify multiple source documents")
 	}
 
-	baseCfg := chunker.NormalizeSplitterConfig(req.Splitter)
+	baseCfg := req.Splitter.Effective()
+	if err := advance(StageChunk); err != nil {
+		return IngestResponse{}, err
+	}
 
-	response := IngestResponse{Documents: make([]IngestDocumentResult, 0, len(sourceDocs))}
+	response = IngestResponse{Documents: make([]IngestDocumentResult, 0, len(sourceDocs))}
 
 	for index, sourceDoc := range sourceDocs {
 		if err := ctx.Err(); err != nil {
@@ -235,6 +369,17 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 			copy.ID = req.DocumentID
 		}
 		sourceDoc = &copy
+		if file.Path != "" {
+			// Loader 读取的是内容摘要命名的副本，展示名和来源仍使用用户提交的原件信息。
+			sourceDoc.MetaData = retrieval.CloneMetadata(sourceDoc.MetaData)
+			sourceDoc.MetaData[MetaSourceURI], sourceDoc.MetaData[MetaFileName] = file.URI, file.Name
+			sourceDoc.MetaData[MetaFileExt], sourceDoc.MetaData[MetaFileSize] = file.Type, file.Size
+			sourceDoc.MetaData["rag_source_content_hash"] = file.Hash
+			savedTitle := strings.TrimSuffix(filepath.Base(source.URI), filepath.Ext(source.URI))
+			if title, _ := sourceDoc.MetaData[MetaTitle].(string); title == "" || title == savedTitle {
+				sourceDoc.MetaData[MetaTitle] = strings.TrimSuffix(file.Name, filepath.Ext(file.Name))
+			}
+		}
 
 		documentID := strings.TrimSpace(sourceDoc.ID)
 		if documentID == "" {
@@ -245,36 +390,64 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 		if strings.TrimSpace(markdown) == "" {
 			continue
 		}
+		if len(markdown) > s.config.Ingest.MaxTextBytes {
+			return IngestResponse{}, fmt.Errorf("%w: document text exceeds %d bytes", ErrIngestLimit, s.config.Ingest.MaxTextBytes)
+		}
 
 		var (
 			batch IngestionBatch
 			diag  *chunker.Diagnostics
 		)
 		processConfig := struct {
-			Version string `json:"version"`
+			Version        string `json:"version"`
+			MaxInputTokens int    `json:"max_input_tokens"`
+			MaxBatchTokens int    `json:"max_batch_tokens"`
 			// Splitter 普通切分或父子切分使用的基础参数。
-			Splitter       chunker.SplitterConfig  `json:"splitter"`
-			ParentChild    bool                    `json:"parent_child"`
-			ParentSplitter *chunker.SplitterConfig `json:"parent_splitter,omitempty"`
-			ChildSplitter  *chunker.SplitterConfig `json:"child_splitter,omitempty"`
-		}{Version: "humbert-rag-v2", Splitter: baseCfg, ParentChild: req.ParentChild}
+			Splitter       ragconfig.Splitter  `json:"splitter"`
+			ParentChild    bool                `json:"parent_child"`
+			ParentSplitter *ragconfig.Splitter `json:"parent_splitter,omitempty"`
+			ChildSplitter  *ragconfig.Splitter `json:"child_splitter,omitempty"`
+		}{Version: "humbert-rag-v4", Splitter: baseCfg, ParentChild: req.ParentChild,
+			MaxInputTokens: s.config.InputBudget.Effective().MaxInputTokens, MaxBatchTokens: s.config.InputBudget.Effective().MaxBatchTokens}
 
 		if req.ParentChild {
-			parentCfg, childCfg := chunker.DeriveParentChildConfigs(baseCfg, req.ParentChunkSize, req.ChildChunkSize)
+			parentCfg, childCfg := baseCfg.ForParentChild(req.ParentChunkSize, req.ChildChunkSize)
 			processConfig.ParentSplitter, processConfig.ChildSplitter = &parentCfg, &childCfg
 
-			parentChild, diagnostics := chunker.SplitParentChildWithDiagnostics(markdown, parentCfg, childCfg)
+			parentChild, diagnostics, splitErr := chunker.SplitParentChildContext(ctx, markdown, parentCfg, childCfg)
+			if splitErr != nil {
+				return IngestResponse{}, splitErr
+			}
+			if len(parentChild.Children) > s.config.Ingest.MaxChunks {
+				return IngestResponse{}, fmt.Errorf("%w: more than %d chunks", ErrIngestLimit, s.config.Ingest.MaxChunks)
+			}
 			diag = diagnostics
 
 			batch = buildParentChildBatch(req.CollectionID, sourceDoc, markdown, parentChild)
 		} else {
-			chunks, diagnostics := chunker.SplitWithDiagnostics(markdown, baseCfg)
+			chunks, diagnostics, splitErr := chunker.SplitContext(ctx, markdown, baseCfg)
+			if splitErr != nil {
+				return IngestResponse{}, splitErr
+			}
+			if len(chunks) > s.config.Ingest.MaxChunks {
+				return IngestResponse{}, fmt.Errorf("%w: more than %d chunks", ErrIngestLimit, s.config.Ingest.MaxChunks)
+			}
 			diag = diagnostics
 
 			batch = buildFlatBatch(req.CollectionID, sourceDoc, markdown, chunks)
 		}
+		if err := ctx.Err(); err != nil {
+			return IngestResponse{}, err
+		}
+		if err := ValidateIngestionBatch(batch); err != nil {
+			return IngestResponse{}, err
+		}
+		if err := s.fitInputs(ctx, &batch); err != nil {
+			return IngestResponse{}, err
+		}
 
 		batch.Attempt = attempt
+		batch.Source = file
 		if attempt > 0 {
 			qualifyChunkIDs(&batch)
 		}
@@ -286,22 +459,12 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 		if err := ValidateIngestionBatch(batch); err != nil {
 			return IngestResponse{}, err
 		}
-		docs := IndexDocuments(batch, s.config.InputBuilder)
-		ids, err := s.indexer.Store(ctx, docs, indexer.WithIndex(req.CollectionID), WithIngestionBatch(batch))
-		if err != nil {
-			return IngestResponse{}, fmt.Errorf("store document %q: %w", documentID, err)
-		}
-		if err := ctx.Err(); err != nil {
+		if err := advance(StageIndex); err != nil {
 			return IngestResponse{}, err
 		}
-		if s.publisher != nil {
-			// 发布依赖明确的分块身份，不能允许后端擅自改 ID。
-			if err := validateStoredIDs(batch.Children, ids); err != nil {
-				return IngestResponse{}, err
-			}
-			if err := s.publisher.PublishDocument(ctx, batch); err != nil {
-				return IngestResponse{}, fmt.Errorf("publish document %q: %w", documentID, err)
-			}
+		ids, warnings, err := s.storeBatch(ctx, batch)
+		if err != nil {
+			return IngestResponse{}, fmt.Errorf("store document %q: %w", documentID, err)
 		}
 
 		item := IngestDocumentResult{
@@ -311,6 +474,7 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 			ChildCount:  len(batch.Children),
 			ChunkIDs:    ids,
 			Diagnostics: diag,
+			Warnings:    warnings,
 		}
 
 		response.Documents = append(response.Documents, item)
@@ -319,13 +483,19 @@ func (s *Service) Ingest(ctx context.Context, req IngestRequest) (IngestResponse
 	}
 
 	if len(response.Documents) == 0 {
-		return IngestResponse{}, ErrEmptyDocument
+		return IngestResponse{}, &IngestionError{Stage: StageParse, Err: ErrEmptyDocument}
 	}
 	return response, nil
 }
 
 // Search 选择 Eino 检索器，再复用精排与父块扩展流水线。
 func (s *Service) Search(ctx context.Context, req SearchRequest) (search.Response, error) {
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return search.Response{}, ErrServiceClosed
+	}
 	if err := ctx.Err(); err != nil {
 		return search.Response{}, err
 	}
@@ -356,17 +526,14 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (search.Respons
 	if req.Limit > 0 {
 		cfg.FinalTopK = req.Limit
 	}
-	if cfg.FinalTopK == 0 {
-		cfg.FinalTopK = search.DefaultConfig().FinalTopK
-	}
+	cfg = cfg.Effective()
 	if err := cfg.Validate(); err != nil {
 		return search.Response{}, err
 	}
-	timeout := cfg.Timeout
-	if timeout == 0 {
-		timeout = 30 * time.Second
+	ctx, cancel, err := s.beginRequest(ctx, cfg.Timeout)
+	if err != nil {
+		return search.Response{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	if s.config.BeforeSearch != nil {
@@ -375,7 +542,6 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (search.Respons
 		}
 	}
 	var parents search.ParentLoader
-	var err error
 	if cfg.ExpandParents && s.config.ParentLoader != nil {
 		parents, err = s.config.ParentLoader(req.CollectionID)
 		if err != nil {
@@ -409,6 +575,7 @@ func buildFlatBatch(
 	chunks []chunker.Chunk,
 ) IngestionBatch {
 	metadata := retrieval.CloneMetadata(source.MetaData)
+	delete(metadata, documenttext.MetaSourceBlocks)
 
 	batch := IngestionBatch{
 		CollectionID: collectionID,
@@ -418,6 +585,7 @@ func buildFlatBatch(
 		Metadata:     metadata,
 		Children:     make([]ChunkRecord, 0, len(chunks)),
 	}
+	batch.SourceBlocks, _ = source.MetaData[documenttext.MetaSourceBlocks].([]documenttext.SourceBlock)
 
 	for _, chunk := range chunks {
 		chunkID := fmt.Sprintf("%s#chunk-%06d", source.ID, chunk.Seq)
@@ -444,6 +612,8 @@ func buildParentChildBatch(
 		Parents:      make([]ChunkRecord, 0, len(result.Parents)),
 		Children:     make([]ChunkRecord, 0, len(result.Children)),
 	}
+	delete(batch.Metadata, documenttext.MetaSourceBlocks)
+	batch.SourceBlocks, _ = source.MetaData[documenttext.MetaSourceBlocks].([]documenttext.SourceBlock)
 
 	parentIDs := make([]string, len(result.Parents))
 
@@ -478,6 +648,7 @@ func buildChunkRecord(
 	parentChunkID string,
 ) ChunkRecord {
 	metadata := retrieval.CloneMetadata(source.MetaData)
+	documenttext.AttachLocators(metadata, chunk.Start, chunk.End)
 
 	metadata[retrieval.MetaSourceDocumentID] = source.ID
 	metadata[retrieval.MetaChunkIndex] = chunk.Seq
@@ -510,7 +681,7 @@ func documentTitle(doc *schema.Document) string {
 		return ""
 	}
 
-	if title := retrieval.DefaultSearchTextBuilder().Title(doc); title != "" {
+	if title := retrieval.Title(ragconfig.SearchText{}, doc); title != "" {
 		return title
 	}
 

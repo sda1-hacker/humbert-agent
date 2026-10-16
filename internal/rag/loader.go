@@ -15,6 +15,7 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/chunker"
+	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
 
 // 编译期检查。
@@ -105,37 +106,13 @@ var supportedExtensions = map[string]struct{}{
 	".csv":  {},
 }
 
-// IDGenerator 为解析后的原始文档分配稳定 ID，分块 ID 由后续切分阶段生成。
-type IDGenerator func(src document.Source) string
-
-// LoaderConfig 控制本地文件解析、页眉页脚过滤、可选 OCR 与原文换行归一化。
-type LoaderConfig struct {
-	ParseOptions documenttext.ParserOptions
-	// ExcludeHeadersAndFooters 指定解析时是否过滤重复页眉页脚。
-	ExcludeHeadersAndFooters bool
-
-	// OCRLanguage 指定 Tesseract 语言；OCR 需要使用 ocr 构建标签及相应运行依赖。
-	OCRLanguage string
-
-	// NormalizeLineEndings 将换行统一为 LF；后续分块坐标以归一化正文为准。
-	NormalizeLineEndings bool
-
-	// IDGenerator 为解析后的原始文档分配稳定 ID，分块 ID 由后续切分阶段生成。
-	IDGenerator IDGenerator
-}
-
-// DefaultLoaderConfig 返回推荐的 RAG Loader 默认配置。
-func DefaultLoaderConfig() LoaderConfig {
-	return LoaderConfig{ExcludeHeadersAndFooters: true, NormalizeLineEndings: true, IDGenerator: DefaultIDGenerator}
-}
-
 // Loader 实现 Eino 文档加载接口，将本地文件解析为完整 Markdown。
 type Loader struct {
-	config LoaderConfig
+	config ragconfig.Loader
 }
 
 // NewLoader 创建一个 Tabula Loader。
-func NewLoader(config LoaderConfig) *Loader {
+func NewLoader(config ragconfig.Loader) *Loader {
 	if config.IDGenerator == nil {
 		config.IDGenerator = DefaultIDGenerator
 	}
@@ -159,8 +136,6 @@ func (l *Loader) Load(
 	}
 
 	opts := l.config.ParseOptions
-	opts.ExcludeHeadersAndFooters = l.config.ExcludeHeadersAndFooters
-	opts.OCRLanguage = l.config.OCRLanguage
 	result, err := documenttext.ExtractFile(ctx, path, opts)
 	markdown, warnings := result.Markdown, result.Warnings
 	if err != nil {
@@ -185,6 +160,8 @@ func (l *Loader) Load(
 
 	metadata := buildMetadata(src, path, info, warnings)
 	metadata["rag_source_content_hash"] = result.ContentHash
+	metadata[documenttext.MetaSourceBlocks] = result.SourceBlocks
+	metadata["rag_parse_cache_hit"] = result.CacheHit
 
 	id := l.config.IDGenerator(src)
 	if id == "" {

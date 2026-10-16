@@ -1,12 +1,15 @@
 package chunker
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // absoluteMaxChunkSize 是保护区域等异常长内容的防御上限；目标块大小仍由配置决定。
 const absoluteMaxChunkSize = 7500
 
 // mergeUnits 按目标大小合并单元，并处理表头补充、重叠和原文范围。
-func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
+func mergeUnits(ctx context.Context, units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 
 	if len(units) == 0 {
 		return nil
@@ -24,6 +27,9 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 	curLen := 0
 
 	for _, unit := range units {
+		if ctx.Err() != nil {
+			return nil
+		}
 		unitLen := RuneLen(unit.text)
 
 		// 合并阶段再次限制异常长单元，避免依赖上游完全正确。
@@ -49,6 +55,9 @@ func mergeUnits(units []splitUnit, chunkSize int, chunkOverlap int) []Chunk {
 			offset := 0
 
 			for offset < len(runes) {
+				if ctx.Err() != nil {
+					return nil
+				}
 				end := offset + absoluteMaxChunkSize
 
 				if end > len(runes) {
