@@ -8,7 +8,7 @@
 # 未注入 tokenizer 时，向量输入及上下文预算均按 UTF-8 字节数保守估算，不是模型真实 token 数。
 # 数据库连接按字段填写；可分别用 HUMBERT_RAG_DATABASE_HOST/PORT/NAME/USER/PASSWORD/SSLMODE 覆盖。
 # rag-migrate 或 ensure_schema: true 的 ingest 会创建缺失的库，已有库直接复用。
-# PostgreSQL 服务及扩展需预先安装：PostgreSQL 15+、pgvector 0.7+、pg_search 0.25+。
+# PostgreSQL 服务及扩展需预先安装：PostgreSQL 14+、pgvector 0.6.2+、pg_search 0.20.10+。
 database:
   host: "localhost" # 数据库主机；本地服务用 localhost，也可填写 Unix socket 目录。
   port: 5432 # 数据库端口，默认 5432，范围 1..65535。
@@ -36,44 +36,87 @@ source_directory: ""
 
 # 托管原件 → 临时 Markdown → 分块。完整 Markdown 不写入文档主表。
 loader:
+  recognize_images: false # 开启后按图处理扫描页、插图和独立图片，OCR/描述独立建块；纯图片未开启时不发布空索引。
+  asset_directory: auto # 转换插图/扫描页的图片文件目录；空/auto 用本机配置目录下 rag/images，不写 Base64 到数据库。
+  image_recognition:
+    provider: agent # 复用“设置 → 多媒体”的图片模型；装配时注入 Model Registry。也可独立选 ollama/openai/tesseract。
+    pipeline: default # default 按 actions 执行；smart_ocr 先生成描述/文字属性，再决定是否转录。
+    actions: [caption, ocr] # 描述和转录分别缓存、分别建块；tesseract 只支持 [ocr]。
+    max_concurrent: 2 # 每篇文档同时处理的图片数量，范围 1..16，整篇导入并发仍受 ingest 限制。
+    retry_attempts: 3 # 临时网络错误、408/429/指定 5xx 的总尝试次数；1 关闭重试，最多 5。
+    retry_interval: 250ms # 首次退避，随后翻倍至多 10s；取消/超时立即结束。
+    base_url: "" # Ollama 留空用 http://localhost:11434；OpenAI 兼容服务必须显式填写基础地址。
+    model: "" # agent 自动读取全局图片模型；独立 ollama/openai 必填视觉模型名，与 embedding.model 分开。
+    api_key: "" # 仅 OpenAI 兼容服务使用；也可通过 HUMBERT_RAG_LOADER_IMAGE_RECOGNITION_API_KEY 环境变量提供。
+    revision: "" # 同名视觉模型升级或本地 OCR/语言包更新时修改，避免使用旧识别缓存。
+    timeout: 1m # 每个 OCR/描述动作的总超时（含重试），受整次导入取消/总超时约束。
+    max_output_tokens: 4096 # 视觉模型输出 token 上限；本地 OCR 使用解析输出字节上限。
   normalize_line_endings: true # 将 CRLF/CR 统一为 LF，再据此计算分块原文范围。
-  # 与附件解析共用的参数；下列大小均为字节，0 会补默认限制，不代表无限制。
+  # 与附件解析共用的参数；资源大小以字节计，0 会补默认限制，不代表无限制。
   parse_options:
     cache_directory: auto # 系统用户缓存目录；空字符串关闭。同文件+解析参数复用 Markdown，损坏时自动重算。
     cache_max_bytes: 268435456 # 解析缓存总容量上限（256 MiB）；仅清理该目录中 parse-*.json，原件不会被清理。
     exclude_headers_and_footers: true # 让 Tabula 过滤页眉页脚；普通文本不受影响。
-    ocr_language: "" # 留空不覆盖库默认语言；如 chi_sim+eng，仍需 ocr 构建支持、Tesseract 及语言包。
+    ocr_language: "" # 本地 OCR 语言；如 chi_sim+eng，需要安装 Tesseract 及语言包（或已有 OCR 构建支持）。
     max_input_bytes: 33554432 # 源文件上限 32 MiB；不是解析后的正文大小。
-    max_output_bytes: 33554432 # 解析结果 Markdown 上限 32 MiB，后续还受 ingest.max_text_bytes 约束。
-    max_expanded_bytes: 268435456 # ZIP 文档声明的解压后总量上限 256 MiB，适用于 docx/xlsx/pptx 等。
+    max_output_bytes: 33554432 # 转换正文与图片合计上限 32 MiB；识别后正文也受此限额及 ingest.max_text_bytes 约束。
+    max_expanded_bytes: 268435456 # ZIP 文档解压后总量上限 256 MiB；Excel 按此预算预检单元格矩阵，避免稀疏坐标耗尽内存。
     max_archive_entries: 8192 # ZIP 内部文件条目数上限，不是工作表、幻灯片或页数。
     timeout: 1m # 单个文件解析总时限，0 用 1m；超时取消读取或终止解析子进程。
     include_page_numbers: false # 是否在 Markdown 中保留页码标记，不改变源文件。
+    preserve_images: true # RAG 先保存图片再切分；recognize_images=false 时明确提示扫描页未识别，不调用模型。
+    max_images: 256 # 单篇文档的图片引用上限，含扫描页；超限明确失败，不静默漏掉后续页面。
+    max_image_pixels: 32000000 # 单张图片解码前的像素上限，防止压缩图片耗尽内存；原件不缩放。
+    xlsx_first_row_as_header: false # WeKnora 默认保留 Excel 首行为数据；列名 A/B/C，true 才从首行取列名。
+    xlsx_percent_as_text: false # WeKnora 默认读取百分比底层值（0.25）；true 使用单元格显示值（25%）。
+    # 以下数值对齐 WeKnora 2c0d838 builtin PDF；Go 使用 Tabula，扫描页渲染使用内嵌 PDFium WASM。
+    # 未实现 PDFium 级隐藏字形过滤、矢量图检测，不声明或接受没有执行效果的配置项。
+    pdf:
+      paddleocr_vl_endpoint: "" # 默认空：Tabula。可填自托管 PaddleOCR-VL pipeline 基础地址（非普通视觉模型 API），启用跨页合表、标题重建及页面重组；PDF 原件会发送至该地址。
+      # 结构化服务使用相同 timeout/资源限额；大扫描件可增大上方 timeout。服务失败明确报错，不静默回退。
+      scan_image_ratio: 0.5 # 图片覆盖页面积达到 50% 判为扫描页，优先于文本字数判断。
+      scan_min_chars: 10 # 少于 10 字符且图片覆盖至少 10% 同样按扫描页处理，真正空白页不渲染。
+      force_scanned: false # 强制所有页按扫描页处理，用于有劣质 OCR 文本层的 PDF。
+      layout_ordering: true # 尝试分栏阅读顺序；文本层已完整或重排破坏数值时保留原文本层。
+      word_gap_width_ratio: 0.4 # 推断词间空格的间距阈值，按文本宽度归一化。
+      detect_headings: true # 按相对字号提升 Markdown 标题，不用章节编号猜层级。
+      min_heading_line_chars: 8 # 被提升为标题的行至少 8 字符，至多 80，句末标点行不提升。
+      margin_col_width_ratio: 0.12 # 窄边栏/竖排水印识别的宽度比例。
+      sanitize_text: true # 清理 PDF 软连字符、零宽字符和文本层占位符，仅影响 PDF。
+      strip_chart_debris: true # 清理连续图表刻度/图例残片；不按当前问题关键词过滤正文。
+      extract_embedded_images: true # 提取正文页栅格插图；原始 PDF 另外完整保存。
+      embed_min_pixels: 80 # 插图宽、高都至少为 80 像素。
+      embed_min_area_ratio: 0.01 # 插图至少占页面面积的 1%。
+      embed_repeat_page_fraction: 0.5 # 至少在 50% 正文页重复的相同图片按页徽/水印过滤，至少跨 2 页。
+      embed_max_images: 50 # 正文插图上限，不是扫描页数上限。
+      render_dpi: 200 # 扫描页渲染 DPI，PDFium 随应用内嵌，无需安装系统工具。
+      jpeg_quality: 85 # 转换图片 JPEG 质量，合法范围 1..95；不改写源文档。
+      render_max_edge: 2000 # 图片最长边，0 不限制缩放；仍受解析输出字节限制。
 
 # 一次导入任务的资源限制，超过限制会停止导入；排队时间也计入总超时。
 ingest:
   max_concurrent: 2 # 同一 Service 同时执行的导入数，0 用 2；其余任务等待空位。
   max_chunks: 5000 # 每篇文档最终普通块/子块的数量上限，不计父块；0 用 5000。
-  max_text_bytes: 33554432 # 解析及换行归一化后的正文上限：本例 32 MiB，代码默认 8 MiB。
+  max_text_bytes: 33554432 # 正文与图片识别文本的合计上限：本例 32 MiB，代码默认 8 MiB。
   timeout: 10m # 包含排队、解析、切分、向量化和存储；0 用 10m。
 
 # 大小以 Unicode 字符数计算，不是字节数或精确 token 数。
 chunking:
   parent_child: true # 父块用于补充上下文，仅子块进入向量/BM25 索引；false 直接生成普通块。
-  parent_chunk_size: 2048 # 本例父块目标 2048 字符，代码默认/0 为 4096；父块不套用 token_limit。
+  parent_chunk_size: 4096 # WeKnora 新建知识库默认父块目标，0 用 4096；父块不套用 token_limit。
   child_chunk_size: 384 # 子块目标字符数，默认/0 为 384；仅父子模式生效。
   # 普通切分或推导父子窗口的基础配置。
   splitter:
-    # auto 自动选择标题/章节策略；heading 优先 Markdown 标题；heuristic 优先章节/分页；recursive 递归切分。
-    # 结构策略失败时递归兜底；省略策略默认 recursive，本例显式启用 auto。
+    # auto 自动选择标题/章节策略；heading 优先 Markdown 标题；heuristic 优先章节/分页；recursive/legacy 递归切分。
+    # 结构策略失败时递归兜底；统一预设为 auto；直接构造零值 Splitter 时空策略仍使用 recursive。
     strategy: auto
     chunk_size: 512 # 普通块目标大小，0 用 512；父子模式改用上面两个窗口，结构保护可能产生更大块。
     # 普通块最大重叠字符数，0 关闭；业务入口最多取块大小的一半。
     # 父子模式中，正值让子块重叠按 child_chunk_size/5 推导，不直接使用这里的 80。
     chunk_overlap: 80
-    separators: ["\n\n", "\n", "。"] # 按顺序尝试字面分隔符并保留原文；空列表使用这组默认值。
+    separators: ["\n\n", "\n", "。", "！", "？", ";", "；"] # 按顺序尝试字面分隔符并保留原文；新建知识库沿用这组值；低层空列表使用空行、换行、中文句号。
     token_limit: 0 # 按语言比例估算的切分目标；0 关闭，完整模型输入仍受 embedding.input_budget 限制。
-    languages: [zh] # zh 中文/en 英文/de 德文/mixed 混合；影响章节规则及 token 估算，首项用于 token 目标。
+    languages: [] # zh 中文/en 英文/de 德文/mixed 混合；影响章节规则及 token 估算，首项用于 token 目标。
 
 # 文档和查询共享同一向量模型。更换模型、权重版本或输入拼接规则时使用新知识库重新导入。
 embedding:

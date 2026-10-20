@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sda1-hacker/humbert-agent/internal/rag"
@@ -24,6 +23,7 @@ type DocumentConfig struct{ ProfileID, ProfileJSON string }
 // DocumentStore 保存原件引用、管理元数据、权威分块和版本，不负责调用模型或文件存储。
 // 单独使用时可与 eino-ext 的 ES/Milvus 等组件组合；Indexer 则复用它完成 PG 同库发布。
 // 事务写入在 postgres_ingestion.go，版本操作在 postgres_revisions.go，分块读取在 postgres_reader.go。
+// source_key/chunk_key 用于跨检索库识别同一内容；BIGINT id 只负责 PG 内部行关联。
 type DocumentStore struct {
 	db     database
 	config DocumentConfig
@@ -34,24 +34,52 @@ func NewDocumentStore(pool *pgxpool.Pool, cfg DocumentConfig) (*DocumentStore, e
 	if pool == nil {
 		return nil, errors.New("rag document store: nil pool")
 	}
-	return &DocumentStore{db: poolDatabase{pool}, config: cfg}, nil
+	return &DocumentStore{db: pool, config: cfg}, nil
 }
 
-// 内部事务接口只封装 pgx 已有操作，便于离线验证提交、回滚和过期版本；不作为后端扩展接口。
-type transaction interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-	Commit(context.Context) error
-	Rollback(context.Context) error
-}
-
+// database 直接使用 pgx 的方法签名；连接池原生满足接口，不再套一层连接或事务适配器。
+// 它只约束本模块用到的操作，不承担 ES、Milvus 等检索后端的扩展职责。
 type database interface {
-	Begin(context.Context) (transaction, error)
+	Begin(context.Context) (pgx.Tx, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Query(context.Context, string, ...any) (pgx.Rows, error)
 }
 
-type poolDatabase struct{ pool *pgxpool.Pool }
+// lockAttempt 用同一条版本记录串行化开始、推进和发布；取消、删除或新版本会使旧任务失败。
+// UPDATE 即使不改值也会取得行锁，不能改成先 EXISTS 检查、后独立写入正文。
+func lockAttempt(ctx context.Context, tx pgx.Tx, collectionID, documentID string, attempt int64) error {
+	tag, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND source_key=$2 AND attempt=$3 AND NOT deleted`, collectionID, documentID, attempt)
+	if err == nil && tag.RowsAffected() != 1 {
+		return ErrStaleIngestion
+	}
+	return err
+}
 
-func (d poolDatabase) Begin(ctx context.Context) (transaction, error) { return d.pool.Begin(ctx) }
+// TrackImages 只保存当前导入的进度快照；发布事务会用已完成的资产状态替换它。
+// 与取消/删除/新版本共用行锁，旧 worker 即使迟到也不能改写新任务。
+func (p *DocumentStore) TrackImages(ctx context.Context, collectionID, documentID string, attempt int64, images []rag.ImageAsset) error {
+	data, err := json.Marshal(images)
+	if err != nil {
+		return err
+	}
+	tx, err := p.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollbackTransaction(ctx, tx)
+	if err := lockAttempt(ctx, tx, collectionID, documentID, attempt); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE documents SET metadata=jsonb_set(metadata,'{rag_pending_images}',$4::jsonb,true),updated_at=NOW()
+WHERE collection_id=$1 AND source_key=$2 AND processing_attempt=$3 AND parse_status='processing' AND processing_deadline>clock_timestamp()`, collectionID, documentID, attempt, string(data))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrStaleIngestion
+	}
+	return tx.Commit(ctx)
+}
 
 // processSnapshot 固定实际输入，拒绝同一版本以不同分块或检索文本重试。
 func processSnapshot(batch rag.IngestionBatch, texts []string, hashKey string) (json.RawMessage, error) {
@@ -90,12 +118,8 @@ func (p *DocumentStore) StartDocument(ctx context.Context, collectionID, documen
 		return err
 	}
 	defer rollbackTransaction(ctx, tx)
-	tag, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND document_id=$2 AND attempt=$3 AND NOT deleted`, collectionID, documentID, attempt)
-	if err != nil {
+	if err := lockAttempt(ctx, tx, collectionID, documentID, attempt); err != nil {
 		return err
-	}
-	if tag.RowsAffected() != 1 {
-		return ErrStaleIngestion
 	}
 	sourceJSON, err := json.Marshal(source)
 	if err != nil {
@@ -106,9 +130,9 @@ func (p *DocumentStore) StartDocument(ctx context.Context, collectionID, documen
 		// 独立组件调用也必须有恢复期限；Service 已提供包含排队在内的总截止时间。
 		deadline = time.Now().Add((ragconfig.Ingest{}).Effective().Timeout)
 	}
-	tag, err = tx.Exec(ctx, `INSERT INTO documents(collection_id,id,title,document_type,source_uri,file_path,file_name,file_type,file_size,file_hash,embedding_profile_id,parse_status,processing_attempt,processing_stage,processing_deadline)
-VALUES($1,$2,$3,'file',$4,$5,$6,$7,$8,$9,$10,'processing',$12,'source',$13)
-ON CONFLICT(collection_id,id) DO UPDATE SET
+	tag, err := tx.Exec(ctx, `INSERT INTO documents(collection_id,source_key,title,document_type,source_uri,file_path,file_name,file_type,file_size,file_hash,embedding_profile_id,parse_status,processing_attempt,processing_stage,processing_deadline)
+VALUES($1,$2,$3,'file',$4,$5,$6,$7,$8,$9,(SELECT id FROM rag_collection_profiles WHERE collection_id=$1 AND profile_id=$10),'processing',$12,'source',$13)
+ON CONFLICT(collection_id,source_key) DO UPDATE SET
  title=CASE WHEN documents.revision=0 THEN EXCLUDED.title ELSE documents.title END,
  source_uri=CASE WHEN documents.revision=0 THEN EXCLUDED.source_uri ELSE documents.source_uri END,
  file_path=CASE WHEN documents.revision=0 THEN EXCLUDED.file_path ELSE documents.file_path END,
@@ -117,7 +141,8 @@ ON CONFLICT(collection_id,id) DO UPDATE SET
  file_size=CASE WHEN documents.revision=0 THEN EXCLUDED.file_size ELSE documents.file_size END,
  file_hash=CASE WHEN documents.revision=0 THEN EXCLUDED.file_hash ELSE documents.file_hash END,
  embedding_profile_id=CASE WHEN documents.revision=0 THEN EXCLUDED.embedding_profile_id ELSE documents.embedding_profile_id END,
- metadata=CASE WHEN documents.revision>0 THEN jsonb_set(documents.metadata,'{rag_pending_source}',$11::jsonb,true) ELSE documents.metadata END,
+ metadata=CASE WHEN documents.revision>0 THEN jsonb_set(documents.metadata,'{rag_pending_source}',$11::jsonb,true) ELSE documents.metadata END
+ - CASE WHEN documents.processing_attempt<EXCLUDED.processing_attempt THEN 'rag_pending_images' ELSE '' END,
  parse_status='processing',error_message='',error_code='',processing_attempt=EXCLUDED.processing_attempt,
  processing_stage='source',processing_deadline=CASE WHEN documents.processing_attempt=EXCLUDED.processing_attempt
  THEN LEAST(documents.processing_deadline,EXCLUDED.processing_deadline) ELSE EXCLUDED.processing_deadline END,updated_at=NOW()
@@ -136,7 +161,7 @@ WHERE documents.processing_attempt<EXCLUDED.processing_attempt
 // AdvanceDocument 在进入耗时阶段前检查版本、状态和截止时间；跨进程取消后不会继续下一阶段。
 func (p *DocumentStore) AdvanceDocument(ctx context.Context, collectionID, documentID string, attempt int64, stage string) error {
 	switch stage {
-	case rag.StageParse, rag.StageChunk, rag.StageIndex, rag.StageReady, rag.StagePublish:
+	case rag.StageParse, rag.StageChunk, rag.StageImages, rag.StageIndex, rag.StageReady, rag.StagePublish:
 	default:
 		return errors.New("rag: invalid processing stage")
 	}
@@ -145,15 +170,11 @@ func (p *DocumentStore) AdvanceDocument(ctx context.Context, collectionID, docum
 		return err
 	}
 	defer rollbackTransaction(ctx, tx)
-	tag, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND document_id=$2 AND attempt=$3 AND NOT deleted`, collectionID, documentID, attempt)
-	if err != nil {
+	if err := lockAttempt(ctx, tx, collectionID, documentID, attempt); err != nil {
 		return err
 	}
-	if tag.RowsAffected() != 1 {
-		return ErrStaleIngestion
-	}
-	tag, err = tx.Exec(ctx, `UPDATE documents SET processing_stage=$4,updated_at=NOW()
-WHERE collection_id=$1 AND id=$2 AND processing_attempt=$3 AND parse_status='processing' AND processing_deadline>clock_timestamp()`, collectionID, documentID, attempt, stage)
+	tag, err := tx.Exec(ctx, `UPDATE documents SET processing_stage=$4,updated_at=NOW()
+WHERE collection_id=$1 AND source_key=$2 AND processing_attempt=$3 AND parse_status='processing' AND processing_deadline>clock_timestamp()`, collectionID, documentID, attempt, stage)
 	if err != nil {
 		return err
 	}
@@ -175,14 +196,14 @@ func (p *DocumentStore) FailDocument(ctx context.Context, collectionID, document
 	}
 	defer rollbackTransaction(ctx, tx)
 	// 先锁定匹配的版本行，再更新状态，不能只用快照中的 EXISTS 判断当前任务。
-	tag, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND document_id=$2
+	tag, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND source_key=$2
 AND ((attempt=$3 AND NOT deleted) OR (attempt=$3+1 AND deleted))`, collectionID, documentID, attempt)
 	if err != nil || tag.RowsAffected() == 0 {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE documents SET parse_status=$4,error_message=$5,error_code=$6,
 processing_stage=$7,processing_deadline=NULL,updated_at=NOW()
-WHERE collection_id=$1 AND id=$2 AND revision<>$3 AND processing_attempt=$3 AND parse_status='processing'`,
+WHERE collection_id=$1 AND source_key=$2 AND revision<>$3 AND processing_attempt=$3 AND parse_status='processing'`,
 		collectionID, documentID, attempt, failure.Status, failure.Message, failure.Code, failure.Stage); err != nil {
 		return err
 	}
@@ -197,22 +218,18 @@ func (p *DocumentStore) RecoverDocuments(ctx context.Context, collectionID strin
 	if collectionID == "" {
 		return 0, errors.New("rag: collection id required for recovery")
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return 0, errors.New("rag: interruption recovery requires a PostgreSQL pool")
-	}
 	var total int64
 	for {
 		n, scanned, err := func() (int64, int, error) {
-			tx, err := db.pool.Begin(ctx)
+			tx, err := p.db.Begin(ctx)
 			if err != nil {
 				return 0, 0, err
 			}
 			defer rollbackTransaction(ctx, tx)
-			rows, err := tx.Query(ctx, `SELECT h.document_id,d.processing_attempt
-FROM rag_document_heads h JOIN documents d ON d.collection_id=h.collection_id AND d.id=h.document_id
+			rows, err := tx.Query(ctx, `SELECT h.source_key,d.processing_attempt
+FROM rag_document_heads h JOIN documents d ON d.collection_id=h.collection_id AND d.source_key=h.source_key
 WHERE h.collection_id=$1 AND d.parse_status='processing' AND d.processing_deadline<=clock_timestamp()
-AND h.attempt>=d.processing_attempt ORDER BY h.document_id LIMIT 256 FOR UPDATE OF h SKIP LOCKED`, collectionID)
+AND h.attempt>=d.processing_attempt ORDER BY h.source_key LIMIT 256 FOR UPDATE OF h SKIP LOCKED`, collectionID)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -220,24 +237,20 @@ AND h.attempt>=d.processing_attempt ORDER BY h.document_id LIMIT 256 FOR UPDATE 
 				id      string
 				attempt int64
 			}
-			var pending []candidate
-			for rows.Next() {
+			// pgx 统一处理扫描失败、迭代错误与关闭；释放行集后再在同一事务内更新状态。
+			pending, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (candidate, error) {
 				var c candidate
-				if err := rows.Scan(&c.id, &c.attempt); err != nil {
-					rows.Close()
-					return 0, 0, err
-				}
-				pending = append(pending, c)
-			}
-			rows.Close()
-			if err := rows.Err(); err != nil {
+				err := row.Scan(&c.id, &c.attempt)
+				return c, err
+			})
+			if err != nil {
 				return 0, 0, err
 			}
 			var changed int64
 			for _, c := range pending {
 				tag, err := tx.Exec(ctx, `UPDATE documents SET parse_status='failed',error_code='interrupted',
 error_message='上次导入未在截止时间前完成，可能因进程退出或超时中断，请重试',processing_deadline=NULL,updated_at=NOW()
-WHERE collection_id=$1 AND id=$2 AND processing_attempt=$3 AND parse_status='processing' AND processing_deadline<=clock_timestamp()`, collectionID, c.id, c.attempt)
+WHERE collection_id=$1 AND source_key=$2 AND processing_attempt=$3 AND parse_status='processing' AND processing_deadline<=clock_timestamp()`, collectionID, c.id, c.attempt)
 				if err != nil {
 					return 0, 0, err
 				}
@@ -245,7 +258,7 @@ WHERE collection_id=$1 AND id=$2 AND processing_attempt=$3 AND parse_status='pro
 					continue
 				}
 				// 状态可能属于已被新版本取代的旧任务；只作废它自己的版本，不能伤及新预留。
-				if _, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt+1,deleted=true WHERE collection_id=$1 AND document_id=$2 AND attempt=$3`, collectionID, c.id, c.attempt); err != nil {
+				if _, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt+1,deleted=true WHERE collection_id=$1 AND source_key=$2 AND attempt=$3`, collectionID, c.id, c.attempt); err != nil {
 					return 0, 0, err
 				}
 				changed++
@@ -269,12 +282,4 @@ func marshalMetadata(metadata map[string]any) (string, error) {
 	}
 	data, err := json.Marshal(metadata)
 	return string(data), err
-}
-
-// nullableString 将不存在的父块 ID 保存为 NULL，以满足外键语义。
-func nullableString(value string) any {
-	if value = strings.TrimSpace(value); value == "" {
-		return nil
-	}
-	return value
 }

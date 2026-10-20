@@ -43,6 +43,12 @@ func NewFactory(credentials *credential.Store) *Factory {
 // Create 统一准备流式连接与凭证，直接使用 Eino 官方 SDK；缓存由 Registry 管理。
 // 当前配置只支持三种协议，在这个入口明确映射即可，无需再维护工厂注册表和请求包装。
 func (f *Factory) Create(ctx context.Context, resolved ResolvedModel) (einomodel.ToolCallingChatModel, error) {
+	return f.create(ctx, resolved, nil)
+}
+
+// create 让离线导入等辅助任务复用凭据和协议工厂，同时使用自己的超时、响应大小及重试边界。
+// Agent 仍走原来的流式客户端，不受辅助任务的短超时影响。
+func (f *Factory) create(ctx context.Context, resolved ResolvedModel, client *http.Client) (einomodel.ToolCallingChatModel, error) {
 	if ctx == nil {
 		return nil, errors.New("context.Context 不能为空")
 	}
@@ -53,9 +59,12 @@ func (f *Factory) Create(ctx context.Context, resolved ResolvedModel) (einomodel
 	if providerType != ProviderTypeOpenAI && providerType != ProviderTypeOpenAICompatible && providerType != ProviderTypeOllama {
 		return nil, fmt.Errorf("不支持的 Provider 类型: %q", resolved.Provider.Type)
 	}
-	client, err := newStreamingHTTPClient(time.Duration(resolved.Model.TimeoutMS) * time.Millisecond)
-	if err != nil {
-		return nil, fmt.Errorf("创建 Streaming HTTP Client 失败: %w", err)
+	var err error
+	if client == nil {
+		client, err = newStreamingHTTPClient(time.Duration(resolved.Model.TimeoutMS) * time.Millisecond)
+		if err != nil {
+			return nil, fmt.Errorf("创建 Streaming HTTP Client 失败: %w", err)
+		}
 	}
 	apiKey := ""
 	if resolved.Provider.Type == ProviderTypeOpenAI {

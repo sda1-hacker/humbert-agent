@@ -53,7 +53,7 @@ func (c Splitter) Validate() error {
 		return fmt.Errorf("rag chunker: sizes, overlap and token limit must be non-negative")
 	}
 	switch c.Strategy {
-	case "", StrategyAuto, StrategyHeading, StrategyHeuristic, StrategyRecursive:
+	case "", StrategyAuto, StrategyHeading, StrategyHeuristic, StrategyRecursive, StrategyLegacy:
 	default:
 		return fmt.Errorf("rag chunker: unknown strategy %q", c.Strategy)
 	}
@@ -192,6 +192,56 @@ func (c RerankHTTP) Validate() error {
 	return nil
 }
 
+// Validate 只检查配置，不探测服务；未启用图片识别时无需安装 OCR 或配置视觉模型。
+func (c Loader) Validate() error {
+	if err := c.ParseOptions.Validate(); err != nil {
+		return err
+	}
+	if !c.RecognizeImages && c.ImageText == nil {
+		return nil
+	}
+	if !c.ParseOptions.PreserveImages {
+		return errors.New("image recognition requires preserve_images")
+	}
+	v := c.ImageRecognition.Effective()
+	if v.MaxConcurrent < 1 || v.MaxConcurrent > 16 || v.RetryAttempts < 1 || v.RetryAttempts > 5 || v.RetryInterval < 0 || v.RetryInterval > 10*time.Second {
+		return errors.New("image recognition: invalid concurrency/retry limit")
+	}
+	if v.Pipeline != "default" && v.Pipeline != "smart_ocr" {
+		return errors.New("image recognition: pipeline must be default/smart_ocr")
+	}
+	seen := map[string]bool{}
+	for _, action := range v.Actions {
+		if (action != "ocr" && action != "caption") || seen[action] {
+			return errors.New("image recognition: actions must be unique caption/ocr values")
+		}
+		seen[action] = true
+	}
+	if v.Provider == "tesseract" && (v.Pipeline != "default" || seen["caption"]) {
+		return errors.New("image recognition: tesseract only supports OCR")
+	}
+	if v.Pipeline == "smart_ocr" && (!seen["caption"] || !seen["ocr"]) {
+		return errors.New("image recognition: smart_ocr requires caption and ocr actions")
+	}
+	if v.Timeout <= 0 || v.MaxOutputTokens <= 0 || v.MaxOutputTokens > 1<<20 {
+		return errors.New("image recognition: invalid timeout/output limit")
+	}
+	if c.ImageText != nil || v.Provider == "tesseract" || v.Provider == ProviderAgent {
+		return nil
+	}
+	if v.Provider != ProviderOpenAI && v.Provider != ProviderOllama {
+		return errors.New("image recognition: provider must be agent/tesseract/openai/ollama")
+	}
+	u, err := url.ParseRequestURI(v.BaseURL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return errors.New("image recognition: invalid base_url")
+	}
+	if v.Model == "" {
+		return errors.New("image recognition: vision model is required")
+	}
+	return nil
+}
+
 // Validate 集中检查组件参数及跨阶段约束，不进行 I/O，也不要求迁移命令配置模型。
 func (c Config) Validate() error {
 	checks := []struct {
@@ -199,7 +249,7 @@ func (c Config) Validate() error {
 		err  error
 	}{
 		{"postgres", c.Postgres.Validate()},
-		{"loader.parse_options", c.Loader.ParseOptions.Validate()}, {"ingest", c.Ingest.Validate()}, {"chunking.splitter", c.Chunking.Splitter.Validate()},
+		{"loader", c.Loader.Validate()}, {"ingest", c.Ingest.Validate()}, {"chunking.splitter", c.Chunking.Splitter.Validate()},
 		{"embedding", c.Embedding.ValidateOptions()}, {"vector", c.Vector.Validate()}, {"keyword", c.Keyword.Validate()},
 		{"hybrid", c.Hybrid.Validate()}, {"rerank", c.Rerank.Validate()}, {"search", c.Search.Validate()},
 	}

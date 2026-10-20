@@ -2,278 +2,167 @@ package chunker
 
 import (
 	"context"
-	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 	"math"
+	"sort"
 	"strings"
 )
 
-// DocProfile 记录文档长度、标题及章节信号，供自动选择分块策略使用。
+// DocProfile 保留导入诊断字段；Markdown 特征全部来自 AST，正则仅用于非 Markdown 的章节提示。
 type DocProfile struct {
-	// -----------------------------------------------------------------
-	// 基础规模统计
-	// -----------------------------------------------------------------
-
-	// TotalChars 是整篇文档 Unicode rune 数量。
-	TotalChars int `json:"total_chars"`
-
-	// TotalLines 是按 "\n" 分割后的总行数。
-	TotalLines int `json:"total_lines"`
-
-	// AvgLineLen 是非 fenced-code 内容的平均行长度。
-	AvgLineLen float64 `json:"avg_line_len"`
-
-	// StdLineLen 是非代码内容行长度的总体标准差，用于粗略描述排版形态。
-	StdLineLen float64 `json:"std_line_len"`
-
-	// -----------------------------------------------------------------
-	// Markdown Heading 结构
-	// -----------------------------------------------------------------
-
-	// MdHeadingCounts 保存各标题层级的数量。
-	MdHeadingCounts map[int]int `json:"md_heading_counts"`
-
-	// MdHeadingTotal 是所有 Markdown Heading 总数。
-	MdHeadingTotal int `json:"md_heading_total"`
-
-	// -----------------------------------------------------------------
-	// Heuristic 结构信号
-	// -----------------------------------------------------------------
-
-	NumberedSectionCount  int `json:"numbered_section_count"`
-	AllCapsShortLineCount int `json:"all_caps_short_line_count"`
-	BlankParagraphBreaks  int `json:"blank_paragraph_breaks"`
-	FormFeedCount         int `json:"form_feed_count"`
-	VisualSepCount        int `json:"visual_sep_count"`
-
-	GermanChapterCount  int `json:"german_chapter_count"`
-	EnglishChapterCount int `json:"english_chapter_count"`
-	ChineseChapterCount int `json:"chinese_chapter_count"`
-
-	// 名字叫 RepeatedFooterCount，
-	// 但当前实现实际上统计的是匹配 PageFooterPattern 的行数。
-	//
-	// 是否“重复”并没有进一步做文本去重判断。
-	RepeatedFooterCount int `json:"repeated_footer_count"`
-
-	// -----------------------------------------------------------------
-	// 内容特征
-	// -----------------------------------------------------------------
-
-	HasTables bool `json:"has_tables"`
-	HasCode   bool `json:"has_code"`
-
-	// CodeRatio 是代码字符数占文档总字符数的比例。
-	CodeRatio float64 `json:"code_ratio"`
-
-	// DetectedLangs 是章节识别的语言提示，混合文本启用全部已支持语言。
-	DetectedLangs []string `json:"detected_langs"`
+	TotalChars            int         `json:"total_chars"`
+	TotalLines            int         `json:"total_lines"`
+	AvgLineLen            float64     `json:"avg_line_len"`
+	StdLineLen            float64     `json:"std_line_len"`
+	MdHeadingCounts       map[int]int `json:"md_heading_counts"`
+	MdHeadingTotal        int         `json:"md_heading_total"`
+	NumberedSectionCount  int         `json:"numbered_section_count"`
+	AllCapsShortLineCount int         `json:"all_caps_short_line_count"`
+	BlankParagraphBreaks  int         `json:"blank_paragraph_breaks"`
+	FormFeedCount         int         `json:"form_feed_count"`
+	VisualSepCount        int         `json:"visual_sep_count"`
+	GermanChapterCount    int         `json:"german_chapter_count"`
+	EnglishChapterCount   int         `json:"english_chapter_count"`
+	ChineseChapterCount   int         `json:"chinese_chapter_count"`
+	RepeatedFooterCount   int         `json:"repeated_footer_count"`
+	HasTables             bool        `json:"has_tables"`
+	HasCode               bool        `json:"has_code"`
+	CodeRatio             float64     `json:"code_ratio"`
+	DetectedLangs         []string    `json:"detected_langs"`
 }
 
-// HeadingDensity 返回标题行数与总行数的比例。
 func (p *DocProfile) HeadingDensity() float64 {
-	if p.TotalLines == 0 {
-		return 0
-	}
-
-	return float64(p.MdHeadingTotal) / float64(p.TotalLines)
+	return float64(p.MdHeadingTotal) / float64(max(1, p.TotalLines))
 }
 
-// DominantHeadingLevel 选择用于划分主章节的标题层级。
 func (p *DocProfile) DominantHeadingLevel() int {
-	if p.MdHeadingTotal == 0 {
-		return 0
-	}
-
 	for level := 1; level <= 6; level++ {
 		if p.MdHeadingCounts[level] >= 3 {
 			return level
 		}
 	}
-
 	for level := 6; level >= 1; level-- {
 		if p.MdHeadingCounts[level] > 0 {
 			return level
 		}
 	}
-
 	return 0
 }
 
-// HeuristicMarkerTotal 返回启发式结构信号的总数。
 func (p *DocProfile) HeuristicMarkerTotal() int {
-	return p.NumberedSectionCount + p.GermanChapterCount + p.EnglishChapterCount + p.ChineseChapterCount + p.AllCapsShortLineCount + p.VisualSepCount +
-		p.FormFeedCount
+	return p.NumberedSectionCount + p.AllCapsShortLineCount + p.GermanChapterCount + p.EnglishChapterCount + p.ChineseChapterCount + p.VisualSepCount + p.FormFeedCount
 }
 
-// ProfileDocument 扫描文档结构，统计标题、章节、表格、代码及分页信号。
-func ProfileDocument(text string) *DocProfile { return profileDocument(context.Background(), text) }
-
-func profileDocument(ctx context.Context, text string) *DocProfile {
-	profile := &DocProfile{MdHeadingCounts: make(map[int]int)}
-
-	if text == "" {
-		return profile
+func ProfileDocument(text string) *DocProfile {
+	layout, err := NewLayout(context.Background(), text)
+	if err != nil {
+		return &DocProfile{MdHeadingCounts: map[int]int{}}
 	}
+	return layout.profile(context.Background(), 0, len(layout.source))
+}
 
-	// 整篇文档字符数必须继续遵守整个 Chunker 的约定：
-	//
-	//     Unicode rune
-	//
-	// 而不是 byte。
-	profile.TotalChars = RuneLen(text)
+func (l *Layout) profile(ctx context.Context, start, end int) *DocProfile {
+	body := string(l.source[start:end])
+	p := &DocProfile{TotalChars: end - start, TotalLines: strings.Count(body, "\n") + 1, MdHeadingCounts: make(map[int]int),
+		FormFeedCount: strings.Count(body, "\f"), BlankParagraphBreaks: strings.Count(body, "\n\n\n")}
+	first := sort.Search(len(l.headings), func(i int) bool { return l.headings[i].start >= start })
+	for _, h := range l.headings[first:] {
+		if h.start >= end {
+			break
+		}
+		if h.start >= start && h.start < end {
+			p.MdHeadingCounts[h.level]++
+			p.MdHeadingTotal++
+		}
+	}
+	first = sort.Search(len(l.codes), func(i int) bool { return l.codes[i].end > start })
+	for _, block := range l.codes[first:] {
+		if block.start >= end {
+			break
+		}
+		if block.start < end && block.end > start {
+			p.HasCode = true
+			p.CodeRatio += float64(min(end, block.end) - max(start, block.start))
+		}
+	}
+	p.CodeRatio /= float64(max(1, p.TotalChars))
+	first = sort.Search(len(l.tables), func(i int) bool { return l.tables[i].end > start })
+	p.HasTables = first < len(l.tables) && l.tables[first].start < end
+	first = sort.Search(len(l.dividers), func(i int) bool { return l.dividers[i].start >= start })
+	for _, divider := range l.dividers[first:] {
+		if divider.start >= end {
+			break
+		}
+		if divider.start >= start && divider.start < end {
+			p.VisualSepCount++
+		}
+	}
+	var sum, sumSquares, count float64
+	l.plainLines(ctx, start, end, func(line string, _ int) {
+		length := float64(RuneLen(line))
+		sum, sumSquares, count = sum+length, sumSquares+length*length, count+1
+		for i, pattern := range plainPatterns {
+			if pattern.MatchString(line) {
+				switch i {
+				case 0:
+					p.NumberedSectionCount++
+				case 1:
+					p.AllCapsShortLineCount++
+				case 2:
+					p.GermanChapterCount++
+				case 3:
+					p.EnglishChapterCount++
+				case 4:
+					p.ChineseChapterCount++
+				case 5:
+					p.RepeatedFooterCount++
+				}
+			}
+		}
+	})
+	if count > 0 {
+		p.AvgLineLen = sum / count
+		p.StdLineLen = math.Sqrt(max(0, sumSquares/count-p.AvgLineLen*p.AvgLineLen))
+	}
+	sample := body[:min(len(body), 4096)]
+	p.DetectedLangs = []string{DetectLanguage(sample)}
+	if p.DetectedLangs[0] == LangMixed {
+		p.DetectedLangs = []string{LangEnglish, LangGerman, LangChinese}
+	}
+	return p
+}
 
-	// \f 一般来自 PDF 页面边界。
-	profile.FormFeedCount = strings.Count(text, "\f")
-
-	lines := strings.Split(text, "\n")
-	profile.TotalLines = len(lines)
-
-	// lengths 只统计非 fenced-code 行。
-	//
-	// 原因是大量代码行会严重改变普通文档的行长分布，
-	// 而 Profiler 的主要目标是判断文档结构。
-	lengths := make([]float64, 0, len(lines))
-
-	var fence documenttext.Fence
-	codeChars := 0
-
-	for _, line := range lines {
+// plainLines 跳过 AST 已确认的标题、代码、表格和公式，避免把其中的内容误当成普通章节。
+func (l *Layout) plainLines(ctx context.Context, start, end int, visit func(string, int)) {
+	position := start
+	for line := range strings.SplitAfterSeq(string(l.source[start:end]), "\n") {
 		if ctx.Err() != nil {
-			return profile
+			return
 		}
-		trimmed := strings.TrimSpace(line)
-
-		// 快速扫描围栏代码，代码内部不统计标题或章节信号。
-
-		if fence.Observe(trimmed) {
-			profile.HasCode = true
-
-			// 代码区域不参与标题识别与普通行长统计。
-			continue
+		i := sort.Search(len(l.excluded), func(i int) bool { return l.excluded[i].end > position })
+		if i == len(l.excluded) || position < l.excluded[i].start {
+			visit(strings.TrimSuffix(line, "\n"), position)
 		}
-
-		if fence.Active() {
-			codeChars += RuneLen(line)
-			continue
-		}
-
-		lineLen := RuneLen(line)
-		lengths = append(lengths, float64(lineLen))
-
-		// 已识别为 Markdown 标题的行不再重复计入其他结构信号。
-		if matchHeading(line, profile.MdHeadingCounts) {
-			profile.MdHeadingTotal++
-			continue
-		}
-
-		if NumberedSectionPattern.MatchString(line) {
-			profile.NumberedSectionCount++
-		}
-
-		if GermanChapterPattern.MatchString(line) {
-			profile.GermanChapterCount++
-		}
-
-		if EnglishChapterPattern.MatchString(line) {
-			profile.EnglishChapterCount++
-		}
-
-		if ChineseChapterPattern.MatchString(line) {
-			profile.ChineseChapterCount++
-		}
-
-		if AllCapsHeadingPattern.MatchString(line) {
-			profile.AllCapsShortLineCount++
-		}
-
-		if VisualSeparatorPattern.MatchString(line) {
-			profile.VisualSepCount++
-		}
-
-		if PageFooterPattern.MatchString(line) {
-			profile.RepeatedFooterCount++
-		}
-
-		// 使用两端竖线快速判断是否包含 Markdown 表格。
-		if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
-			profile.HasTables = true
-		}
+		position += RuneLen(line)
 	}
-
-	calculateLineStats(profile, lengths)
-
-	if profile.TotalChars > 0 {
-		profile.CodeRatio = float64(codeChars) / float64(profile.TotalChars)
-	}
-
-	// 画像中的空白计数使用非重叠统计，与完整边界检测的正则计数不同。
-	profile.BlankParagraphBreaks = strings.Count(text, "\n\n\n")
-
-	detectProfileLanguages(profile, text)
-
-	return profile
 }
 
-// matchHeading 判断 Markdown ATX 标题并累计对应层级的数量。
-func matchHeading(line string, counts map[int]int) bool {
-	match := MarkdownHeadingPattern.FindStringSubmatch(line)
-
-	if match == nil {
-		return false
-	}
-
-	level := len(match[1])
-
-	if level < 1 || level > 6 {
-		return false
-	}
-
-	counts[level]++
-
-	return true
-}
-
-// calculateLineStats 计算平均行长与总体标准差。
-func calculateLineStats(profile *DocProfile, lengths []float64) {
-	if len(lengths) == 0 {
-		return
-	}
-
-	var sum float64
-
-	for _, length := range lengths {
-		sum += length
-	}
-
-	profile.AvgLineLen = sum / float64(len(lengths))
-
-	var variance float64
-
-	for _, length := range lengths {
-		diff := length - profile.AvgLineLen
-		variance += diff * diff
-	}
-
-	variance /= float64(len(lengths))
-	profile.StdLineLen = math.Sqrt(variance)
-}
-
-// detectProfileLanguages 仅采样文档前 4096 字节，以限制语言判断的扫描成本。
-func detectProfileLanguages(profile *DocProfile, text string) {
-	const sampleSize = 4096
-
-	sample := text
-
-	if len(sample) > sampleSize {
-		sample = sample[:sampleSize]
-	}
-
-	lang := DetectLanguage(sample)
-
-	profile.DetectedLangs = []string{lang}
-
-	// 混合语言启用全部已支持的章节识别规则。
-	if lang == LangMixed {
-		profile.DetectedLangs = []string{LangEnglish, LangGerman, LangChinese}
-	}
+func (l *Layout) heuristicBoundaries(ctx context.Context, start, end int, languages []string) []int {
+	var points []int
+	patterns := ChapterPatternsForLangs(languages)
+	l.plainLines(ctx, start, end, func(line string, at int) {
+		matched := NumberedSectionPattern.MatchString(line) || AllCapsHeadingPattern.MatchString(line) || PageFooterPattern.MatchString(line)
+		for _, pattern := range patterns {
+			matched = matched || pattern.MatchString(line)
+		}
+		if matched {
+			points = append(points, at)
+		}
+		for i, r := range []rune(line) {
+			if r == '\f' {
+				points = append(points, at+i+1)
+			}
+		}
+	})
+	sort.Ints(points)
+	return points
 }

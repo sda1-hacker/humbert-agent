@@ -15,13 +15,16 @@ const (
 func Default() Config {
 	parser := documenttext.DefaultOptions()
 	parser.ExcludeHeadersAndFooters = true
+	parser.PreserveImages = true
 	parser.CacheDirectory = "auto"
 	return Config{
 		Database: Database{Host: "localhost", Port: 5432, Name: "humbert_rag", SSLMode: "disable"},
 		Postgres: (Postgres{}).Effective(),
-		Loader:   Loader{ParseOptions: parser, NormalizeLineEndings: true},
+		Loader:   Loader{ParseOptions: parser, NormalizeLineEndings: true, AssetDirectory: "auto", ImageRecognition: (ImageRecognition{}).Effective()},
 		Ingest:   (Ingest{}).Effective(),
-		Chunking: Chunking{Splitter: (Splitter{ChunkOverlap: DefaultChunkOverlap}).Effective(), ParentChild: true,
+		// 对齐 WeKnora 2c0d838 新建知识库预设；低层空策略仍保留递归语义。
+		Chunking: Chunking{Splitter: Splitter{Strategy: StrategyAuto, ChunkSize: DefaultChunkSize, ChunkOverlap: DefaultChunkOverlap,
+			Separators: []string{"\n\n", "\n", "。", "！", "？", ";", "；"}}, ParentChild: true,
 			ParentChunkSize: DefaultParentChunkSize, ChildChunkSize: DefaultChildChunkSize},
 		// 地址和超时留零值，加载后按实际选择的协议补齐，避免 OpenAI 默认值影响 Ollama。
 		Embedding:    Embedding{Provider: ProviderOpenAI, InputBudget: (Budget{}).Effective()},
@@ -34,6 +37,43 @@ func Default() Config {
 			FallbackMinScore: 0.15, MMRLambda: 0.7}).Effective(),
 		Search: (Search{ExpandParents: true}).Effective(),
 	}
+}
+
+// Effective 只补齐图片识别默认值；agent 路由的模型与凭据由执行阶段注入的 Registry 负责。
+func (c ImageRecognition) Effective() ImageRecognition {
+	c.Provider = normalizeName(c.Provider)
+	if c.Provider == "" {
+		c.Provider = ProviderAgent
+	}
+	if c.Pipeline == "" {
+		c.Pipeline = "default"
+	}
+	if len(c.Actions) == 0 {
+		c.Actions = []string{"caption", "ocr"}
+		if c.Provider == "tesseract" {
+			c.Actions = []string{"ocr"}
+		}
+	}
+	if c.MaxConcurrent == 0 {
+		c.MaxConcurrent = 2
+	}
+	if c.RetryAttempts == 0 {
+		c.RetryAttempts = 3
+	}
+	if c.RetryInterval == 0 {
+		c.RetryInterval = 250 * time.Millisecond
+	}
+	c.BaseURL, c.Model = trimBaseURL(c.BaseURL), trim(c.Model)
+	if c.Provider == ProviderOllama && c.BaseURL == "" {
+		c.BaseURL = DefaultOllamaURL
+	}
+	if c.Timeout == 0 {
+		c.Timeout = time.Minute
+	}
+	if c.MaxOutputTokens == 0 {
+		c.MaxOutputTokens = 4096
+	}
+	return c
 }
 
 // Effective 为未指定的导入限额补上默认值。

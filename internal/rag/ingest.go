@@ -120,16 +120,14 @@ func (s *Service) beginRequest(ctx context.Context, timeout time.Duration) (cont
 
 // fitInputs 在版本 ID 分配前按完整检索文本进一步切分，保留父块关系和原文字符坐标。
 // 标题本身超出预算时明确报错，不静默截断原文或来源。
-func (s *Service) fitInputs(ctx context.Context, batch *IngestionBatch) error {
+func (s *Service) fitInputs(ctx context.Context, batch *IngestionBatch, layout *chunker.Layout) error {
 	budget := s.config.InputBudget.Effective()
 	limit := min(budget.MaxInputTokens, budget.MaxBatchTokens)
-	layout, err := chunker.NewLayout(ctx, batch.Markdown)
-	if err != nil {
-		return err
-	}
 	update := func(record ChunkRecord, chunk chunker.Chunk) ChunkRecord {
 		record.Content, record.StartRune, record.EndRune = chunk.Content, chunk.Start, chunk.End
+		record.ContextHeader = chunk.ContextHeader
 		record.Metadata = retrieval.CloneMetadata(record.Metadata)
+		record.Metadata[retrieval.MetaContextHeader] = chunk.ContextHeader
 		record.Metadata[retrieval.MetaChunkStart], record.Metadata[retrieval.MetaChunkEnd] = chunk.Start, chunk.End
 		if len(batch.SourceBlocks) > 0 {
 			record.Metadata[documenttext.MetaSourceBlocks] = batch.SourceBlocks
@@ -154,6 +152,7 @@ func (s *Service) fitInputs(ctx context.Context, batch *IngestionBatch) error {
 		fits := func(chunk chunker.Chunk) (bool, error) {
 			record := original
 			record.Content, record.StartRune, record.EndRune = chunk.Content, chunk.Start, chunk.End
+			record.ContextHeader = chunk.ContextHeader
 			count := budget.CountTokens(indexDocument(*batch, record, s.config.InputBuilder).Content)
 			if count < 0 {
 				return false, errors.New("rag: tokenizer returned a negative count")
@@ -164,7 +163,7 @@ func (s *Service) fitInputs(ctx context.Context, batch *IngestionBatch) error {
 			// 软切分可能多次落入同一个原子区域；修复边界后不重复保存完全相同的块。
 			if len(out) > 0 {
 				last := out[len(out)-1]
-				if last.StartRune == chunk.Start && last.EndRune == chunk.End && last.ContextHeader == original.ContextHeader && last.ParentChunkID == original.ParentChunkID {
+				if last.StartRune == chunk.Start && last.EndRune == chunk.End && last.ContextHeader == chunk.ContextHeader && last.ParentChunkID == original.ParentChunkID {
 					return nil
 				}
 			}

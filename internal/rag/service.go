@@ -40,13 +40,13 @@ var (
 
 // ChunkRecord 保存权威正文和原文坐标；它不承担检索库接口的职责。
 type ChunkRecord struct {
-	// ID 分块的唯一身份，版本化导入时包含文档版本。
+	// ID 是跨检索后端的分块业务键，对应 PG 的 chunk_key；版本化导入时包含文档版本。
 	ID string
-	// DocumentID 所属文档的稳定 ID。
+	// DocumentID 是所属文档的稳定业务键，对应 PG 的 source_key，数据库外键另用 BIGINT。
 	DocumentID string
-	// ChunkType 普通正文块或父块类型。
+	// ChunkType 区分正文、父块与图片的 OCR/描述块。
 	ChunkType string
-	// ChunkIndex 同类分块在文档中的顺序编号。
+	// ChunkIndex 父块、检索子块各自编号；正文和图片共用子块序列，避免业务 ID 重复。
 	ChunkIndex int
 	// Content 权威分块正文，可能包含补充表头。
 	Content string
@@ -61,7 +61,7 @@ type ChunkRecord struct {
 }
 
 // IngestionBatch 是一个待发布版本；原子 Indexer 或 Publisher 保存元数据和分块。
-// Markdown 必须来自 Loader，仅用于内存中的范围校验和摘要计算，不写入文档主表。
+// Markdown 来自 Loader，末尾可附加独立的图片识别结果，仅用于内存中的范围校验和摘要计算，不写入主表。
 type IngestionBatch struct {
 	// Attempt 解析前预留的文档版本；非版本化导入为零。
 	Attempt int64
@@ -75,7 +75,7 @@ type IngestionBatch struct {
 	DocumentID string
 	// Title 是用于检索和展示的文档标题。
 	Title string
-	// Markdown 是 Loader 输出并统一换行后的完整正文。
+	// Markdown 是归一化正文及图片识别文本；普通正文块在识别前已固定，不把 OCR 混入其内容。
 	Markdown string
 	// SourceBlocks 只参与导入中的范围裁剪；文档主表与分块中均不保存全文位置列表。
 	SourceBlocks []documenttext.SourceBlock `json:"-"`
@@ -157,8 +157,10 @@ type IngestDocumentResult struct {
 	ChunkIDs   []string `json:"chunk_ids,omitempty"`
 
 	Diagnostics *chunker.Diagnostics `json:"diagnostics,omitempty"`
-	// Warnings 表示发布已成功，但旧索引清理等收尾操作未完成，不能据此重新向量化。
+	// Warnings 保留解析降级、未开启 OCR 和发布后清理警告；文档已发布，不能据此重跑整个向量化。
 	Warnings []string `json:"warnings,omitempty"`
+	// Images 返回实际图片/动作状态，混合文档部分失败时也不能显示为全部识别成功。
+	Images []ImageAsset `json:"images,omitempty"`
 }
 
 // IngestResponse 各文档的导入结果及父子块总数。
@@ -234,7 +236,7 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 		if err != nil {
 			return IngestResponse{}, err
 		}
-		if record.ParseStatus != DocumentFailed && record.ParseStatus != DocumentCancelled {
+		if record.ParseStatus != DocumentFailed && record.ParseStatus != DocumentCancelled && !hasFailedImages(record.Metadata) {
 			return IngestResponse{}, errors.New("rag: 只能重试已失败或已取消的导入")
 		}
 		file := record.SourceFile
@@ -398,6 +400,10 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 			batch IngestionBatch
 			diag  *chunker.Diagnostics
 		)
+		layout, layoutErr := chunker.NewLayout(ctx, markdown)
+		if layoutErr != nil {
+			return IngestResponse{}, layoutErr
+		}
 		processConfig := struct {
 			Version        string `json:"version"`
 			MaxInputTokens int    `json:"max_input_tokens"`
@@ -407,30 +413,30 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 			ParentChild    bool                `json:"parent_child"`
 			ParentSplitter *ragconfig.Splitter `json:"parent_splitter,omitempty"`
 			ChildSplitter  *ragconfig.Splitter `json:"child_splitter,omitempty"`
-		}{Version: "humbert-rag-v4", Splitter: baseCfg, ParentChild: req.ParentChild,
+		}{Version: "humbert-rag-v10-structures", Splitter: baseCfg, ParentChild: req.ParentChild,
 			MaxInputTokens: s.config.InputBudget.Effective().MaxInputTokens, MaxBatchTokens: s.config.InputBudget.Effective().MaxBatchTokens}
 
 		if req.ParentChild {
 			parentCfg, childCfg := baseCfg.ForParentChild(req.ParentChunkSize, req.ChildChunkSize)
 			processConfig.ParentSplitter, processConfig.ChildSplitter = &parentCfg, &childCfg
 
-			parentChild, diagnostics, splitErr := chunker.SplitParentChildContext(ctx, markdown, parentCfg, childCfg)
+			parentChild, diagnostics, splitErr := layout.SplitParentChild(ctx, parentCfg, childCfg, s.config.Ingest.MaxChunks)
 			if splitErr != nil {
+				if errors.Is(splitErr, chunker.ErrChunkLimit) {
+					return IngestResponse{}, fmt.Errorf("%w: more than %d chunks", ErrIngestLimit, s.config.Ingest.MaxChunks)
+				}
 				return IngestResponse{}, splitErr
-			}
-			if len(parentChild.Children) > s.config.Ingest.MaxChunks {
-				return IngestResponse{}, fmt.Errorf("%w: more than %d chunks", ErrIngestLimit, s.config.Ingest.MaxChunks)
 			}
 			diag = diagnostics
 
 			batch = buildParentChildBatch(req.CollectionID, sourceDoc, markdown, parentChild)
 		} else {
-			chunks, diagnostics, splitErr := chunker.SplitContext(ctx, markdown, baseCfg)
+			chunks, diagnostics, splitErr := layout.Split(ctx, baseCfg, s.config.Ingest.MaxChunks)
 			if splitErr != nil {
+				if errors.Is(splitErr, chunker.ErrChunkLimit) {
+					return IngestResponse{}, fmt.Errorf("%w: more than %d chunks", ErrIngestLimit, s.config.Ingest.MaxChunks)
+				}
 				return IngestResponse{}, splitErr
-			}
-			if len(chunks) > s.config.Ingest.MaxChunks {
-				return IngestResponse{}, fmt.Errorf("%w: more than %d chunks", ErrIngestLimit, s.config.Ingest.MaxChunks)
 			}
 			diag = diagnostics
 
@@ -442,8 +448,18 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 		if err := ValidateIngestionBatch(batch); err != nil {
 			return IngestResponse{}, err
 		}
-		if err := s.fitInputs(ctx, &batch); err != nil {
+		if err := s.fitInputs(ctx, &batch, layout); err != nil {
 			return IngestResponse{}, err
+		}
+		if assets, assetErr := imageAssets(batch.Metadata); assetErr != nil {
+			return IngestResponse{}, assetErr
+		} else if len(assets) > 0 {
+			if err := advance(StageImages); err != nil {
+				return IngestResponse{}, err
+			}
+			if err := s.enrichImages(ctx, &batch, req, attempt); err != nil {
+				return IngestResponse{}, err
+			}
 		}
 
 		batch.Attempt = attempt
@@ -451,7 +467,7 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 		if attempt > 0 {
 			qualifyChunkIDs(&batch)
 		}
-		batch.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(markdown)))
+		batch.ContentHash = fmt.Sprintf("%x", sha256.Sum256([]byte(batch.Markdown)))
 		batch.ProcessConfig, err = json.Marshal(processConfig)
 		if err != nil {
 			return IngestResponse{}, fmt.Errorf("encode effective process config: %w", err)
@@ -467,6 +483,11 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 			return IngestResponse{}, fmt.Errorf("store document %q: %w", documentID, err)
 		}
 
+		if parseWarnings, ok := sourceDoc.MetaData[MetaParserWarnings].([]string); ok {
+			warnings = append(parseWarnings, warnings...)
+		}
+		images, _ := imageAssets(batch.Metadata)
+		warnings = append(warnings, imageWarnings(images)...)
 		item := IngestDocumentResult{
 			Attempt:     attempt,
 			DocumentID:  documentID,
@@ -475,6 +496,7 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 			ChunkIDs:    ids,
 			Diagnostics: diag,
 			Warnings:    warnings,
+			Images:      images,
 		}
 
 		response.Documents = append(response.Documents, item)
@@ -567,26 +589,26 @@ func (s *Service) Search(ctx context.Context, req SearchRequest) (search.Respons
 	return result, err
 }
 
-// buildFlatBatch 将普通 Split() 结果转换成持久化模型。
-func buildFlatBatch(
-	collectionID string,
-	source *schema.Document,
-	markdown string,
-	chunks []chunker.Chunk,
-) IngestionBatch {
+// newIngestionBatch 统一两种切分策略的文档身份与元数据，避免来源处理逻辑分叉。
+// 全文位置表只留在本次导入内存中；落库时每个分块仅保存与自身范围相关的出处。
+func newIngestionBatch(collectionID string, source *schema.Document, markdown string, childCount int) IngestionBatch {
 	metadata := retrieval.CloneMetadata(source.MetaData)
 	delete(metadata, documenttext.MetaSourceBlocks)
-
-	batch := IngestionBatch{
+	blocks, _ := source.MetaData[documenttext.MetaSourceBlocks].([]documenttext.SourceBlock)
+	return IngestionBatch{
 		CollectionID: collectionID,
 		DocumentID:   source.ID,
 		Title:        documentTitle(source),
 		Markdown:     markdown,
 		Metadata:     metadata,
-		Children:     make([]ChunkRecord, 0, len(chunks)),
+		SourceBlocks: blocks,
+		Children:     make([]ChunkRecord, 0, childCount),
 	}
-	batch.SourceBlocks, _ = source.MetaData[documenttext.MetaSourceBlocks].([]documenttext.SourceBlock)
+}
 
+// buildFlatBatch 将普通切分结果转换成持久化模型。
+func buildFlatBatch(collectionID string, source *schema.Document, markdown string, chunks []chunker.Chunk) IngestionBatch {
+	batch := newIngestionBatch(collectionID, source, markdown, len(chunks))
 	for _, chunk := range chunks {
 		chunkID := fmt.Sprintf("%s#chunk-%06d", source.ID, chunk.Seq)
 
@@ -597,23 +619,9 @@ func buildFlatBatch(
 }
 
 // buildParentChildBatch 转换父子切分结果，保存父块身份与子块的关联关系。
-func buildParentChildBatch(
-	collectionID string,
-	source *schema.Document,
-	markdown string,
-	result chunker.ParentChildResult,
-) IngestionBatch {
-	batch := IngestionBatch{
-		CollectionID: collectionID,
-		DocumentID:   source.ID,
-		Title:        documentTitle(source),
-		Markdown:     markdown,
-		Metadata:     retrieval.CloneMetadata(source.MetaData),
-		Parents:      make([]ChunkRecord, 0, len(result.Parents)),
-		Children:     make([]ChunkRecord, 0, len(result.Children)),
-	}
-	delete(batch.Metadata, documenttext.MetaSourceBlocks)
-	batch.SourceBlocks, _ = source.MetaData[documenttext.MetaSourceBlocks].([]documenttext.SourceBlock)
+func buildParentChildBatch(collectionID string, source *schema.Document, markdown string, result chunker.ParentChildResult) IngestionBatch {
+	batch := newIngestionBatch(collectionID, source, markdown, len(result.Children))
+	batch.Parents = make([]ChunkRecord, 0, len(result.Parents))
 
 	parentIDs := make([]string, len(result.Parents))
 
@@ -648,6 +656,11 @@ func buildChunkRecord(
 	parentChunkID string,
 ) ChunkRecord {
 	metadata := retrieval.CloneMetadata(source.MetaData)
+	delete(metadata, "rag_image_assets")
+	delete(metadata, "rag_image_recognition")
+	delete(metadata, "rag_parse_diagnostics")
+	delete(metadata, "rag_parse_config")
+	delete(metadata, MetaParserWarnings)
 	documenttext.AttachLocators(metadata, chunk.Start, chunk.End)
 
 	metadata[retrieval.MetaSourceDocumentID] = source.ID

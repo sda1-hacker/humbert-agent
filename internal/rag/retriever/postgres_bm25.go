@@ -52,14 +52,14 @@ func (r *BM25Retriever) Retrieve(ctx context.Context, query string, opts ...eino
 // 仅检索当前知识库中启用的子块，再关联权威文档以保留当前版本和原文范围。
 const bm25SearchSQL = `
 SELECT
-    c.id,
-    c.document_id,
+    c.chunk_key,
+    d.source_key,
     c.content,
     c.context_header,
     c.chunk_index,
     c.start_rune,
     c.end_rune,
-    c.parent_chunk_id,
+    p.chunk_key,
     c.metadata || jsonb_build_object('rag_document_revision', d.revision::text),
     pdb.score(ri.id)::float8 AS score
 FROM retrieval_index ri
@@ -67,6 +67,7 @@ JOIN chunks c
   ON c.collection_id = ri.collection_id
  AND c.id = ri.chunk_id
 JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
+LEFT JOIN chunks p ON p.collection_id=c.collection_id AND p.id=c.parent_chunk_id
 WHERE ri.collection_id = $1
   AND ri.enabled = TRUE
   AND ri.search_content ||| $2::text

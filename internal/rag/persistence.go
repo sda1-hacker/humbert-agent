@@ -62,6 +62,7 @@ const (
 	StageSource    = "source"
 	StageParse     = "parse"
 	StageChunk     = "chunk"
+	StageImages    = "images"
 	StageIndex     = "index"
 	StageEmbedding = "embedding"
 	StageReady     = "ready"
@@ -88,10 +89,12 @@ type DocumentFailure struct {
 // ParseStatus 描述最近一次导入，Revision 描述已发布版本，失败重试期间两者可以不同。
 type DocumentRecord struct {
 	CollectionID string `json:"collection_id"`
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	Type         string `json:"type"`
+	// ID 是稳定业务键，对应 documents.source_key；数据库内部自增主键不参与 Eino 标识。
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Type  string `json:"type"`
 	SourceFile
+	// EmbeddingProfileID 返回模型档案指纹；数据库关联列保存档案行的 BIGINT 主键。
 	EmbeddingProfileID string `json:"embedding_profile_id"`
 	// Attempt 是最新版本栅栏，取消也会递增；Revision 才是当前已发布的版本。
 	Attempt       int64           `json:"attempt"`

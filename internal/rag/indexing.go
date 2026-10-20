@@ -106,20 +106,30 @@ func qualifyChunkIDs(batch *IngestionBatch) {
 	// 将逻辑知识库加入身份，避免两个知识库内相同文档 ID/版本互相覆盖。
 	namespace := sha256.Sum256([]byte(batch.CollectionID))
 	prefix := fmt.Sprintf("%s#c%x#v%d", batch.DocumentID, namespace[:16], batch.Attempt)
-	parents := make(map[string]string, len(batch.Parents))
+	ids := make(map[string]string, len(batch.Parents)+len(batch.Children))
 	for i := range batch.Parents {
 		parent := &batch.Parents[i]
-		id := fmt.Sprintf("%s#parent-%06d", prefix, parent.ChunkIndex)
-		parents[parent.ID], parent.ID = id, id
+		old := parent.ID
+		parent.ID = fmt.Sprintf("%s#parent-%06d", prefix, parent.ChunkIndex)
+		ids[old] = parent.ID
 	}
 	for i := range batch.Children {
 		child := &batch.Children[i]
+		old := child.ID
 		child.ID = fmt.Sprintf("%s#chunk-%06d", prefix, child.ChunkIndex)
-		if child.ParentChunkID != "" {
-			child.ParentChunkID = parents[child.ParentChunkID]
-			child.Metadata[retrieval.MetaParentChunkID] = child.ParentChunkID
+		ids[old] = child.ID
+	}
+	for _, records := range [][]ChunkRecord{batch.Parents, batch.Children} {
+		for i := range records {
+			child := &records[i]
+			if id, ok := ids[child.ParentChunkID]; ok {
+				child.ParentChunkID = id
+				child.Metadata[retrieval.MetaParentChunkID] = id
+			}
+			qualifyImageMetadata(child.Metadata, ids)
 		}
 	}
+	qualifyImageMetadata(batch.Metadata, ids)
 }
 
 // validateStoredIDs 检查索引器返回的 ID 与全部子块一一对应，拒绝改名或重复。

@@ -102,12 +102,23 @@ func ValidateIngestionBatch(batch IngestionBatch) error {
 	}
 
 	for _, child := range batch.Children {
-		if child.ChunkType != ChunkTypeText {
+		if child.ChunkType != ChunkTypeText && child.ChunkType != ChunkTypeImageOCR && child.ChunkType != ChunkTypeImageCaption {
 			return fmt.Errorf("%w: child %q has chunk type %q", ErrInvalidIngestionBatch, child.ID, child.ChunkType)
 		}
 
 		if err := validateRecord(child); err != nil {
 			return err
+		}
+		if child.ChunkType == ChunkTypeText {
+			parentIDs[child.ID] = child
+		}
+	}
+	for _, child := range batch.Children {
+		if child.ChunkType != ChunkTypeText {
+			images, err := imageAssets(map[string]any{MetaImageAssets: child.Metadata[MetaImageInfo]})
+			if err != nil || len(images) != 1 || child.ParentChunkID == "" || images[0].OwnerChunkID != child.ParentChunkID {
+				return fmt.Errorf("%w: image chunk %q is missing its asset/owner", ErrInvalidIngestionBatch, child.ID)
+			}
 		}
 
 		if child.ParentChunkID == "" {
@@ -118,7 +129,10 @@ func ValidateIngestionBatch(batch IngestionBatch) error {
 			return fmt.Errorf("%w: child %q -> %q", ErrUnknownParentChunk, child.ID, child.ParentChunkID)
 		}
 		parent := parentIDs[child.ParentChunkID]
-		if child.StartRune < parent.StartRune || child.EndRune > parent.EndRune {
+		if child.ChunkType == ChunkTypeText && parent.ChunkType != ChunkTypeParentText {
+			return fmt.Errorf("%w: text chunk must reference parent_text", ErrInvalidIngestionBatch)
+		}
+		if child.ChunkType == ChunkTypeText && (child.StartRune < parent.StartRune || child.EndRune > parent.EndRune) {
 			return fmt.Errorf("%w: child %q is outside parent source range", ErrInvalidIngestionBatch, child.ID)
 		}
 	}

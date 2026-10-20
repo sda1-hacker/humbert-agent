@@ -33,47 +33,35 @@ func FuseRRF(vectorResults, keywordResults []SearchResult, cfg ragconfig.RRF) []
 		return vectorOnlyResults(vectorResults)
 	}
 
-	vectorRanks := make(map[string]int, len(vectorResults))
-	keywordRanks := make(map[string]int, len(keywordResults))
-
-	for i := range vectorResults {
-		vectorRanks[vectorResults[i].IdentityKey()] = i + 1
-	}
-
-	for i := range keywordResults {
-		keywordRanks[keywordResults[i].IdentityKey()] = i + 1
-	}
-
-	// all 保存所有唯一 Chunk。
-	//
-	// 如果 Dense 与 Keyword 都有同一 Chunk，
-	// 优先以 Vector Result 的结构信息作为 base，
-	// 再补 KeywordScore。
+	// 以知识库、文档版本和分块身份去重；双路命中时沿用向量侧的正文与引用。
+	// 排名直接保存在结果中，Score 暂存本轮 RRF 贡献，避免另外维护两套排名映射。
 	all := make(map[string]SearchResult, len(vectorResults)+len(keywordResults))
 
-	for _, item := range vectorResults {
+	for i, item := range vectorResults {
 		item.VectorScore = item.Score
-		item.VectorRank = vectorRanks[item.IdentityKey()]
+		item.VectorRank = i + 1
 		item.MatchType = MatchVector
-
+		item.Score = cfg.VectorWeight / float64(cfg.K+item.VectorRank)
 		all[item.IdentityKey()] = item
 	}
 
-	for _, item := range keywordResults {
-		if existing, ok := all[item.IdentityKey()]; ok {
+	for i, item := range keywordResults {
+		key, rank := item.IdentityKey(), i+1
+		contribution := cfg.KeywordWeight / float64(cfg.K+rank)
+		if existing, ok := all[key]; ok {
 			existing.KeywordScore = item.Score
-			existing.KeywordRank = keywordRanks[item.IdentityKey()]
+			existing.KeywordRank = rank
 			existing.MatchType = MatchHybrid
-
-			all[item.IdentityKey()] = existing
+			existing.Score += contribution
+			all[key] = existing
 			continue
 		}
 
 		item.KeywordScore = item.Score
-		item.KeywordRank = keywordRanks[item.IdentityKey()]
+		item.KeywordRank = rank
 		item.MatchType = MatchKeyword
-
-		all[item.IdentityKey()] = item
+		item.Score = contribution
+		all[key] = item
 	}
 
 	// 一个 Chunk 同时排名两个 Retriever 第一时的理论最大 RRF。
@@ -81,19 +69,7 @@ func FuseRRF(vectorResults, keywordResults []SearchResult, cfg ragconfig.RRF) []
 
 	result := make([]SearchResult, 0, len(all))
 
-	for chunkID, item := range all {
-		rawRRF := 0.0
-
-		if rank := vectorRanks[chunkID]; rank > 0 {
-			rawRRF += cfg.VectorWeight / float64(cfg.K+rank)
-			item.VectorRank = rank
-		}
-
-		if rank := keywordRanks[chunkID]; rank > 0 {
-			rawRRF += cfg.KeywordWeight / float64(cfg.K+rank)
-			item.KeywordRank = rank
-		}
-
+	for _, item := range all {
 		if item.VectorRank > 0 && item.KeywordRank > 0 {
 			item.MatchType = MatchHybrid
 		} else if item.VectorRank > 0 {
@@ -102,11 +78,9 @@ func FuseRRF(vectorResults, keywordResults []SearchResult, cfg ragconfig.RRF) []
 			item.MatchType = MatchKeyword
 		}
 
-		item.Score = rawRRF / maxRRF
+		item.Score /= maxRRF
 
-		// 理论上不会超过1。
-		//
-		// 这里只处理极小的 floating point 误差。
+		// 按双路同时排名第一的理论最大值归一化；只修正极小的浮点误差。
 		if item.Score > 1 && item.Score < 1.0000000001 {
 			item.Score = 1
 		}

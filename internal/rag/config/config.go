@@ -2,6 +2,7 @@
 package config
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cloudwego/eino/components/document"
 	"github.com/cloudwego/eino/components/embedding"
+	"github.com/cloudwego/eino/components/model"
 
 	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
 )
@@ -19,7 +21,9 @@ import (
 const (
 	ProviderOpenAI            = "openai"                 // 使用 OpenAI 兼容的 embeddings 接口。
 	ProviderOllama            = "ollama"                 // 使用 Ollama 原生 /api/embed 接口。
+	ProviderAgent             = "agent"                  // 图片理解复用应用 Model Registry；不执行 Agent。
 	DefaultOllamaURL          = "http://localhost:11434" // Ollama 本地服务的默认基础地址。
+	StrategyLegacy            = "legacy"                 // WeKnora 递归策略的历史名称，与 recursive 等价。
 	StrategyAuto              = "auto"                   // 按文档结构尝试标题、章节和递归切分。
 	StrategyHeading           = "heading"                // 优先按 Markdown 标题切分，失败时递归兜底。
 	StrategyHeuristic         = "heuristic"              // 优先按章节、分页等信号切分，失败时递归兜底。
@@ -59,7 +63,7 @@ type Config struct {
 	// SourceDirectory 保存知识库原件；空值用系统用户配置目录下的 humbert-agent/rag/sources。
 	// 相对路径以进程工作目录解析；数据库只保存内容摘要命名的相对文件标识。
 	SourceDirectory string `mapstructure:"source_directory"`
-	// Loader 控制本地文件解析为完整 Markdown，不负责分块或调用模型。
+	// Loader 配置文档解析、图片保存及独立的图片识别；切分与调度仍由导入流程负责。
 	Loader Loader `mapstructure:"loader"`
 	// Ingest 限制导入并发、正文规模、子块数量和总耗时。
 	Ingest Ingest `mapstructure:"ingest"`
@@ -136,10 +140,54 @@ type Postgres struct {
 type Loader struct {
 	// ParseOptions 是附件与 RAG 共用的解析参数，包括文件大小、解压、OCR 和解析超时。
 	ParseOptions documenttext.ParserOptions `mapstructure:"parse_options"`
+	// AssetDirectory 保存转换图片的独立目录；空/auto 使用本机配置目录，数据库仅保留内容摘要文件名。
+	AssetDirectory string `mapstructure:"asset_directory"`
+	// RecognizeImages 默认 false；开启后在导入阶段按图处理，成功动作缓存、失败动作可重试。
+	RecognizeImages bool `mapstructure:"recognize_images"`
+	// ImageRecognition 集中配置本地 OCR 或视觉模型；与 Embedding 模型、Agent 凭据相互独立。
+	ImageRecognition ImageRecognition `mapstructure:"image_recognition"`
+	// ImageModels 由应用或示例注入统一模型注册表，不在 RAG 文件中复制用户的 API Key。
+	ImageModels ImageModelResolver `mapstructure:"-" json:"-" yaml:"-"`
+	// ImageText 可由 Go 注入图片识别器，最后一个参数是本次动作的提示词；不使用未知实现的持久缓存。
+	ImageText func(context.Context, []byte, string, string) (string, error) `mapstructure:"-" json:"-" yaml:"-"`
 	// NormalizeLineEndings 默认 true，将 CRLF/CR 统一为 LF 后再计算原文分块范围。
 	NormalizeLineEndings bool `mapstructure:"normalize_line_endings"`
 	// IDGenerator 仅由 Go 注入；nil 使用来源 URI 的稳定哈希生成原始文档 ID。
 	IDGenerator func(document.Source) string `mapstructure:"-" json:"-" yaml:"-"`
+}
+
+// ImageModelResolver 只依赖 Eino；实现方负责选择全局图片模型并管理凭据。
+// 返回基础模型、实际模型名、稳定配置指纹；client/maxOutput 保留导入任务自己的资源边界。
+type ImageModelResolver interface {
+	ImageModel(context.Context, *http.Client, int) (model.BaseChatModel, string, string, error)
+}
+
+// ImageRecognition 只负责将图片转换为可检索文字；没有工具权限，不生成最终问答。
+type ImageRecognition struct {
+	// Provider 默认 agent，复用应用的图片模型；也可独立选 ollama/openai，tesseract 仅显式启用。
+	Provider string `mapstructure:"provider"`
+	// Pipeline 默认 default：按 Actions 执行；smart_ocr 先生成描述/文字属性，再按需转录。
+	Pipeline string `mapstructure:"pipeline"`
+	// Actions 默认 [caption,ocr]；tesseract 默认仅 [ocr]，不能生成图片描述。
+	Actions []string `mapstructure:"actions"`
+	// MaxConcurrent 是同一导入中并行处理图片的上限，默认 2；整篇导入并发仍受 ingest 限制。
+	MaxConcurrent int `mapstructure:"max_concurrent"`
+	// RetryAttempts 是临时网络错误/限流的总尝试次数，默认 3；1 关闭重试，配置/鉴权错误不重试。
+	RetryAttempts int `mapstructure:"retry_attempts"`
+	// RetryInterval 是首次退避时间，默认 250ms，随后翻倍，取消/超时立即结束等待。
+	RetryInterval time.Duration `mapstructure:"retry_interval"`
+	// BaseURL 是视觉服务基础地址；Ollama 默认为本机 11434，OpenAI 兼容服务必须显式填写。
+	BaseURL string `mapstructure:"base_url"`
+	// Model 在 agent 路由自动读取；独立服务需填写支持图像输入的模型，Embedding 不能替代图片转文字。
+	Model string `mapstructure:"model"`
+	// APIKey 仅发送到显式配置的 OpenAI 兼容地址，不写入处理快照或识别缓存。
+	APIKey string `mapstructure:"api_key" json:"-" yaml:"-"`
+	// Revision 是模型部署版本；同名模型更新后修改它，使图片识别缓存失效。
+	Revision string `mapstructure:"revision"`
+	// Timeout 限制单个 OCR/描述动作（含重试）的时间，0 用 1m；同时受整次导入的 context 控制。
+	Timeout time.Duration `mapstructure:"timeout"`
+	// MaxOutputTokens 限制视觉模型输出，0 用 4096；本地 OCR 仍受解析输出字节上限约束。
+	MaxOutputTokens int `mapstructure:"max_output_tokens"`
 }
 
 // Ingest 限制单次导入规模、进程并发和包含排队在内的总时间。
@@ -148,7 +196,7 @@ type Ingest struct {
 	MaxConcurrent int `mapstructure:"max_concurrent"`
 	// MaxChunks 是每篇文档最终子块/普通块的数量上限，不计父块；0 用 5000。
 	MaxChunks int `mapstructure:"max_chunks"`
-	// MaxTextBytes 是解析、换行归一化后正文的 UTF-8 字节上限，0 用 8 MiB；不同于源文件大小。
+	// MaxTextBytes 是解析正文与图片识别文本的合计 UTF-8 字节上限，0 用 8 MiB；不同于源文件大小。
 	MaxTextBytes int `mapstructure:"max_text_bytes"`
 	// Timeout 包含排队、解析、分块、向量化及写入的总时间，0 用 10m。
 	Timeout time.Duration `mapstructure:"timeout"`
@@ -175,7 +223,7 @@ type Splitter struct {
 	ChunkOverlap int `mapstructure:"chunk_overlap"`
 	// Separators 按顺序尝试字面分隔符，空列表用空行、换行、中文句号；分隔符不会从原文丢失。
 	Separators []string `mapstructure:"separators"`
-	// Strategy 可选 auto/heading/heuristic/recursive；空值使用 recursive，前两种结构策略可递归兜底。
+	// Strategy 可选 auto/heading/heuristic/recursive（legacy 同 recursive）；空值使用 recursive，前两种结构策略可递归兜底。
 	Strategy string `mapstructure:"strategy"`
 	// TokenLimit 是按语言比例估算的切分目标，0 关闭；不是模型真实 tokenizer 的硬上限。
 	TokenLimit int `mapstructure:"token_limit"`

@@ -18,13 +18,18 @@ func EnsureCollectionProfile(ctx context.Context, pool *pgxpool.Pool, collection
 	if pool == nil {
 		return errors.New("rag: nil profile database pool")
 	}
+	return ensureCollectionProfile(ctx, pool, collectionID, profileID, profileJSON)
+}
+
+// ensureCollectionProfile 共用首次绑定与后续校验；同一知识库的模型档案受数据库锁保护。
+func ensureCollectionProfile(ctx context.Context, db database, collectionID, profileID, profileJSON string) error {
 	if strings.TrimSpace(collectionID) == "" || profileID == "" {
 		return errors.New("rag: missing collection/profile id")
 	}
 	if profileJSON == "" {
 		profileJSON = "{}"
 	}
-	tx, err := pool.Begin(ctx)
+	tx, err := db.Begin(ctx)
 	if err != nil {
 		return err
 	}
@@ -58,11 +63,7 @@ func (p *DocumentStore) ensureProfile(ctx context.Context, collectionID string) 
 	if p.config.ProfileID == "" {
 		return nil
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return errors.New("rag: profile binding requires a PostgreSQL pool")
-	}
-	return EnsureCollectionProfile(ctx, db.pool, collectionID, p.config.ProfileID, p.config.ProfileJSON)
+	return ensureCollectionProfile(ctx, p.db, collectionID, p.config.ProfileID, p.config.ProfileJSON)
 }
 
 // CheckCollectionProfile 是查询期的只读校验，已绑定的知识库不再每次搜索取得排他咨询锁。

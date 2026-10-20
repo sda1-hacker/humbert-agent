@@ -18,6 +18,9 @@ import (
 type Dependencies struct {
 	// Loader 解析真实文档的 Eino 加载器。
 	Loader document.Loader
+	// Images 在正文切分后独立处理图片；ImageStates 可把每图/每动作进度写入文档管理记录。
+	Images      ImageProcessor
+	ImageStates ImageTracker
 	// Indexer 接收统一检索文本的 Eino 索引器。
 	// 原生组件应在装配时配置知识库范围；是否支持 WithIndex 以具体组件为准。
 	Indexer indexer.Indexer
@@ -52,6 +55,8 @@ type Dependencies struct {
 // Service 是唯一的业务入口。提供导入、检索及文档管理，不再包装另一层 Service。
 type Service struct {
 	loader         document.Loader
+	images         ImageProcessor
+	imageStates    ImageTracker
 	indexer        indexer.Indexer
 	config         Config
 	chunks         ChunkReader
@@ -124,7 +129,7 @@ func New(ctx context.Context, deps Dependencies) (*Service, error) {
 	}
 	stopping, stop := context.WithCancel(context.Background())
 	return &Service{
-		loader: deps.Loader, indexer: deps.Indexer, config: deps.Config,
+		loader: deps.Loader, images: deps.Images, imageStates: deps.ImageStates, indexer: deps.Indexer, config: deps.Config,
 		chunks: deps.ChunkReader, lifecycle: deps.Lifecycle, publisher: deps.Publisher,
 		sources: deps.Sources, documents: deps.Documents,
 		beforePublish: deps.BeforePublish, discardAttempt: deps.DiscardAttempt, removeIndex: deps.RemoveIndex,
@@ -165,7 +170,7 @@ func (s *Service) RecoverDocuments(ctx context.Context, collectionID string) (in
 	return s.documents.RecoverDocuments(ctx, collectionID)
 }
 
-// ListChunks 返回已发布的普通分块，供展示和人工标注使用。
+// ListChunks 返回已发布的正文及图片 OCR/描述块，供展示和人工标注使用。
 func (s *Service) ListChunks(ctx context.Context, collectionID, documentID string) ([]ChunkRecord, error) {
 	ctx, finish, err := s.beginRequest(ctx, 0)
 	if err != nil {

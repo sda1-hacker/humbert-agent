@@ -3,126 +3,284 @@ package chunker
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/gohugoio/hugo-goldmark-extensions/passthrough"
 	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
+	"github.com/yuin/goldmark/ast"
+	tableast "github.com/yuin/goldmark/extension/ast"
 )
 
-var ErrStructureBudget = errors.New("rag chunker: indivisible table row, formula or link exceeds input budget")
+var ErrStructureBudget = errors.New("rag chunker: indivisible table row/group, formula or link exceeds input budget")
 
-type fenceRange struct {
+// span 在 Layout 中统一使用 Unicode 字符坐标，构建期间先接收 AST 的字节坐标。
+type span struct{ start, end int }
+type heading struct {
 	span
-	headerEnd, closeStart int
-	header, marker        string
+	level int
+	title string
+	path  string
+}
+type codeRange struct {
+	span
+	body           span
+	header, suffix string
 }
 type tableRange struct {
 	span
-	headerEnd, promoteAfter int
-	header                  string
+	headerRange, promoted span
+	header                string
+	closing               string // HTML 表格续块的结束标签；Markdown 表格留空。
 }
 
-// Layout 一次建立原文结构索引，二次预算切分复用它；合成表头和围栏不占原文坐标。
+// Layout 是整篇文档的结构索引。父块、子块和预算切分共用它，不重新解析被截断的 Markdown。
 type Layout struct {
-	source []rune
-	atoms  []span
-	fences []fenceRange
-	tables []tableRange
+	source    []rune
+	atoms     []span
+	blocks    []span
+	excluded  []span
+	dividers  []span
+	headings  []heading
+	codes     []codeRange
+	codeUnits []span // 按 WeKnora 的 7500 字符上限保护代码片段，硬 token 预算仍可继续拆分。
+	tables    []tableRange
 }
 
-// Quote 直接截取原文字符范围的短引文，避免给每个引用重复编码整篇正文。
-func (l *Layout) Quote(start, end int) string {
-	return strings.TrimSpace(string(l.source[start:min(end, start+128)]))
-}
-
-func (l *Layout) clippedFence(start, end int) bool {
-	index := sort.Search(len(l.fences), func(i int) bool { return l.fences[i].end > start })
-	for _, block := range l.fences[index:] {
-		if block.start >= end {
-			break
-		}
-		if start > block.start || end < block.end {
-			return true
-		}
-	}
-	return false
-}
-
-func NewLayout(ctx context.Context, text string) (*Layout, error) {
-	if err := ctx.Err(); err != nil {
+func NewLayout(ctx context.Context, source string) (*Layout, error) {
+	md, err := documenttext.ParseMarkdown(ctx, source)
+	if err != nil {
 		return nil, err
 	}
-	layout := &Layout{source: []rune(text)}
-	var fence documenttext.Fence
-	offset := 0
-	lines := strings.SplitAfter(text, "\n")
-	for i, line := range lines {
+	l := &Layout{source: []rune(source)}
+	lineEnd := func(start int) int {
+		if next := strings.IndexByte(source[start:], '\n'); next >= 0 {
+			return start + next + 1
+		}
+		return len(source)
+	}
+	err = ast.Walk(md.Root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return ast.WalkStop, err
 		}
-		end := offset + RuneLen(line)
-		active := fence.Active()
-		if fence.Observe(line) {
-			if !active {
-				layout.fences = append(layout.fences, fenceRange{span: span{offset, len(layout.source)}, headerEnd: end, closeStart: len(layout.source), header: line, marker: fence.Marker()})
-			} else {
-				last := &layout.fences[len(layout.fences)-1]
-				last.closeStart, last.end = offset, end
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		r := md.Range(n)
+		region := span{r.Start, r.End}
+		if region.end <= region.start {
+			return ast.WalkContinue, nil
+		}
+		if n.Type() == ast.TypeBlock && (n.FirstChild() == nil || n.FirstChild().Type() == ast.TypeInline) {
+			l.blocks = append(l.blocks, region)
+		}
+		switch node := n.(type) {
+		case *ast.ThematicBreak:
+			l.dividers = append(l.dividers, region)
+			l.atoms = append(l.atoms, region)
+		case *ast.Heading:
+			l.headings = append(l.headings, heading{span: region, level: node.Level, title: strings.TrimSpace(string(node.Lines().Value(md.Source)))})
+			l.atoms = append(l.atoms, region)
+			l.excluded = append(l.excluded, region)
+		case *ast.FencedCodeBlock, *ast.CodeBlock:
+			// 缩进代码跨块时输出为围栏代码；选择不会与正文冲突的标记，仅用于序列化。
+			longest, run := 2, 0
+			for _, r := range source[region.start:region.end] {
+				if r == '~' {
+					run++
+					longest = max(longest, run)
+				} else {
+					run = 0
+				}
+			}
+			fenceText := strings.Repeat("~", longest+1)
+			block := codeRange{span: region, body: region, header: fenceText + "\n", suffix: "\n" + fenceText + "\n"}
+			if fence, ok := node.(*ast.FencedCodeBlock); ok {
+				block.body.start, block.body.end = lineEnd(region.start), lineEnd(region.start)
+				if node.Lines().Len() > 0 {
+					block.body.end = node.Lines().At(node.Lines().Len() - 1).Stop
+				}
+				block.header = source[region.start:block.body.start]
+				// 围栏和语言范围由 Goldmark 确认；这里只复制标记，用于跨块输出。
+				markerEnd := block.body.start
+				if fence.Info != nil {
+					markerEnd = fence.Info.Segment.Start
+				}
+				marker := strings.TrimSpace(source[node.Pos():markerEnd])
+				block.suffix = "\n" + source[region.start:node.Pos()] + marker + "\n"
+				l.atoms = append(l.atoms, span{region.start, block.body.start})
+				if block.body.end < region.end {
+					l.atoms = append(l.atoms, span{block.body.end, region.end})
+				}
+			}
+			l.codes = append(l.codes, block)
+			l.excluded = append(l.excluded, region)
+			return ast.WalkSkipChildren, nil
+		case *tableast.Table:
+			header := md.Range(node.FirstChild())
+			region.start = header.Start
+			table := tableRange{span: region, headerRange: span{header.Start, lineEnd(header.End)}}
+			table.header = source[header.Start:table.headerRange.end]
+			l.atoms = append(l.atoms, table.headerRange)
+			// 空表头仅在后续块补充首行列名；原文和引用坐标保持不变。
+			empty := true
+			for cell := node.FirstChild().FirstChild(); cell != nil; cell = cell.NextSibling() {
+				empty = empty && strings.TrimSpace(string(cell.Lines().Value(md.Source))) == ""
+			}
+			for row := node.FirstChild().NextSibling(); row != nil; row = row.NextSibling() {
+				location := md.Range(row)
+				l.atoms = append(l.atoms, span{location.Start, location.End})
+				if empty {
+					table.header = source[location.Start:location.End] + source[header.End:table.headerRange.end]
+					table.promoted = span{location.Start, location.End}
+					empty = false
+				}
+			}
+			l.tables = append(l.tables, table)
+			l.excluded = append(l.excluded, region)
+			l.blocks = append(l.blocks, region)
+			return ast.WalkSkipChildren, nil
+		case *ast.HTMLBlock:
+			value := source[region.start:region.end]
+			locations := documenttext.HTMLTableRanges(value)
+			if len(locations) == 1 && strings.TrimSpace(value[:locations[0][0]]) == "" && strings.TrimSpace(value[locations[0][1]:]) == "" {
+				location := locations[0]
+				if table, ok := documenttext.ParseHTMLTable(value[location[0]:location[1]]); ok {
+					base := region.start + location[0]
+					t := tableRange{span: region, headerRange: span{region.start, base + table.HeaderEnd}, header: value[:location[0]] + table.Header, closing: table.Closing}
+					l.tables = append(l.tables, t)
+					l.atoms = append(l.atoms, t.headerRange)
+					for _, row := range table.Rows {
+						l.atoms = append(l.atoms, span{base + row.Start, base + row.End})
+					}
+					l.excluded = append(l.excluded, region)
+					return ast.WalkSkipChildren, nil
+				}
+			}
+			// 嵌套表、无界 rowspan 或不完整 HTML 无法安全逐行拆分，保留整体并由硬预算明确拒绝。
+			l.atoms = append(l.atoms, region)
+			l.excluded = append(l.excluded, region)
+			return ast.WalkSkipChildren, nil
+		case *passthrough.PassthroughBlock, *passthrough.PassthroughInline, *ast.Link, *ast.Image, *ast.CodeSpan, *ast.AutoLink:
+			l.atoms = append(l.atoms, region)
+			l.excluded = append(l.excluded, region)
+			return ast.WalkSkipChildren, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// 只转换实际结构端点，按原文扫描一次，避免逐节点从全文开头统计中文字符。
+	var regions []*span
+	for _, list := range [][]span{l.atoms, l.blocks, l.excluded, l.dividers} {
+		for i := range list {
+			regions = append(regions, &list[i])
+		}
+	}
+	for i := range l.headings {
+		regions = append(regions, &l.headings[i].span)
+	}
+	for i := range l.codes {
+		regions = append(regions, &l.codes[i].span, &l.codes[i].body)
+	}
+	for i := range l.tables {
+		regions = append(regions, &l.tables[i].span, &l.tables[i].headerRange, &l.tables[i].promoted)
+	}
+	if err := convertRanges(ctx, source, regions); err != nil {
+		return nil, err
+	}
+	for _, code := range l.codes {
+		for at := code.start; at < code.end; {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			stop := min(at+7500, code.end)
+			if stop < code.end {
+				// 与参考实现相同，在上限前 200 字符内寻找自然行尾，避免为大代码块生成大量微小子块。
+				for i := stop - 1; i > max(at, stop-200); i-- {
+					if l.source[i] == '\n' {
+						stop = i + 1
+						break
+					}
+				}
+			}
+			l.codeUnits = append(l.codeUnits, span{at, stop})
+			at = stop
+		}
+	}
+	l.atoms = mergeSpans(l.atoms)
+	l.excluded = mergeSpans(l.excluded)
+	l.blocks = mergeSpans(l.blocks)
+	sort.Slice(l.headings, func(i, j int) bool { return l.headings[i].start < l.headings[j].start })
+	var path [6]string
+	for i := range l.headings {
+		h := &l.headings[i]
+		path[h.level-1] = strings.Repeat("#", h.level) + " " + h.title
+		clear(path[h.level:])
+		var lines []string
+		for _, title := range path {
+			if title != "" {
+				lines = append(lines, title)
 			}
 		}
-		if !active && !fence.Active() && i+1 < len(lines) && defaultHeaderHooks[0].startPattern.MatchString(line+lines[i+1]) {
-			header := line + lines[i+1]
-			table := tableRange{span: span{offset, offset + RuneLen(header)}, headerEnd: offset + RuneLen(header), header: header}
-			// 沿用已有空表头修复规则，后续切片重复真实列名；第一条原文行自身仍按原样保留。
-			if isEmptyTableHeaderRow(header) && i+2 < len(lines) && tableRowPattern.MatchString(strings.TrimSpace(lines[i+2])) {
-				table.header = strings.TrimRight(lines[i+2], "\n") + "\n" + extractSeparatorLine(header)
-				table.promoteAfter = table.headerEnd + RuneLen(lines[i+2])
-			}
-			layout.tables = append(layout.tables, table)
-		}
-		if len(layout.tables) > 0 {
-			last := &layout.tables[len(layout.tables)-1]
-			if offset >= last.headerEnd && offset == last.end && tableRowPattern.MatchString(strings.TrimSpace(line)) && !headerColumnMismatch(last.header, line) {
-				last.end = end
-			}
-		}
-		offset = end
+		h.path = strings.Join(lines, "\n")
 	}
-	for _, atom := range protectedSpansRune(text, protectedSpansContext(ctx, text)) {
-		index := sort.Search(len(layout.fences), func(i int) bool { return layout.fences[i].end > atom.start })
-		if index < len(layout.fences) && layout.fences[index].start <= atom.start {
-			continue // 代码块可以切分，但会自动补齐前后围栏；代码内的表格和链接按代码处理。
-		}
-		layout.atoms = append(layout.atoms, atom)
+	return l, ctx.Err()
+}
+
+func convertRanges(ctx context.Context, source string, ranges []*span) error {
+	points := make([]int, 0, 2*len(ranges))
+	for _, r := range ranges {
+		points = append(points, r.start, r.end)
 	}
-	for _, block := range layout.fences {
-		layout.atoms = append(layout.atoms, span{block.start, block.headerEnd})
-		if block.closeStart < block.end {
-			layout.atoms = append(layout.atoms, span{block.closeStart, block.end})
+	slices.Sort(points)
+	offsets := make(map[int]int, len(points))
+	bytePos, runePos := 0, 0
+	for _, point := range slices.Compact(points) {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		runePos += utf8.RuneCountInString(source[bytePos:point])
+		offsets[point], bytePos = runePos, point
 	}
-	sort.Slice(layout.atoms, func(i, j int) bool { return layout.atoms[i].start < layout.atoms[j].start })
-	merged := layout.atoms[:0]
-	for _, atom := range layout.atoms {
-		if len(merged) > 0 && atom.start < merged[len(merged)-1].end {
-			merged[len(merged)-1].end = max(merged[len(merged)-1].end, atom.end)
+	for _, r := range ranges {
+		r.start, r.end = offsets[r.start], offsets[r.end]
+	}
+	return nil
+}
+
+func mergeSpans(spans []span) []span {
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	merged := spans[:0]
+	for _, r := range spans {
+		if r.end <= r.start {
+			continue
+		}
+		if len(merged) > 0 && r.start < merged[len(merged)-1].end {
+			merged[len(merged)-1].end = max(merged[len(merged)-1].end, r.end)
 		} else {
-			merged = append(merged, atom)
+			merged = append(merged, r)
 		}
 	}
-	layout.atoms = merged
-	return layout, ctx.Err()
+	return merged
 }
 
 func (l *Layout) atomAt(position int) (span, bool) {
-	index := sort.Search(len(l.atoms), func(i int) bool { return l.atoms[i].end > position })
-	if index < len(l.atoms) && l.atoms[index].start < position {
-		return l.atoms[index], true
+	i := sort.Search(len(l.atoms), func(i int) bool { return l.atoms[i].end > position })
+	if i < len(l.atoms) && l.atoms[i].start < position {
+		return l.atoms[i], true
 	}
 	return span{}, false
 }
 
-// Normalize 修复上游软切分落在结构内部的边界，并按完整原文范围重新渲染。
+// Quote 使用原文短引文，合成表头和围栏不占用新的原文坐标。
+func (l *Layout) Quote(start, end int) string {
+	return strings.TrimSpace(string(l.source[start:min(end, start+128)]))
+}
+
 func (l *Layout) Normalize(chunk Chunk) Chunk {
 	if atom, ok := l.atomAt(chunk.Start); ok {
 		chunk.Start = atom.start
@@ -131,33 +289,38 @@ func (l *Layout) Normalize(chunk Chunk) Chunk {
 		chunk.End = atom.end
 	}
 	chunk.Content = l.render(chunk.Start, chunk.End)
+	chunk.ContextHeader = l.header(chunk.Start, chunk.End)
 	return chunk
 }
 
 func (l *Layout) render(start, end int) string {
 	var prefix, suffix string
-	index := sort.Search(len(l.fences), func(i int) bool { return l.fences[i].end > start })
-	for _, block := range l.fences[index:] {
+	i := sort.Search(len(l.codes), func(i int) bool { return l.codes[i].end > start })
+	for _, block := range l.codes[i:] {
 		if block.start >= end {
 			break
 		}
 		if start > block.start && start < block.end {
-			prefix = strings.TrimRight(block.header, "\n") + "\n"
+			prefix = block.header
 		}
-		if end >= block.headerEnd && (end <= block.closeStart || block.closeStart == block.end) {
-			suffix = "\n" + block.marker + "\n"
+		if end >= block.body.start && end <= block.body.end {
+			suffix = block.suffix
 		}
 	}
-	index = sort.Search(len(l.tables), func(i int) bool { return l.tables[i].end > start })
-	if prefix == "" && index < len(l.tables) {
-		table := l.tables[index]
-		if start >= table.headerEnd && start < table.end {
-			header := table.header
-			if table.promoteAfter > start {
-				header = string(l.source[table.start:table.headerEnd])
+	i = sort.Search(len(l.tables), func(i int) bool { return l.tables[i].end > start })
+	if i < len(l.tables) {
+		t := l.tables[i]
+		if prefix == "" && start >= t.headerRange.end && start < t.end {
+			prefix = t.header
+			if t.promoted.end > start {
+				prefix = string(l.source[t.headerRange.start:t.headerRange.end])
 			}
-			prefix = strings.TrimRight(header, "\n") + "\n"
 		}
+	}
+	// 开头和结尾可能落在不同表格里，结束标签必须按 end 单独查找。
+	i = sort.Search(len(l.tables), func(i int) bool { return l.tables[i].end > end })
+	if i < len(l.tables) && end > l.tables[i].start && l.tables[i].closing != "" {
+		suffix = l.tables[i].closing
 	}
 	return prefix + string(l.source[start:end]) + suffix
 }
@@ -187,6 +350,7 @@ func (l *Layout) Fit(ctx context.Context, original Chunk, fits func(Chunk) (bool
 			}
 			part.Start, part.End = start, end
 			part.Content = l.render(start, end)
+			part.ContextHeader = l.header(start, end) // 硬预算再次细分后，标题路径也必须按新范围重算。
 			return fits(part)
 		}
 		best, high := start, min(start+256, original.End)

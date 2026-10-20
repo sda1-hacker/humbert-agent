@@ -2,10 +2,51 @@ package models
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"net/http"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 )
+
+// ImageModel 复用“设置 → 多媒体”的图片模型。只创建无工具的 Eino 基础实例，不启动 Agent。
+// 返回实例、模型名和稳定配置指纹；指纹不含凭据，也不使用重启会归零的 Registry revision。
+func (r *Registry) ImageModel(ctx context.Context, client *http.Client, maxOutput int) (einomodel.BaseChatModel, string, string, error) {
+	if ctx == nil {
+		return nil, "", "", fmt.Errorf("图片模型 context.Context 不能为空")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", "", err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	route, err := r.store.MultimediaConfig(ctx)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if route.ImageModelID == "" {
+		return nil, "", "", fmt.Errorf("请先在设置 → 多媒体中选择图片模型")
+	}
+	resolved, err := r.store.ResolveModel(ctx, route.ImageModelID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	if !resolved.Model.Enabled || !EffectiveCapabilities(resolved.Provider.Type, resolved.Model.ModelName, resolved.Model.Capabilities).Vision {
+		return nil, "", "", fmt.Errorf("配置的图片模型未启用或不支持视觉输入")
+	}
+	if maxOutput > 0 {
+		resolved.Model.MaxOutputTokens = min(resolved.Model.MaxOutputTokens, maxOutput)
+	}
+	instance, err := r.factory.create(ctx, resolved, client)
+	if err != nil {
+		return nil, "", "", err
+	}
+	// 模型标识、输出预算或服务地址改变才更新指纹；改显示名/无关模型不使成功识别缓存失效。
+	profile, _ := json.Marshal([]any{"image-model-v1", resolved.Model.ID, resolved.Provider.ID, resolved.Provider.Type, resolved.Provider.BaseURL,
+		resolved.Model.ModelName, resolved.Model.MaxOutputTokens})
+	return instance, resolved.Model.ModelName, fmt.Sprintf("sha256:%x", sha256.Sum256(profile)), nil
+}
 
 // RuntimeSnapshot 是 ModelRegistry 在一个配置 Revision 下冻结的完整模型运行信息。
 //

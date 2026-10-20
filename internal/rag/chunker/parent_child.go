@@ -2,182 +2,59 @@ package chunker
 
 import (
 	"context"
-	"strings"
 
 	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
 
-// SplitParentChild 先切父块，再切用于检索的子块；完全重复的单一父块不保存。
+// SplitParentChild 先切父块，再切检索子块；完全相同的单一父块不重复保存。
 func SplitParentChild(text string, parentCfg, childCfg ragconfig.Splitter) ParentChildResult {
-	result, _, _ := splitParentChild(context.Background(), text, parentCfg, childCfg, false)
+	result, _, _ := SplitParentChildContext(context.Background(), text, parentCfg, childCfg)
 	return result
 }
 
-// SplitParentChildWithDiagnostics 返回父子分块和父块策略诊断，子块仍独立选择策略。
-func SplitParentChildWithDiagnostics(
-	text string,
-	parentCfg, childCfg ragconfig.Splitter,
-) (ParentChildResult, *Diagnostics) {
-	result, diag, _ := splitParentChild(context.Background(), text, parentCfg, childCfg, true)
+func SplitParentChildWithDiagnostics(text string, parentCfg, childCfg ragconfig.Splitter) (ParentChildResult, *Diagnostics) {
+	result, diag, _ := SplitParentChildContext(context.Background(), text, parentCfg, childCfg)
 	return result, diag
 }
 
-// SplitParentChildContext 将取消传入父子切分的内部循环，供有生命周期的导入任务使用。
+// SplitParentChildContext 全程复用一份 AST 和全文坐标，子块自动继承正确的标题、表头及代码围栏。
 func SplitParentChildContext(ctx context.Context, text string, parentCfg, childCfg ragconfig.Splitter) (ParentChildResult, *Diagnostics, error) {
-	return splitParentChild(ctx, text, parentCfg, childCfg, true)
-}
-
-// splitParentChild 共用父子切分流程，并将子块范围映射回整篇原文。
-func splitParentChild(
-	ctx context.Context,
-	text string,
-	parentCfg, childCfg ragconfig.Splitter,
-	withDiagnostics bool,
-) (ParentChildResult, *Diagnostics, error) {
-	if err := ctx.Err(); err != nil {
-		return ParentChildResult{}, nil, err
-	}
-	if text == "" {
-		if withDiagnostics {
-			return ParentChildResult{}, &Diagnostics{SelectedTier: TierLegacy}, nil
-		}
-
-		return ParentChildResult{}, nil, nil
-	}
-
-	// 父子配置都应用默认值，子块还按近似 token 预算收紧大小。
-	parentCfg = ensureDefaults(parentCfg)
-	childCfg = ensureDefaults(childCfg)
-
-	var (
-		parents []Chunk
-		diag    *Diagnostics
-	)
-
-	// -------------------------------------------------------------------------
-	// 第一步：切 Parent。
-	// -------------------------------------------------------------------------
-
-	var err error
-	parents, diag, err = SplitContext(ctx, text, parentCfg)
-	if err != nil {
-		return ParentChildResult{}, diag, err
-	}
-	if !withDiagnostics {
-		diag = nil
-	}
-
-	if len(parents) == 0 {
-		return ParentChildResult{}, diag, ctx.Err()
-	}
-
-	// 只有产生不同子块的父块才保存，避免重复持久化完全相同的内容。
-	var newParents []Chunk
-
-	// children 是最终真正用于检索的小块。
-	var children []ChildChunk
-
-	// Child.Seq 必须在整个文档范围内连续，
-	// 而不是每个 Parent 都从0重新开始。
-	childSeq := 0
 	layout, err := NewLayout(ctx, text)
 	if err != nil {
+		return ParentChildResult{}, nil, err
+	}
+	return layout.SplitParentChild(ctx, parentCfg, childCfg, 0)
+}
+
+// SplitParentChild 共用布局与全局子块预算；每个父块不会重新获得完整的 MaxChunks 额度。
+func (layout *Layout) SplitParentChild(ctx context.Context, parentCfg, childCfg ragconfig.Splitter, maxChunks int) (ParentChildResult, *Diagnostics, error) {
+	parents, diag, err := layout.split(ctx, 0, len(layout.source), parentCfg, maxChunks)
+	if err != nil {
 		return ParentChildResult{}, diag, err
 	}
-	source := layout.source
-	lang := ""
-	if childCfg.TokenLimit > 0 {
-		lang = tokenLanguage(text, childCfg)
-	}
-
+	var result ParentChildResult
 	for _, parent := range parents {
-		if err := ctx.Err(); err != nil {
-			return ParentChildResult{}, diag, err
+		remaining := 0
+		if maxChunks > 0 {
+			remaining = maxChunks - len(result.Children)
+			if remaining <= 0 {
+				return ParentChildResult{}, diag, ErrChunkLimit
+			}
 		}
-		// 子块继续使用自己的策略，可根据父块局部结构选择更细的标题路径。
-
-		// 正文可能含补充表头，子块切分必须使用原文范围，才能保持局部坐标正确。
-		body := string(source[parent.Start:parent.End])
-		localCfg := childCfg
-		if layout.clippedFence(parent.Start, parent.End) {
-			// 大代码块跨父块时局部可能没有开头围栏，不能把其中的 # 注释误认为文档标题。
-			localCfg.Strategy = ragconfig.StrategyRecursive
-		}
-		subs, _, err := SplitContext(ctx, body, localCfg)
+		children, _, err := layout.split(ctx, parent.Start, parent.End, childCfg, remaining)
 		if err != nil {
 			return ParentChildResult{}, diag, err
 		}
-		prefix := ""
-		if strings.HasSuffix(parent.Content, body) {
-			prefix = strings.TrimSuffix(parent.Content, body)
+		index := -1
+		if len(children) > 1 || (len(children) == 1 && children[0].Content != parent.Content) {
+			index = len(result.Parents)
+			parent.Seq = index
+			result.Parents = append(result.Parents, parent)
 		}
-		for i := range subs {
-			if prefix != "" && !headerAlreadyPresent(prefix, subs[i].Content, "") && !headerColumnMismatch(prefix, subs[i].Content) {
-				subs[i].Content = prefix + subs[i].Content
-			}
-		}
-
-		// -1 表示这个 Child 没有必要关联一个单独保存的 Parent。
-		parentIndex := -1
-
-		// 多个子块或单个不同子块需要保留父块；完全相同的单一子块不保存父块。
-
-		if len(subs) > 1 || (len(subs) == 1 && subs[0].Content != parent.Content) {
-			parentIndex = len(newParents)
-			newParents = append(newParents, parent)
-		}
-
-		for _, sub := range subs {
-			if err := ctx.Err(); err != nil {
-				return ParentChildResult{}, diag, err
-			}
-			// 子块局部坐标加上父块原文起点，转换为整篇文档的字符范围。
-
-			sub.Start += parent.Start
-			sub.End += parent.Start
-
-			// 合并父块外层标题和子块局部标题，去掉连接处重复行。
-
-			sub.ContextHeader = mergeBreadcrumbs(parent.ContextHeader, sub.ContextHeader)
-
-			// 补充父块表头与标题路径后，再检查完整子块的近似预算。
-			for _, part := range enforceTokenTargetOnRunes(ctx, source, []Chunk{sub}, childCfg, lang) {
-				part.Seq = childSeq
-				children = append(children, ChildChunk{Chunk: part, ParentIndex: parentIndex})
-				childSeq++
-			}
+		for _, child := range children {
+			child.Seq = len(result.Children)
+			result.Children = append(result.Children, ChildChunk{Chunk: child, ParentIndex: index})
 		}
 	}
-
-	return ParentChildResult{Parents: newParents, Children: children}, diag, ctx.Err()
-}
-
-// mergeBreadcrumbs 合并父子标题路径，并去除连接处重复的标题行。
-func mergeBreadcrumbs(parent, child string) string {
-	if parent == "" {
-		return child
-	}
-
-	if child == "" {
-		return parent
-	}
-
-	parentLines := strings.Split(parent, "\n")
-	childLines := strings.Split(child, "\n")
-
-	if len(parentLines) > 0 && len(childLines) > 0 && strings.TrimSpace(parentLines[len(parentLines)-1]) == strings.TrimSpace(childLines[0]) {
-
-		childLines = childLines[1:]
-	}
-
-	// Child 原本只有一行，
-	// 并且这一行正好和 Parent 最后一行重复。
-	//
-	// 删除后已经没有新内容，
-	// 直接返回 Parent。
-	if len(childLines) == 0 {
-		return parent
-	}
-
-	return parent + "\n" + strings.Join(childLines, "\n")
+	return result, diag, ctx.Err()
 }

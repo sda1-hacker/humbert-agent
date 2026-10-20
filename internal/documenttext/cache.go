@@ -19,7 +19,43 @@ import (
 )
 
 // 缓存只复用转换结果，不缓存失败、取消或任何 API 凭据；升级 Tabula 或转换规则后自动失效。
-const conversionVersion = "tabula-markdown-source-v1"
+const conversionVersion = "weknora-tabula-structures-v10"
+
+// 图片识别规则未变化时保持独立版本，避免仅升级解析或分块就重复调用视觉模型。
+const imageTextVersion = "weknora-tabula-pdfium-images-v9"
+
+// ExtractImageText 与正文转换共用有界、可校验、可取消的缓存；profile 不得包含密钥。
+// key 包含图片内容与识别器版本，同一进程并发导入相同图片只识别一次。
+func ExtractImageText(ctx context.Context, data []byte, profile string, opts ParserOptions, recognize func(context.Context) (string, error)) (string, bool, error) {
+	opts = opts.effective()
+	hash := fmt.Sprintf("%x", sha256.Sum256(data))
+	key := fmt.Sprintf("%x", sha256.Sum256([]byte(imageTextVersion+"\x00image-text\x00"+hash+"\x00"+profile)))
+	release, err := acquireParse(ctx, opts.CacheDirectory, key)
+	if err != nil {
+		return "", false, err
+	}
+	defer release()
+	if cached, ok := readParseCache(ctx, key, hash, opts); ok && strings.TrimSpace(cached.Markdown) != "" {
+		return cached.Markdown, true, nil
+	}
+	text, err := recognize(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	text = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"))
+	result, err := checkedResult(Result{Markdown: text, ContentHash: hash}, opts)
+	if err != nil {
+		return "", false, err
+	}
+	if text == "" {
+		return "", false, fmt.Errorf("document parser: image recognition returned empty text")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	writeParseCache(ctx, key, result, opts)
+	return text, false, ctx.Err()
+}
 
 var parseLocks = struct {
 	sync.Mutex
@@ -125,6 +161,9 @@ func readParseCache(ctx context.Context, key, hash string, opts ParserOptions) (
 	}
 	data, _ := json.Marshal(value.Result)
 	if value.Checksum != fmt.Sprintf("%x", sha256.Sum256(data)) || value.Result.ContentHash != hash || len(value.Result.Markdown) > opts.MaxOutputBytes {
+		return Result{}, false
+	}
+	if _, err := checkedResult(value.Result, opts); err != nil {
 		return Result{}, false
 	}
 	value.Result.CacheHit = true

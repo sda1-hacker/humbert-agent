@@ -14,7 +14,6 @@ import (
 	"github.com/tsawler/tabula"
 	"github.com/tsawler/tabula/pptx"
 	tabularag "github.com/tsawler/tabula/rag"
-	"github.com/tsawler/tabula/xlsx"
 )
 
 const (
@@ -34,6 +33,7 @@ type SourceLocator struct {
 	Block      int    `json:"block,omitempty"` // DOCX body 内的段落/表格序号，1 起算。
 	Slide      int    `json:"slide,omitempty"` // PPTX 幻灯片序号，1 起算。
 	Sheet      string `json:"sheet,omitempty"`
+	Image      string `json:"image,omitempty"`     // 图片资产的相对路径；识别文字仍保留页码/幻灯片等来源。
 	RowStart   int    `json:"row_start,omitempty"` // XLSX/CSV 行号，1 起算；CSV 的一条多行记录算一行。
 	RowEnd     int    `json:"row_end,omitempty"`
 	Start      int    `json:"start"` // 最终 Markdown 的 Unicode 字符范围 [Start, End)。
@@ -59,18 +59,6 @@ func convertStructured(path string, extractor *tabula.Extractor, md tabularag.Ma
 	case ".html", ".htm":
 		markdown, warnings, err := convertHTML(path, md, opts)
 		return markdown, warnings, nil, err
-	case ".pdf":
-		collection, warnings, err := extractor.Chunks()
-		if err != nil {
-			return "", warnings, nil, err
-		}
-		for _, chunk := range collection.Chunks {
-			fragments = append(fragments, sourceFragment{chunk.Text, SourceLocator{Type: "pdf", Page: chunk.Metadata.PageStart, PageEnd: chunk.Metadata.PageEnd}})
-			if len(fragments) >= maxSourceBlocks {
-				break
-			}
-		}
-		return collection.ToMarkdownWithOptions(md), warnings, fragments, nil
 	case ".pptx":
 		reader, err := pptx.Open(path)
 		if err != nil {
@@ -105,57 +93,8 @@ func convertStructured(path string, extractor *tabula.Extractor, md tabularag.Ma
 		}
 		return markdown.String(), nil, fragments, nil
 	case ".xlsx":
-		reader, err := xlsx.Open(path)
-		if err != nil {
-			return "", nil, nil, err
-		}
-		defer reader.Close()
-		markdown, err := reader.MarkdownWithRAGOptions(xlsx.ExtractOptions{}, md)
-		if err != nil || len(markdown) > opts.MaxOutputBytes {
-			return markdown, nil, nil, err
-		}
-		for i := 0; i < reader.SheetCount() && len(fragments) < maxSourceBlocks; i++ {
-			sheet, err := reader.Sheet(i)
-			if err != nil {
-				return "", nil, nil, err
-			}
-			part, err := reader.MarkdownWithRAGOptions(xlsx.ExtractOptions{Sheets: []int{i}}, md)
-			if err != nil {
-				return "", nil, nil, err
-			}
-			// Tabula 去掉工作表首尾空行，随后逐行输出；从真实非空行起算，不把表头分隔线算成 Excel 行。
-			first := -1
-			for row, cells := range sheet.Rows {
-				for _, cell := range cells {
-					if !cell.IsEmpty() {
-						first = row
-						break
-					}
-				}
-				if first >= 0 {
-					break
-				}
-			}
-			row := first + 1
-			separator := false
-			for line := range strings.SplitSeq(part, "\n") {
-				if len(fragments) >= maxSourceBlocks {
-					break
-				}
-				locator := SourceLocator{Type: "sheet", Sheet: sheet.Name}
-				if strings.HasPrefix(line, "|") {
-					if separator {
-						separator = false
-						continue
-					}
-					locator.RowStart, locator.RowEnd = row, row
-					separator = row == first+1
-					row++
-				}
-				fragments = append(fragments, sourceFragment{line, locator})
-			}
-		}
-		return markdown, nil, fragments, nil
+		markdown, fragments, err := convertSpreadsheet(path, opts)
+		return markdown, nil, fragments, err
 	default:
 		markdown, warnings, err := extractor.ToMarkdownWithOptions(md)
 		if err == nil && len(markdown) <= opts.MaxOutputBytes && strings.EqualFold(filepath.Ext(path), ".docx") {

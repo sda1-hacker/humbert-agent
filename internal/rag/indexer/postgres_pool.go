@@ -74,8 +74,8 @@ func EnsureExtensions(ctx context.Context, dsn string, cfg ragconfig.Postgres) e
 	if err := conn.QueryRow(ctx, `SELECT current_setting('server_version_num')::int`).Scan(&serverVersion); err != nil {
 		return err
 	}
-	if serverVersion < 150000 {
-		return fmt.Errorf("rag backend: PostgreSQL 15+ required")
+	if serverVersion < 140000 {
+		return fmt.Errorf("rag backend: PostgreSQL 14+ required")
 	}
 
 	for _, statement := range []string{`CREATE EXTENSION IF NOT EXISTS vector`, `CREATE EXTENSION IF NOT EXISTS pg_search`} {

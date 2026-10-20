@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
 	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 )
 
@@ -22,15 +24,15 @@ func (p *DocumentStore) DiscardAttempt(ctx context.Context, collectionID, docume
 	}
 	defer rollbackTransaction(ctx, tx)
 	// 即使已被取消/更新也取得同一行锁，等待在途发布事务确定提交状态。
-	if _, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND document_id=$2`, collectionID, documentID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt WHERE collection_id=$1 AND source_key=$2`, collectionID, documentID); err != nil {
 		return false, err
 	}
 	var published bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM documents WHERE collection_id=$1 AND id=$2 AND revision=$3)`, collectionID, documentID, attempt).Scan(&published); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM documents WHERE collection_id=$1 AND source_key=$2 AND revision=$3)`, collectionID, documentID, attempt).Scan(&published); err != nil {
 		return false, err
 	}
 	if !published {
-		if _, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt+1,deleted=true WHERE collection_id=$1 AND document_id=$2 AND attempt=$3`, collectionID, documentID, attempt); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE rag_document_heads SET attempt=attempt+1,deleted=true WHERE collection_id=$1 AND source_key=$2 AND attempt=$3`, collectionID, documentID, attempt); err != nil {
 			return false, err
 		}
 	}
@@ -41,7 +43,7 @@ func (p *DocumentStore) DiscardAttempt(ctx context.Context, collectionID, docume
 }
 
 // rollbackTransaction 使用独立短超时回滚事务，避免请求取消后无法清理。
-func rollbackTransaction(ctx context.Context, tx transaction) {
+func rollbackTransaction(ctx context.Context, tx pgx.Tx) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), ragconfig.CleanupTimeout)
 	defer cancel()
 	_ = tx.Rollback(cleanup)
@@ -55,13 +57,9 @@ func (p *DocumentStore) ReserveDocument(ctx context.Context, collectionID, docum
 	if err := p.ensureProfile(ctx, collectionID); err != nil {
 		return 0, err
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return 0, errors.New("rag: revision reservation requires a PostgreSQL pool")
-	}
 	var attempt int64
-	err := db.pool.QueryRow(ctx, `INSERT INTO rag_document_heads(collection_id,document_id,attempt,deleted)
-VALUES($1,$2,1,false) ON CONFLICT(collection_id,document_id) DO UPDATE SET attempt=rag_document_heads.attempt+1,deleted=false
+	err := p.db.QueryRow(ctx, `INSERT INTO rag_document_heads(collection_id,source_key,attempt,deleted)
+VALUES($1,$2,1,false) ON CONFLICT(collection_id,source_key) DO UPDATE SET attempt=rag_document_heads.attempt+1,deleted=false
 RETURNING attempt`, collectionID, documentID).Scan(&attempt)
 	return attempt, err
 }
@@ -71,21 +69,17 @@ func (p *DocumentStore) InvalidateDocument(ctx context.Context, collectionID, do
 	if strings.TrimSpace(collectionID) == "" || strings.TrimSpace(documentID) == "" {
 		return errors.New("rag: stable collection/document id required")
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return errors.New("rag: invalidation requires a PostgreSQL pool")
-	}
-	tx, err := db.pool.Begin(ctx)
+	tx, err := p.db.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer rollbackTransaction(ctx, tx)
-	_, err = tx.Exec(ctx, `INSERT INTO rag_document_heads(collection_id,document_id,attempt,deleted)
-VALUES($1,$2,1,true) ON CONFLICT(collection_id,document_id) DO UPDATE SET attempt=rag_document_heads.attempt+1,deleted=true`, collectionID, documentID)
+	_, err = tx.Exec(ctx, `INSERT INTO rag_document_heads(collection_id,source_key,attempt,deleted)
+VALUES($1,$2,1,true) ON CONFLICT(collection_id,source_key) DO UPDATE SET attempt=rag_document_heads.attempt+1,deleted=true`, collectionID, documentID)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE documents SET parse_status='cancelled',error_code='cancelled',error_message='用户已取消导入',processing_deadline=NULL,updated_at=NOW() WHERE collection_id=$1 AND id=$2 AND parse_status='processing'`, collectionID, documentID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE documents SET parse_status='cancelled',error_code='cancelled',error_message='用户已取消导入',processing_deadline=NULL,updated_at=NOW() WHERE collection_id=$1 AND source_key=$2 AND parse_status='processing'`, collectionID, documentID); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -102,22 +96,18 @@ func (p *DocumentStore) TombstoneDocument(ctx context.Context, collectionID, doc
 	if strings.TrimSpace(collectionID) == "" || strings.TrimSpace(documentID) == "" {
 		return 0, errors.New("rag: stable collection/document id required")
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return 0, errors.New("rag: deletion requires a PostgreSQL pool")
-	}
-	tx, err := db.pool.Begin(ctx)
+	tx, err := p.db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer rollbackTransaction(ctx, tx)
 	var revision int64
-	if err = tx.QueryRow(ctx, `INSERT INTO rag_document_heads(collection_id,document_id,attempt,deleted)
-VALUES($1,$2,1,true) ON CONFLICT(collection_id,document_id) DO UPDATE SET attempt=rag_document_heads.attempt+1,deleted=true
+	if err = tx.QueryRow(ctx, `INSERT INTO rag_document_heads(collection_id,source_key,attempt,deleted)
+VALUES($1,$2,1,true) ON CONFLICT(collection_id,source_key) DO UPDATE SET attempt=rag_document_heads.attempt+1,deleted=true
 RETURNING attempt`, collectionID, documentID).Scan(&revision); err != nil {
 		return 0, err
 	}
-	if _, err = tx.Exec(ctx, `DELETE FROM documents WHERE collection_id=$1 AND id=$2`, collectionID, documentID); err != nil {
+	if _, err = tx.Exec(ctx, `DELETE FROM documents WHERE collection_id=$1 AND source_key=$2`, collectionID, documentID); err != nil {
 		return 0, err
 	}
 	if err = tx.Commit(ctx); err != nil {

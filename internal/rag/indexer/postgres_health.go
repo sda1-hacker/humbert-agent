@@ -37,14 +37,14 @@ COALESCE((SELECT extversion FROM pg_extension WHERE extname='pg_search'),'')`).S
 
 // Validate 校验数据库与扩展的最低支持版本。
 func (s BackendStatus) Validate() error {
-	if s.Postgres < 150000 {
-		return fmt.Errorf("rag backend: PostgreSQL 15+ required for column-specific ON DELETE SET NULL")
+	if s.Postgres < 140000 {
+		return fmt.Errorf("rag backend: PostgreSQL 14+ required")
 	}
-	if !versionAtLeast(s.Vector, 0, 7, 0) {
-		return fmt.Errorf("rag backend: vector 0.7.0+ required for halfvec (installed %q)", s.Vector)
+	if !versionAtLeast(s.Vector, 0, 6, 2) {
+		return fmt.Errorf("rag backend: vector 0.6.2+ required (installed %q)", s.Vector)
 	}
-	if !versionAtLeast(s.PGSearch, 0, 25, 0) {
-		return fmt.Errorf("rag backend: pg_search 0.25.0+ required for USING paradedb (installed %q)", s.PGSearch)
+	if !versionAtLeast(s.PGSearch, 0, 20, 10) {
+		return fmt.Errorf("rag backend: pg_search 0.20.10+ required (installed %q)", s.PGSearch)
 	}
 	return nil
 }
@@ -96,9 +96,12 @@ WHERE attrelid=to_regclass('retrieval_index') AND attname='embedding' AND NOT at
 	if err != nil {
 		return fmt.Errorf("检查 PG 向量列失败，请先执行 rag-migrate: %w", err)
 	}
-	expected := fmt.Sprintf("halfvec(%d)", dimensions)
-	if actual != expected {
-		return fmt.Errorf("%w: 数据库列为 %s，embedding.dimensions 要求 %s；请新建数据库并重新导入，程序不会自动改写已有向量", ragconfig.ErrEmbeddingDimensionMismatch, actual, expected)
+	// 老版 pgvector 使用 vector，新版可使用 halfvec；只核对实际列，不自动转换已有数据。
+	if actual != fmt.Sprintf("halfvec(%d)", dimensions) && actual != fmt.Sprintf("vector(%d)", dimensions) {
+		return fmt.Errorf("%w: 数据库列为 %s，embedding.dimensions 要求 %d 维；请新建数据库并重新导入，程序不会自动改写已有向量", ragconfig.ErrEmbeddingDimensionMismatch, actual, dimensions)
+	}
+	if strings.HasPrefix(actual, "vector(") && dimensions > 2000 {
+		return fmt.Errorf("rag backend: vector HNSW 最多支持 2000 维，当前为 %d；更高维度请使用支持 halfvec 的 pgvector 0.7+ 新库", dimensions)
 	}
 	return nil
 }

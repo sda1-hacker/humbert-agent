@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -29,9 +30,9 @@ var ErrResourceLimit = errors.New("document parser: resource limit exceeded")
 type ParserOptions struct {
 	// MaxInputBytes 是源文件字节上限，0 用 32 MiB；读取快照时也会再次限制。
 	MaxInputBytes int64 `mapstructure:"max_input_bytes"`
-	// MaxOutputBytes 是解析结果 Markdown 的 UTF-8 字节上限，0 用 32 MiB，不是 token 数。
+	// MaxOutputBytes 是转换 Markdown 与提取图片的合计字节上限，0 用 32 MiB；图片识别后的正文也受此上限约束。
 	MaxOutputBytes int `mapstructure:"max_output_bytes"`
-	// MaxExpandedBytes 是 ZIP 文档声明的解压后总字节上限，0 用 256 MiB；适用于 docx/xlsx/pptx 等格式。
+	// MaxExpandedBytes 是 ZIP 文档解压后总字节上限，0 用 256 MiB；Excel 还按同一预算预检稠密单元格矩阵。
 	MaxExpandedBytes uint64 `mapstructure:"max_expanded_bytes"`
 	// MaxArchiveEntries 是 ZIP 文档内部文件条目上限，0 用 8192；不是工作表、幻灯片或页数。
 	MaxArchiveEntries int `mapstructure:"max_archive_entries"`
@@ -39,7 +40,7 @@ type ParserOptions struct {
 	Timeout time.Duration `mapstructure:"timeout"`
 	// ExcludeHeadersAndFooters 控制 Tabula 页眉页脚过滤；解析器零值为 false，RAG.Default 设置为 true。
 	ExcludeHeadersAndFooters bool `mapstructure:"exclude_headers_and_footers"`
-	// OCRLanguage 传给 Tabula 的 OCR 语言，如 chi_sim+eng；空值用解析库默认设置，OCR 仍需构建支持和语言包。
+	// OCRLanguage 是本地 Tesseract 语言，如 chi_sim+eng；空值用默认语言，需安装程序/语言包或启用已有 OCR 构建。
 	OCRLanguage string `mapstructure:"ocr_language"`
 	// IncludePageNumbers 控制 Markdown 中是否带页码标记，默认 false，不会改变源文件内容。
 	IncludePageNumbers bool `mapstructure:"include_page_numbers"`
@@ -47,24 +48,43 @@ type ParserOptions struct {
 	CacheDirectory string `mapstructure:"cache_directory"`
 	// CacheMaxBytes 是该目录缓存文件的总字节上限，0 用 256 MiB；损坏、过期版本和超大结果会重新解析。
 	CacheMaxBytes int64 `mapstructure:"cache_max_bytes"`
+	// PDF 是通用 PDF 解析参数；nil 使用 WeKnora builtin 默认值，指针保证显式 false 不被默认值覆盖。
+	PDF *PDFOptions `mapstructure:"pdf"`
+	// PreserveImages 供 RAG 开启：转换器返回图片引用，由 Loader 保存后再切分；附件文本提取默认关闭。
+	PreserveImages bool `mapstructure:"preserve_images"`
+	// MaxImages 限制单篇文档的图片引用数（含扫描页），0 用 256；超限明确失败，不静默漏图。
+	MaxImages int `mapstructure:"max_images"`
+	// MaxImagePixels 在解码前检查图片宽高乘积，0 用 3200 万像素，避免小文件解压出超大位图。
+	MaxImagePixels int64 `mapstructure:"max_image_pixels"`
+	// XLSXFirstRowAsHeader 默认 false；保留首行为数据，列名 A/B/C，显式开启才使用首行标签。
+	XLSXFirstRowAsHeader bool `mapstructure:"xlsx_first_row_as_header"`
+	// XLSXPercentAsText 默认 false；百分比按底层数值输出，开启后保留百分号显示形式。
+	XLSXPercentAsText bool `mapstructure:"xlsx_percent_as_text"`
 }
 
 func DefaultOptions() ParserOptions {
-	return ParserOptions{MaxInputBytes: 32 << 20, MaxOutputBytes: 32 << 20, MaxExpandedBytes: 256 << 20, MaxArchiveEntries: 8192, Timeout: time.Minute, CacheMaxBytes: 256 << 20}
+	pdf := DefaultPDFOptions()
+	return ParserOptions{PDF: &pdf, MaxInputBytes: 32 << 20, MaxOutputBytes: 32 << 20, MaxExpandedBytes: 256 << 20, MaxArchiveEntries: 8192, Timeout: time.Minute, CacheMaxBytes: 256 << 20, MaxImages: 256, MaxImagePixels: 32_000_000}
 }
 
 func (o ParserOptions) Validate() error {
-	if o.MaxInputBytes < 0 || o.MaxOutputBytes < 0 || o.Timeout < 0 || o.MaxArchiveEntries < 0 || o.CacheMaxBytes < 0 {
+	if o.MaxInputBytes < 0 || o.MaxOutputBytes < 0 || o.Timeout < 0 || o.MaxArchiveEntries < 0 || o.CacheMaxBytes < 0 || o.MaxImages < 0 || o.MaxImagePixels < 0 {
 		return errors.New("document parser: negative resource limit")
 	}
 	if o.MaxOutputBytes > (int(^uint(0)>>1)-(64*4096*6+(64<<10)))/8 || o.MaxInputBytes == int64(^uint64(0)>>1) {
 		return errors.New("document parser: resource limit too large")
 	}
-	return nil
+	return o.pdfOptions().Validate()
 }
 
 func (o ParserOptions) effective() ParserOptions {
 	d := DefaultOptions()
+	if o.MaxImages == 0 {
+		o.MaxImages = d.MaxImages
+	}
+	if o.MaxImagePixels == 0 {
+		o.MaxImagePixels = d.MaxImagePixels
+	}
 	if o.MaxInputBytes == 0 {
 		o.MaxInputBytes = d.MaxInputBytes
 	}
@@ -99,8 +119,11 @@ type Result struct {
 	// SourceBlocks 的范围基于最终 Markdown 的 Unicode 字符，不是字节；不伪造 Office 页码或坐标。
 	SourceBlocks []SourceBlock
 	CacheHit     bool
+	Images       []ImageReference // 仅转换边界内传递二进制，Loader 保存为图片文件；不写入分块元数据。
+	Metadata     map[string]any   // 页数、扫描页数、版面回退等解析诊断。
 }
 type workerRequest struct {
+	Image   []byte
 	Path    string
 	Options ParserOptions
 }
@@ -115,11 +138,17 @@ func init() {
 		return
 	}
 	var req workerRequest
-	if err := json.NewDecoder(io.LimitReader(os.Stdin, 64<<10)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(os.Stdin, 48<<20)).Decode(&req); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	result, err := convert(req.Path, req.Options)
+	var result Result
+	var err error
+	if req.Image != nil {
+		result.Markdown, err = recognizePage(req.Image, req.Options.OCRLanguage)
+	} else {
+		result, err = convert(req.Path, req.Options)
+	}
 	response := workerResponse{Result: result}
 	if err != nil {
 		response.Error = err.Error()
@@ -193,22 +222,44 @@ func ExtractFile(ctx context.Context, path string, opts ParserOptions) (Result, 
 	if result, ok := readParseCache(ctx, cacheKey, contentHash, opts); ok {
 		return result, ctx.Err()
 	}
-	if err = preflight(snapshot.Name(), opts); err != nil {
-		return Result{}, err
-	}
 	if err = ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	result, err := callWorker(ctx, workerRequest{Path: snapshot.Name(), Options: opts})
+	if err != nil {
+		return Result{}, err
+	}
+	result.ContentHash = contentHash
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	writeParseCache(ctx, cacheKey, result, opts)
+	return result, nil
+}
+
+// callWorker 统一文件转换与 OCR 的进程边界，超时/取消均终止解析进程树。
+func callWorker(ctx context.Context, req workerRequest) (Result, error) {
+	opts := req.Options.effective()
 	executable, err := os.Executable()
 	if err != nil {
 		return Result{}, err
 	}
-	request, err := json.Marshal(workerRequest{Path: snapshot.Name(), Options: opts})
+	request, err := json.Marshal(req)
 	if err != nil {
 		return Result{}, err
 	}
 	command := exec.CommandContext(ctx, executable)
-	command.Env = []string{workerMarker + "=1", "PATH=" + os.Getenv("PATH")}
+	configureWorker(command)
+	// 临时目录由父进程持有：即使取消时强制终止 worker，渲染器留下的文件也会清理。
+	workdir, err := os.MkdirTemp("", "humbert-parser-work-*")
+	if err != nil {
+		return Result{}, err
+	}
+	defer os.RemoveAll(workdir)
+	command.Env = []string{workerMarker + "=1", "PATH=" + os.Getenv("PATH"), "TMPDIR=" + workdir, "TMP=" + workdir, "TEMP=" + workdir}
+	if value := os.Getenv("SystemRoot"); value != "" {
+		command.Env = append(command.Env, "SystemRoot="+value)
+	}
 	// OCR 语言包目录可以传入子进程；不继承模型密钥等其他环境变量。
 	if value := os.Getenv("TESSDATA_PREFIX"); value != "" {
 		command.Env = append(command.Env, "TESSDATA_PREFIX="+value)
@@ -235,22 +286,54 @@ func ExtractFile(ctx context.Context, path string, opts ParserOptions) (Result, 
 		return Result{}, fmt.Errorf("%w: %s", ErrResourceLimit, response.Error)
 	}
 	if response.Error != "" {
-		return Result{}, fmt.Errorf("document parser: %s", response.Error)
+		return Result{}, fmt.Errorf("document parser: %s", strings.TrimPrefix(response.Error, "document parser: "))
 	}
-	result := response.Result
-	if len(result.Markdown) > opts.MaxOutputBytes {
-		return Result{}, fmt.Errorf("%w: markdown exceeds %d bytes", ErrResourceLimit, opts.MaxOutputBytes)
+	return checkedResult(response.Result, opts)
+}
+
+// parserExecutable 优先使用显式路径；GUI/IDE 的 PATH 常缺少 Homebrew 等目录，按平台补查已安装的工具。
+// 不启动 Shell 或修改全局 PATH；显式路径错误时直接报错，避免悄悄执行另一份程序。
+func parserExecutable(name, configured string) (string, error) {
+	if configured != "" {
+		if !filepath.IsAbs(configured) {
+			return "", fmt.Errorf("document parser: %s executable path must be absolute", name)
+		}
+		return exec.LookPath(configured)
 	}
-	result.ContentHash = contentHash
-	if err := ctx.Err(); err != nil {
-		return Result{}, err
+	path, err := exec.LookPath(name)
+	if err == nil {
+		return filepath.Abs(path)
 	}
-	writeParseCache(ctx, cacheKey, result, opts)
-	return result, nil
+	if !errors.Is(err, exec.ErrNotFound) {
+		return "", err
+	}
+	var directories []string
+	switch runtime.GOOS {
+	case "darwin":
+		directories = []string{"/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/bin"}
+	case "linux":
+		directories = []string{"/usr/local/bin", "/usr/bin", "/bin"}
+	}
+	for _, directory := range directories {
+		if path, findErr := exec.LookPath(filepath.Join(directory, name)); findErr == nil {
+			return path, nil
+		}
+	}
+	return "", err
 }
 
 func convert(path string, opts ParserOptions) (Result, error) {
+	// ZIP/XML 预检也放在受控进程中，大文件扫描和稀疏表格检查同样能被立即取消。
+	if err := preflight(path, opts); err != nil {
+		return Result{}, err
+	}
 	ext := strings.ToLower(filepath.Ext(path))
+	if IsImageExtension(ext) {
+		return convertImage(path, opts)
+	}
+	if opts.PreserveImages && (ext == ".html" || ext == ".htm") {
+		return convertHTMLImages(path, opts)
+	}
 	if ext == ".md" || ext == ".txt" || ext == ".csv" {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -275,7 +358,20 @@ func convert(path string, opts ParserOptions) (Result, error) {
 		if len(markdown) > opts.MaxOutputBytes {
 			return Result{}, ErrResourceLimit
 		}
-		return Result{Markdown: markdown, SourceBlocks: textSourceBlocks(markdown, ext)}, nil
+		result := Result{Markdown: markdown, SourceBlocks: textSourceBlocks(markdown, ext)}
+		if ext == ".md" && opts.PreserveImages {
+			if err := extractMarkdownImages(&result, opts); err != nil {
+				return Result{}, err
+			}
+		}
+		return checkedResult(result, opts)
+	}
+	if ext == ".pdf" {
+		result, err := convertPDF(path, opts)
+		if err != nil {
+			return Result{}, err
+		}
+		return checkedResult(result, opts)
 	}
 	extractor := tabula.Open(path)
 	if opts.ExcludeHeadersAndFooters {
@@ -286,30 +382,49 @@ func convert(path string, opts ParserOptions) (Result, error) {
 	}
 	markdownOpts := tabularag.DefaultMarkdownOptions()
 	markdownOpts.IncludePageNumbers = opts.IncludePageNumbers
-	// PDF 复用 Tabula 已生成的块及页码；Office 保持原生 Markdown 渲染，不走虚拟 PDF 坐标。
+	// Office 保持格式转换与来源定位；正文只在下游 RAG 中切分。
 	markdown, warnings, blocks, err := convertStructured(path, extractor, markdownOpts, opts)
 	if err != nil {
 		return Result{}, err
 	}
-	if len(markdown) > opts.MaxOutputBytes {
-		return Result{}, ErrResourceLimit
-	}
 	markdown = normalizeMarkdown(markdown)
-	if !utf8.ValidString(markdown) || strings.ContainsRune(markdown, 0) {
-		return Result{}, errors.New("document parser: converted text must be UTF-8 without NUL bytes")
-	}
-	if len(markdown) > opts.MaxOutputBytes {
-		return Result{}, ErrResourceLimit
-	}
-	if len(warnings) > 64 {
-		warnings = warnings[:64]
-	}
-	for i := range warnings {
-		if len(warnings[i].Message) > 4096 {
-			warnings[i].Message = warnings[i].Message[:4096]
+	result := Result{Markdown: markdown, Warnings: warnings, SourceBlocks: alignSourceBlocks(markdown, blocks)}
+	if opts.PreserveImages {
+		if err := extractOfficeImages(path, opts, &result); err != nil {
+			return Result{}, err
 		}
 	}
-	return Result{Markdown: markdown, Warnings: warnings, SourceBlocks: alignSourceBlocks(markdown, blocks)}, nil
+	return checkedResult(result, opts)
+}
+
+// checkedResult 是转换边界的最后校验，禁止损坏正文或超大图片结果进入缓存、向量化和数据库。
+func checkedResult(result Result, opts ParserOptions) (Result, error) {
+	opts = opts.effective()
+	if len(result.Images) > opts.MaxImages {
+		return Result{}, ErrResourceLimit
+	}
+	if !utf8.ValidString(result.Markdown) || strings.ContainsRune(result.Markdown, 0) {
+		return Result{}, errors.New("document parser: converted text must be UTF-8 without NUL bytes")
+	}
+	size := len(result.Markdown)
+	for _, image := range result.Images {
+		if len(image.Data) > opts.MaxOutputBytes-size {
+			return Result{}, ErrResourceLimit
+		}
+		size += len(image.Data)
+	}
+	if size > opts.MaxOutputBytes {
+		return Result{}, ErrResourceLimit
+	}
+	if len(result.Warnings) > 64 {
+		result.Warnings = result.Warnings[:64]
+	}
+	for i := range result.Warnings {
+		if len(result.Warnings[i].Message) > 4096 {
+			result.Warnings[i].Message = string([]rune(result.Warnings[i].Message)[:min(1024, len([]rune(result.Warnings[i].Message)))])
+		}
+	}
+	return result, nil
 }
 
 func parserResponseLimit(opts ParserOptions) int {
@@ -354,6 +469,15 @@ func preflight(path string, opts ParserOptions) error {
 		}
 		total += file.UncompressedSize64
 	}
+	if ext == ".xlsx" {
+		for _, file := range archive.File {
+			if strings.HasPrefix(file.Name, "xl/worksheets/") && strings.HasSuffix(file.Name, ".xml") {
+				if err := preflightSpreadsheet(file, opts); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -384,4 +508,17 @@ func (w *boundedWriter) Write(p []byte) (int, error) {
 	}
 	_, _ = w.Buffer.Write(p)
 	return n, nil
+}
+
+// OutputLimit 供图片引用改写/OCR 后的 Loader 继续使用同一输出上限。
+func (o ParserOptions) OutputLimit() int { return o.effective().MaxOutputBytes }
+
+// Snapshot 记录实际生效的解析参数；缓存路径属于本机运行状态，不扩散到数据库。
+func (o ParserOptions) Snapshot() ParserOptions {
+	o = o.effective()
+	pdf := o.pdfOptions()
+	o.PDF = &pdf
+	o.CacheDirectory = ""
+	o.CacheMaxBytes = 0
+	return o
 }

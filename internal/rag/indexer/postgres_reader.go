@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/sda1-hacker/humbert-agent/internal/rag"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 )
@@ -20,18 +22,15 @@ func (p *DocumentStore) GetDocument(ctx context.Context, collectionID, documentI
 	if strings.TrimSpace(collectionID) == "" || strings.TrimSpace(documentID) == "" {
 		return record, errors.New("rag: collection/document id required")
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return record, errors.New("rag: document reading requires a PostgreSQL pool")
-	}
 	var metadata []byte
-	err := db.pool.QueryRow(ctx, `SELECT d.collection_id,d.id,d.title,d.document_type,
-d.source_uri,d.file_path,d.file_name,d.file_type,d.file_size,d.file_hash,d.embedding_profile_id,
+	err := p.db.QueryRow(ctx, `SELECT d.collection_id,d.source_key,d.title,d.document_type,
+d.source_uri,d.file_path,d.file_name,d.file_type,d.file_size,d.file_hash,COALESCE(p.profile_id,''),
 COALESCE(h.attempt,d.revision),d.revision,d.content_hash,d.process_config,d.metadata,
 d.parse_status,d.error_message,d.processed_at,d.created_at,d.updated_at,
 d.processing_attempt,d.processing_stage,d.processing_deadline,d.error_code
-FROM documents d LEFT JOIN rag_document_heads h ON h.collection_id=d.collection_id AND h.document_id=d.id
-WHERE d.collection_id=$1 AND d.id=$2`, collectionID, documentID).Scan(
+FROM documents d LEFT JOIN rag_document_heads h ON h.collection_id=d.collection_id AND h.source_key=d.source_key
+LEFT JOIN rag_collection_profiles p ON p.id=d.embedding_profile_id AND p.collection_id=d.collection_id
+WHERE d.collection_id=$1 AND d.source_key=$2`, collectionID, documentID).Scan(
 		&record.CollectionID, &record.ID, &record.Title, &record.Type,
 		&record.URI, &record.Path, &record.Name, &record.SourceFile.Type, &record.Size, &record.Hash, &record.EmbeddingProfileID,
 		&record.Attempt, &record.Revision, &record.ContentHash, &record.ProcessConfig, &metadata,
@@ -52,40 +51,30 @@ func (p *DocumentStore) ListChunks(ctx context.Context, collectionID, documentID
 	if collectionID == "" || documentID == "" {
 		return nil, errors.New("rag: collection/document id required")
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return nil, errors.New("rag: chunk reading requires a PostgreSQL pool")
-	}
-	rows, err := db.pool.Query(ctx, `
-		SELECT c.id, c.document_id, c.chunk_type, c.chunk_index,
+	rows, err := p.db.Query(ctx, `
+		SELECT c.chunk_key, d.source_key, c.chunk_type, c.chunk_index,
 		       c.content, c.context_header, c.start_rune, c.end_rune,
-		       COALESCE(c.parent_chunk_id, ''), c.metadata
+		       COALESCE(p.chunk_key, ''), c.metadata
 		FROM chunks c JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
-		WHERE c.collection_id=$1 AND c.document_id=$2 AND c.chunk_type='text'
+		LEFT JOIN chunks p ON p.collection_id=c.collection_id AND p.id=c.parent_chunk_id
+		WHERE c.collection_id=$1 AND d.source_key=$2 AND c.chunk_type IN ('text','image_ocr','image_caption')
 		ORDER BY c.chunk_index
 	`, collectionID, documentID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var records []rag.ChunkRecord
-	for rows.Next() {
+	// 原生 pgx 负责关闭行集；以 nil 开始收集，保持无分块时的原有返回值。
+	return pgx.AppendRows([]rag.ChunkRecord(nil), rows, func(row pgx.CollectableRow) (rag.ChunkRecord, error) {
 		var record rag.ChunkRecord
 		var metadata []byte
-		if err := rows.Scan(&record.ID, &record.DocumentID, &record.ChunkType, &record.ChunkIndex,
+		if err := row.Scan(&record.ID, &record.DocumentID, &record.ChunkType, &record.ChunkIndex,
 			&record.Content, &record.ContextHeader, &record.StartRune, &record.EndRune,
 			&record.ParentChunkID, &metadata); err != nil {
-			return nil, err
+			return record, err
 		}
-		if err := json.Unmarshal(metadata, &record.Metadata); err != nil {
-			return nil, err
-		}
-		records = append(records, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return records, nil
+		err := json.Unmarshal(metadata, &record.Metadata)
+		return record, err
+	})
 }
 
 // ResolveChunks 一次读取外部命中的权威分块，只保留当前已发布版本。
@@ -101,10 +90,6 @@ func (p *DocumentStore) ResolveChunks(ctx context.Context, collectionID string, 
 	if len(hits) == 0 {
 		return nil, nil
 	}
-	db, ok := p.db.(poolDatabase)
-	if !ok {
-		return nil, errors.New("rag: chunk resolution requires a PostgreSQL pool")
-	}
 	ids := make([]string, 0, len(hits))
 	seen := make(map[string]bool)
 	for _, hit := range hits {
@@ -116,11 +101,12 @@ func (p *DocumentStore) ResolveChunks(ctx context.Context, collectionID string, 
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	rows, err := db.pool.Query(ctx, `
-		SELECT c.id, c.document_id, d.revision, c.content, c.context_header,
-		       c.chunk_index, c.start_rune, c.end_rune, COALESCE(c.parent_chunk_id, ''), c.metadata
+	rows, err := p.db.Query(ctx, `
+		SELECT c.chunk_key, d.source_key, d.revision, c.content, c.context_header,
+		       c.chunk_index, c.start_rune, c.end_rune, COALESCE(p.chunk_key, ''), c.metadata
 		FROM chunks c JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
-		WHERE c.collection_id=$1 AND c.id=ANY($2::text[]) AND c.chunk_type='text'
+		LEFT JOIN chunks p ON p.collection_id=c.collection_id AND p.id=c.parent_chunk_id
+		WHERE c.collection_id=$1 AND c.chunk_key=ANY($2::text[]) AND c.chunk_type IN ('text','image_ocr','image_caption')
 	`, collectionID, ids)
 	if err != nil {
 		return nil, err

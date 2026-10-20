@@ -61,7 +61,7 @@ func NewIndexer(pool *pgxpool.Pool, cfg ragconfig.Indexer) (*Indexer, error) {
 	if pool == nil {
 		return nil, errors.New("postgres indexer: nil pool")
 	}
-	return newIndexerWithDatabase(poolDatabase{pool}, cfg), nil
+	return newIndexerWithDatabase(pool, cfg), nil
 }
 func newIndexerWithDatabase(db database, cfg ragconfig.Indexer) *Indexer {
 	if cfg.EmbeddingBatchSize == 0 {

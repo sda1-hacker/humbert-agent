@@ -71,13 +71,14 @@ func (l *ParentLoader) LoadParents(
 
 const parentChunkSQL = `
 SELECT
-    c.id, c.document_id, c.content, c.context_header, c.chunk_index,
-    c.start_rune, c.end_rune, c.parent_chunk_id,
+    c.chunk_key, d.source_key, c.content, c.context_header, c.chunk_index,
+    c.start_rune, c.end_rune, p.chunk_key,
     c.metadata || jsonb_build_object('rag_document_revision', d.revision::text),
     0::float8 AS score
 FROM chunks c
 JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
-WHERE c.collection_id = $1 AND c.id = ANY($2::text[]) AND c.chunk_type='parent_text'
+LEFT JOIN chunks p ON p.collection_id=c.collection_id AND p.id=c.parent_chunk_id
+WHERE c.collection_id = $1 AND c.chunk_key = ANY($2::text[]) AND c.chunk_type='parent_text'
 `
 
 // uniqueStrings 去除空值与重复 ID，保留首次出现顺序。

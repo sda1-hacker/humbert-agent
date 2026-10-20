@@ -121,6 +121,11 @@ func chunkToDocument(
 	generator IDGenerator,
 ) *schema.Document {
 	metadata := retrieval.CloneMetadata(source.MetaData)
+	delete(metadata, "rag_image_assets")
+	delete(metadata, "rag_image_recognition")
+	delete(metadata, "rag_parse_diagnostics")
+	delete(metadata, "rag_parse_config")
+	delete(metadata, "rag_parser_warnings")
 	documenttext.AttachLocators(metadata, chunk.Start, chunk.End)
 
 	metadata[retrieval.MetaSourceDocumentIndex] = sourceIndex

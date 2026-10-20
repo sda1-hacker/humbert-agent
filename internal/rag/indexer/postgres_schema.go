@@ -2,6 +2,7 @@ package indexer
 
 // 冻结的初始结构；后续迁移将文档表调整为原件引用和管理元数据，正文由分块承载。
 // 以下 SQL 已进入迁移校验和，不能直接改写；结构或分词配置调整必须新增迁移。
+// 最终自增主键与 BIGINT 关联列由 postgres_identity.go 的新增迁移建立。
 var schemaStatements = []string{
 	`
 CREATE EXTENSION IF NOT EXISTS vector

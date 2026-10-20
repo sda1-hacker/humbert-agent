@@ -89,7 +89,7 @@ func NewPipelineWithDiagnostics(retrieve func(context.Context, string) ([]retrie
 	return p, err
 }
 
-// Search 执行召回、可选精排、父块扩展与最终选择；当前统一流程不执行 MMR 或问题改写。
+// Search 执行召回、可选结构排序与模型精排、父块扩展和最终选择；不执行问题改写。
 func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, p.config.Timeout)
 	defer cancel()
@@ -180,6 +180,11 @@ func (p *Pipeline) Search(ctx context.Context, query string) (Response, error) {
 
 	for i := range response.Results {
 		parentID := response.Results[i].ParentChunkID
+		// 图片 OCR/描述本身就是命中证据；它的父关系用于溯源，不能用正文覆盖识别结果。
+		kind, _ := response.Results[i].Metadata[retrieval.MetaChunkType].(string)
+		if kind == "image_ocr" || kind == "image_caption" {
+			continue
+		}
 
 		if parentID == "" {
 			continue
@@ -264,6 +269,10 @@ func uniqueParentIDs(results []retrieval.SearchResult) []string {
 	ids := make([]string, 0)
 
 	for _, result := range results {
+		kind, _ := result.Metadata[retrieval.MetaChunkType].(string)
+		if kind == "image_ocr" || kind == "image_caption" {
+			continue
+		}
 		if result.ParentChunkID == "" {
 			continue
 		}

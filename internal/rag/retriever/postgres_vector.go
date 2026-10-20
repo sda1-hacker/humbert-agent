@@ -98,27 +98,28 @@ func toHalfVector(vector []float64, dimensions int) (pgvector.HalfVector, error)
 }
 
 // 直接按余弦距离取候选，保留可使用 HNSW 的查询形状；最终分数为 1 - 距离。
+// 参数类型由 embedding 列推导，兼容 vector/halfvec，避免转换列本身而使索引失效。
 const vectorSearchSQL = `
 WITH nearest AS MATERIALIZED (
     SELECT
         chunk_id,
         document_id,
-        embedding <=> $1::halfvec AS distance
+        embedding <=> $1 AS distance
     FROM retrieval_index
     WHERE collection_id = $2
       AND enabled = TRUE
-    ORDER BY embedding <=> $1::halfvec
+    ORDER BY embedding <=> $1
     LIMIT $3
 )
 SELECT
-    c.id,
-    c.document_id,
+    c.chunk_key,
+    d.source_key,
     c.content,
     c.context_header,
     c.chunk_index,
     c.start_rune,
     c.end_rune,
-    c.parent_chunk_id,
+    p.chunk_key,
     c.metadata || jsonb_build_object('rag_document_revision', d.revision::text),
     1.0 - n.distance AS score
 FROM nearest n
@@ -126,5 +127,6 @@ JOIN chunks c
   ON c.collection_id = $2
  AND c.id = n.chunk_id
 JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
-ORDER BY score DESC, c.id ASC
+LEFT JOIN chunks p ON p.collection_id=c.collection_id AND p.id=c.parent_chunk_id
+ORDER BY score DESC, c.chunk_key ASC
 `

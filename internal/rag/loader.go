@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/cloudwego/eino/components/document"
+	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 	tabulalib "github.com/tsawler/tabula"
 
@@ -106,9 +107,11 @@ var supportedExtensions = map[string]struct{}{
 	".csv":  {},
 }
 
-// Loader 实现 Eino 文档加载接口，将本地文件解析为完整 Markdown。
+// Loader 实现 Eino 文档加载接口，只解析文件、保存图片和来源；图片理解由导入层单独调度。
 type Loader struct {
 	config ragconfig.Loader
+	// imageModel 仅在本次图片处理副本中固定，不修改可被多个导入并发复用的 Loader。
+	imageModel model.BaseChatModel
 }
 
 // NewLoader 创建一个 Tabula Loader。
@@ -126,6 +129,9 @@ func (l *Loader) Load(
 	src document.Source,
 	_ ...document.LoaderOption,
 ) ([]*schema.Document, error) {
+	if err := l.config.ParseOptions.Validate(); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -137,11 +143,15 @@ func (l *Loader) Load(
 
 	opts := l.config.ParseOptions
 	result, err := documenttext.ExtractFile(ctx, path, opts)
-	markdown, warnings := result.Markdown, result.Warnings
 	if err != nil {
 		return nil, fmt.Errorf("tabula loader: extracting markdown from %q: %w", path, err)
 	}
 
+	assets, err := l.storeImages(ctx, &result)
+	if err != nil {
+		return nil, fmt.Errorf("tabula loader: persist images: %w", err)
+	}
+	markdown, warnings := result.Markdown, result.Warnings
 	// 解析子进程在取消时终止；构造输出前再次检查，防止已取消请求进入后续阶段。
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -159,6 +169,23 @@ func (l *Loader) Load(
 	}
 
 	metadata := buildMetadata(src, path, info, warnings)
+	if parser, ok := result.Metadata["parser"].(string); ok && parser != "" {
+		metadata[MetaParser] = parser // 结构化 PDF 必须记录真实解析引擎，不能仍显示为 Tabula。
+	}
+	metadata["rag_parse_config"] = opts.Snapshot()
+	if len(assets) > 0 {
+		metadata["rag_image_assets"] = assets
+		recognition := l.config.ImageRecognition.Effective()
+		recognition.APIKey = ""
+		if l.config.ImageText != nil {
+			recognition.Provider = "injected"
+			recognition.BaseURL, recognition.Model = "", ""
+		}
+		metadata["rag_image_recognition"] = map[string]any{"enabled": l.config.RecognizeImages || l.config.ImageText != nil, "config": recognition}
+	}
+	if len(result.Metadata) > 0 {
+		metadata["rag_parse_diagnostics"] = result.Metadata
+	}
 	metadata["rag_source_content_hash"] = result.ContentHash
 	metadata[documenttext.MetaSourceBlocks] = result.SourceBlocks
 	metadata["rag_parse_cache_hit"] = result.CacheHit
@@ -197,7 +224,7 @@ func validateSource(src document.Source) (string, os.FileInfo, error) {
 	}
 	ext := strings.ToLower(filepath.Ext(path))
 
-	if _, ok := supportedExtensions[ext]; !ok {
+	if !SupportedExtension(ext) {
 		if ext == "" {
 			ext = "<none>"
 		}
@@ -218,6 +245,9 @@ func SupportedExtension(ext string) bool {
 
 	if !strings.HasPrefix(ext, ".") {
 		ext = "." + ext
+	}
+	if documenttext.IsImageExtension(ext) {
+		return true
 	}
 
 	_, ok := supportedExtensions[ext]

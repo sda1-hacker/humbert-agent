@@ -1,16 +1,19 @@
 package documenttext
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/csv"
-	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/gohugoio/hugo-goldmark-extensions/passthrough"
 	"github.com/tsawler/tabula"
 	tabularag "github.com/tsawler/tabula/rag"
+	"github.com/yuin/goldmark/ast"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
@@ -18,12 +21,17 @@ import (
 var htmlRowStart = regexp.MustCompile(`\s*<tr\b`)
 
 // convertHTML 让 Tabula 转换正文，并在转换前保留表格片段，防止库先把合并关系和单元格引用压平。
-func convertHTML(path string, md tabularag.MarkdownOptions, opts ParserOptions) (string, []tabula.Warning, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", nil, err
+func convertHTML(path string, md tabularag.MarkdownOptions, opts ParserOptions, sources ...string) (string, []tabula.Warning, error) {
+	source := ""
+	if len(sources) > 0 {
+		source = sources[0]
+	} else {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", nil, err
+		}
+		source = string(data)
 	}
-	source := string(data)
 	var masked strings.Builder
 	var replacements []string
 	consumed := 0
@@ -50,51 +58,38 @@ func convertHTML(path string, md tabularag.MarkdownOptions, opts ParserOptions) 
 // normalizeMarkdown 在建立原文范围之前统一换行和 HTML 表格；代码示例中的 HTML 保持原样。
 func normalizeMarkdown(text string) string {
 	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
-	var out, plain strings.Builder
-	var fence Fence
-	flush := func() { out.WriteString(normalizeTables(plain.String())); plain.Reset() }
-	for line := range strings.SplitAfterSeq(text, "\n") {
-		active := fence.Active()
-		boundary := fence.Observe(line)
-		if !active && boundary {
-			flush()
-			out.WriteString(line)
-		} else if active {
-			out.WriteString(line)
-		} else {
-			plain.WriteString(line)
+	if !strings.Contains(strings.ToLower(text), "<table") {
+		return text
+	}
+	md, err := ParseMarkdown(context.Background(), text)
+	if err != nil {
+		return text
+	}
+	// 代码、公式和链接中的 HTML 是示例文字，不能被表格清洗误改。
+	var protected []MarkdownRange
+	_ = ast.Walk(md.Root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			switch n.(type) {
+			case *ast.FencedCodeBlock, *ast.CodeBlock, *ast.CodeSpan, *ast.Link, *ast.Image, *passthrough.PassthroughBlock, *passthrough.PassthroughInline:
+				protected = append(protected, md.Range(n))
+				return ast.WalkSkipChildren, nil
+			}
 		}
+		return ast.WalkContinue, nil
+	})
+	sort.Slice(protected, func(i, j int) bool { return protected[i].Start < protected[j].Start })
+	var out strings.Builder
+	at := 0
+	for _, r := range protected {
+		if r.Start < at || r.End <= r.Start {
+			continue
+		}
+		out.WriteString(normalizeTables(text[at:r.Start]))
+		out.WriteString(text[r.Start:r.End])
+		at = r.End
 	}
-	flush()
+	out.WriteString(normalizeTables(text[at:]))
 	return out.String()
-}
-
-// Fence 跟踪 Markdown 围栏；四个反引号中的三个反引号不会被误认为结束，波浪线围栏同样受保护。
-type Fence struct{ marker string }
-
-func (f *Fence) Active() bool   { return f.marker != "" }
-func (f *Fence) Marker() string { return f.marker }
-func (f *Fence) Observe(line string) bool {
-	line = strings.TrimSpace(line)
-	if len(line) < 3 || (line[0] != '`' && line[0] != '~') {
-		return false
-	}
-	n := 0
-	for n < len(line) && line[n] == line[0] {
-		n++
-	}
-	if n < 3 {
-		return false
-	}
-	if f.marker == "" {
-		f.marker = line[:n]
-		return true
-	}
-	if line[0] == f.marker[0] && n >= len(f.marker) && strings.TrimSpace(line[n:]) == "" {
-		f.marker = ""
-		return true
-	}
-	return false
 }
 
 func normalizeTables(text string) string {
@@ -160,6 +155,9 @@ func normalizeTable(source string) string {
 	var clean func(*html.Node)
 	clean = func(node *html.Node) {
 		if node.Type == html.ElementNode {
+			if node.Parent != nil && node.Parent.Data == "table" && (node.Data == "thead" || node.Data == "tbody" || node.Data == "tfoot") {
+				clampRowSpans(node)
+			}
 			if node.Data == "table" {
 				tables++
 			}
@@ -184,6 +182,23 @@ func normalizeTable(source string) string {
 				node.RemoveChild(child)
 			} else {
 				clean(child)
+				// 展平表格行组，保留 th/rowspan/colspan；续块只需补 table 和表头，不会留下半个 tbody。
+				if node.Data == "table" && (child.Data == "thead" || child.Data == "tbody" || child.Data == "tfoot") {
+					for row := child.FirstChild; row != nil; {
+						following := row.NextSibling
+						if child.Data == "thead" {
+							for cell := row.FirstChild; cell != nil; cell = cell.NextSibling {
+								if cell.Type == html.ElementNode && cell.Data == "td" {
+									cell.Data, cell.DataAtom = "th", atom.Th
+								}
+							}
+						}
+						child.RemoveChild(row)
+						node.InsertBefore(row, child)
+						row = following
+					}
+					node.RemoveChild(child)
+				}
 			}
 			child = next
 		}
@@ -208,29 +223,65 @@ func normalizeTable(source string) string {
 	return "\n\n" + strings.TrimSpace(markdown) + "\n\n"
 }
 
-// CSV 逐条读取，保留单元格中的引号、逗号和换行；显式拒绝不一致的列数，而不是带错位数据继续建索引。
+// clampRowSpans 在展平前固定行组范围；rowspan=0 表示当前行组剩余行，不能错误延伸到下一个 tbody。
+func clampRowSpans(group *html.Node) {
+	var rows []*html.Node
+	for row := group.FirstChild; row != nil; row = row.NextSibling {
+		if row.Type == html.ElementNode && row.Data == "tr" {
+			rows = append(rows, row)
+		}
+	}
+	for i, row := range rows {
+		for cell := row.FirstChild; cell != nil; cell = cell.NextSibling {
+			for j, attr := range cell.Attr {
+				if attr.Key == "rowspan" {
+					if n, err := strconv.Atoi(attr.Val); err == nil && (n == 0 || n > len(rows)-i) {
+						cell.Attr[j].Val = strconv.Itoa(len(rows) - i)
+					}
+				}
+			}
+		}
+	}
+}
+
+// CSV 对齐 WeKnora 的宽表规则：宽度取最长记录，短行补空列；不丢弃多出的单元格。
 func csvMarkdown(source string, maxBytes int) (string, error) {
 	reader := csv.NewReader(strings.NewReader(source))
+	reader.LazyQuotes, reader.TrimLeadingSpace, reader.FieldsPerRecord = true, true, -1
+	records, err := reader.ReadAll()
+	if err != nil {
+		return "", err
+	}
+	if len(records) == 0 {
+		return "", nil
+	}
+	width := 0
+	for _, row := range records {
+		width = max(width, len(row))
+	}
 	var out strings.Builder
-	for row := 0; ; row++ {
-		cells, err := reader.Read()
-		if err == io.EOF {
-			return out.String(), nil
-		}
-		if err != nil {
-			return "", err
-		}
-		out.WriteByte('|')
-		for _, cell := range cells {
-			cell = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(cell, "\\", "\\\\"), "|", "\\|"), "\n", "<br>")
-			out.WriteString(" " + cell + " |")
+	escape := strings.NewReplacer("\\", "\\\\", "|", "\\|", "\n", "<br>", "\r", "")
+	for i, row := range records {
+		out.WriteString("| ")
+		for col := range width {
+			cell := ""
+			if col < len(row) {
+				cell = row[col]
+			}
+			cell = escape.Replace(cell)
+			out.WriteString(cell)
+			out.WriteString(" |")
+			if col+1 < width {
+				out.WriteByte(' ')
+			}
 		}
 		out.WriteByte('\n')
-		if row == 0 {
-			out.WriteString("|" + strings.Repeat(" --- |", len(cells)) + "\n")
+		if i == 0 {
+			out.WriteString("|" + strings.Repeat(" --- |", width) + "\n")
 		}
 		if out.Len() > maxBytes {
 			return "", ErrResourceLimit
 		}
 	}
+	return out.String(), nil
 }
