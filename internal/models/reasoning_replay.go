@@ -10,7 +10,7 @@ import (
 )
 
 // SupportsReasoningReplay 描述当前模型的已知协议，而非能否生成 thinking。
-// MiMo 的接口文档建议工具链持续回传前序 reasoning_content；未知兼容模型仍保守省略。
+// MiMo 与 DeepSeek 当前协议要求工具链回传前序 reasoning_content；未知兼容模型仍保守省略。
 func (s RuntimeSnapshot) SupportsReasoningReplay() bool {
 	return supportsReasoningReplay(s.ProviderType, s.ModelName)
 }
@@ -22,9 +22,11 @@ func supportsReasoningReplay(provider ProviderType, modelName string) bool {
 	if provider != ProviderTypeOpenAICompatible {
 		return false
 	}
-	// 只识别 MiMo 官方已文档化的模型 ID；不能将所有兼容端点视为同一种协议。
+	// 只识别官方已文档化的模型 ID；预设新增模型也必须遵守对应协议，不能一概丢弃推理字段。
 	switch strings.ToLower(strings.TrimSpace(modelName)) {
 	case "mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5":
+		return true
+	case "deepseek-flash", "deepseek-v4-pro":
 		return true
 	default:
 		return false

@@ -1,11 +1,14 @@
 <script setup>
-import { defineAsyncComponent } from "vue";
+import { defineAsyncComponent, inject } from "vue";
+import { knowledgeCitationContext } from "../../utils/knowledgeSources.js";
 import { safeUrl } from "../../utils/markdown.js";
 import { Browser } from "@wailsio/runtime";
 import { Message } from "../../utils/uiMessage.js";
 
 defineProps({ tokens: { type: Array, default: () => [] } });
 const MathFormula = defineAsyncComponent(() => import("./MathFormula.vue"));
+const citations = inject(knowledgeCitationContext, null);
+function hasSource(id) { return citations?.sources.value.some((source) => source.id === id); }
 
 function openLink(url) {
   const safe = safeUrl(url);
@@ -31,6 +34,7 @@ function openImage(url) {
     <em v-else-if="token.type === 'em'"><MarkdownInline :tokens="token.children" /></em>
     <del v-else-if="token.type === 'strike'"><MarkdownInline :tokens="token.children" /></del>
     <button v-else-if="token.type === 'link'" type="button" class="md-link" @click="openLink(token.url)">{{ token.text }}</button>
+    <template v-else-if="token.type === 'citation'"><button v-if="hasSource(token.sourceID)" type="button" class="md-link" @click="citations.open(token.sourceID)" :aria-label="`查看来源：${token.text}`">{{ token.text }}</button><span v-else title="没有对应的已检索来源">{{ token.text }}</span></template>
     <img v-else-if="token.type === 'image'" class="md-inline-image" :src="token.url" :alt="token.alt" loading="lazy" />
     <button v-else-if="token.type === 'remote-image'" type="button" class="md-link" @click="openImage(token.url)">打开远程图片{{ token.alt ? `：${token.alt}` : '' }}</button>
     <template v-else>{{ token.text }}</template>

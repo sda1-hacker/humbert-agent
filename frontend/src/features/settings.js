@@ -52,18 +52,10 @@ const groups = [
       {
         key: "models",
         load: () => import("../components/settings/models/ModelCatalog.vue"),
-        title: "模型",
-        description: "管理可供 Agent 使用的模型、启用状态与请求参数。",
-        keywords: ["模型", "model", "llm", "ai"],
+        title: "模型与供应商",
+        description: "连接模型服务，选择预设模型或添加自定义模型。",
+        keywords: ["模型", "供应商", "provider", "model", "llm", "ai", "openai", "ollama", "api"],
         glyph: "M",
-      },
-      {
-        key: "providers",
-        load: () => import("../components/settings/models/ProviderSettings.vue"),
-        title: "供应商",
-        description: "配置 OpenAI、兼容服务与 Ollama 等模型供应商。",
-        keywords: ["供应商", "provider", "openai", "ollama", "api"],
-        glyph: "P",
       },
       {
         key: "multimedia",
@@ -79,6 +71,14 @@ const groups = [
     key: "capabilities",
     title: "Agent 能力",
     items: [
+      {
+        key: "knowledge",
+        load: () => import("../components/settings/KnowledgeSettings.vue"),
+        title: "知识库 RAG",
+        description: "配置文档索引、PostgreSQL、Embedding、图片识别和可选精排。",
+        keywords: ["rag", "知识库", "文档", "embedding", "pgsql", "检索", "rerank"],
+        glyph: "K",
+      },
       {
         key: "skills",
         forwardEvents: { "open-detail": "open-skills" },

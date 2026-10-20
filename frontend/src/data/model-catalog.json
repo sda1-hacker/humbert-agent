@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "verifiedAt": "2026-10-20",
+  "_说明": "预设仅用于新建表单，不覆盖用户保存的配置。capabilities 按当前接入协议填写；未实现的原生文件与音频入口不自动开启。maxOutputTokens 是服务公开上限，defaultOutputTokens 是应用的初始输出预算；null 表示没有核实统一上限。Ollama 的实际窗口取决于本机部署，默认按 4K 保守配置。",
+  "defaults": { "timeoutMS": 60000, "contextWindow": 131072, "maxOutputTokens": 8192 },
+  "providers": [
+    {
+      "id": "xiaomi",
+      "name": "小米 MiMo",
+      "type": "openai_compatible",
+      "baseURL": "https://api.xiaomimimo.com/v1",
+      "baseURLAliases": ["https://token-plan-cn.xiaomimimo.com/v1"],
+      "source": "https://mimo.mi.com/docs/quick-start/model",
+      "models": [
+        { "id": "mimo-v2.6-flash", "displayName": "MiMo V2.6 Flash", "contextWindow": 1048576, "maxOutputTokens": 131072, "defaultOutputTokens": 32768, "capabilities": { "tools": true, "vision": true, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://mimo.mi.com/docs/en-US/tokenplan/integration/openclaw" },
+        { "id": "mimo-v2.6-pro", "displayName": "MiMo V2.6 Pro", "contextWindow": 1048576, "maxOutputTokens": 131072, "defaultOutputTokens": 32768, "capabilities": { "tools": true, "vision": true, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://mimo.mi.com/docs/en-US/tokenplan/integration/openclaw" },
+        { "id": "mimo-v2.6-pro-ultraspeed", "displayName": "MiMo V2.6 Pro UltraSpeed", "contextWindow": 1048576, "maxOutputTokens": 131072, "defaultOutputTokens": 32768, "capabilities": { "tools": true, "vision": true, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://mimo.mi.com/models/zh-CN/mimo-v2.6-pro-ultraspeed" }
+      ]
+    },
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "type": "openai",
+      "baseURL": "https://api.openai.com/v1",
+      "source": "https://developers.openai.com/api/docs/models",
+      "models": [
+        { "id": "gpt-5.4", "displayName": "GPT-5.4", "contextWindow": 1050000, "maxOutputTokens": 128000, "defaultOutputTokens": 16384, "capabilities": { "tools": true, "vision": true, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://developers.openai.com/api/docs/models/gpt-5.4" }
+      ]
+    },
+    {
+      "id": "deepseek",
+      "name": "DeepSeek",
+      "type": "openai_compatible",
+      "baseURL": "https://api.deepseek.com",
+      "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+      "models": [
+        { "id": "deepseek-flash", "displayName": "DeepSeek V4.1 Flash", "contextWindow": 1048576, "maxOutputTokens": 393216, "defaultOutputTokens": 32768, "capabilities": { "tools": true, "vision": true, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://api-docs.deepseek.com/quick_start/pricing/" },
+        { "id": "deepseek-v4-pro", "displayName": "DeepSeek V4 Pro", "contextWindow": 1048576, "maxOutputTokens": 393216, "defaultOutputTokens": 32768, "capabilities": { "tools": true, "vision": false, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://api-docs.deepseek.com/quick_start/pricing/" }
+      ]
+    },
+    {
+      "id": "dashscope",
+      "name": "阿里云百炼",
+      "type": "openai_compatible",
+      "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "source": "https://help.aliyun.com/zh/model-studio/qwen3-6-plus",
+      "models": [
+        { "id": "qwen3.6-plus", "displayName": "Qwen3.6 Plus", "contextWindow": 1000000, "maxOutputTokens": 65536, "defaultOutputTokens": 16384, "capabilities": { "tools": true, "vision": true, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://help.aliyun.com/zh/model-studio/qwen3-6-plus" }
+      ]
+    },
+    {
+      "id": "ollama",
+      "name": "Ollama",
+      "type": "ollama",
+      "baseURL": "http://127.0.0.1:11434",
+      "source": "https://docs.ollama.com/context-length",
+      "models": [
+        { "id": "qwen3:8b", "displayName": "Qwen3 8B", "contextWindow": 40960, "defaultContextWindow": 4096, "maxOutputTokens": null, "defaultOutputTokens": 2048, "capabilities": { "tools": true, "vision": false, "reasoning": true, "json": true, "files": false, "audio": false }, "source": "https://ollama.com/library/qwen3:8b" },
+        { "id": "qwen3-vl:8b-instruct", "displayName": "Qwen3 VL 8B Instruct", "contextWindow": 262144, "defaultContextWindow": 4096, "maxOutputTokens": null, "defaultOutputTokens": 2048, "capabilities": { "tools": true, "vision": true, "reasoning": false, "json": true, "files": false, "audio": false }, "source": "https://ollama.com/library/qwen3-vl:8b-instruct" }
+      ]
+    }
+  ]
+}

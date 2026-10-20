@@ -13,6 +13,9 @@ import MarkdownRenderer
 
 import IdentityAvatar
   from "../ui/IdentityAvatar.vue";
+import { useKnowledgeCitations } from "../../composables/useKnowledgeCitations.js";
+import KnowledgeSources from "../knowledge/KnowledgeSources.vue";
+import SourcePreview from "../knowledge/SourcePreview.vue";
 
 const props =
     defineProps({
@@ -89,6 +92,9 @@ const answering =
         props.content.length > 0,
     );
 
+const calls = computed(() => props.activity.filter((step) => step.type === "tool").map((step) => step.call));
+const { sources, preview, previewOpen, previewLoading, previewError, open: openSource } = useKnowledgeCitations(calls, () => props.agentId, () => props.sessionId, true);
+
 </script>
 
 <template>
@@ -133,6 +139,8 @@ const answering =
           aria-hidden="true"
       ></span>
     </div>
+    <KnowledgeSources :sources="sources" @open="openSource" />
+    <SourcePreview v-model:visible="previewOpen" :source="preview" :loading="previewLoading" :error="previewError" />
   </article>
 </template>
 

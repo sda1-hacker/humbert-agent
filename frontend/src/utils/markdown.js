@@ -94,8 +94,9 @@ export function parseInline(source) {
                         ? { type: "remote-image", alt: match[1], url }
                         : { type: "text", text: match[0] });
             } else if (pattern.type === "link") {
+                const sourceID = match[2].match(/^humbert-source:\/\/([A-Za-z0-9_-]{1,2048})$/)?.[1];
                 const url = safeUrl(match[2]);
-                tokens.push(url ? { type: "link", text: match[1], url } : { type: "text", text: match[0] });
+                tokens.push(sourceID ? { type: "citation", text: match[1], sourceID } : url ? { type: "link", text: match[1], url } : { type: "text", text: match[0] });
             } else {
                 tokens.push({ type: pattern.type, text: match[1],
                     ...(pattern.type === "code" ? {} : { children: parseInline(match[1]) }) });

@@ -218,15 +218,25 @@ func (s *Service) appendImageText(ctx context.Context, batch *IngestionBatch, as
 
 func imageWarnings(images []ImageAsset) []string {
 	var warnings []string
+	skipped := 0
 	for i, img := range images {
 		switch img.Status {
 		case "failed", "partial_failure":
 			warnings = append(warnings, fmt.Sprintf("图片 %d（页码 %d）处理状态 %s；已保留成功结果，可重试失败动作。", i+1, img.Page, img.Status))
 		case "not_requested":
-			warnings = append(warnings, fmt.Sprintf("图片 %d 已保存，未开启图片识别。", i+1))
+			skipped++
 		}
 	}
+	// 未启用识别是用户的配置选择，只汇总一次；真正的图片失败仍保留逐项定位。
+	if skipped > 0 {
+		warnings = append(warnings, fmt.Sprintf("已保存 %d 张图片，未开启图片识别。", skipped))
+	}
 	return warnings
+}
+
+// CanRetryDocument 统一判断文档是否允许重试，包括正文已发布但个别图片识别失败的情况。
+func CanRetryDocument(record DocumentRecord) bool {
+	return record.ParseStatus == DocumentFailed || record.ParseStatus == DocumentCancelled || hasFailedImages(record.Metadata)
 }
 
 func hasFailedImages(metadata map[string]any) bool {

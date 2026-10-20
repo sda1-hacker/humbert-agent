@@ -10,6 +10,7 @@ import (
 // 新模块可在桌面装配处追加已构造的 Service，不必改动既有服务或公共业务规则。
 func All(core *coreapp.Application, additional ...application.Service) []application.Service {
 	services := []application.Service{
+		application.NewService(NewKnowledgeService(KnowledgeDependencies{Knowledge: core.Knowledge(), Agents: core.Agents(), Events: core.Events()})),
 		application.NewService(NewAgentService(AgentDependencies{
 			Agents: core.Agents(), Config: core.Config(), Lifecycle: core.Lifecycle(), Logger: core.Logger(),
 			Sandbox: core.Sandbox(), Tools: core.Tools(), Workspaces: core.Workspaces(),

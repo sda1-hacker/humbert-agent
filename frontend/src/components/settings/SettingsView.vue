@@ -1,5 +1,5 @@
 <script setup>
-import { computed, defineAsyncComponent, onErrorCaptured, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onErrorCaptured, onMounted, ref, watch } from "vue";
 import { IconSearch } from "@arco-design/web-vue/es/icon";
 import AppPageHeader from "../ui/AppPageHeader.vue";
 import { settingsFeatures, settingsGroups } from "../../features/settings.js";
@@ -19,8 +19,15 @@ function validKey(value) { return allItems.value.some((item) => item.key === val
 const activeKey = ref(validKey(props.initialKey));
 const query = ref("");
 const childRenderError = ref("");
+const settingsNav = ref(null);
+// 窄窗口使用横向导航，首次打开时也让当前配置项保持可见。
+async function revealActiveItem() {
+  await nextTick();
+  settingsNav.value?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+onMounted(revealActiveItem);
 watch(() => props.initialKey, (value) => { activeKey.value = validKey(value); });
-watch(activeKey, () => { childRenderError.value = ""; });
+watch(activeKey, () => { childRenderError.value = ""; void revealActiveItem(); });
 
 // 沿用技能/连接器的局部错误恢复，是否支持恢复由页面定义声明。
 onErrorCaptured((error, _instance, info) => {
@@ -78,7 +85,7 @@ function selectItem(key) { activeKey.value = validKey(key); }
         </a-input>
       </div>
 
-      <nav class="settings-nav" aria-label="设置导航">
+      <nav ref="settingsNav" class="settings-nav" aria-label="设置导航">
         <template v-for="group in filteredGroups" :key="group.key">
           <div class="settings-nav-label">{{ group.title }}</div>
 
@@ -88,6 +95,7 @@ function selectItem(key) { activeKey.value = validKey(key); }
               type="button"
               class="settings-nav-item"
               :class="{ 'settings-nav-item--active': activeKey === item.key }"
+              :aria-current="activeKey === item.key ? 'page' : undefined"
               @click="selectItem(item.key)"
           >
             <span class="settings-nav-item__glyph" aria-hidden="true">
@@ -106,7 +114,7 @@ function selectItem(key) { activeKey.value = validKey(key); }
 
     <main class="settings-content">
       <div class="settings-content__scroll">
-        <div class="settings-content__inner">
+        <div class="settings-content__inner" :class="{'settings-content__inner--models': activeKey === 'models'}">
           <AppPageHeader
               eyebrow="HUMBERT"
               :title="activeItem.title"
@@ -414,6 +422,20 @@ function selectItem(key) { activeKey.value = validKey(key); }
   min-width: 0;
 }
 
+/* 模型页使用完整可用高度，供应商导航与右侧内容各自滚动；其余设置沿用原布局。 */
+.settings-content__inner--models {
+  display: flex;
+  flex-direction: column;
+  width: min(1280px, 100%);
+  height: 100%;
+  padding-top: 26px;
+  padding-bottom: 26px;
+  padding-left: 28px;
+  padding-right: 28px;
+}
+.settings-content__inner--models > .h-page-header { flex-shrink: 0; margin-bottom: 20px; }
+.settings-content__inner--models > .settings-content__body { flex: 1; min-height: 0; }
+
 
 .settings-child-host {
   min-width: 0;
@@ -457,5 +479,22 @@ max-width: 900px
   .settings-content__inner {
     padding: var(--h-page-top) var(--h-page-gutter) var(--h-page-bottom);
   }
+  .settings-content__inner--models { height: auto; }
+  .settings-content__inner--models > .settings-content__body { flex: none; }
+}
+
+@media (max-width: 700px) {
+  .settings-view { grid-template-columns: minmax(0,1fr); grid-template-rows: auto minmax(0,1fr); }
+  .settings-sidebar { border-right: 0; border-bottom: 1px solid var(--h-border); }
+  .settings-sidebar__top { height: 48px; flex: 0 0 48px; }
+  .settings-search { display: none; }
+  .settings-nav { display: flex; flex-direction: row; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 0 12px 10px; }
+  .settings-nav-label { display: none; }
+  .settings-nav-item { width: auto; flex: 0 0 auto; padding: 9px 12px; border-left: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; }
+  .settings-nav-item--active { border-bottom-color: var(--h-accent); }
+  .settings-nav-item__glyph { display: none; }
+  .settings-content__inner, .settings-content__inner--models { height: auto; padding: 24px 16px 32px; }
+  .settings-content__inner--models > .settings-content__body { flex: none; }
+  .settings-content__inner--models :deep(.h-page-header__title) { font-size: 26px; }
 }
 </style>

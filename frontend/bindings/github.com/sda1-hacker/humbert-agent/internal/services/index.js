@@ -5,6 +5,7 @@
 import * as AgentService from "./agentservice.js";
 import * as AppService from "./appservice.js";
 import * as ChatService from "./chatservice.js";
+import * as KnowledgeService from "./knowledgeservice.js";
 import * as MCPService from "./mcpservice.js";
 import * as ModelService from "./modelservice.js";
 import * as PermissionService from "./permissionservice.js";
@@ -18,6 +19,7 @@ export {
     AgentService,
     AppService,
     ChatService,
+    KnowledgeService,
     MCPService,
     ModelService,
     PermissionService,

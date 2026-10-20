@@ -8,6 +8,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
 	"github.com/sda1-hacker/humbert-agent/internal/eventbus"
+	"github.com/sda1-hacker/humbert-agent/internal/knowledge"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/models"
@@ -25,6 +26,13 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/usecases"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
+
+// KnowledgeDependencies 只接收知识库业务及绑定校验需要的服务。
+type KnowledgeDependencies struct {
+	Knowledge *knowledge.Manager
+	Agents    *agents.Service
+	Events    *eventbus.Bus
+}
 
 // AgentDependencies 明确声明 AgentService 所需的依赖，入口不能再取得整个应用对象。
 type AgentDependencies struct {

@@ -204,7 +204,7 @@ func compactionModel(roles resolvedModelRoles) models.RuntimeSnapshot {
 	return roles.chat
 }
 
-// MiMo 回放当前窗口内所有 thinking，保持前序工具链；Ollama 保留当前轮次。
+// MiMo / DeepSeek 回放当前窗口内所有 thinking，保持前序工具链；Ollama 保留当前轮次。
 // OpenAI 与未知兼容端点默认只发送回答和工具事务。
 func reasoningReplayPolicyForModel(model models.RuntimeSnapshot) contextengine.ReasoningReplayPolicy {
 	if model.ProviderType == models.ProviderTypeOllama {

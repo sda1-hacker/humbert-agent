@@ -4,6 +4,12 @@ import { createFeatureRegistry } from "./registry.js";
 // 页面内部的 Agent/Session 状态仍由原来的领域 Store 管理。
 export const workspaceFeatures = createFeatureRegistry([
   {
+    key: "knowledge", title: "知识库", description: "文档、检索与 Agent 资料来源",
+    iconPath: "M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H4V4Zm9 3a3 3 0 0 1 3-3h5v15h-4a4 4 0 0 0-4 2",
+    load: () => import("../components/knowledge/KnowledgeWorkspaceView.vue"),
+    settingsEvents: { "manage-settings": "knowledge" },
+  },
+  {
     key: "tasks", title: "任务", description: "主动运行与定时计划",
     iconPath: "M7 3v3M17 3v3M5 5h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm-2 5h18M8 12h3M8 16h7",
     load: () => import("../components/tasks/TasksWorkspaceView.vue"),

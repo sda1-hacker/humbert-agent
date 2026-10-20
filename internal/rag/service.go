@@ -131,6 +131,9 @@ type IngestRequest struct {
 
 	// Source 本次导入的 Eino 文档来源。
 	Source document.Source
+	// StoredSource 是上传队列已经保存的原件；再次校验摘要后使用，避免排队期间原文件变化。
+	// 仅由业务装配层传入，不接受模型生成的文件路径。
+	StoredSource *SourceFile
 
 	// Splitter 普通切分或父子切分使用的基础参数。
 	Splitter ragconfig.Splitter
@@ -225,6 +228,17 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 	}
 	defer finish()
 	var saved *SourceFile
+	if !retry && req.StoredSource != nil {
+		if s.sources == nil {
+			return IngestResponse{}, errors.New("rag: 托管原件存储未配置")
+		}
+		file := *req.StoredSource
+		req.Source, err = s.sources.Resolve(ctx, file)
+		if err != nil {
+			return IngestResponse{}, err
+		}
+		saved = &file
+	}
 	if retry {
 		if s.documents == nil || s.sources == nil || req.DocumentID == "" {
 			return IngestResponse{}, errors.New("rag: 重试需要文档 ID、状态存储和托管原件")
@@ -236,7 +250,7 @@ func (s *Service) ingest(ctx context.Context, req IngestRequest, retry bool) (re
 		if err != nil {
 			return IngestResponse{}, err
 		}
-		if record.ParseStatus != DocumentFailed && record.ParseStatus != DocumentCancelled && !hasFailedImages(record.Metadata) {
+		if !CanRetryDocument(record) {
 			return IngestResponse{}, errors.New("rag: 只能重试已失败或已取消的导入")
 		}
 		file := record.SourceFile

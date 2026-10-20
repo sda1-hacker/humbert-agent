@@ -215,7 +215,7 @@ async function finish() {
           <p v-if="diagnostic.success">工具调用：{{ $t(diagnostic.toolsSupported ? '配置显示支持，尚未实测' : '当前配置未启用') }}</p>
         </div>
         <a-button v-if="diagnostic?.success" type="primary" :disabled="busy" @click="advance(3)">继续创建助手</a-button>
-        <a-button type="outline" :disabled="busy" @click="emit('open-settings', ['credential', 'network', 'endpoint', 'timeout'].includes(diagnostic?.category) ? 'providers' : 'models')">打开相关设置</a-button>
+        <a-button type="outline" :disabled="busy" @click="emit('open-settings', 'models')">打开相关设置</a-button>
       </div>
 
       <div v-else class="body" :aria-busy="busy">

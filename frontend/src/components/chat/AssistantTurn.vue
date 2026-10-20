@@ -16,6 +16,9 @@ import IdentityAvatar
 
 import { scheduledTasksOfCalls } from "../../utils/toolTrace.js";
 import { formatDate } from "../../i18n/index.js";
+import { useKnowledgeCitations } from "../../composables/useKnowledgeCitations.js";
+import KnowledgeSources from "../knowledge/KnowledgeSources.vue";
+import SourcePreview from "../knowledge/SourcePreview.vue";
 
 const emit = defineEmits([
   "open-workspace-file",
@@ -77,6 +80,8 @@ const content =
     );
 
 const scheduledTasks = computed(() => scheduledTasksOfCalls(props.trace?.calls || []));
+const calls = computed(() => props.trace?.calls || props.activity.filter((step) => step.type === "tool").map((step) => step.call));
+const { sources, preview, previewOpen, previewLoading, previewError, open: openSource } = useKnowledgeCitations(calls, () => props.agentId, () => props.sessionId);
 
 function taskTime(value) {
   if (!value) return "";
@@ -121,6 +126,9 @@ const incomplete =
     >
       <MarkdownRenderer :content="content" />
     </div>
+
+    <KnowledgeSources :sources="sources" @open="openSource" />
+    <SourcePreview v-model:visible="previewOpen" :source="preview" :loading="previewLoading" :error="previewError" />
 
     <MessageActions
         :message-id="message?.id || ''"

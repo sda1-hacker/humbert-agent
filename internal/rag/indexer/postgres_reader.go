@@ -16,6 +16,32 @@ var _ rag.ChunkReader = (*DocumentStore)(nil)
 var _ rag.PublishedChunkReader = (*DocumentStore)(nil)
 var _ rag.DocumentTracker = (*DocumentStore)(nil)
 
+// ListDocuments 分页读取管理摘要，不把全文、处理配置或大块元数据发送给桌面页面。
+func (p *DocumentStore) ListDocuments(ctx context.Context, collectionID string, limit, offset int) ([]rag.DocumentRecord, error) {
+	if strings.TrimSpace(collectionID) == "" || limit < 1 || limit > 101 || offset < 0 {
+		return nil, errors.New("rag: invalid document page")
+	}
+	rows, err := p.db.Query(ctx, `SELECT source_key,title,document_type,file_name,file_type,file_size,
+revision,parse_status,processing_stage,error_code,error_message,created_at,updated_at,
+jsonb_build_object('rag_image_assets',COALESCE((SELECT jsonb_agg(jsonb_build_object('status',asset->>'status'))
+ FROM jsonb_array_elements(CASE WHEN jsonb_typeof(metadata->'rag_image_assets')='array'
+ THEN metadata->'rag_image_assets' ELSE '[]'::jsonb END) asset),'[]'::jsonb))
+FROM documents WHERE collection_id=$1 ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3`, collectionID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.AppendRows([]rag.DocumentRecord{}, rows, func(row pgx.CollectableRow) (rag.DocumentRecord, error) {
+		r := rag.DocumentRecord{CollectionID: collectionID}
+		var metadata []byte
+		err := row.Scan(&r.ID, &r.Title, &r.Type, &r.Name, &r.SourceFile.Type, &r.Size, &r.Revision,
+			&r.ParseStatus, &r.ProcessingStage, &r.ErrorCode, &r.ErrorMessage, &r.CreatedAt, &r.UpdatedAt, &metadata)
+		if err == nil {
+			err = json.Unmarshal(metadata, &r.Metadata)
+		}
+		return r, err
+	})
+}
+
 // GetDocument 只返回管理字段，最近导入失败时仍返回旧版本的原件信息和发布版本。
 func (p *DocumentStore) GetDocument(ctx context.Context, collectionID, documentID string) (rag.DocumentRecord, error) {
 	var record rag.DocumentRecord
@@ -44,6 +70,17 @@ WHERE d.collection_id=$1 AND d.source_key=$2`, collectionID, documentID).Scan(
 
 // ListChunks 按原文顺序返回已发布文档的可检索分块，父分块不参与评估。
 func (p *DocumentStore) ListChunks(ctx context.Context, collectionID, documentID string) ([]rag.ChunkRecord, error) {
+	return p.listChunks(ctx, collectionID, documentID, 0, 0)
+}
+
+// PageChunks 供管理页按需读取，避免预览长文档时加载所有分块和图片识别正文。
+func (p *DocumentStore) PageChunks(ctx context.Context, collectionID, documentID string, offset int) ([]rag.ChunkRecord, error) {
+	if offset < 0 {
+		return nil, errors.New("rag: invalid chunk offset")
+	}
+	return p.listChunks(ctx, collectionID, documentID, 20, offset)
+}
+func (p *DocumentStore) listChunks(ctx context.Context, collectionID, documentID string, limit, offset int) ([]rag.ChunkRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -58,8 +95,8 @@ func (p *DocumentStore) ListChunks(ctx context.Context, collectionID, documentID
 		FROM chunks c JOIN documents d ON d.collection_id=c.collection_id AND d.id=c.document_id
 		LEFT JOIN chunks p ON p.collection_id=c.collection_id AND p.id=c.parent_chunk_id
 		WHERE c.collection_id=$1 AND d.source_key=$2 AND c.chunk_type IN ('text','image_ocr','image_caption')
-		ORDER BY c.chunk_index
-	`, collectionID, documentID)
+		ORDER BY c.chunk_index LIMIT NULLIF($3,0) OFFSET $4
+	`, collectionID, documentID, limit, offset)
 	if err != nil {
 		return nil, err
 	}

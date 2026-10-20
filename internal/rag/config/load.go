@@ -33,6 +33,31 @@ func Load(path string) (Config, error) {
 		}
 	}
 
+	return decode(v, cfg)
+}
+
+// Values 提供桌面设置页与持久化共用的配置投影，跳过客户端、回调等运行时依赖。
+// 时长保留单位字符串；调用方负责将密码等敏感字段移交凭据库。
+func Values(cfg Config) map[string]any {
+	v := viper.New()
+	_ = register(v, reflect.ValueOf(cfg), "", true)
+	return v.AllSettings()
+}
+
+// FromValues 与 YAML 加载使用相同默认值和严格校验，不读取环境变量。
+func FromValues(values map[string]any) (Config, error) {
+	cfg := Default()
+	v := viper.New()
+	if err := register(v, reflect.ValueOf(cfg), "", true); err != nil {
+		return Config{}, err
+	}
+	if err := v.MergeConfigMap(values); err != nil {
+		return Config{}, err
+	}
+	return decode(v, cfg)
+}
+
+func decode(v *viper.Viper, cfg Config) (Config, error) {
 	if err := v.UnmarshalExact(&cfg, func(d *mapstructure.DecoderConfig) {
 		d.DecodeHook = mapstructure.ComposeDecodeHookFunc(durationHook, mapstructure.StringToSliceHookFunc(","))
 	}); err != nil {

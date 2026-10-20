@@ -16,6 +16,7 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/contextengine"
 	"github.com/sda1-hacker/humbert-agent/internal/credential"
 	"github.com/sda1-hacker/humbert-agent/internal/eventbus"
+	"github.com/sda1-hacker/humbert-agent/internal/knowledge"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	humbertmcp "github.com/sda1-hacker/humbert-agent/internal/mcp"
 	"github.com/sda1-hacker/humbert-agent/internal/mcp/einoadapter"
@@ -70,6 +71,7 @@ type Status struct {
 // 业务协调放在 usecases，能力装配放在 runtime。Shutdown 先停止生产者，
 // 再等待 Runtime，最后逆序关闭模块连接、索引、存储及基础资源。
 type Application struct {
+	knowledge        *knowledge.Manager
 	mcpConfiguration *usecases.MCPConfiguration
 	config           *config.Config
 	logger           *logging.Logger
@@ -340,7 +342,16 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 	modules := &moduleManager{}
 	resources.add(closeResources, "Modules", modules.close)
 	resources.add(stopWork, "Modules", modules.stop)
-	if err := modules.install(ctx, agentruntime.ModuleHost{DataDir: cfg.Paths.HomeDir, Logger: logger, Credentials: credentials, Events: events, Sandbox: sandboxManager}, runtimeResolver, opts.modules); err != nil {
+	var knowledgeManager *knowledge.Manager
+	installers := append([]agentruntime.ModuleInstaller{func(ctx context.Context, host agentruntime.ModuleHost) (agentruntime.Module, error) {
+		var err error
+		knowledgeManager, err = knowledge.New(ctx, host, modelRegistry)
+		if err != nil {
+			return agentruntime.Module{}, err
+		}
+		return knowledgeManager.Module(), nil
+	}}, opts.modules...)
+	if err := modules.install(ctx, agentruntime.ModuleHost{DataDir: cfg.Paths.HomeDir, Logger: logger, Credentials: credentials, Events: events, Sandbox: sandboxManager}, runtimeResolver, installers); err != nil {
 		return nil, err
 	}
 	if err := modules.start(ctx); err != nil {
@@ -356,6 +367,7 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 	maintenance := usecases.NewSkillMaintenance(agentService, skillManager)
 	mcpConfiguration := usecases.NewMCPConfiguration(mcpManager, credentials, logger)
 	application := &Application{
+		knowledge:        knowledgeManager,
 		resources:        resources,
 		mcpConfiguration: mcpConfiguration,
 		search:           searchService, lifecycle: lifecycle, maintenance: maintenance,
@@ -482,6 +494,8 @@ func (a *Application) MCP() *humbertmcp.Manager {
 }
 
 // Models 返回 ModelRegistry。
+func (a *Application) Knowledge() *knowledge.Manager { return a.knowledge }
+
 func (a *Application) Models() *models.Registry {
 	return a.models
 }

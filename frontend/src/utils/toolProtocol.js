@@ -150,6 +150,7 @@ export function toolDisplayName(
     toolName,
 ) {
     const names = {
+        knowledge_search: "检索知识库",
         list_files:
             "查看目录",
 

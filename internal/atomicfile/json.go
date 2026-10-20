@@ -219,6 +219,10 @@ func writeFull(file *os.File, data []byte) error {
 	return nil
 }
 
+// Replace 发布已经完整写入并同步的同目录临时文件，复用 Windows 覆盖与失败恢复逻辑。
+// 调用方负责目标路径授权、临时文件权限及未提交时的清理。
+func Replace(source string, destination string) error { return replaceFile(source, destination) }
+
 func replaceFile(source string, destination string) error {
 	if err := os.Rename(source, destination); err == nil {
 		return nil
