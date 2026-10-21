@@ -53,6 +53,8 @@ const props =
         default: false,
       },
 
+      syncPending: { type: Boolean, default: false },
+
       /** 当前 Turn 正在等待的 Human Approval。 */
       approval: {
         type: Object,
@@ -110,6 +112,7 @@ const { sources, preview, previewOpen, previewLoading, previewError, open: openS
         :agent-id="agentId"
         :session-id="sessionId"
         :running="running && !answering"
+        :sync-pending="syncPending"
         @open-workspace-file="emit('open-workspace-file', $event)"
     />
 

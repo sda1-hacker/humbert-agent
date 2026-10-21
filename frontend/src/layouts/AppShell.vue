@@ -16,6 +16,16 @@ import ChatView from "../components/chat/ChatView.vue";
 // 和领域 API 全部进入聊天首屏主包，同时不改变任何 Pinia/Runtime 生命周期。
 const SettingsView = defineAsyncComponent(() => import("../components/settings/SettingsView.vue"));
 
+import SettingsAgentModal from "../components/sidebar/AgentModal.vue";
+const settingsAgent = ref(null);
+const settingsAgentVisible = ref(false);
+const settingsPage = ref(null);
+async function openSettingsAgent(id) {
+  const agent = agentStore.items.find(item => item.id === id);
+  if (!agent) { Message.warning("Agent 已变化，请刷新配置"); return; }
+  settingsAgent.value = agent; settingsAgentVisible.value = true;
+}
+
 const FirstRunGuide = defineAsyncComponent(() => import("../components/onboarding/FirstRunGuide.vue"));
 
 // 页面定义共用同一个导航注册表；新增工作区不再修改模板中的分支链。
@@ -54,7 +64,7 @@ const runtimeStore = useRuntimeStore();
 
 // 使用现有运行事件投影全局停止入口，切换会话/设置页后仍能接管，不另建状态或轮询。
 const computerSessions = computed(() => Object.entries(runtimeStore.runs)
-    .filter(([, run]) => run.requestID && run.tools?.some((tool) => tool.name === "computer"))
+    .filter(([sessionID, run]) => runtimeStore.isSessionRunning(sessionID) && run.tools?.some((tool) => tool.name === "computer"))
     .map(([sessionID]) => sessionID));
 const stoppingComputer = ref(false);
 async function stopComputer() {
@@ -334,7 +344,8 @@ async function openTask(taskID) {
       return;
     }
     await taskStore.select(taskID);
-    openTasks();
+    if (settingsVisible.value) await settingsPage.value?.navigate(openTasks);
+    else openTasks();
   } catch (error) { Message.error(error?.message ?? String(error)); }
 }
 
@@ -478,13 +489,14 @@ onUnmounted(() => {
     -->
     <SettingsView
         v-if="settingsVisible"
+        ref="settingsPage"
         class="app-shell__settings"
         :initial-key="settingsInitialKey"
         @close="closeSettings"
         @open-skills="openSkills"
         @open-session="openTaskSession"
+        @open-agent="openSettingsAgent"
     />
-
     <div v-else-if="bootstrapError" class="app-shell__bootstrap">
       <p>读取本地配置失败：{{ bootstrapError }}</p>
       <a-button @click="bootstrap">重试</a-button>
@@ -522,6 +534,7 @@ onUnmounted(() => {
           v-show="!compactLayout || (!layoutStore.sidebarOpen && !contextVisible)"
           @open-workspace-file="openWorkspaceFile"
           @open-task="openTask"
+          @open-settings="openSettings"
       />
       <template v-if="contextVisible">
         <div
@@ -544,6 +557,7 @@ onUnmounted(() => {
         />
       </template>
     </div>
+    <SettingsAgentModal v-if="settingsAgent" v-model:visible="settingsAgentVisible" :agent="settingsAgent" @deleted="sessionStore.loadForAgent(agentStore.selectedID).catch(error => Message.error(error?.message || String(error)))" />
   </div>
 </template>
 

@@ -78,18 +78,19 @@ type Event struct {
 
 	// Runtime 只在 turn.started 中提供，表示该 Turn 已经冻结的统一 Runtime Manifest。
 	// 上面的扁平字段继续保留兼容现有前端/日志消费者。
-	Runtime       *RuntimeManifest `json:"runtime,omitempty"`
-	Delta         string           `json:"delta,omitempty"`
-	MessageID     string           `json:"messageID,omitempty"`
-	ToolCallID    string           `json:"toolCallID,omitempty"`
-	ToolName      string           `json:"toolName,omitempty"`
-	ToolArguments string           `json:"toolArguments,omitempty"`
-	DurationMS    int64            `json:"durationMS,omitempty"`
-	InputTokens   int              `json:"inputTokens,omitempty"`
-	OutputTokens  int              `json:"outputTokens,omitempty"`
-	TotalTokens   int              `json:"totalTokens,omitempty"`
-	ToolCalls     int              `json:"toolCalls,omitempty"` // 终态携带预算计数，覆盖中途事件持久化失败。
-	Error         string           `json:"error,omitempty"`
+	Runtime        *RuntimeManifest `json:"runtime,omitempty"`
+	Delta          string           `json:"delta,omitempty"`
+	MessageID      string           `json:"messageID,omitempty"`
+	ToolCallID     string           `json:"toolCallID,omitempty"`
+	ToolName       string           `json:"toolName,omitempty"`
+	ToolArguments  string           `json:"toolArguments,omitempty"`
+	DurationMS     int64            `json:"durationMS,omitempty"`
+	InputTokens    int              `json:"inputTokens,omitempty"`
+	OutputTokens   int              `json:"outputTokens,omitempty"`
+	TotalTokens    int              `json:"totalTokens,omitempty"`
+	ToolCalls      int              `json:"toolCalls,omitempty"` // 终态携带预算计数，覆盖中途事件持久化失败。
+	Error          string           `json:"error,omitempty"`
+	DiscardPartial bool             `json:"discardPartial,omitempty"` // 审核拦截等不可交付输出不得保留在实时视图。
 
 	// Approval 只在 approval.* Runtime Event 中存在。Request 本身不包含 raw Tool
 	// Arguments，只包含 Permission 层已经脱敏的 Presentation。

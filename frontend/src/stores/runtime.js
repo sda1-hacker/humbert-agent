@@ -90,6 +90,9 @@ export const useRuntimeStore = defineStore("runtime", {
 
     // 保存初始化失败的消息收据；同一内容重试时复用后端消息，避免重复追加。
     failedStarts: {},
+    historyErrors: {},
+    historyLoading: {},
+    recoverableFailures: {},
 
     /**
      * sessionID -> Context Usage。
@@ -136,8 +139,10 @@ export const useRuntimeStore = defineStore("runtime", {
     isSessionRunning:
     (state) =>
     (sessionID) => {
-      return Boolean(state.runs[sessionID]?.requestID || state.startingSessions[ sessionID ]);
+      return Boolean(state.runs[sessionID]?.requestID && !state.runs[sessionID]?.finalEvent || state.startingSessions[ sessionID ]);
     },
+
+    needsHistorySync: state => sessionID => Boolean(state.runs[sessionID]?.finalEvent),
 
     streamingContent:
     (state) =>
@@ -165,7 +170,7 @@ export const useRuntimeStore = defineStore("runtime", {
       );
     },
 
-    runState: (state) => (sessionID) => (state.runs[sessionID]?.status ?? null),
+    runState: (state) => (sessionID) => state.runs[sessionID]?.finalEvent ? null : (state.runs[sessionID]?.status ?? null),
 
     liveTools: (state) => (sessionID) => (state.runs[sessionID]?.tools ?? []),
 
@@ -455,7 +460,11 @@ export const useRuntimeStore = defineStore("runtime", {
 
         // Overview.Active 是后端活动 Run 的恢复入口。它让 UI 在重新挂载、
         // 切换 Session 后不必完全依赖“恰好没有错过”的 turn.started event。
-        if (active) {
+        if (active && current?.finalEvent && active.requestID !== current.requestID) {
+          // 真实的新任务复用 started 投影；旧任务的迟到快照不能复活已经结束的执行。
+          void this.handleEvent({ ...active, type: "turn.started", sessionID, modelID: active.runtime?.modelID });
+        }
+        if (active && !current?.finalEvent) {
           this.ensureRun(sessionID).status = active;
           this.ensureRun(sessionID).requestID = active.requestID;
           this.ensureRun(sessionID).modelID = active.runtime?.modelID ?? "";
@@ -464,7 +473,7 @@ export const useRuntimeStore = defineStore("runtime", {
           } else {
             delete this.ensureRun(sessionID).approval;
           }
-        } else if (!this.startingSessions[sessionID]) {
+        } else if (!this.startingSessions[sessionID] && !current?.finalEvent) {
           // 如果 UI 错过了终态 Event（例如 WebView 重新挂载），Overview 是
           // 后端活动 Run 的恢复真相；没有 active 就清理前端陈旧运行态。
           delete this.ensureRun(sessionID).status;
@@ -537,6 +546,7 @@ export const useRuntimeStore = defineStore("runtime", {
      * 发起新 Turn。
      */
     async send(sessionID, content, attachments = []) {
+      if (this.needsHistorySync(sessionID)) throw new Error("请先重新同步对话记录，再继续发送。" );
       if (this.isSessionRunning(sessionID)) {
         throw new Error(
         "当前会话仍在生成回复");
@@ -554,6 +564,7 @@ export const useRuntimeStore = defineStore("runtime", {
 
       delete this.terminalErrors[ sessionID ];
       delete this.terminalErrorRequests[sessionID];
+      delete this.recoverableFailures[sessionID];
 
       try {
         const retry = this.failedStarts[sessionID];
@@ -568,6 +579,8 @@ export const useRuntimeStore = defineStore("runtime", {
           throw new Error(result.startError);
         }
         delete this.failedStarts[sessionID];
+        // 终态可能先于 Bridge 收据返回，不能再用启动快照覆盖完成后的状态。
+        if (this.terminalRequests[sessionID] === result.requestID) return result;
 
         if (this.terminalRequests[ sessionID ] !== result.requestID) {
           this.ensureRun(sessionID).requestID = result.requestID;
@@ -709,6 +722,8 @@ export const useRuntimeStore = defineStore("runtime", {
         }
         case "turn.started": {
           this.discardStreamingDelta(data.sessionID);
+          delete this.ensureRun(data.sessionID).finalEvent;
+          delete this.historyErrors[data.sessionID];
           const frozenManifest = normalizeRuntimeManifest(data.runtime);
           if (frozenManifest) {
             this.contextManifests[ data.sessionID ] = frozenManifest;
@@ -836,40 +851,63 @@ export const useRuntimeStore = defineStore("runtime", {
      * 处理所有 Runtime 终态。
      */
     async finalise(data) {
-      this.flushStreamingDelta(data.sessionID);
-
-      this.terminalRequests[ data.sessionID ] = data.requestID;
-
-      delete this.ensureRun(data.sessionID).requestID;
-
-      const pendingApproval = this.ensureRun(data.sessionID).approval;
-      if (pendingApproval && (!data.requestID || pendingApproval.requestID === data.requestID)) {
-        delete this.ensureRun(data.sessionID).approval;
-        delete this.approvalResolving[pendingApproval.id];
-        delete this.approvalErrors[pendingApproval.id];
+      const sessionID = data.sessionID;
+      this.flushStreamingDelta(sessionID);
+      this.terminalRequests[sessionID] = data.requestID;
+      const run = this.ensureRun(sessionID);
+      run.finalEvent = data;
+      if (data.discardPartial) { run.text = ""; run.activities = []; }
+      const approval = run.approval;
+      if (approval) {
+        delete this.approvalResolving[approval.id];
+        delete this.approvalErrors[approval.id];
+        delete run.approval;
       }
-
-      if (data.type === "turn.failed" && typeof data.error === "string" && data.error.trim()) {
-        this.terminalErrors[ data.sessionID ] = data.error.trim();
-        this.terminalErrorRequests[data.sessionID] = data.requestID ?? "";
-      } else if (data.type === "turn.completed") {
-        delete this.terminalErrors[ data.sessionID ];
-        delete this.terminalErrorRequests[data.sessionID];
+      if (data.type !== "turn.completed") {
+        this.terminalErrors[sessionID] = data.error || "这次回复已停止，可以从已保存的进度继续。";
+        this.terminalErrorRequests[sessionID] = data.requestID || "";
+        this.recoverableFailures[sessionID] = !data.discardPartial;
+      } else {
+        delete this.terminalErrors[sessionID];
+        delete this.terminalErrorRequests[sessionID];
+        delete this.recoverableFailures[sessionID];
       }
+      await this.syncSessionMessages(sessionID);
+    },
 
-      const sessionStore = useSessionStore();
-
+    // 只重读本地历史，不会重新调用模型。读失败时保留可见流式内容，供用户恢复。
+    async syncSessionMessages(sessionID) {
+      if (this.historyLoading[sessionID]) return false;
+      const run = this.runs[sessionID];
+      const requestID = run?.requestID;
+      this.historyLoading[sessionID] = true;
       try {
-        await sessionStore.refreshMessages(data.sessionID);
-
-        await this.refreshContextUsage(data.sessionID, { silent: true });
-      } finally {
-        const current = this.runs[data.sessionID];
-        if (!current?.requestID || current.requestID === data.requestID) {
-          this.discardStreamingDelta(data.sessionID);
-          delete this.runs[data.sessionID];
+        const sessions = useSessionStore();
+        const refreshed = await sessions.refreshMessages(sessionID);
+        // 切走的会话不会执行历史读取；未读取或被替代都不能作为清理流式缓冲的依据。
+        if (refreshed === false) throw new Error("消息尚未读取或已被更新的请求替代");
+        if (this.runs[sessionID] === run && run?.requestID === requestID && run?.finalEvent) {
+          this.discardStreamingDelta(sessionID);
+          delete this.runs[sessionID];
         }
+        delete this.historyErrors[sessionID];
+        void this.refreshContextUsage(sessionID, { silent: true });
+        return true;
+      } catch {
+        if (this.runs[sessionID] === run && run?.requestID === requestID) {
+          this.historyErrors[sessionID] = "生成已结束，但历史暂时无法读取。当前内容会保留，请重新同步后继续。";
+        }
+        return false;
+      } finally {
+        delete this.historyLoading[sessionID];
+        if (this.runs[sessionID]?.finalEvent && this.runs[sessionID].requestID !== requestID) void this.syncSessionMessages(sessionID);
       }
+    },
+
+    async continueSession(sessionID) {
+      if (!this.recoverableFailures[sessionID]) return;
+      // 新增一条明确的继续指令，沿用持久化轨迹；不回滚历史或自动重放有副作用的工具。
+      return this.send(sessionID, "请根据上次已保存的对话和工具结果，从中断处继续完成任务。不要重复已经确认完成的操作；对没有保存结果的操作，先检查实际状态再决定是否执行。");
     },
   },
 });

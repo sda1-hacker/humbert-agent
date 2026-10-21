@@ -5,19 +5,47 @@ import { useModelStore } from "../../../stores/models.js";
 import { capabilityFields, formatTokens, modelDraft, presetForModel } from "../../../utils/modelCatalog.js";
 import { Message } from "../../../utils/uiMessage.js";
 import { t } from "../../../i18n/index.js";
+import { useAgentStore } from "../../../stores/agents.js";
+import { useSettingsGuard } from "../../../composables/useSettingsGuard.js";
 
 const props = defineProps({ visible: Boolean, providerId: { type: String, default: "" }, model: { type: Object, default: null }, preset: { type: Object, default: null } });
-const emit = defineEmits(["update:visible", "saved"]);
+const emit = defineEmits(["update:visible", "saved", "open-settings", "open-agent"]);
 const store = useModelStore();
+const agents = useAgentStore();
 const form = reactive(modelDraft(""));
 const saving = ref(false);
 const advanced = ref(false);
 const provider = computed(() => store.providers.find((item) => item.id === form.providerID));
 const reference = computed(() => presetForModel(provider.value, form.modelName));
+const baseline = ref("");
+const mayLeave = useSettingsGuard(() => props.visible && JSON.stringify(form) !== baseline.value, save, () => saving.value);
+const usages = computed(() => {
+  if (!form.id) return [];
+  const result = [];
+  for (const agent of agents.items) {
+    const roles = [];
+    if (agent.modelID === form.id) roles.push(t("对话模型"));
+    if (agent.modelRoles?.utilityModelID === form.id) roles.push(t("辅助模型"));
+    if (roles.length) result.push({ key: agent.id, label: `${agent.name} · ${roles.join(" / ")}`, event: "open-agent", target: agent.id });
+  }
+  if (store.multimedia.imageModelID === form.id) result.push({ key: "vision", label: t("应用视觉辅助模型"), event: "open-settings", target: "multimedia" });
+  return result;
+});
+async function openUsage(usage) {
+  if (!(await mayLeave())) return;
+  emit("update:visible", false);
+  emit(usage.event, usage.target);
+}
+// Arco 的 beforeCancel 只支持同步布尔值；异步确认结束后由受控 visible 手动关闭。
+function beforeCancel() {
+  if (!saving.value) void mayLeave().then(allowed => { if (allowed) emit("update:visible", false); });
+  return false;
+}
 
 watch(() => props.visible, (visible) => {
   if (!visible) return;
   Object.assign(form, modelDraft(props.providerId, props.model, props.preset));
+  baseline.value = JSON.stringify(form);
   advanced.value = false;
 }, { immediate: true });
 
@@ -53,7 +81,7 @@ async function openReference() {
 </script>
 
 <template>
-  <a-modal :visible="visible" :title="t(form.id ? '编辑模型' : '添加模型')" :width="660" :modal-style="{maxWidth:'calc(100vw - 32px)',maxHeight:'90vh',display:'inline-flex',flexDirection:'column'}" :body-style="{minHeight:0,overflowY:'auto'}" :mask-closable="false" :esc-to-close="!saving" :ok-loading="saving" :on-before-ok="save" :on-before-cancel="() => !saving" :ok-text="t('保存模型')" :cancel-text="t('取消')" @update:visible="emit('update:visible', $event)">
+  <a-modal :visible="visible" :title="t(form.id ? '编辑模型' : '添加模型')" :width="660" :modal-style="{maxWidth:'calc(100vw - 32px)',maxHeight:'90vh',display:'inline-flex',flexDirection:'column'}" :body-style="{minHeight:0,overflowY:'auto'}" :mask-closable="false" :esc-to-close="!saving" :ok-loading="saving" :on-before-ok="save" :on-before-cancel="beforeCancel" :ok-text="t('保存模型')" :cancel-text="t('取消')" @update:visible="emit('update:visible', $event)">
     <a-form :model="form" layout="vertical" :disabled="saving" class="model-editor">
       <p class="model-provider">{{ provider?.name }}</p>
       <div class="editor-grid">
@@ -69,6 +97,7 @@ async function openReference() {
         <a-button v-if="reference" type="text" size="mini" @click="openReference">官方参数</a-button>
       </div>
       <div class="model-enabled"><div><strong>启用模型</strong><span>停用后不会出现在 Agent 默认模型选择中。</span></div><a-switch v-model="form.enabled" aria-label="启用模型" /></div>
+      <section v-if="form.id" class="model-usages"><strong>使用位置</strong><a-button v-for="usage in usages" :key="usage.key" type="text" size="small" @click="openUsage(usage)">{{ usage.label }}</a-button><p v-if="!usages.length" class="field-help">当前没有 Agent 或视觉辅助配置引用此模型。</p></section>
       <details class="model-advanced" :open="advanced" @toggle="advanced = $event.target.open">
         <summary>能力与高级参数</summary>
         <div class="advanced-body">
@@ -102,6 +131,9 @@ async function openReference() {
 .model-advanced summary { cursor: pointer; color: var(--h-text-secondary); font-size: 13px; }
 .advanced-body { display: grid; gap: 14px; margin-top: 14px; }
 .field-help { margin: 0; }
+.model-usages { display: grid; justify-items: start; gap: 6px; padding-top: 14px; border-top: 1px solid var(--h-border); }
+.model-usages strong { font-size: 13px; font-weight: 500; }
+.model-usages :deep(.arco-btn) { max-width: 100%; height: auto; white-space: normal; text-align: left; }
 .capability-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }
 @media (max-width: 480px) { .editor-grid, .capability-grid { grid-template-columns: minmax(0,1fr); } }
 </style>

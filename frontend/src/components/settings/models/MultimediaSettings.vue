@@ -6,9 +6,12 @@ import { useModelStore } from "../../../stores/models.js";
 import SectionCard from "../../ui/SectionCard.vue";
 import ModelCapabilityBadges from "../../models/ModelCapabilityBadges.vue";
 
+import { useSettingsGuard } from "../../../composables/useSettingsGuard.js";
+
 const store = useModelStore();
 const saving = ref(false);
 const imageModelID = ref("");
+useSettingsGuard(() => imageModelID.value !== store.multimedia.imageModelID, save, () => saving.value);
 
 const visionModels = computed(() => store.models.filter(
     (model) => model.enabled && model.capabilities?.vision,
@@ -29,8 +32,10 @@ async function save() {
   try {
     await store.updateMultimediaConfig({imageModelID: imageModelID.value || ""});
     Message.success("多媒体模型配置已保存");
+    return true;
   } catch (error) {
     Message.error(error?.message ?? String(error));
+    return false;
   } finally {
     saving.value = false;
   }
@@ -43,7 +48,7 @@ async function save() {
         title="图片理解"
         description="当 Agent 的 Chat 模型不支持图片输入时，视觉辅助模型先理解图片，再把观察结果交给 Chat 模型继续推理和调用工具。"
     >
-      <a-form layout="vertical" class="multimedia-form">
+      <a-form :model="{ imageModelID }" layout="vertical" class="multimedia-form">
         <a-form-item label="视觉辅助模型">
           <a-select
               v-model="imageModelID"

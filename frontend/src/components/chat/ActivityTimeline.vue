@@ -8,6 +8,8 @@ import BrowserScreenshotCard from "./BrowserScreenshotCard.vue";
 const props = defineProps({
   steps: { type: Array, default: () => [] },
   running: { type: Boolean, default: false },
+  // 已收到终态但历史尚未读取成功，不能继续把未确认的步骤显示为“执行中”。
+  syncPending: { type: Boolean, default: false },
   agentId: { type: String, default: "" },
   sessionId: { type: String, default: "" },
 });
@@ -34,6 +36,7 @@ function toggleDetail(key) {
 function statusText(status) {
   if (status === "failed") return t("失败");
   if (status === "completed") return t("完成");
+  if (props.syncPending) return t("对话记录待同步");
   if (status === "running") return t("执行中");
   return t("等待执行");
 }
@@ -45,6 +48,7 @@ function fileLabel(operation) {
 function emptyResultText(call) {
   if (call?.status === "completed") return t("工具未返回内容");
   if (call?.status === "failed") return t("工具未返回错误详情");
+  if (props.syncPending) return t("对话记录待同步");
   return t("等待工具返回结果…");
 }
 
@@ -56,7 +60,7 @@ function emptyResultText(call) {
       <IconLoading v-if="running" class="activity-summary__icon" aria-hidden="true"/>
       <IconCheckCircle v-else class="activity-summary__icon" aria-hidden="true"/>
       <span class="activity-summary__label">
-        <span>{{ t(running ? '正在处理' : '处理完成') }}</span>
+        <span>{{ t(syncPending ? '对话记录待同步' : running ? '正在处理' : '处理完成') }}</span>
         <span v-if="toolCount" class="activity-summary__meta"> · {{ t('{count} 个工具', { count: toolCount }) }}</span>
         <span v-if="thinkingCount" class="activity-summary__meta"> · {{ t('{count} 次思考', { count: thinkingCount }) }}</span>
       </span>
@@ -73,11 +77,11 @@ function emptyResultText(call) {
               @click="toggleDetail(step.key)"
           >
             <IconRight class="activity-step__marker" :class="{ 'activity-step__marker--open': openDetails.has(step.key) }" aria-hidden="true"/>
-            <span>{{ t(step.status === 'running' ? '正在思考…' : '思考完成') }}</span>
+            <span>{{ t(step.status === 'running' ? syncPending ? '对话记录待同步' : '正在思考…' : '思考完成') }}</span>
           </button>
           <div v-else class="activity-step__heading">
             <span class="activity-step__marker" aria-hidden="true">·</span>
-            <span>{{ t(step.status === 'running' ? '正在分析…' : '分析完成') }}</span>
+            <span>{{ t(step.status === 'running' ? syncPending ? '对话记录待同步' : '正在分析…' : '分析完成') }}</span>
           </div>
           <p v-if="step.note" class="activity-step__note">{{ step.note }}</p>
           <div v-if="step.content && openDetails.has(step.key)" class="activity-step__detail">

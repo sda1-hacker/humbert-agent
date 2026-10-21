@@ -48,7 +48,7 @@ const canSend = computed(() =>
   // Agent 切换尚未加载完会话时，不允许使用上一个 Agent 的选中会话发送。
   sessionStore.agentID === agentStore.selectedID && !sessionStore.loading &&
   Boolean(sessionStore.selectedSession) && Boolean(selectedModelID.value) &&
-  (draft.value.trim() !== "" || attachments.value.length > 0) && !running.value && !sending.value);
+  (draft.value.trim() !== "" || attachments.value.length > 0) && !running.value && !sending.value && !runtimeStore.needsHistorySync(sessionStore.selectedID));
 
 const skillStore = useSkillStore();
 const composerInput = ref(null);

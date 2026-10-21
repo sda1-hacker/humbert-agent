@@ -21,12 +21,13 @@ import (
 var secretKeys = []string{"database.password", "embedding.api_key", "loader.image_recognition.api_key", "rerank_provider.api_key", "rerank_provider.headers"}
 
 type Settings struct {
-	Enabled    bool            `json:"enabled"`
-	Revision   uint64          `json:"revision"`
-	Values     map[string]any  `json:"values"`
-	HasSecrets map[string]bool `json:"has_secrets"`
-	Connected  bool            `json:"connected"`
-	LogQueries bool            `json:"log_queries"`
+	Enabled     bool              `json:"enabled"`
+	Revision    uint64            `json:"revision"`
+	Values      map[string]any    `json:"values"`
+	HasSecrets  map[string]bool   `json:"has_secrets"`
+	Connected   bool              `json:"connected"`
+	LogQueries  bool              `json:"log_queries"`
+	Connections map[string]string `json:"connections"`
 }
 
 type SaveSettingsRequest struct {
@@ -34,8 +35,9 @@ type SaveSettingsRequest struct {
 	Revision uint64         `json:"revision"`
 	Values   map[string]any `json:"values"`
 	// 不传保持原值，传空字符串清除；密码从不回显。
-	Secrets    map[string]string `json:"secrets"`
-	LogQueries bool              `json:"log_queries"`
+	Secrets     map[string]string `json:"secrets"`
+	LogQueries  bool              `json:"log_queries"`
+	Connections map[string]string `json:"connections"`
 }
 
 type Collection struct {
@@ -54,6 +56,7 @@ type diskState struct {
 	Collections []Collection      `json:"collections"`
 	Jobs        []jobRecord       `json:"jobs"`
 	LogQueries  bool              `json:"log_queries"`
+	Connections map[string]string `json:"connections,omitempty"`
 }
 
 type State struct {
@@ -98,7 +101,11 @@ func (m *Manager) SaveSettings(ctx context.Context, req SaveSettingsRequest) (St
 	deleteValue(values, "loader.parse_options.cache_directory")
 	values["collection_id"] = "desktop"
 	values["ensure_schema"] = false
-	cfg, err := ragconfig.FromValues(values)
+	resolved, err := m.connectionValues(ctx, values, req.Connections)
+	if err != nil {
+		return State{}, err
+	}
+	cfg, err := ragconfig.FromValues(resolved)
 	if err != nil {
 		return State{}, err
 	}
@@ -108,7 +115,12 @@ func (m *Manager) SaveSettings(ctx context.Context, req SaveSettingsRequest) (St
 		}
 	}
 	next := clone(m.state)
-	next.Values, next.Enabled, next.Revision = values, req.Enabled, next.Revision+1
+	// 保留一份可独立校验的非敏感参数快照；运行时仍以连接引用解析最新地址与凭据。
+	for _, key := range secretKeys {
+		deleteValue(resolved, key)
+	}
+	next.Values, next.Enabled, next.Revision = resolved, req.Enabled, next.Revision+1
+	next.Connections = clone(req.Connections)
 	next.LogQueries = req.LogQueries
 	created := []string{}
 	for key, value := range req.Secrets {
@@ -170,7 +182,59 @@ func (m *Manager) stateLocked() State {
 	for _, j := range copy.Jobs {
 		jobs = append(jobs, j.Job)
 	}
-	return State{Settings: Settings{copy.Enabled, copy.Revision, copy.Values, has, m.engine != nil, copy.LogQueries}, Collections: copy.Collections, Jobs: jobs}
+	return State{Settings: Settings{Enabled: copy.Enabled, Revision: copy.Revision, Values: copy.Values, HasSecrets: has, Connected: m.engine != nil, LogQueries: copy.LogQueries, Connections: copy.Connections}, Collections: copy.Collections, Jobs: jobs}
+}
+
+// DeleteProvider 与保存绑定共用同一把锁，检查后到删除完成前不能插入新的引用。
+// 锁顺序始终是知识库 -> Registry，与保存和构建连接保持一致。
+func (m *Manager) DeleteProvider(ctx context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, bound := range m.state.Connections {
+		if bound == id {
+			return errors.New("该供应商仍被 RAG 引用，请先在知识库设置中切换连接")
+		}
+	}
+	if m.imageModels == nil {
+		return errors.New("模型供应商服务未初始化")
+	}
+	return m.imageModels.DeleteProvider(ctx, id)
+}
+
+// 连接引用属于桌面装配层，RAG 核心仍只接收标准配置和 Eino 组件。
+// 密钥只进入这份临时副本，保存文件和前端投影仍只有 provider ID。
+func (m *Manager) connectionValues(ctx context.Context, values map[string]any, connections map[string]string) (map[string]any, error) {
+	resolved := clone(values)
+	for prefix, id := range connections {
+		if prefix != "embedding" && prefix != "rerank_provider" && prefix != "loader.image_recognition" {
+			return nil, errors.New("未知的 RAG 供应商连接用途")
+		}
+		if id == "" {
+			continue
+		}
+		if m.imageModels == nil {
+			return nil, errors.New("模型供应商服务未初始化")
+		}
+		provider, key, err := m.imageModels.ProviderConnection(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("读取 RAG 共享供应商失败: %w", err)
+		}
+		setValue(resolved, prefix+".api_key", key)
+		if prefix == "rerank_provider" {
+			if provider.Type == "ollama" {
+				return nil, errors.New("精排请使用提供 rerank 接口的供应商或独立连接")
+			}
+			setValue(resolved, prefix+".endpoint", strings.TrimRight(provider.BaseURL, "/")+"/rerank")
+		} else {
+			protocol := "openai"
+			if provider.Type == "ollama" {
+				protocol = "ollama"
+			}
+			setValue(resolved, prefix+".provider", protocol)
+			setValue(resolved, prefix+".base_url", provider.BaseURL)
+		}
+	}
+	return resolved, nil
 }
 
 // SaveCollection 的 Agent 绑定属于知识库模块，不向 Agent Profile 增加一份重复配置。

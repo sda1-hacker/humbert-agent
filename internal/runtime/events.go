@@ -53,9 +53,10 @@ func (s *Service) finishRun(active *activeRun, result ExecutionResult, runErr er
 			SessionID: active.SessionID, AgentID: snapshot.AgentID,
 			ModelID: snapshot.ModelID, ModelRevision: snapshot.ModelRevision,
 			ToolRevision: snapshot.ToolRevision, MessageID: result.MessageID,
-			Error:      runtimeUserVisibleError(runErr),
-			ToolCalls:  toolCallCount(snapshot.limitState),
-			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Error:          runtimeUserVisibleError(runErr),
+			DiscardPartial: errors.Is(runErr, ErrProviderContentBlocked) || (runErr != nil && isProviderContentBlockedText(runErr.Error())),
+			ToolCalls:      toolCallCount(snapshot.limitState),
+			OccurredAt:     time.Now().UTC().Format(time.RFC3339Nano),
 		})
 		args := []any{
 			"operation", operation, "request_id", active.RequestID, "run_id", active.RunID,
@@ -93,6 +94,9 @@ func runtimeUserVisibleError(err error) string {
 
 	if errors.Is(err, context.Canceled) {
 		return "本次生成已取消。"
+	}
+	if errors.Is(err, ErrProviderContentBlocked) || isProviderContentBlockedText(err.Error()) {
+		return providerContentBlockedUserMessage
 	}
 
 	if errors.Is(err, contextengine.ErrContextBudgetExceeded) {

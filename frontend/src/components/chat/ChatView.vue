@@ -15,6 +15,7 @@ import MessageList
 const emit = defineEmits([
   "open-workspace-file",
   "open-task",
+  "open-settings",
 ]);
 
 const sessionStore =
@@ -45,6 +46,7 @@ const sessionStore =
       <MessageList
           @open-workspace-file="emit('open-workspace-file', $event)"
           @open-task="emit('open-task', $event)"
+          @open-settings="emit('open-settings', $event)"
       />
 
       <ComposerBar/>

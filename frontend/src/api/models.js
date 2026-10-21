@@ -45,6 +45,10 @@ export function diagnoseModel(id) {
     return Call.ByName(`${serviceName}.DiagnoseModel`, id);
 }
 
+// 只读元数据与用户主动能力测试分开，读取列表不触发生成。
+export function discoverModels(providerID) { return Call.ByName(`${serviceName}.DiscoverModels`, providerID); }
+export function probeModel(id, kind) { return Call.ByName(`${serviceName}.ProbeModel`, id, kind); }
+
 export function updateMultimediaConfig(request) {
     return Call.ByName(`${serviceName}.UpdateMultimediaConfig`, request);
 }

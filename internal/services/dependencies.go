@@ -69,7 +69,8 @@ type MCPDependencies struct {
 
 // ModelDependencies 明确声明 ModelService 所需的依赖，入口不能再取得整个应用对象。
 type ModelDependencies struct {
-	Models *models.Registry
+	Models    *models.Registry
+	Knowledge *knowledge.Manager
 }
 
 // PermissionDependencies 明确声明 PermissionService 所需的依赖，入口不能再取得整个应用对象。

@@ -18,7 +18,7 @@ func All(core *coreapp.Application, additional ...application.Service) []applica
 		application.NewService(NewAppService(AppDependencies{Config: core.Config(), Logger: core.Logger(), Status: core.Status})),
 		application.NewService(NewChatService(ChatDependencies{Config: core.Config(), Events: core.Events(), Logger: core.Logger(), Runtime: core.Runtime()})),
 		application.NewService(NewMCPService(MCPDependencies{Agents: core.Agents(), Configuration: core.MCPConfiguration(), MCP: core.MCP()})),
-		application.NewService(NewModelService(ModelDependencies{Models: core.Models()})),
+		application.NewService(NewModelService(ModelDependencies{Models: core.Models(), Knowledge: core.Knowledge()})),
 		application.NewService(NewPermissionService(PermissionDependencies{
 			Agents: core.Agents(), Approvals: core.Approvals(), Config: core.Config(), Logger: core.Logger(),
 			MCP: core.MCP(), Permissions: core.Permissions(),

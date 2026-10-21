@@ -614,7 +614,7 @@ export const useSessionStore =
                     sessionID =
                         this.selectedID,
                 ) {
-                    if (sessionID && sessionID !== this.selectedID) return;
+                    if (sessionID && sessionID !== this.selectedID) return false;
                     const sequence = ++this.messageLoadSequence;
                     this.loadingOlderMessages = false;
                     if (!sessionID) {
@@ -683,20 +683,14 @@ export const useSessionStore =
                             automaticTitleRefreshes.add(
                                 sessionID,
                             );
-                            try {
-                                await this
-                                    .loadAgentSessions(
-                                        this.agentID,
-                                        {force: true},
-                                    );
-                            } catch {
-                                // 标题刷新失败不影响消息；保留下一次非阻塞重试机会。
-                                automaticTitleRefreshes.delete(
-                                    sessionID,
-                                );
-                            }
+                            // 消息已就绪，标题目录在后台刷新，不阻塞继续对话。
+                            void this.loadAgentSessions(this.agentID, {force: true}).catch(() => {
+                                automaticTitleRefreshes.delete(sessionID);
+                            });
                         }
+                        return true;
                     }
+                    return false;
                 },
 
                 /**

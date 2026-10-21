@@ -52,6 +52,7 @@ import MessageItem
 const emit = defineEmits([
   "open-workspace-file",
   "open-task",
+  "open-settings",
 ]);
 
 const viewport =
@@ -138,6 +139,11 @@ const running =
         ),
     );
 
+async function continueTurn() {
+  const sessionID = sessionStore.selectedID;
+  try { await runtimeStore.continueSession(sessionID); }
+  catch (error) { Message.error(error?.message || String(error)); }
+}
 const terminalError = computed(() =>
     runtimeStore.terminalError(sessionStore.selectedID),
 );
@@ -476,7 +482,7 @@ onUnmounted(() => {
             conversationBlocks.length ===
               0 &&
             !running &&
-            !streaming
+            !streaming && !runtimeStore.needsHistorySync(sessionStore.selectedID)
           "
             class="message-empty"
         >
@@ -543,8 +549,7 @@ onUnmounted(() => {
         <!-- 实时步骤只存在于内存；完成后从 JSONL 重建同样的有序时间线。 -->
         <LiveAssistantTurn
             v-if="
-            running ||
-            streaming
+            running || streaming || runtimeStore.needsHistorySync(sessionStore.selectedID)
           "
             :agent-name="
             currentAgentName
@@ -562,6 +567,7 @@ onUnmounted(() => {
             running
           "
             :activity="currentLiveActivity"
+            :sync-pending="runtimeStore.needsHistorySync(sessionStore.selectedID)"
             :approval="
             currentApproval
           "
@@ -578,19 +584,26 @@ onUnmounted(() => {
         />
 
         <div
-            v-if="terminalError && !sessionStore.searchWindowActive && !running"
+            v-if="(terminalError || runtimeStore.historyErrors[sessionStore.selectedID]) && !sessionStore.searchWindowActive && !running"
             class="message-turn-error"
             role="alert"
         >
           <div class="message-turn-error__heading">
-            <strong>这次回复失败</strong>
+            <strong>{{ $t(runtimeStore.historyErrors[sessionStore.selectedID] ? '对话记录待同步' : '这次回复未完成') }}</strong>
             <button
+                v-if="!runtimeStore.historyErrors[sessionStore.selectedID]"
                 type="button"
                 aria-label="关闭错误提示"
                 @click="runtimeStore.dismissTerminalError(sessionStore.selectedID)"
             >关闭</button>
           </div>
-          <p>{{ terminalError }}</p>
+          <p v-if="terminalError">{{ $t(terminalError) }}</p>
+          <p v-if="runtimeStore.historyErrors[sessionStore.selectedID]">{{ $t(runtimeStore.historyErrors[sessionStore.selectedID]) }}</p>
+          <div class="message-recovery-actions">
+            <a-button v-if="runtimeStore.historyErrors[sessionStore.selectedID]" type="primary" size="small" :loading="runtimeStore.historyLoading[sessionStore.selectedID]" @click="runtimeStore.syncSessionMessages(sessionStore.selectedID)">重新同步</a-button>
+            <a-button v-if="runtimeStore.recoverableFailures[sessionStore.selectedID]" type="primary" size="small" :disabled="runtimeStore.needsHistorySync(sessionStore.selectedID)" @click="continueTurn">继续处理</a-button>
+            <a-button size="small" @click="emit('open-settings', 'models')">检查模型设置</a-button>
+          </div>
           <details v-if="terminalErrorRequestID">
             <summary>诊断信息</summary>
             <span>请求编号：{{ terminalErrorRequestID }}</span>
@@ -626,6 +639,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.message-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
 .message-turn-error {
   max-width: 650px;
   margin: 8px 0 26px 40px;

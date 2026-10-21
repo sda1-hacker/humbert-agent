@@ -3,6 +3,7 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,16 +19,21 @@ import (
 
 type engine struct {
 	*rag.Service
-	pool    *pgxpool.Pool
-	store   *indexer.Indexer
-	sources *rag.LocalSourceStore
-	config  ragconfig.Config
+	pool             *pgxpool.Pool
+	store            *indexer.Indexer
+	sources          *rag.LocalSourceStore
+	config           ragconfig.Config
+	providerRevision uint64
 }
 
 // buildEngine 仅在用户初始化、上传或检索时连接外部服务；应用启动不依赖 PostgreSQL 在线。
 // 更换存储时替换这里的 Eino 组件，知识库页面、Agent 工具与核心导入流程无需改写。
 func (m *Manager) buildEngine(ctx context.Context, initialize bool) (_ *engine, err error) {
 	values := clone(m.state.Values)
+	providerRevision := uint64(0)
+	if m.imageModels != nil {
+		providerRevision = m.imageModels.Revision()
+	}
 	for key, id := range m.state.Credentials {
 		value, e := m.host.Credentials.Get(ctx, id)
 		if e != nil {
@@ -42,6 +48,10 @@ func (m *Manager) buildEngine(ctx context.Context, initialize bool) (_ *engine, 
 		} else {
 			setValue(values, key, value)
 		}
+	}
+	values, err = m.connectionValues(ctx, values, m.state.Connections)
+	if err != nil {
+		return nil, err
 	}
 	values["collection_id"] = "desktop"
 	cfg, err := ragconfig.FromValues(values)
@@ -146,5 +156,9 @@ func (m *Manager) buildEngine(ctx context.Context, initialize bool) (_ *engine, 
 	if err != nil {
 		return nil, err
 	}
-	return &engine{service, pool, store, sources, cfg}, nil
+	if m.imageModels != nil && m.imageModels.Revision() != providerRevision {
+		service.Close()
+		return nil, errors.New("供应商配置在连接期间发生变化，请重试")
+	}
+	return &engine{Service: service, pool: pool, store: store, sources: sources, config: cfg, providerRevision: providerRevision}, nil
 }

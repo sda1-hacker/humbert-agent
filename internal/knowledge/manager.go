@@ -18,8 +18,8 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/atomicfile"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	"github.com/sda1-hacker/humbert-agent/internal/models"
 	"github.com/sda1-hacker/humbert-agent/internal/rag"
-	ragconfig "github.com/sda1-hacker/humbert-agent/internal/rag/config"
 	"github.com/sda1-hacker/humbert-agent/internal/rag/retrieval"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 )
@@ -29,7 +29,7 @@ const TopicChanged = "knowledge.changed"
 type Manager struct {
 	mu          sync.Mutex
 	host        agentruntime.ModuleHost
-	imageModels ragconfig.ImageModelResolver
+	imageModels *models.Registry
 	directory   string
 	state       diskState
 	engine      *engine
@@ -76,7 +76,7 @@ type DocumentPage struct {
 	HasMore   bool       `json:"has_more"`
 }
 
-func New(ctx context.Context, host agentruntime.ModuleHost, images ragconfig.ImageModelResolver) (*Manager, error) {
+func New(ctx context.Context, host agentruntime.ModuleHost, images *models.Registry) (*Manager, error) {
 	if host.DataDir == "" || host.Logger == nil || host.Credentials == nil {
 		return nil, errors.New("知识库缺少数据目录、日志或凭据存储")
 	}
@@ -120,6 +120,16 @@ func (m *Manager) acquire(ctx context.Context, revision uint64, initialize bool)
 		m.mu.Unlock()
 		fail()
 		return nil, nil, nil, errors.New("请等待知识库任务结束后初始化")
+	}
+	// 共享供应商改动只影响后续操作；在途导入/检索继续使用它自己的冻结连接。
+	if m.engine != nil && m.imageModels != nil && len(m.state.Connections) > 0 && m.engine.providerRevision != m.imageModels.Revision() {
+		if m.active != 0 {
+			m.mu.Unlock()
+			fail()
+			return nil, nil, nil, errors.New("供应商连接已更新，请等待当前知识库任务结束后重试")
+		}
+		m.engine.Close()
+		m.engine = nil
 	}
 	if initialize && m.engine != nil {
 		m.engine.Close()

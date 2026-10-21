@@ -15,7 +15,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 
 	einomodel "github.com/cloudwego/eino/components/model"
-	"github.com/cloudwego/eino/schema"
 )
 
 // Registry 是 Humbert 模型系统的唯一运行时入口。
@@ -388,38 +387,7 @@ func (r *Registry) DeleteModel(ctx context.Context, id string) error {
 //
 // 测试提示词非常短，但仍可能产生少量 API Token 费用。
 func (r *Registry) TestModel(ctx context.Context, id string) (TestResult, error) {
-	r.mu.RLock()
-	resolved, err := r.store.ResolveModel(ctx, id)
-	if err != nil {
-		r.mu.RUnlock()
-		return TestResult{}, err
-	}
-	instance, err := r.factory.Create(ctx, resolved)
-	r.mu.RUnlock()
-	if err != nil {
-		return TestResult{}, err
-	}
-	timeout := time.Duration(resolved.Model.TimeoutMS) * time.Millisecond
-	testCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	started := time.Now()
-	response, err := instance.Generate(testCtx, []*schema.Message{{Role: schema.User, Content: "Reply with exactly OK."}})
-	duration := time.Since(started)
-	if err != nil {
-		return TestResult{}, fmt.Errorf("模型连接测试失败: %w", err)
-	}
-	if response == nil {
-		return TestResult{}, errors.New("模型请求成功但返回空响应")
-	}
-	preview := strings.TrimSpace(response.Content)
-	if preview == "" {
-		preview = "(请求成功，模型返回空文本)"
-	}
-	if len(preview) > 200 {
-		preview = preview[:200]
-	}
-	r.logger.Info(ctx, "模型连接测试成功", "model_id", id, logging.Duration(started))
-	return TestResult{Success: true, DurationMS: duration.Milliseconds(), ResponsePreview: preview}, nil
+	return r.ProbeModel(ctx, id, "text")
 }
 
 func (r *Registry) configurationChangedLocked() {

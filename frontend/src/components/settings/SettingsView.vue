@@ -1,12 +1,24 @@
 <script setup>
-import { computed, defineAsyncComponent, nextTick, onErrorCaptured, onMounted, ref, watch } from "vue";
+import { computed, defineAsyncComponent, nextTick, onErrorCaptured, onMounted, provide, ref, watch } from "vue";
+import { settingsGuardKey } from "../../composables/useSettingsGuard.js";
 import { IconSearch } from "@arco-design/web-vue/es/icon";
 import AppPageHeader from "../ui/AppPageHeader.vue";
 import { settingsFeatures, settingsGroups } from "../../features/settings.js";
 import { t } from "../../i18n/index.js";
 
 const props = defineProps({ initialKey: { type: String, default: "models" } });
-const emit = defineEmits(["close", "open-skills", "open-session"]);
+const emit = defineEmits(["close", "open-skills", "open-session", "open-agent"]);
+const guards = new Set();
+let navigating = false;
+provide(settingsGuardKey, guard => { guards.add(guard); return () => guards.delete(guard); });
+async function navigate(action) {
+  if (navigating) return;
+  navigating = true;
+  try { for (const guard of [...guards]) if (!(await guard())) return; action(); }
+  finally { navigating = false; }
+}
+// 系统任务通知等外部入口也经过同一处离开检查，避免直接卸载配置草稿。
+defineExpose({ navigate });
 
 // 文案在 computed 中翻译，切换语言时无需重新注册页面或重新创建组件。
 const navigationGroups = computed(() => settingsGroups.map((group) => ({
@@ -26,7 +38,7 @@ async function revealActiveItem() {
   settingsNav.value?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 onMounted(revealActiveItem);
-watch(() => props.initialKey, (value) => { activeKey.value = validKey(value); });
+watch(() => props.initialKey, value => { void selectItem(value); });
 watch(activeKey, () => { childRenderError.value = ""; void revealActiveItem(); });
 
 // 沿用技能/连接器的局部错误恢复，是否支持恢复由页面定义声明。
@@ -53,9 +65,14 @@ const activeComponent = computed(() => components.get(activeKey.value));
 // 特殊页面事件在定义中映射，宿主只转发，不依赖技能或归档模块的内部行为。
 const activeListeners = computed(() => Object.fromEntries(
   Object.entries(settingsFeatures.get(activeKey.value)?.forwardEvents || {}).map(([event, forwarded]) =>
-    [event, (...args) => emit(forwarded, ...args)]),
+    [event, (...args) => navigate(() => emit(forwarded, ...args))]),
 ));
-function selectItem(key) { activeKey.value = validKey(key); }
+function selectItem(key) {
+  key = validKey(key);
+  if (key !== activeKey.value) return navigate(() => { activeKey.value = key; });
+}
+const localListeners = computed(() => ({ ...activeListeners.value, "open-settings": selectItem,
+  "open-agent": id => navigate(() => emit("open-agent", id)) }));
 </script>
 
 <template>
@@ -67,7 +84,7 @@ function selectItem(key) { activeKey.value = validKey(key); }
             class="settings-back"
             aria-label="返回"
             title="返回"
-            @click="emit('close')"
+            @click="navigate(() => emit('close'))"
         >
           <svg class="settings-back__icon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M15 5L8 12L15 19"/>
@@ -128,9 +145,9 @@ function selectItem(key) { activeKey.value = validKey(key); }
                 <span>{{ childRenderError }}</span>
                 <button type="button" @click="childRenderError = ''">重新显示</button>
               </div>
-              <component :is="activeComponent" v-else v-on="activeListeners" />
+              <component :is="activeComponent" v-else v-on="localListeners" />
             </div>
-            <component :is="activeComponent" v-else v-on="activeListeners" />
+            <component :is="activeComponent" v-else v-on="localListeners" />
           </section>
         </div>
       </div>

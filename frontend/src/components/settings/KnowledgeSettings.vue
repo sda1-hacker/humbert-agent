@@ -4,6 +4,15 @@ import SectionCard from "../ui/SectionCard.vue";
 import { knowledgeState, saveKnowledgeSettings, initializeKnowledge } from "../../api/knowledge.js";
 import { Message } from "../../utils/uiMessage.js";
 
+import { useModelStore } from "../../stores/models.js";
+import { useSettingsGuard } from "../../composables/useSettingsGuard.js";
+
+const models = useModelStore();
+const connections = ref({});
+const baseline = ref("");
+const snapshot = () => JSON.stringify([enabled.value, values.value, connections.value, secrets.value, logQueries.value]);
+useSettingsGuard(() => !!baseline.value && (snapshot() !== baseline.value || showAdvanced.value && advanced.value !== JSON.stringify(values.value, null, 2)), save, () => loading.value || saving.value || initializing.value);
+
 const loading = ref(true);
 const saving = ref(false);
 const initializing = ref(false);
@@ -17,6 +26,12 @@ const advanced = ref("");
 const showAdvanced = ref(false);
 const logQueries = ref(false);
 
+// 普通输入框留空表示沿用原凭据；只有明确点击“清除”才发送空字符串。
+function setSecret(key, value) {
+  if (value) secrets.value[key] = value;
+  else delete secrets.value[key];
+}
+
 // 设置页直接编辑后端统一配置投影；不存在第二套默认参数。
 function apply(state) {
   const s = state.settings;
@@ -27,6 +42,8 @@ function apply(state) {
   logQueries.value = s.log_queries || false;
   secrets.value = {};
   values.value.rerank_provider ||= { endpoint: "", model: "" };
+  connections.value = s.connections || {};
+  baseline.value = snapshot();
 }
 async function load() {
   loading.value = true;
@@ -35,12 +52,12 @@ async function load() {
   finally { loading.value = false; }
 }
 async function save() {
-  if (saving.value) return false;
+  if (saving.value || showAdvanced.value && !applyAdvanced()) return false;
   saving.value = true; error.value = "";
   try {
     const config = JSON.parse(JSON.stringify(values.value));
     if (config.rerank.disabled && !config.rerank_provider?.endpoint) delete config.rerank_provider;
-    apply(await saveKnowledgeSettings({ enabled: enabled.value, revision: revision.value, values: config, secrets: secrets.value, log_queries: logQueries.value }));
+    apply(await saveKnowledgeSettings({ enabled: enabled.value, revision: revision.value, values: config, connections: connections.value, secrets: secrets.value, log_queries: logQueries.value }));
     Message.success("知识库配置已保存");
     return true;
   } catch (e) { error.value = e?.message || String(e); return false; }
@@ -89,7 +106,7 @@ onMounted(load);
               <a-form-item label="数据库"><a-input v-model="values.database.name" placeholder="humbert_rag" /></a-form-item>
               <a-form-item label="用户名"><a-input v-model="values.database.user" /></a-form-item>
               <a-form-item label="密码">
-                <a-input-password v-model="secrets['database.password']" :placeholder="hasSecrets['database.password'] ? '已保存，留空保持不变' : '输入数据库密码'" autocomplete="new-password" />
+                <a-input-password :model-value="secrets['database.password']" @update:model-value="setSecret('database.password', $event)" :placeholder="hasSecrets['database.password'] ? '已保存，留空保持不变' : '输入数据库密码'" autocomplete="new-password" />
                 <template #extra><a-button v-if="hasSecrets['database.password']" type="text" size="mini" @click="secrets['database.password'] = ''">清除已存密码</a-button><span v-if="secrets['database.password'] === ''">保存后清除</span></template>
               </a-form-item>
               <a-form-item label="SSL 模式"><a-select v-model="values.database.sslmode" :options="['disable', 'prefer', 'require', 'verify-ca', 'verify-full']" /></a-form-item>
@@ -99,12 +116,13 @@ onMounted(load);
         <SectionCard title="Embedding" description="入库与查询使用同一个模型、维度和输入规则。更换模型后请新建知识库并重新导入；改变维度请使用新的数据库。">
           <a-form :model="values" layout="vertical" :disabled="saving || initializing">
             <div class="form-grid">
-              <a-form-item label="协议"><a-select v-model="values.embedding.provider" :options="[{value:'ollama',label:'Ollama 本地模型'},{value:'openai',label:'OpenAI 兼容接口'}]" @change="values.embedding.base_url = ''" /></a-form-item>
-              <a-form-item label="Base URL"><a-input v-model="values.embedding.base_url" :placeholder="values.embedding.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.example.com/v1'" /></a-form-item>
+              <a-form-item label="供应商连接"><a-select v-model="connections.embedding" allow-clear placeholder="独立配置"><a-option v-for="provider in models.providers" :key="provider.id" :value="provider.id">{{ provider.name }}</a-option></a-select><template #extra>复用已保存的地址和密钥，模型及维度仍独立配置。</template></a-form-item>
+              <a-form-item v-if="!connections.embedding" label="协议"><a-select v-model="values.embedding.provider" :options="[{value:'ollama',label:'Ollama 本地模型'},{value:'openai',label:'OpenAI 兼容接口'}]" @change="values.embedding.base_url = ''" /></a-form-item>
+              <a-form-item v-if="!connections.embedding" label="Base URL"><a-input v-model="values.embedding.base_url" :placeholder="values.embedding.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.example.com/v1'" /></a-form-item>
               <a-form-item label="模型名称"><a-input v-model="values.embedding.model" placeholder="例如 embeddinggemma-2:740m" /></a-form-item>
               <a-form-item label="向量维度"><a-input-number v-model="values.embedding.dimensions" :min="1" :max="4000" /><template #extra>建表、文档向量与查询向量都使用此值；模型必须支持所选维度。</template></a-form-item>
               <a-form-item label="向量请求超时"><a-input v-model="values.embedding.timeout" placeholder="例如 2m；0s 使用协议默认值" /></a-form-item>
-              <a-form-item v-if="values.embedding.provider === 'openai'" label="API Key"><a-input-password v-model="secrets['embedding.api_key']" :placeholder="hasSecrets['embedding.api_key'] ? '已保存，留空保持不变' : '可选，按服务要求填写'" autocomplete="new-password" /></a-form-item>
+              <a-form-item v-if="!connections.embedding && values.embedding.provider === 'openai'" label="API Key"><a-input-password :model-value="secrets['embedding.api_key']" @update:model-value="setSecret('embedding.api_key', $event)" :placeholder="hasSecrets['embedding.api_key'] ? '已保存，留空保持不变' : '可选，按服务要求填写'" autocomplete="new-password" /><template #extra><a-button v-if="hasSecrets['embedding.api_key']" type="text" size="mini" @click="secrets['embedding.api_key'] = ''">清除已存密钥</a-button><span v-if="secrets['embedding.api_key'] === ''">保存后清除</span></template></a-form-item>
             </div>
           </a-form>
         </SectionCard>
@@ -118,11 +136,12 @@ onMounted(load);
               <a-form-item label="最大并行导入"><a-input-number v-model="values.ingest.max_concurrent" :min="1" :max="2" /><template #extra>桌面任务队列最多同时处理 2 篇。</template></a-form-item>
             </div>
             <div class="setting-toggle"><div><strong>图片 OCR 与描述</strong><span>调用视觉模型提取图片文字与描述；关闭时仍保存图片。使用在线模型可能产生费用。</span></div><a-switch v-model="values.loader.recognize_images" aria-label="图片 OCR 与描述" /></div>
-            <a-form-item v-if="values.loader.recognize_images" label="图片识别来源"><a-select v-model="values.loader.image_recognition.provider" :options="[{value:'agent',label:'应用视觉辅助模型'},{value:'ollama',label:'独立 Ollama 视觉模型'},{value:'openai',label:'独立 OpenAI 兼容视觉模型'}]" /></a-form-item>
+            <a-form-item v-if="values.loader.recognize_images" label="图片识别来源"><a-select v-model="values.loader.image_recognition.provider" @change="delete connections['loader.image_recognition']" :options="[{value:'agent',label:'应用视觉辅助模型'},{value:'ollama',label:'独立 Ollama 视觉模型'},{value:'openai',label:'独立 OpenAI 兼容视觉模型'}]" /></a-form-item>
+            <a-form-item v-if="values.loader.recognize_images && values.loader.image_recognition.provider !== 'agent'" label="供应商连接"><a-select v-model="connections['loader.image_recognition']" allow-clear placeholder="独立配置"><a-option v-for="provider in models.providers" :key="provider.id" :value="provider.id">{{ provider.name }}</a-option></a-select></a-form-item>
             <div v-if="values.loader.recognize_images && values.loader.image_recognition.provider !== 'agent'" class="form-grid">
-              <a-form-item label="视觉 Base URL"><a-input v-model="values.loader.image_recognition.base_url" :placeholder="values.loader.image_recognition.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.example.com/v1'" /></a-form-item>
+              <a-form-item v-if="!connections['loader.image_recognition']" label="视觉 Base URL"><a-input v-model="values.loader.image_recognition.base_url" :placeholder="values.loader.image_recognition.provider === 'ollama' ? 'http://localhost:11434' : 'https://api.example.com/v1'" /></a-form-item>
               <a-form-item label="视觉模型"><a-input v-model="values.loader.image_recognition.model" placeholder="填写视觉模型名称" /></a-form-item>
-              <a-form-item v-if="values.loader.image_recognition.provider === 'openai'" label="视觉 API Key"><a-input-password v-model="secrets['loader.image_recognition.api_key']" :placeholder="hasSecrets['loader.image_recognition.api_key'] ? '已保存，留空保持不变' : '输入视觉服务密钥'" autocomplete="new-password" /></a-form-item>
+              <a-form-item v-if="!connections['loader.image_recognition'] && values.loader.image_recognition.provider === 'openai'" label="视觉 API Key"><a-input-password :model-value="secrets['loader.image_recognition.api_key']" @update:model-value="setSecret('loader.image_recognition.api_key', $event)" :placeholder="hasSecrets['loader.image_recognition.api_key'] ? '已保存，留空保持不变' : '输入视觉服务密钥'" autocomplete="new-password" /><template #extra><a-button v-if="hasSecrets['loader.image_recognition.api_key']" type="text" size="mini" @click="secrets['loader.image_recognition.api_key'] = ''">清除已存密钥</a-button><span v-if="secrets['loader.image_recognition.api_key'] === ''">保存后清除</span></template></a-form-item>
             </div>
           </a-form>
         </SectionCard>
@@ -138,10 +157,11 @@ onMounted(load);
             <div class="setting-toggle"><div><strong>展开父块</strong><span>命中子块后补充父块原文，提供更完整的上下文。</span></div><a-switch v-model="values.search.expand_parents" aria-label="展开父块" /></div>
             <div class="setting-toggle"><div><strong>Rerank 精排</strong><span>使用独立模型对召回结果重新排序。</span></div><a-switch :model-value="!values.rerank.disabled" aria-label="Rerank 精排" @change="values.rerank.disabled = !$event" /></div>
             <div v-if="!values.rerank.disabled" class="form-grid">
-              <a-form-item label="精排完整 URL"><a-input v-model="values.rerank_provider.endpoint" placeholder="https://example.com/v1/rerank" /></a-form-item>
+              <a-form-item label="供应商连接"><a-select v-model="connections.rerank_provider" allow-clear placeholder="独立配置"><a-option v-for="provider in models.providers.filter(p => p.type !== 'ollama')" :key="provider.id" :value="provider.id">{{ provider.name }}</a-option></a-select><template #extra>使用供应商地址下的 /rerank 接口；服务需提供精排模型。</template></a-form-item>
+              <a-form-item v-if="!connections.rerank_provider" label="精排完整 URL"><a-input v-model="values.rerank_provider.endpoint" placeholder="https://example.com/v1/rerank" /></a-form-item>
               <a-form-item label="精排模型"><a-input v-model="values.rerank_provider.model" /></a-form-item>
-              <a-form-item label="精排 API Key"><a-input-password v-model="secrets['rerank_provider.api_key']" :placeholder="hasSecrets['rerank_provider.api_key'] ? '已保存，留空保持不变' : '可选'" autocomplete="new-password" /></a-form-item>
-              <a-form-item label="额外请求头（JSON，可选）"><a-textarea v-model="secrets['rerank_provider.headers']" :placeholder="hasSecrets['rerank_provider.headers'] ? '已保存，不修改则保持原值' : '例如 {&quot;X-API-Key&quot;:&quot;...&quot;}'" :auto-size="{minRows:2,maxRows:4}" /><template #extra>内容单独存入凭据库，不会写入高级参数或回显。</template></a-form-item>
+              <a-form-item v-if="!connections.rerank_provider" label="精排 API Key"><a-input-password :model-value="secrets['rerank_provider.api_key']" @update:model-value="setSecret('rerank_provider.api_key', $event)" :placeholder="hasSecrets['rerank_provider.api_key'] ? '已保存，留空保持不变' : '可选'" autocomplete="new-password" /><template #extra><a-button v-if="hasSecrets['rerank_provider.api_key']" type="text" size="mini" @click="secrets['rerank_provider.api_key'] = ''">清除已存密钥</a-button><span v-if="secrets['rerank_provider.api_key'] === ''">保存后清除</span></template></a-form-item>
+              <a-form-item label="额外请求头（JSON，可选）"><a-textarea :model-value="secrets['rerank_provider.headers']" @update:model-value="setSecret('rerank_provider.headers', $event)" :placeholder="hasSecrets['rerank_provider.headers'] ? '已保存，不修改则保持原值' : '例如 {&quot;X-API-Key&quot;:&quot;...&quot;}'" :auto-size="{minRows:2,maxRows:4}" /><template #extra>内容单独存入凭据库，不会写入高级参数或回显。<a-button v-if="hasSecrets['rerank_provider.headers']" type="text" size="mini" @click="secrets['rerank_provider.headers'] = ''">清除已存请求头</a-button><span v-if="secrets['rerank_provider.headers'] === ''">保存后清除</span></template></a-form-item>
             </div>
           </a-form>
         </SectionCard>

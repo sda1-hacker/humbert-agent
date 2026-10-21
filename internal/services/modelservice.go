@@ -189,6 +189,9 @@ func (s *ModelService) UpdateProvider(id string, request UpdateProviderRequest) 
 func (s *ModelService) DeleteProvider(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if s.deps.Knowledge != nil {
+		return s.deps.Knowledge.DeleteProvider(ctx, id)
+	}
 
 	if err := s.deps.Models.DeleteProvider(ctx, id); err != nil {
 
@@ -255,44 +258,46 @@ func (s *ModelService) TestModel(id string) (TestModelResponse, error) {
 
 // DiagnoseModel 发送最小请求，并把常见连接故障转换成可处理的提示。
 func (s *ModelService) DiagnoseModel(id string) (ModelDiagnostic, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	return s.ProbeModel(id, "text")
+}
 
+// DiscoverModels 只读供应商元数据，密钥始终留在 Registry 内部。
+func (s *ModelService) DiscoverModels(providerID string) ([]string, error) {
+	return s.deps.Models.DiscoverModels(context.Background(), providerID)
+}
+
+// ProbeModel 由用户明确点击测试触发，不在保存或切换配置时调用。
+func (s *ModelService) ProbeModel(id, kind string) (ModelDiagnostic, error) {
+	ctx := context.Background()
 	model, err := s.modelDTOByID(ctx, id)
 	if err != nil {
-		return ModelDiagnostic{}, fmt.Errorf("读取待诊断模型失败: %w", err)
+		return ModelDiagnostic{}, err
 	}
 	result := ModelDiagnostic{ToolsSupported: model.Capabilities.Tools}
 	if !model.Enabled {
 		result.Category, result.Summary, result.Action = "model_disabled", "模型未启用", "在模型设置中启用该模型后重试。"
 		return result, nil
 	}
-	providers, err := s.deps.Models.ListProviders(ctx)
-	if err != nil {
-		return ModelDiagnostic{}, fmt.Errorf("读取供应商失败: %w", err)
-	}
-	for _, provider := range providers {
-		if provider.ID == model.ProviderID && provider.Type == models.ProviderTypeOpenAI && provider.CredentialID == "" {
-			result.Category, result.Summary, result.Action = "credential", "尚未配置 API Key", "在供应商设置中填写 API Key 后重试。"
-			return result, nil
-		}
-	}
-
 	started := time.Now()
-	test, err := s.deps.Models.TestModel(ctx, id)
+	probe, err := s.deps.Models.ProbeModel(context.Background(), id, kind)
 	result.DurationMS = time.Since(started).Milliseconds()
 	if err != nil {
+		if errors.Is(err, models.ErrProbeMismatch) {
+			result.Category, result.Summary, result.Action = "capability", "本次能力测试未通过", err.Error()
+			return result, nil
+		}
 		result.Category, result.Summary, result.Action = classifyModelDiagnostic(err)
 		return result, nil
 	}
-	result.Success = test.Success
-	result.DurationMS = test.DurationMS
-	result.Category = "ok"
-	result.Summary = "模型连接成功"
-	if model.Capabilities.Tools {
-		result.Action = "文本对话已验证；工具调用能力依据模型配置推断，尚未实际测试。"
-	} else {
-		result.Action = "文本对话已验证。当前未启用工具调用能力；需要工具时请确认模型支持并在模型设置中开启。"
+	result.Success, result.Category, result.DurationMS = probe.Success, "ok", probe.DurationMS
+	result.Summary = map[string]string{"tools": "工具调用已验证", "vision": "图片输入已验证", "stream": "流式输出已验证", "text": "模型连接成功"}[kind]
+	result.Action = "本次测试通过；结果只用于当前配置，不会自动修改模型能力。"
+	if kind == "text" {
+		if model.Capabilities.Tools {
+			result.Action = "文本对话已验证；工具调用能力依据模型配置推断，尚未实际测试。"
+		} else {
+			result.Action = "文本对话已验证。当前未启用工具调用能力；需要工具时请确认模型支持并在模型设置中开启。"
+		}
 	}
 	return result, nil
 }

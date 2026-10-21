@@ -10,6 +10,11 @@ import ModelCapabilityBadges from "../../models/ModelCapabilityBadges.vue";
 import StatusPill from "../../ui/StatusPill.vue";
 import EmptyState from "../../ui/EmptyState.vue";
 import ModelEditor from "./ModelEditor.vue";
+import { useSettingsGuard } from "../../../composables/useSettingsGuard.js";
+import ModelDiscovery from "./ModelDiscovery.vue";
+
+const props = defineProps({ selectable: Boolean });
+const emit = defineEmits(["open-settings", "open-agent", "selected"]);
 
 const store = useModelStore();
 const selectedKey = ref("");
@@ -23,6 +28,8 @@ const diagnostics = ref({});
 const editorOpen = ref(false);
 const editingModel = ref(null);
 const editingPreset = ref(null);
+const discoveryOpen = ref(false);
+const diagnosticKind = ref("text");
 const form = reactive({ name: "", type: "openai_compatible", baseURL: "", apiKey: "", clearAPIKey: false });
 const initialConnection = ref("");
 let alive = true;
@@ -34,6 +41,7 @@ const selectedPreset = computed(() => selectedKey.value.startsWith("preset:")
 const connectionDirty = computed(() => JSON.stringify(form) !== initialConnection.value);
 const providerModels = computed(() => store.models.filter((model) => model.providerID === selectedProvider.value?.id));
 const working = computed(() => saving.value || removing.value || loading.value);
+const mayLeave = useSettingsGuard(() => connectionDirty.value, saveProvider, () => working.value);
 const unavailable = computed(() => !selectedProvider.value || connectionDirty.value || working.value);
 const title = computed(() => selectedProvider.value?.name || selectedPreset.value?.name || t("自定义供应商"));
 const protocolNames = { openai: "OpenAI", openai_compatible: "OpenAI Compatible", ollama: "Ollama" };
@@ -55,7 +63,7 @@ function applySelection(key) {
 }
 async function select(key) {
   if (working.value || key === selectedKey.value) return;
-  if (connectionDirty.value && !(await confirmAction({ title: t("连接配置尚未保存"), message: t("切换供应商会放弃当前未保存的连接修改。"), confirmText: t("放弃修改") }))) return;
+  if (!(await mayLeave())) return;
   applySelection(key);
 }
 watch(() => store.providers.map((provider) => provider.id).join(","), () => {
@@ -104,7 +112,8 @@ async function saveProvider() {
     if (!alive) return;
     applySelection(`provider:${result.id}`);
     Message.success(t(owner ? "供应商已更新" : "供应商已创建"));
-  } catch (reason) { if (alive) Message.error(reason?.message || String(reason)); }
+    return true;
+  } catch (reason) { if (alive) Message.error(reason?.message || String(reason)); return false; }
   finally { if (alive) saving.value = false; }
 }
 async function removeProvider() {
@@ -137,8 +146,9 @@ async function test(model) {
   testingID.value = model.id;
   diagnostics.value = { ...diagnostics.value, [model.id]: null };
   try {
-    const result = await store.diagnoseModel(model.id);
-    if (alive && revision === store.revision) diagnostics.value = { ...diagnostics.value, [model.id]: result };
+    const kind = diagnosticKind.value;
+    const result = await store.diagnoseModel(model.id, kind);
+    if (alive && revision === store.revision) diagnostics.value = { ...diagnostics.value, [model.id]: { ...result, kind, checkedAt: new Date().toLocaleTimeString() } };
   } catch (reason) { if (alive && revision === store.revision) Message.error(reason?.message || String(reason)); }
   finally { if (alive) testingID.value = ""; }
 }
@@ -147,6 +157,7 @@ async function test(model) {
 <template>
   <div class="model-catalog">
     <a-alert v-if="error" type="error">{{ error }} <a-button type="text" @click="refresh">重新加载</a-button></a-alert>
+    <a-alert v-if="store.syncError" type="warning">{{ t(store.syncError) }} <a-button type="text" @click="refresh">刷新配置</a-button></a-alert>
     <div class="provider-board" :aria-busy="loading">
       <aside class="provider-sidebar" aria-label="供应商列表">
         <a-input v-model="query" allow-clear placeholder="搜索供应商" aria-label="搜索供应商"><template #prefix><IconSearch /></template></a-input>
@@ -182,14 +193,16 @@ async function test(model) {
           <header class="models-heading"><h3>已添加的模型 <span>{{ providerModels.length }}</span></h3><span class="section-hint">供 Agent 与视觉辅助使用</span></header>
           <p v-if="!selectedProvider" class="model-help">先保存连接，再添加模型。</p>
           <p v-else-if="connectionDirty" class="model-help">请先保存连接修改，再管理或测试模型。</p>
-          <div class="add-model-row"><a-select :model-value="''" allow-search :disabled="unavailable" placeholder="选择模型，自动填写参数" aria-label="选择预设模型" @change="chooseModel"><a-option v-for="preset in selectedPreset?.models || []" :key="preset.id" :value="preset.id" :label="`${preset.displayName} ${preset.id}`" :disabled="providerModels.some((model) => model.modelName === preset.id)"><span class="preset-option"><span>{{ preset.displayName }}</span><small>{{ formatTokens(preset.contextWindow) }}</small></span></a-option><a-option value="__custom__">自定义模型</a-option></a-select><a-button :disabled="unavailable" @click="openModel()"><template #icon><IconPlus /></template>自定义模型</a-button></div>
-          <div v-if="providerModels.length" class="model-items"><article v-for="model in providerModels" :key="model.id" class="model-item"><div class="model-row"><div class="model-copy"><div class="model-title-line"><button type="button" class="model-title" :disabled="unavailable" @click="openModel(model)">{{ model.displayName }}</button><StatusPill v-if="!model.enabled" label="已停用" :dot="false" /></div><code class="model-id">{{ model.modelName }}</code><div class="model-facts"><span :title="model.contextWindow.toLocaleString()">{{ t('上下文 {size}', {size: formatTokens(model.contextWindow)}) }}</span><span :title="model.maxOutputTokens.toLocaleString()">{{ t('输出 {size}', {size: formatTokens(model.maxOutputTokens)}) }}</span><ModelCapabilityBadges :capabilities="model.capabilities" /></div></div><div class="model-actions"><a-button type="text" size="small" :loading="testingID === model.id" :disabled="unavailable || !!testingID && testingID !== model.id" @click="test(model)">测试</a-button><a-button type="text" size="small" :disabled="unavailable" aria-label="编辑模型" title="编辑模型" @click="openModel(model)"><template #icon><IconEdit /></template></a-button><a-button type="text" size="small" status="danger" :disabled="unavailable || testingID === model.id" aria-label="删除模型" title="删除模型" @click="removeModel(model)"><template #icon><IconDelete /></template></a-button></div></div><div v-if="diagnostics[model.id]" class="model-diagnostic" :class="{'has-error': !diagnostics[model.id].success}" role="status"><strong>{{ t(diagnostics[model.id].summary) }}</strong><span v-if="diagnostics[model.id].durationMS"> · {{ diagnostics[model.id].durationMS }} ms</span><p>{{ t(diagnostics[model.id].action) }}</p></div></article></div>
+          <div class="add-model-row"><a-button :disabled="unavailable" @click="discoveryOpen = true">读取模型</a-button><a-select :model-value="''" allow-search :disabled="unavailable" placeholder="选择模型，自动填写参数" aria-label="选择预设模型" @change="chooseModel"><a-option v-for="preset in selectedPreset?.models || []" :key="preset.id" :value="preset.id" :label="`${preset.displayName} ${preset.id}`" :disabled="providerModels.some((model) => model.modelName === preset.id)"><span class="preset-option"><span>{{ preset.displayName }}</span><small>{{ formatTokens(preset.contextWindow) }}</small></span></a-option><a-option value="__custom__">自定义模型</a-option></a-select><a-button :disabled="unavailable" @click="openModel()"><template #icon><IconPlus /></template>自定义模型</a-button></div>
+          <div v-if="providerModels.length" class="model-items"><article v-for="model in providerModels" :key="model.id" class="model-item"><div class="model-row"><div class="model-copy"><div class="model-title-line"><button type="button" class="model-title" :disabled="unavailable" @click="openModel(model)">{{ model.displayName }}</button><StatusPill v-if="!model.enabled" label="已停用" :dot="false" /></div><code class="model-id">{{ model.modelName }}</code><div class="model-facts"><span :title="model.contextWindow.toLocaleString()">{{ t('上下文 {size}', {size: formatTokens(model.contextWindow)}) }}</span><span :title="model.maxOutputTokens.toLocaleString()">{{ t('输出 {size}', {size: formatTokens(model.maxOutputTokens)}) }}</span><ModelCapabilityBadges :capabilities="model.capabilities" /></div></div><div class="model-actions"><a-button v-if="props.selectable && model.enabled" type="primary" size="small" :disabled="unavailable" @click="emit('selected', model)">使用此模型</a-button><a-button type="text" size="small" :loading="testingID === model.id" :disabled="unavailable || !!testingID && testingID !== model.id" @click="test(model)">测试</a-button><a-button type="text" size="small" :disabled="unavailable" aria-label="编辑模型" title="编辑模型" @click="openModel(model)"><template #icon><IconEdit /></template></a-button><a-button type="text" size="small" status="danger" :disabled="unavailable || testingID === model.id" aria-label="删除模型" title="删除模型" @click="removeModel(model)"><template #icon><IconDelete /></template></a-button></div></div><div v-if="diagnostics[model.id]" class="model-diagnostic" :class="{'has-error': !diagnostics[model.id].success}" role="status"><strong>{{ t(diagnostics[model.id].summary) }}</strong><span> · {{ diagnostics[model.id].checkedAt }}</span><span v-if="diagnostics[model.id].durationMS"> · {{ diagnostics[model.id].durationMS }} ms</span><p>{{ t(diagnostics[model.id].action) }}</p></div></article></div>
           <EmptyState v-else-if="selectedProvider" title="还没有模型" description="选择预设模型自动填入参数，或添加自定义模型。" compact />
-          <p class="model-footnote">保存配置不会调用模型；点击“测试”会发送少量请求，可能产生费用。</p>
+          <div class="diagnostic-options"><span>测试项目</span><a-select v-model="diagnosticKind" :disabled="!!testingID" aria-label="测试项目"><a-option value="text">文本对话</a-option><a-option value="tools">工具调用</a-option><a-option value="vision">图片输入</a-option><a-option value="stream">流式输出</a-option></a-select></div>
+          <p class="model-footnote">保存和读取模型列表不会生成回复；点击“测试”才调用模型，可能产生少量费用。</p>
         </section>
       </main>
     </div>
-    <ModelEditor v-model:visible="editorOpen" :provider-id="selectedProvider?.id || ''" :model="editingModel" :preset="editingPreset" />
+    <ModelEditor v-model:visible="editorOpen" :provider-id="selectedProvider?.id || ''" :model="editingModel" :preset="editingPreset" @saved="props.selectable && $event.enabled && emit('selected', $event)" @open-settings="emit('open-settings', $event)" @open-agent="emit('open-agent', $event)" />
+    <ModelDiscovery v-model:visible="discoveryOpen" :provider-id="selectedProvider?.id || ''" />
   </div>
 </template>
 
@@ -233,7 +246,9 @@ async function test(model) {
 .models-heading h3 { margin: 0; font-size: 14px; font-weight: 500; }
 .models-heading h3 span { margin-left: 6px; color: var(--h-text-muted); font-size: 12px; }
 .section-hint, .model-help, .model-footnote { margin: 8px 0; color: var(--h-text-muted); font-size: 12px; line-height: 1.65; }
-.add-model-row { display: flex; gap: 8px; }
+.add-model-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.diagnostic-options { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 16px; color: var(--h-text-muted); font-size: 12px; }
+.diagnostic-options :deep(.arco-select) { width: 150px; }
 .add-model-row :deep(.arco-select) { min-width: 0; flex: 1; }
 .add-model-row > :deep(.arco-btn) { flex-shrink: 0; }
 .preset-option { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
