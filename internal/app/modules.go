@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sda1-hacker/humbert-agent/internal/knowledge"
 	agentruntime "github.com/sda1-hacker/humbert-agent/internal/runtime"
 )
 
@@ -99,4 +100,26 @@ func (m *moduleManager) close(ctx context.Context) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// initModules 连接模块能力和生命周期，桌面服务仍由 services.All 独立注册。
+func (a *Application) initModules(ctx context.Context, runtimeResolver *agentruntime.Resolver, installersExtra []agentruntime.ModuleInstaller) error {
+	modules := &moduleManager{}
+	a.resources.add(closeResources, "Modules", modules.close)
+	a.resources.add(stopWork, "Modules", modules.stop)
+	installers := append([]agentruntime.ModuleInstaller{func(ctx context.Context, host agentruntime.ModuleHost) (agentruntime.Module, error) {
+		var err error
+		a.knowledge, err = knowledge.New(ctx, host, a.models)
+		if err != nil {
+			return agentruntime.Module{}, err
+		}
+		return a.knowledge.Module(), nil
+	}}, installersExtra...)
+	if err := modules.install(ctx, agentruntime.ModuleHost{DataDir: a.config.Paths.HomeDir, Logger: a.logger, Credentials: a.credentials, Events: a.events, Sandbox: a.sandbox}, runtimeResolver, installers); err != nil {
+		return err
+	}
+	if err := modules.start(ctx); err != nil {
+		return err
+	}
+	return nil
 }

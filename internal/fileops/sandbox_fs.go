@@ -1,4 +1,4 @@
-package builtin
+package fileops
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
-	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
 
 type sandboxTarget struct {
@@ -24,7 +23,7 @@ type sandboxTarget struct {
 
 // openSandboxTarget 先通过 PathGuard 对具体业务动作做裁决，再使用命中的 PathRule Root
 // 创建 os.Root。Tool 不再自行猜测“读 root / 写 root”，PathDecision 是唯一依据。
-func openSandboxTarget(ctx context.Context, scope humberttools.Scope, input string, operation sandbox.PathOperation) (*sandboxTarget, error) {
+func openSandboxTarget(ctx context.Context, policy sandbox.EffectivePolicy, input string, operation sandbox.PathOperation) (*sandboxTarget, error) {
 	if ctx == nil {
 		return nil, errors.New("context.Context 不能为空")
 	}
@@ -32,7 +31,6 @@ func openSandboxTarget(ctx context.Context, scope humberttools.Scope, input stri
 		return nil, err
 	}
 
-	policy := scope.SandboxPolicy()
 	decision, err := policy.CheckPath(input, operation)
 	if err != nil {
 		return nil, err

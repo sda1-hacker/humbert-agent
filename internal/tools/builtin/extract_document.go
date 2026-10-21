@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 
@@ -13,7 +12,7 @@ import (
 	"github.com/cloudwego/eino/components/tool/utils"
 
 	"github.com/sda1-hacker/humbert-agent/internal/documenttext"
-	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
+	"github.com/sda1-hacker/humbert-agent/internal/fileops"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 )
@@ -113,27 +112,11 @@ func (f *ExtractDocumentFactory) run(ctx context.Context, scope humberttools.Sco
 		if !f.allowPaths {
 			return nil, errors.New("工作区文件工具未启用，只能提取当前会话附件")
 		}
-		target, openErr := openSandboxTarget(ctx, scope, path, sandbox.OpRead)
-		if openErr != nil {
-			return nil, fmt.Errorf("文档路径被 Sandbox 拒绝: %w", openErr)
+		name, path, mime, data, err = fileops.ReadDocument(ctx, scope.SandboxPolicy(), path)
+		if err != nil {
+			return nil, err
 		}
-		defer target.Close()
-		name = target.relative
-		mime = documenttext.MIMEForName(name)
-		if mime == "" {
-			return nil, errors.New("仅支持 PDF、DOCX、XLSX 和 PPTX 文档")
-		}
-		file, openErr := target.root.Open(target.relative)
-		if openErr != nil {
-			return nil, fmt.Errorf("打开文档失败: %w", openErr)
-		}
-		defer file.Close()
-		info, statErr := file.Stat()
-		if statErr != nil || !info.Mode().IsRegular() || info.Size() > 12<<20 {
-			return nil, errors.New("文档必须是 12 MiB 以内的普通文件")
-		}
-		data, err = io.ReadAll(io.LimitReader(file, (12<<20)+1))
-		path = target.display
+
 	}
 	if err != nil {
 		return nil, fmt.Errorf("读取文档失败: %w", err)

@@ -1,14 +1,7 @@
 <script setup>
-import { beginLatestRequest } from "../../utils/latestRequest.js";
-
-// 目录请求按组件实例隔离，保存后的刷新使较早响应失效。
-const catalogRequests = {};
-let pendingCatalogLoad = null;
-import {
-  computed,
-  onMounted,
-  ref,
-} from "vue";
+import { storeToRefs } from "pinia";
+import { useSkillStore } from "../../stores/skills.js";
+import { computed, onMounted, ref } from "vue";
 
 import { Message } from "../../utils/uiMessage.js";
 import { t } from "../../i18n/index.js";
@@ -23,7 +16,6 @@ import {
 import {
   discoverLocalSkillSource,
   discoverSkillSource,
-  getSkillState,
   installDiscoveredSkillsFromDirectory,
   installDiscoveredSkillsFromURL,
   selectSkillDirectory,
@@ -33,15 +25,18 @@ import SectionCard from "../ui/SectionCard.vue";
 import EmptyState from "../ui/EmptyState.vue";
 import StatusPill from "../ui/StatusPill.vue";
 
-const emit = defineEmits([
-  "open-detail",
-]);
+const skillStore = useSkillStore();
+const {
+  rootDir,
+  agents,
+  items: skills,
+  loading,
+  loadError,
+  sourceError,
+} = storeToRefs(skillStore);
 
-const loading = ref(false);
-const loadError = ref("");
-const sourceError = ref("");
-const rootDir = ref("");
-const skills = ref([]);
+const emit = defineEmits(["open-detail"]);
+
 const search = ref("");
 const installPanelVisible = ref(false);
 const installAdvancedVisible = ref(false);
@@ -57,29 +52,38 @@ const visibleSkills = computed(() => {
   const keyword = search.value.trim().toLocaleLowerCase();
   if (!keyword) return skills.value;
 
-  return skills.value.filter((skill) => [
-    skill?.alias,
-    skill?.name,
-    skill?.directoryName,
-    skill?.description,
-    skill?.source?.provider,
-  ]
+  return skills.value.filter((skill) =>
+    [
+      skill?.alias,
+      skill?.name,
+      skill?.directoryName,
+      skill?.description,
+      skill?.source?.provider,
+    ]
       .filter(Boolean)
       .join("\n")
       .toLocaleLowerCase()
-      .includes(keyword));
+      .includes(keyword),
+  );
 });
 
 const discoveryCandidates = computed(() =>
-    Array.isArray(discovery.value?.candidates) ? discovery.value.candidates : [],
+  Array.isArray(discovery.value?.candidates) ? discovery.value.candidates : [],
 );
 
 const installableDiscoveryCandidates = computed(() =>
-    discoveryCandidates.value.filter((candidate) => candidate?.valid && !candidate?.installed),
+  discoveryCandidates.value.filter(
+    (candidate) => candidate?.valid && !candidate?.installed,
+  ),
 );
 
 function displayName(skill) {
-  return skill?.alias?.trim() || skill?.name || skill?.directoryName || t("未命名 Skill");
+  return (
+    skill?.alias?.trim() ||
+    skill?.name ||
+    skill?.directoryName ||
+    t("未命名 Skill")
+  );
 }
 
 function usedByAgents(skill) {
@@ -88,38 +92,25 @@ function usedByAgents(skill) {
 
 function skillStatus(skill) {
   if (!skill?.valid) return { label: "无效", tone: "danger" };
-  if (skill?.runtimeStatus === "unsupported") return { label: "暂不可启用", tone: "warning" };
-  if (skill?.runtimeStatus === "needs_setup") return { label: "需要配置", tone: "warning" };
-  if (skill?.specStatus === "legacy") return { label: "兼容模式", tone: "neutral" };
+  if (skill?.runtimeStatus === "unsupported")
+    return { label: "暂不可启用", tone: "warning" };
+  if (skill?.runtimeStatus === "needs_setup")
+    return { label: "需要配置", tone: "warning" };
+  if (skill?.specStatus === "legacy")
+    return { label: "兼容模式", tone: "neutral" };
   return { label: "可用", tone: "success" };
 }
 
 function discoveryCandidateStatus(candidate) {
   if (!candidate?.valid) return { label: "无效", tone: "danger" };
   if (candidate?.installed) return { label: "已安装", tone: "neutral" };
-  if (candidate?.runtimeStatus === "unsupported") return { label: "可安装 · 暂不可启用", tone: "warning" };
-  if (candidate?.runtimeStatus === "needs_setup") return { label: "可安装 · 需要配置", tone: "warning" };
-  if (candidate?.specStatus === "legacy") return { label: "可安装 · 兼容模式", tone: "neutral" };
+  if (candidate?.runtimeStatus === "unsupported")
+    return { label: "可安装 · 暂不可启用", tone: "warning" };
+  if (candidate?.runtimeStatus === "needs_setup")
+    return { label: "可安装 · 需要配置", tone: "warning" };
+  if (candidate?.specStatus === "legacy")
+    return { label: "可安装 · 兼容模式", tone: "neutral" };
   return { label: "可安装", tone: "success" };
-}
-
-function normalizeState(state) {
-  return {
-    rootDir: state?.rootDir ?? "",
-    sourceError: typeof state?.sourceError === "string" ? state.sourceError : "",
-    skills: Array.isArray(state?.skills)
-        ? state.skills.map((skill) => ({
-          ...skill,
-          alias: typeof skill?.alias === "string" ? skill.alias : "",
-          diagnostics: Array.isArray(skill?.diagnostics) ? skill.diagnostics : [],
-          scriptRuntimes: Array.isArray(skill?.scriptRuntimes) ? skill.scriptRuntimes : [],
-          usedByAgents: Array.isArray(skill?.usedByAgents) ? skill.usedByAgents : [],
-          source: skill?.source && typeof skill.source === "object"
-              ? skill.source
-              : { known: false },
-        }))
-        : [],
-  };
 }
 
 function normalizeDiscovery(value) {
@@ -128,12 +119,16 @@ function normalizeDiscovery(value) {
     provider: value?.provider ?? "",
     displaySource: value?.displaySource ?? "",
     candidates: Array.isArray(value?.candidates)
-        ? value.candidates.map((candidate) => ({
+      ? value.candidates.map((candidate) => ({
           ...candidate,
-          diagnostics: Array.isArray(candidate?.diagnostics) ? candidate.diagnostics : [],
-          scriptRuntimes: Array.isArray(candidate?.scriptRuntimes) ? candidate.scriptRuntimes : [],
+          diagnostics: Array.isArray(candidate?.diagnostics)
+            ? candidate.diagnostics
+            : [],
+          scriptRuntimes: Array.isArray(candidate?.scriptRuntimes)
+            ? candidate.scriptRuntimes
+            : [],
         }))
-        : [],
+      : [],
   };
 }
 
@@ -147,36 +142,15 @@ function applyDiscovery(result, context) {
   discovery.value = normalizeDiscovery(result);
   discoveryContext.value = context;
   selectedDiscoveryPaths.value = discovery.value.candidates
-      .filter((candidate) => candidate?.valid && !candidate?.installed)
-      .map((candidate) => candidate.path);
+    .filter((candidate) => candidate?.valid && !candidate?.installed)
+    .map((candidate) => candidate.path);
 }
 
 async function load({ force = false } = {}) {
-  // 普通读取共享当前请求；保存后强制刷新，不允许复用保存前的快照。
-  if (pendingCatalogLoad && !force) return pendingCatalogLoad;
-  const isCurrent = beginLatestRequest(catalogRequests, "catalog");
-  pendingCatalogLoad = readCatalog(isCurrent);
-  try { return await pendingCatalogLoad; }
-  finally { if (isCurrent()) pendingCatalogLoad = null; }
-}
-
-async function readCatalog(isCurrent) {
-  loading.value = true;
-  loadError.value = "";
-  sourceError.value = "";
-
   try {
-    const state = normalizeState(await getSkillState());
-    if (!isCurrent()) return;
-    rootDir.value = state.rootDir;
-    sourceError.value = state.sourceError;
-    skills.value = state.skills;
+    await skillStore.load({ force });
   } catch (error) {
-    if (!isCurrent()) return;
-    loadError.value = error?.message ?? String(error);
     console.error("[SkillPackageSettings] 加载 Skills 失败", error);
-  } finally {
-    if (isCurrent()) loading.value = false;
   }
 }
 
@@ -215,7 +189,10 @@ async function discoverRemotePackages() {
   discovering.value = true;
   resetDiscovery();
   try {
-    const result = await discoverSkillSource(sourceURL, remoteSkillPath.value.trim());
+    const result = await discoverSkillSource(
+      sourceURL,
+      remoteSkillPath.value.trim(),
+    );
     applyDiscovery(result, { kind: "remote", source: sourceURL });
     if (discoveryCandidates.value.length === 0) {
       Message.warning("这个来源中没有发现 SKILL.md");
@@ -228,7 +205,9 @@ async function discoverRemotePackages() {
 }
 
 function selectAllInstallable() {
-  selectedDiscoveryPaths.value = installableDiscoveryCandidates.value.map((candidate) => candidate.path);
+  selectedDiscoveryPaths.value = installableDiscoveryCandidates.value.map(
+    (candidate) => candidate.path,
+  );
 }
 
 async function installSelectedPackages() {
@@ -240,7 +219,10 @@ async function installSelectedPackages() {
   try {
     let result;
     if (context.kind === "local") {
-      result = await installDiscoveredSkillsFromDirectory(context.source, paths);
+      result = await installDiscoveredSkillsFromDirectory(
+        context.source,
+        paths,
+      );
     } else {
       result = await installDiscoveredSkillsFromURL(context.source, paths);
     }
@@ -264,9 +246,9 @@ onMounted(load);
 <template>
   <div class="skill-package-settings">
     <SectionCard
-        class="skill-package-panel"
-        title="本地 Skill Packages"
-        description="这里管理安装到 Humbert 的 Skill Package。为某个 Agent 开启或关闭 Skill，请使用左侧「技能」工作区。"
+      class="skill-package-panel"
+      title="本地 Skill Packages"
+      description="这里管理安装到 Humbert 的 Skill Package。为某个 Agent 开启或关闭 Skill，请使用左侧「技能」工作区。"
     >
       <template #actions>
         <div class="panel-actions">
@@ -274,7 +256,10 @@ onMounted(load);
             <template #icon><IconRefresh /></template>
             刷新
           </a-button>
-          <a-button type="primary" @click="installPanelVisible = !installPanelVisible">
+          <a-button
+            type="primary"
+            @click="installPanelVisible = !installPanelVisible"
+          >
             <template #icon><IconPlus /></template>
             安装 Skill
           </a-button>
@@ -297,7 +282,10 @@ onMounted(load);
         <div class="installer-panel__top">
           <div>
             <strong>发现 / 安装 Skills</strong>
-            <span>粘贴仓库、skills.sh 或 ZIP 地址，Humbert 会先发现其中的 Skills，再由你选择安装。</span>
+            <span
+              >粘贴仓库、skills.sh 或 ZIP 地址，Humbert 会先发现其中的
+              Skills，再由你选择安装。</span
+            >
           </div>
 
           <a-button :loading="discovering" @click="discoverLocalPackages">
@@ -308,85 +296,107 @@ onMounted(load);
 
         <div class="installer-panel__row">
           <a-input
-              v-model="remoteURL"
-              allow-clear
-              placeholder="https://github.com/...、skills.sh/... 或公开 HTTPS ZIP"
-              @press-enter="discoverRemotePackages"
+            v-model="remoteURL"
+            allow-clear
+            placeholder="https://github.com/...、skills.sh/... 或公开 HTTPS ZIP"
+            @press-enter="discoverRemotePackages"
           />
           <a-button
-              type="primary"
-              :loading="discovering"
-              :disabled="!remoteURL.trim()"
-              @click="discoverRemotePackages"
+            type="primary"
+            :loading="discovering"
+            :disabled="!remoteURL.trim()"
+            @click="discoverRemotePackages"
           >
             扫描来源
           </a-button>
         </div>
 
         <button
-            type="button"
-            class="advanced-toggle"
-            @click="installAdvancedVisible = !installAdvancedVisible"
+          type="button"
+          class="advanced-toggle"
+          @click="installAdvancedVisible = !installAdvancedVisible"
         >
           {{ installAdvancedVisible ? "收起高级选项" : "高级选项" }}
         </button>
 
         <div v-if="installAdvancedVisible" class="installer-advanced">
           <a-input
-              v-model="remoteSkillPath"
-              allow-clear
-              placeholder="可选：只扫描仓库子目录，例如 skills/pdf"
+            v-model="remoteSkillPath"
+            allow-clear
+            placeholder="可选：只扫描仓库子目录，例如 skills/pdf"
           />
-          <p>留空时自动发现仓库中的 SKILL.md。扫描和安装都统一经过 SSRF、下载大小、归档与 Package 安全校验。</p>
+          <p>
+            留空时自动发现仓库中的 SKILL.md。扫描和安装都统一经过
+            SSRF、下载大小、归档与 Package 安全校验。
+          </p>
         </div>
 
         <div v-if="discovery" class="discovery-panel">
           <div class="discovery-panel__header">
             <div>
               <strong>发现 {{ discoveryCandidates.length }} 个 Skill</strong>
-              <span>{{ discovery.provider || discovery.sourceKind || "Skill Source" }} · {{ discovery.displaySource || discoveryContext?.source }}</span>
+              <span
+                >{{
+                  discovery.provider || discovery.sourceKind || "Skill Source"
+                }}
+                ·
+                {{ discovery.displaySource || discoveryContext?.source }}</span
+              >
             </div>
             <button
-                v-if="installableDiscoveryCandidates.length > 0"
-                type="button"
-                class="advanced-toggle discovery-select-all"
-                @click="selectAllInstallable"
+              v-if="installableDiscoveryCandidates.length > 0"
+              type="button"
+              class="advanced-toggle discovery-select-all"
+              @click="selectAllInstallable"
             >
               选择全部可安装
             </button>
           </div>
 
-          <a-checkbox-group v-model="selectedDiscoveryPaths" class="discovery-list">
+          <a-checkbox-group
+            v-model="selectedDiscoveryPaths"
+            class="discovery-list"
+          >
             <div
-                v-for="candidate in discoveryCandidates"
-                :key="candidate.path"
-                class="discovery-item"
-                :class="{ 'discovery-item--invalid': !candidate.valid }"
+              v-for="candidate in discoveryCandidates"
+              :key="candidate.path"
+              class="discovery-item"
+              :class="{ 'discovery-item--invalid': !candidate.valid }"
             >
               <a-checkbox
-                  :value="candidate.path"
-                  :disabled="!candidate.valid || candidate.installed"
+                :value="candidate.path"
+                :disabled="!candidate.valid || candidate.installed"
               />
               <div class="discovery-item__body">
                 <div class="discovery-item__title">
                   <strong>{{ candidate.name || candidate.path }}</strong>
                   <code>{{ candidate.path }}</code>
                   <StatusPill
-                      :label="t(discoveryCandidateStatus(candidate).label)"
-                      :tone="discoveryCandidateStatus(candidate).tone"
-                      :dot="false"
+                    :label="t(discoveryCandidateStatus(candidate).label)"
+                    :tone="discoveryCandidateStatus(candidate).tone"
+                    :dot="false"
                   />
                 </div>
                 <p :class="{ 'discovery-item__error': !candidate.valid }">
-                  {{ candidate.valid ? (candidate.description || "没有描述") : (candidate.error || "Skill Package 校验失败") }}
+                  {{
+                    candidate.valid
+                      ? candidate.description || "没有描述"
+                      : candidate.error || "Skill Package 校验失败"
+                  }}
                 </p>
                 <div class="discovery-item__meta">
-                  <span v-if="candidate.valid">{{ candidate.fileCount }} 个文件</span>
+                  <span v-if="candidate.valid"
+                    >{{ candidate.fileCount }} 个文件</span
+                  >
                   <span v-if="candidate.hasScripts">scripts</span>
                   <span v-if="candidate.hasReferences">references</span>
                   <span v-if="candidate.hasAssets">assets</span>
-                  <span v-if="candidate.runtimeMessage">{{ candidate.runtimeMessage }}</span>
-                  <span v-else-if="candidate.specMessage">{{ candidate.specMessage }}</span>
+                  <span v-if="candidate.runtimeMessage">{{
+                    candidate.runtimeMessage
+                  }}</span>
+                  <span v-else-if="candidate.specMessage">{{
+                    candidate.specMessage
+                  }}</span>
                 </div>
               </div>
             </div>
@@ -395,10 +405,10 @@ onMounted(load);
           <div class="discovery-panel__actions">
             <span>选择了 {{ selectedDiscoveryPaths.length }} 个</span>
             <a-button
-                type="primary"
-                :loading="installingDiscovered"
-                :disabled="selectedDiscoveryPaths.length === 0"
-                @click="installSelectedPackages"
+              type="primary"
+              :loading="installingDiscovered"
+              :disabled="selectedDiscoveryPaths.length === 0"
+              @click="installSelectedPackages"
             >
               安装所选 Skills
             </a-button>
@@ -407,7 +417,11 @@ onMounted(load);
       </div>
 
       <div class="catalog-toolbar">
-        <a-input v-model="search" allow-clear placeholder="搜索显示名称、Skill 名称、描述或来源">
+        <a-input
+          v-model="search"
+          allow-clear
+          placeholder="搜索显示名称、Skill 名称、描述或来源"
+        >
           <template #prefix><IconSearch /></template>
         </a-input>
         <span>{{ visibleSkills.length }} / {{ skills.length }}</span>
@@ -415,38 +429,50 @@ onMounted(load);
 
       <div class="catalog-hint">
         <span aria-hidden="true">↗</span>
-        <span>点击 Skill 可在独立工作区查看 SKILL.md / references / scripts、修改显示名称、检查更新或修复 Package。</span>
+        <span
+          >点击 Skill 可在独立工作区查看 SKILL.md / references /
+          scripts、修改显示名称、检查更新或修复 Package。</span
+        >
       </div>
 
       <EmptyState
-          v-if="loading && skills.length === 0"
-          title="正在读取本地 Skills…"
-          description="正在扫描已安装的 Skill Package。"
-          compact
+        v-if="loading && skills.length === 0"
+        title="正在读取本地 Skills…"
+        description="正在扫描已安装的 Skill Package。"
+        compact
       />
 
       <div v-else-if="visibleSkills.length > 0" class="package-list">
         <button
-            v-for="skill in visibleSkills"
-            :key="skill.directoryName || skill.name"
-            type="button"
-            class="package-row"
-            :class="{ 'package-row--invalid': !skill.valid, 'package-row--unsupported': skill.valid && ['unsupported', 'needs_setup'].includes(skill.runtimeStatus) }"
-            @click="openDetail(skill)"
+          v-for="skill in visibleSkills"
+          :key="skill.directoryName || skill.name"
+          type="button"
+          class="package-row"
+          :class="{
+            'package-row--invalid': !skill.valid,
+            'package-row--unsupported':
+              skill.valid &&
+              ['unsupported', 'needs_setup'].includes(skill.runtimeStatus),
+          }"
+          @click="openDetail(skill)"
         >
           <div class="package-row__body">
             <div class="package-row__title">
               <strong>{{ displayName(skill) }}</strong>
               <code v-if="skill.alias">{{ skill.name }}</code>
               <StatusPill
-                  :label="t(skillStatus(skill).label)"
-                  :tone="skillStatus(skill).tone"
-                  :dot="false"
+                :label="t(skillStatus(skill).label)"
+                :tone="skillStatus(skill).tone"
+                :dot="false"
               />
             </div>
 
             <p :class="{ 'package-row__error': !skill.valid }">
-              {{ skill.valid ? skill.description : (skill.error || "Skill Package 校验失败") }}
+              {{
+                skill.valid
+                  ? skill.description
+                  : skill.error || "Skill Package 校验失败"
+              }}
             </p>
 
             <div class="package-row__meta">
@@ -454,12 +480,27 @@ onMounted(load);
               <span v-if="skill.hasScripts">scripts</span>
               <span v-if="skill.hasReferences">references</span>
               <span v-if="skill.hasAssets">assets</span>
-              <span v-if="skill.valid && ['unsupported', 'needs_setup'].includes(skill.runtimeStatus)" class="package-row__runtime-warning">
-                {{ skill.runtimeMessage || (skill.runtimeStatus === 'needs_setup' ? "需要补充运行环境" : "当前 Runtime 暂不支持启用") }}
+              <span
+                v-if="
+                  skill.valid &&
+                  ['unsupported', 'needs_setup'].includes(skill.runtimeStatus)
+                "
+                class="package-row__runtime-warning"
+              >
+                {{
+                  skill.runtimeMessage ||
+                  (skill.runtimeStatus === "needs_setup"
+                    ? "需要补充运行环境"
+                    : "当前 Runtime 暂不支持启用")
+                }}
               </span>
-              <span v-if="skill.source?.known">来源：{{ skill.source.provider || "已记录" }}</span>
+              <span v-if="skill.source?.known"
+                >来源：{{ skill.source.provider || "已记录" }}</span
+              >
               <span>{{ usedByAgents(skill).length }} 个 Agent 已启用</span>
-              <span v-if="!skill.valid && skill.source?.known">可从来源修复</span>
+              <span v-if="!skill.valid && skill.source?.known"
+                >可从来源修复</span
+              >
             </div>
           </div>
 
@@ -471,10 +512,14 @@ onMounted(load);
       </div>
 
       <EmptyState
-          v-else
-          :title="skills.length > 0 ? '没有匹配的 Skill' : '还没有安装 Skill'"
-          :description="skills.length > 0 ? '尝试调整搜索关键词。' : '点击上方「安装 Skill」添加第一个 Package。'"
-          compact
+        v-else
+        :title="skills.length > 0 ? '没有匹配的 Skill' : '还没有安装 Skill'"
+        :description="
+          skills.length > 0
+            ? '尝试调整搜索关键词。'
+            : '点击上方「安装 Skill」添加第一个 Package。'
+        "
+        compact
       />
 
       <footer class="package-footer">

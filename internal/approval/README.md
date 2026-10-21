@@ -35,4 +35,4 @@ checkpoint 由 Runtime 的 RunID 唯一定位，Manager 不再复制 checkpointI
 
 排查审批卡卡住时同时检查 `approval.Request.ID`、Eino `interruptID`、Runtime `RequestID` 与 Session reservation；四者用途不同。
 
-原 `errors.go` 的定义已并入 `types.go`，只保留 package 声明，可手动删除。
+错误定义集中在 `types.go`，原空的 `errors.go` 已清理。

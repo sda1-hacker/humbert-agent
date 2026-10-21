@@ -2,7 +2,7 @@
 
 [架构目录](../../docs/项目源码详解.md) · [Services](../services/README.md)
 
-`application.go` 创建已有领域服务与应用用例，成功后返回 `Application`。`tools.go` 注册内置工厂；浏览器视觉模型选择已放到 `usecases.VisionInspector`。`runtime_event_reporter.go` 将运行事件发布到 EventBus。
+`application.go` 创建基础领域服务与应用用例，再按顺序调用 `runtime.go` 的 `initRuntime`、`tasks.go` 的 `initTasks` 和 `modules.go` 的 `initModules`，成功后返回 `Application`。`tools.go` 注册内置工厂；浏览器视觉模型选择已放到 `usecases.VisionInspector`。`runtime_event_reporter.go` 将运行事件发布到 EventBus。
 
 工作区看板使用已有 usecases 包中的 `WorkspaceQuery`。工具装配只接收一份 `sessions.Service`，从中取得历史、附件和完整结果归档；不再另建 ContextArtifactStore，也不重复保存 History/Artifacts 两份来源。Builtin 的最小接口仍在工具侧定义，真实构造通过编译期接口匹配，构建入口先拒绝缺失会话服务。
 

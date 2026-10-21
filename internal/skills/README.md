@@ -64,4 +64,4 @@ Agent Profile：enabled_skills = [name]
 
 仓库来源优先由 `materializeGitSkillRepository` 获取，固定命令禁用仓库 hooks 与危险 protocol，再生成 ZIP；Git 不可用或获取失败时，编排层按既有规则尝试 HTTPS Archive。两条路径随后都进入 `extractRemoteArchive`，共享入口路径、符号链接、展开预算和包检查，扩展来源时无需再写一套安装器。
 
-`remote_source.go` 和 `source_providers.go` 保持纯地址解析；新的来源 Resolver 只返回规范化描述。新增 Git 获取行为放在 `remote_git.go`，修改下载/ZIP 边界放在 `remote_archive.go`，安装原子提交仍在 `installer.go`/`update.go`。哨兵错误已与领域类型合并到 `types.go`，原 `errors.go` 可手动删除。
+`remote_source.go` 和 `source_providers.go` 保持纯地址解析；新的来源 Resolver 只返回规范化描述。新增 Git 获取行为放在 `remote_git.go`，修改下载/ZIP 边界放在 `remote_archive.go`，安装原子提交仍在 `installer.go`/`update.go`。哨兵错误已与领域类型合并到 `types.go`，原空的 `errors.go` 已清理。

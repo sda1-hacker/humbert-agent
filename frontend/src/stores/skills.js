@@ -1,101 +1,118 @@
+import { defineStore } from "pinia";
+import { toRaw } from "vue";
 import { beginLatestRequest } from "../utils/latestRequest.js";
-import {
-    defineStore,
-} from "pinia";
+import { deleteSkill, getSkillState } from "../api/skills.js";
 
-import {
-    deleteSkill,
-    getSkillState,
-} from "../api/skills.js";
+const pendingLoads = new WeakMap();
 
-/**
- * Skill Store 只保存设置页/Agent 编辑器需要的控制面状态。
- *
- * Skill 正文、references/scripts 内容与 Runtime Snapshot 都只存在 Go 后端，不复制到
- * WebView，避免把可能较大的本地指令包变成前端长期状态。
- */
-export const useSkillStore =
-    defineStore(
-        "skills",
-        {
-            state: () => ({
-                rootDir: "",
-                sourceResolvers: [],
-                items: [],
-                loaded: false,
-                loading: false,
-                loadError: "",
-                removingName: "",
-            }),
+// Catalog is shared control-plane state. File bodies and editor drafts stay local.
+function normalizeCatalog(state) {
+  const items = (Array.isArray(state?.skills) ? state.skills : []).map(
+    (skill) => ({
+      ...skill,
+      alias: typeof skill?.alias === "string" ? skill.alias : "",
+      diagnostics: Array.isArray(skill?.diagnostics) ? skill.diagnostics : [],
+      scriptRuntimes: Array.isArray(skill?.scriptRuntimes)
+        ? skill.scriptRuntimes
+        : [],
+      usedByAgents: Array.isArray(skill?.usedByAgents)
+        ? skill.usedByAgents
+        : [],
+      source:
+        skill?.source && typeof skill.source === "object"
+          ? skill.source
+          : { known: false },
+    }),
+  );
+  const inferred = new Map();
+  for (const skill of items) {
+    if (!skill?.name) continue;
+    for (const agent of skill.usedByAgents) {
+      if (!agent?.id) continue;
+      if (!inferred.has(agent.id)) inferred.set(agent.id, new Set());
+      inferred.get(agent.id).add(skill.name);
+    }
+  }
+  const agents = (Array.isArray(state?.agents) ? state.agents : [])
+    .map((agent) => ({
+      id: agent?.id ?? "",
+      name: agent?.name ?? "",
+      enabledSkills: [
+        ...new Set([
+          ...(Array.isArray(agent?.enabledSkills)
+            ? agent.enabledSkills.filter(Boolean)
+            : []),
+          ...(inferred.get(agent?.id) ?? []),
+        ]),
+      ],
+    }))
+    .filter((agent) => agent.id);
+  return {
+    rootDir: state?.rootDir ?? "",
+    sourceError:
+      typeof state?.sourceError === "string" ? state.sourceError : "",
+    sourceResolvers: Array.isArray(state?.sourceResolvers)
+      ? [...state.sourceResolvers]
+      : [],
+    items,
+    agents,
+  };
+}
 
-            getters: {
-                validSkills(state) {
-                    return state.items.filter(
-                        (item) => item.valid,
-                    );
-                },
-            },
-
-            actions: {
-                /**
-                 * 重新读取后端 Skill Catalog 与 Agent 引用关系。
-                 */
-                async load() {
-                    // 保存后的读取必须真正发起，不能被保存前的在途请求吞掉。
-                    const isCurrent = beginLatestRequest(this, "skills");
-
-                    this.loading = true;
-                    this.loadError = "";
-                    try {
-                        const state =
-                            await getSkillState();
-                        if (!isCurrent()) return;
-
-                        this.rootDir =
-                            state?.rootDir ?? "";
-                        this.sourceResolvers =
-                            Array.isArray(state?.sourceResolvers)
-                                ? [...state.sourceResolvers]
-                                : [];
-                        this.items =
-                            Array.isArray(state?.skills)
-                                ? state.skills.map(
-                                    (item) => ({
-                                        ...item,
-                                        usedByAgents:
-                                            Array.isArray(item?.usedByAgents)
-                                                ? item.usedByAgents
-                                                : [],
-                                    }),
-                                )
-                                : [];
-                        this.loaded = true;
-                    } catch (error) {
-                        if (!isCurrent()) return;
-                        this.loadError =
-                            error?.message ?? String(error);
-                        throw error;
-                    } finally {
-                        if (isCurrent()) this.loading = false;
-                    }
-                },
-
-                /**
-                 * 删除一个 Skill。后端会再次检查是否仍被 Agent 引用。
-                 */
-                async remove(name) {
-                    if (!name || this.removingName) {
-                        return;
-                    }
-
-                    this.removingName = name;
-                    try {
-                        await deleteSkill(name);
-                        await this.load();
-                    } finally {
-                        this.removingName = "";
-                    }
-                },
-            },
-        },
-    );
+export const useSkillStore = defineStore("skills", {
+  state: () => ({
+    rootDir: "",
+    sourceError: "",
+    sourceResolvers: [],
+    items: [],
+    agents: [],
+    loaded: false,
+    loading: false,
+    loadError: "",
+    removingName: "",
+  }),
+  getters: {
+    validSkills: (state) => state.items.filter((item) => item.valid),
+    findSkill: (state) => (name) =>
+      state.items.find(
+        (item) => item.name === name || item.directoryName === name,
+      ),
+  },
+  actions: {
+    async load({ force = true } = {}) {
+      const owner = toRaw(this);
+      if (!force && pendingLoads.has(owner)) return pendingLoads.get(owner);
+      const isCurrent = beginLatestRequest(this, "skills");
+      this.loading = true;
+      this.loadError = "";
+      const request = Promise.resolve().then(async () => {
+        try {
+          const state = await getSkillState();
+          if (!isCurrent()) return pendingLoads.get(owner);
+          Object.assign(this, normalizeCatalog(state), { loaded: true });
+        } catch (error) {
+          if (!isCurrent()) return pendingLoads.get(owner);
+          this.loadError = error?.message ?? String(error);
+          throw error;
+        } finally {
+          if (isCurrent()) {
+            this.loading = false;
+            pendingLoads.delete(owner);
+          }
+        }
+      });
+      pendingLoads.set(owner, request);
+      return request;
+    },
+    async remove(name) {
+      if (!name || this.removingName) return;
+      this.removingName = name;
+      try {
+        await deleteSkill(name);
+        await this.load();
+      } finally {
+        this.removingName = "";
+      }
+    },
+  },
+});

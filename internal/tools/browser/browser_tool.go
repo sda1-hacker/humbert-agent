@@ -1,4 +1,4 @@
-package builtin
+package browser
 
 import (
 	"bytes"
@@ -25,6 +25,8 @@ import (
 	"github.com/go-rod/rod/lib/launcher"
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/rod/lib/proto"
+
+	"github.com/sda1-hacker/humbert-agent/internal/publicweb"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
 
@@ -72,12 +74,7 @@ type BrowserFactory struct {
 	stop        chan struct{}
 	reapOnce    sync.Once
 	inspect     BrowserVisionInspector
-	attachments BrowserAttachmentWriter
-}
-
-// BrowserAttachmentWriter 将截图原件写入当前会话，而不是默认污染 Agent 工作区。
-type BrowserAttachmentWriter interface {
-	SaveToolImage(context.Context, string, string, string, []byte) (string, error)
+	attachments humberttools.ImageWriter
 }
 
 // BrowserVisionInspector observes pixels from the same page the user sees.
@@ -91,7 +88,7 @@ func NewBrowserFactory(profileRoot string, inspectors ...BrowserVisionInspector)
 	return f
 }
 
-func (f *BrowserFactory) SetAttachmentWriter(writer BrowserAttachmentWriter) {
+func (f *BrowserFactory) SetAttachmentWriter(writer humberttools.ImageWriter) {
 	f.attachments = writer
 }
 
@@ -380,14 +377,14 @@ func (f *BrowserFactory) Close() error {
 }
 
 func validateBrowserURL(ctx context.Context, raw string) error {
-	parsed, err := parsePublicFetchURL(raw)
+	parsed, err := publicweb.ParseURL(raw)
 	if err != nil {
 		return err
 	}
 	if len(raw) > 4096 {
 		return errors.New("browser URL 超过 4096 字节")
 	}
-	_, err = resolvePublicIPs(ctx, parsed.Hostname())
+	_, err = publicweb.ResolveIPs(ctx, parsed.Hostname())
 	return err
 }
 
@@ -462,7 +459,7 @@ func startBrowserWithProfile(ctx context.Context, visible bool, profile string, 
 	if err != nil {
 		return nil, fmt.Errorf("未找到 Chrome；请安装浏览器或设置 HUMBERT_BROWSER_CHROME_PATH: %w", err)
 	}
-	proxy, err := startBrowserProxy((&publicWebDialer{}).DialContext)
+	proxy, err := startBrowserProxy((&publicweb.Dialer{}).DialContext)
 	if err != nil {
 		return nil, fmt.Errorf("启动 browser 出站代理失败: %w", err)
 	}

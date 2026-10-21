@@ -9,6 +9,7 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 	"github.com/sda1-hacker/humbert-agent/internal/searchindex"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
@@ -262,12 +263,12 @@ func messageDTO(value sessions.Message, messageNo int64) (MessageDTO, error) {
 
 	role := string(value.Message.Role)
 	metadata := MessageMetadataDTO{}
-	content := runtimeMessageText(value.Message)
+	content := multimodal.MessageText(value.Message)
 	attachments := runtimeMessageAttachments(value.Message)
 	switch value.Message.Role {
 	case schema.User:
 	case schema.Assistant:
-		metadata.Reasoning = runtimeMessageReasoning(value.Message)
+		metadata.Reasoning = multimodal.MessageReasoning(value.Message)
 		metadata.ToolCalls = value.Message.ToolCalls
 		metadata.ProviderID = value.Persistence.Provider
 		metadata.ModelName = value.Persistence.Model
@@ -296,31 +297,6 @@ func messageDTO(value sessions.Message, messageNo int64) (MessageDTO, error) {
 		Attachments: attachments,
 		CreatedAt:   value.CreatedAt.Format(time.RFC3339),
 	}, nil
-}
-
-func runtimeMessageText(message *schema.Message) string {
-	if message == nil {
-		return ""
-	}
-	if message.Content != "" {
-		return message.Content
-	}
-
-	var builder strings.Builder
-	if message.Role == schema.User {
-		for _, part := range message.UserInputMultiContent {
-			if part.Type == schema.ChatMessagePartTypeText {
-				builder.WriteString(part.Text)
-			}
-		}
-		return builder.String()
-	}
-	for _, part := range message.AssistantGenMultiContent {
-		if part.Type == schema.ChatMessagePartTypeText {
-			builder.WriteString(part.Text)
-		}
-	}
-	return builder.String()
 }
 
 func runtimeMessageAttachments(message *schema.Message) []AttachmentDTO {
@@ -383,21 +359,4 @@ func int64Extra(values map[string]any, key string) int64 {
 	default:
 		return 0
 	}
-}
-
-func runtimeMessageReasoning(message *schema.Message) string {
-	if message == nil {
-		return ""
-	}
-	if message.ReasoningContent != "" {
-		return message.ReasoningContent
-	}
-
-	var builder strings.Builder
-	for _, part := range message.AssistantGenMultiContent {
-		if part.Type == schema.ChatMessagePartTypeReasoning && part.Reasoning != nil {
-			builder.WriteString(part.Reasoning.Text)
-		}
-	}
-	return builder.String()
 }

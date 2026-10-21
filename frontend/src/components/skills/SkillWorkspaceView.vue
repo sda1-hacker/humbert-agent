@@ -1,77 +1,33 @@
 <script setup>
-import {
-  onMounted,
-  ref,
-  watch,
-} from "vue";
+import { onMounted, ref, watch } from "vue";
 
 import { Message } from "../../utils/uiMessage.js";
 
-import {
-  getSkillState,
-} from "../../api/skills.js";
+import { useSkillStore } from "../../stores/skills.js";
+const skillStore = useSkillStore();
 
-import SkillSettings
-  from "../settings/SkillSettings.vue";
+import SkillSettings from "../settings/SkillSettings.vue";
 
-import AppPageHeader
-  from "../ui/AppPageHeader.vue";
+import AppPageHeader from "../ui/AppPageHeader.vue";
 
-import SkillDetailView
-  from "./SkillDetailView.vue";
+import SkillDetailView from "./SkillDetailView.vue";
 
-const props =
-    defineProps({
-      initialSkillName: {
-        type: String,
-        default: "",
-      },
-    });
+const props = defineProps({
+  initialSkillName: {
+    type: String,
+    default: "",
+  },
+});
 
-const emit = defineEmits([
-  "manage-packages",
-]);
+const emit = defineEmits(["manage-packages"]);
 
-const selectedSkill =
-    ref(null);
+const selectedSkill = ref(null);
 
-const selectedAgentID =
-    ref("");
+const selectedAgentID = ref("");
 
-const catalogRevision =
-    ref(0);
+const catalogRevision = ref(0);
 
-const loadingDetail =
-    ref(false);
-
-function normalizeSkills(state) {
-  return Array.isArray(state?.skills)
-      ? state.skills.map(
-          (skill) => ({
-            ...skill,
-
-            alias:
-                typeof skill?.alias ===
-                "string"
-                    ? skill.alias
-                    : "",
-
-            usedByAgents:
-                Array.isArray(
-                    skill?.usedByAgents,
-                )
-                    ? skill.usedByAgents
-                    : [],
-
-            source:
-                skill?.source &&
-                typeof skill.source === "object"
-                    ? skill.source
-                    : {known: false},
-          }),
-      )
-      : [];
-}
+const loadingDetail = ref(false);
 
 async function openDetail(name) {
   if (!name || loadingDetail.value) {
@@ -81,22 +37,12 @@ async function openDetail(name) {
   loadingDetail.value = true;
 
   try {
-    const state =
-        await getSkillState();
+    await skillStore.load({ force: true });
 
-    const skill =
-        normalizeSkills(state)
-            .find(
-                (item) => (
-                    item?.name === name ||
-                    item?.directoryName === name
-                ),
-            );
+    const skill = skillStore.findSkill(name);
 
     if (!skill) {
-      Message.warning(
-          `没有找到 Skill「${name}」`,
-      );
+      Message.warning(`没有找到 Skill「${name}」`);
 
       selectedSkill.value = null;
 
@@ -105,10 +51,7 @@ async function openDetail(name) {
 
     selectedSkill.value = skill;
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
   } finally {
     loadingDetail.value = false;
   }
@@ -119,10 +62,7 @@ function closeDetail() {
 }
 
 async function refreshSelectedSkill() {
-  const name =
-      selectedSkill.value?.name ||
-      selectedSkill.value
-          ?.directoryName;
+  const name = selectedSkill.value?.name || selectedSkill.value?.directoryName;
 
   if (!name) {
     return;
@@ -139,26 +79,23 @@ function handleDeleted() {
 }
 
 function rememberAgent(agentID) {
-  selectedAgentID.value =
-      agentID || "";
+  selectedAgentID.value = agentID || "";
 }
 
 watch(
-    () => props.initialSkillName,
-    (name) => {
-      if (name) {
-        void openDetail(name);
-      } else {
-        selectedSkill.value = null;
-      }
-    },
+  () => props.initialSkillName,
+  (name) => {
+    if (name) {
+      void openDetail(name);
+    } else {
+      selectedSkill.value = null;
+    }
+  },
 );
 
 onMounted(() => {
   if (props.initialSkillName) {
-    void openDetail(
-        props.initialSkillName,
-    );
+    void openDetail(props.initialSkillName);
   }
 });
 </script>
@@ -168,10 +105,10 @@ onMounted(() => {
     <div class="skill-workspace__scroll">
       <div class="skill-workspace__inner">
         <AppPageHeader
-            v-if="!selectedSkill"
-            eyebrow="Agent Skills"
-            title="技能"
-            description="选择 Agent，开启需要的技能。点击技能可查看详情。"
+          v-if="!selectedSkill"
+          eyebrow="Agent Skills"
+          title="技能"
+          description="选择 Agent，开启需要的技能。点击技能可查看详情。"
         >
           <template #aside>
             <div class="skill-workspace__legend">
@@ -182,20 +119,20 @@ onMounted(() => {
         </AppPageHeader>
 
         <SkillDetailView
-            v-if="selectedSkill"
-            :skill="selectedSkill"
-            @back="closeDetail"
-            @deleted="handleDeleted"
-            @updated="refreshSelectedSkill"
+          v-if="selectedSkill"
+          :skill="selectedSkill"
+          @back="closeDetail"
+          @deleted="handleDeleted"
+          @updated="refreshSelectedSkill"
         />
 
         <SkillSettings
-            v-else
-            :key="catalogRevision"
-            :initial-agent-id="selectedAgentID"
-            @agent-change="rememberAgent"
-            @manage-packages="emit('manage-packages')"
-            @open-detail="openDetail"
+          v-else
+          :key="catalogRevision"
+          :initial-agent-id="selectedAgentID"
+          @agent-change="rememberAgent"
+          @manage-packages="emit('manage-packages')"
+          @open-detail="openDetail"
         />
       </div>
     </div>

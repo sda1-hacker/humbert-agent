@@ -1,15 +1,7 @@
 <script setup>
-import { beginLatestRequest } from "../../utils/latestRequest.js";
-
-// 目录请求按组件实例隔离，保存后的刷新使较早响应失效。
-const catalogRequests = {};
-let pendingCatalogLoad = null;
-import {
-  computed,
-  onMounted,
-  ref,
-  watch,
-} from "vue";
+import { storeToRefs } from "pinia";
+import { useSkillStore } from "../../stores/skills.js";
+import { computed, onMounted, ref, watch } from "vue";
 
 import { Message } from "../../utils/uiMessage.js";
 import { t } from "../../i18n/index.js";
@@ -20,342 +12,124 @@ import {
   IconSettings,
 } from "@arco-design/web-vue/es/icon";
 
-import {
-  disableSkillForAgent,
-  enableSkillForAgent,
-  getSkillState,
-} from "../../api/skills.js";
+import { disableSkillForAgent, enableSkillForAgent } from "../../api/skills.js";
 
-import {
-  useAgentStore,
-} from "../../stores/agents.js";
+import { useAgentStore } from "../../stores/agents.js";
 
-const props =
-    defineProps({
-      initialAgentId: {
-        type: String,
-        default: "",
-      },
+const props = defineProps({
+  initialAgentId: {
+    type: String,
+    default: "",
+  },
+});
+
+const skillStore = useSkillStore();
+const {
+  rootDir,
+  agents,
+  items: skills,
+  loading,
+  loadError,
+  sourceError,
+} = storeToRefs(skillStore);
+
+const emit = defineEmits(["agent-change", "manage-packages", "open-detail"]);
+
+const agentStore = useAgentStore();
+
+const selectedAgentID = ref("");
+
+const catalogSearch = ref("");
+
+const updatingKey = ref("");
+
+const selectedAgent = computed(
+  () =>
+    agents.value.find((agent) => agent.id === selectedAgentID.value) ?? null,
+);
+
+const visibleSkills = computed(() => {
+  const query = catalogSearch.value.trim().toLocaleLowerCase();
+
+  if (!query) {
+    return skills.value;
+  }
+
+  return skills.value.filter((skill) =>
+    [skill?.alias, skill?.name, skill?.directoryName, skill?.description]
+      .filter(Boolean)
+      .join("\n")
+      .toLocaleLowerCase()
+      .includes(query),
+  );
+});
+
+const validSkillNames = computed(
+  () =>
+    new Set(
+      skills.value
+        .filter((skill) => Boolean(skill?.valid && skill?.name))
+        .map((skill) => skill.name),
+    ),
+);
+
+const unavailableSkills = computed(() => {
+  const enabled = Array.isArray(selectedAgent.value?.enabledSkills)
+    ? selectedAgent.value.enabledSkills
+    : [];
+
+  return [...new Set(enabled)]
+    .filter((name) => !validSkillNames.value.has(name))
+    .map((name) => {
+      const installed = skills.value.find((skill) => skill?.name === name);
+
+      return {
+        name,
+        displayName: installed?.alias?.trim() || installed?.name || name,
+        reason: installed
+          ? installed.error || "Skill Package 当前无效"
+          : "Skill 已从安装目录移除或尚未安装",
+      };
     });
+});
 
-const emit =
-    defineEmits([
-      "agent-change",
-      "manage-packages",
-      "open-detail",
-    ]);
-
-const agentStore =
-    useAgentStore();
-
-const rootDir =
-    ref("");
-
-const agents =
-    ref([]);
-
-const skills =
-    ref([]);
-
-const loading =
-    ref(false);
-
-const loadError =
-    ref("");
-
-const sourceError =
-    ref("");
-
-const selectedAgentID =
-    ref("");
-
-const catalogSearch =
-    ref("");
-
-
-const updatingKey =
-    ref("");
-
-const selectedAgent =
-    computed(() => agents.value.find(
-        (agent) => agent.id === selectedAgentID.value,
-    ) ?? null);
-
-const visibleSkills =
-    computed(() => {
-      const query =
-          catalogSearch.value
-              .trim()
-              .toLocaleLowerCase();
-
-      if (!query) {
-        return skills.value;
-      }
-
-      return skills.value.filter(
-          (skill) => [
-            skill?.alias,
-            skill?.name,
-            skill?.directoryName,
-            skill?.description,
-          ]
-              .filter(Boolean)
-              .join("\n")
-              .toLocaleLowerCase()
-              .includes(query),
-      );
-    });
-
-const validSkillNames =
-    computed(() => new Set(
-        skills.value
-            .filter(
-                (skill) => Boolean(
-                    skill?.valid &&
-                    skill?.name,
-                ),
-            )
-            .map(
-                (skill) => skill.name,
-            ),
-    ));
-
-const unavailableSkills =
-    computed(() => {
-      const enabled =
-          Array.isArray(
-              selectedAgent.value
-                  ?.enabledSkills,
-          )
-              ? selectedAgent.value.enabledSkills
-              : [];
-
-      return [...new Set(enabled)]
-          .filter(
-              (name) =>
-                  !validSkillNames.value.has(
-                      name,
-                  ),
-          )
-          .map(
-              (name) => {
-                const installed =
-                    skills.value.find(
-                        (skill) =>
-                            skill?.name === name,
-                    );
-
-                return {
-                  name,
-
-                  displayName:
-                      installed?.alias
-                          ?.trim() ||
-                      installed?.name ||
-                      name,
-
-                  reason:
-                      installed
-                          ? (
-                              installed.error ||
-                              "Skill Package 当前无效"
-                          )
-                          : "Skill 已从安装目录移除或尚未安装",
-                };
-              },
-          );
-    });
-
-const selectedEnabledCount =
-    computed(() => (
-        Array.isArray(
-            selectedAgent.value
-                ?.enabledSkills,
-        )
-            ? selectedAgent.value
-                .enabledSkills
-                .length
-            : 0
-    ));
+const selectedEnabledCount = computed(() =>
+  Array.isArray(selectedAgent.value?.enabledSkills)
+    ? selectedAgent.value.enabledSkills.length
+    : 0,
+);
 
 function displayName(skill) {
   return (
-      skill?.alias?.trim() ||
-      skill?.name ||
-      skill?.directoryName ||
-      t("未命名 Skill")
+    skill?.alias?.trim() ||
+    skill?.name ||
+    skill?.directoryName ||
+    t("未命名 Skill")
   );
 }
 
 function usedByAgents(skill) {
-  return Array.isArray(
-      skill?.usedByAgents,
-  )
-      ? skill.usedByAgents
-      : [];
+  return Array.isArray(skill?.usedByAgents) ? skill.usedByAgents : [];
 }
 
-function enabledForSelectedAgent(
-    skillName,
-) {
-  if (
-      !skillName ||
-      !selectedAgent.value
-  ) {
+function enabledForSelectedAgent(skillName) {
+  if (!skillName || !selectedAgent.value) {
     return false;
   }
 
-  const enabled =
-      Array.isArray(
-          selectedAgent.value
-              .enabledSkills,
-      )
-          ? selectedAgent.value
-              .enabledSkills
-          : [];
+  const enabled = Array.isArray(selectedAgent.value.enabledSkills)
+    ? selectedAgent.value.enabledSkills
+    : [];
 
-  return enabled.includes(
-      skillName,
-  );
+  return enabled.includes(skillName);
 }
 
-function operationKey(
-    skillName,
-    agentID = selectedAgentID.value,
-) {
+function operationKey(skillName, agentID = selectedAgentID.value) {
   return `${skillName ?? ""}:${agentID ?? ""}`;
 }
 
-function normalizeState(state) {
-  const nextSkills =
-      Array.isArray(state?.skills)
-          ? state.skills.map(
-              (skill) => ({
-                ...skill,
-
-                alias:
-                    typeof skill?.alias ===
-                    "string"
-                        ? skill.alias
-                        : "",
-
-                usedByAgents:
-                    Array.isArray(
-                        skill?.usedByAgents,
-                    )
-                        ? skill.usedByAgents
-                        : [],
-
-                source:
-                    skill?.source &&
-                    typeof skill.source === "object"
-                        ? skill.source
-                        : {known: false},
-              }),
-          )
-          : [];
-
-  const enabledByAgent =
-      new Map();
-
-  for (const skill of nextSkills) {
-    if (!skill?.name) {
-      continue;
-    }
-
-    for (
-        const agent of
-        usedByAgents(skill)
-        ) {
-      if (!agent?.id) {
-        continue;
-      }
-
-      if (
-          !enabledByAgent.has(
-              agent.id,
-          )
-      ) {
-        enabledByAgent.set(
-            agent.id,
-            new Set(),
-        );
-      }
-
-      enabledByAgent
-          .get(agent.id)
-          .add(skill.name);
-    }
-  }
-
-  const nextAgents =
-      Array.isArray(state?.agents)
-          ? state.agents
-              .map(
-                  (agent) => {
-                    const explicit =
-                        Array.isArray(
-                            agent?.enabledSkills,
-                        )
-                            ? agent.enabledSkills
-                                .filter(Boolean)
-                            : [];
-
-                    const inferred =
-                        [
-                          ...(
-                              enabledByAgent
-                                  .get(agent?.id) ??
-                              []
-                          ),
-                        ];
-
-                    return {
-                      id:
-                          agent?.id ?? "",
-
-                      name:
-                          agent?.name ?? "",
-
-                      enabledSkills:
-                          [
-                            ...new Set([
-                              ...explicit,
-                              ...inferred,
-                            ]),
-                          ],
-                    };
-                  },
-              )
-              .filter(
-                  (agent) =>
-                      Boolean(agent.id),
-              )
-          : [];
-
-  return {
-    rootDir:
-        state?.rootDir ?? "",
-
-    sourceError:
-        typeof state?.sourceError === "string"
-            ? state.sourceError
-            : "",
-
-    agents:
-    nextAgents,
-
-    skills:
-    nextSkills,
-  };
-}
-
 function syncAgentStore(agentID) {
-  const refreshed =
-      agents.value.find(
-          (agent) =>
-              agent.id === agentID,
-      );
+  const refreshed = agents.value.find((agent) => agent.id === agentID);
 
   if (!refreshed) {
     return;
@@ -365,234 +139,99 @@ function syncAgentStore(agentID) {
 }
 
 async function load({ force = false } = {}) {
-  // 普通读取共享当前请求；保存后强制刷新，不允许复用保存前的快照。
-  if (pendingCatalogLoad && !force) return pendingCatalogLoad;
-  const isCurrent = beginLatestRequest(catalogRequests, "catalog");
-  pendingCatalogLoad = readCatalog(isCurrent);
-  try { return await pendingCatalogLoad; }
-  finally { if (isCurrent()) pendingCatalogLoad = null; }
-}
-
-async function readCatalog(isCurrent) {
-  loading.value = true;
-  loadError.value = "";
-  sourceError.value = "";
-
-  const previousAgentID =
-      selectedAgentID.value;
-
   try {
-    const raw =
-        await getSkillState();
-    if (!isCurrent()) return;
-
-    const state =
-        normalizeState(raw);
-
-    rootDir.value =
-        state.rootDir;
-
-    sourceError.value =
-        state.sourceError;
-
-    agents.value =
-        state.agents;
-
-    skills.value =
-        state.skills;
-
-    const previousExists =
-        agents.value.some(
-            (agent) =>
-                agent.id ===
-                previousAgentID,
-        );
-
-    const requestedAgentID =
-        props.initialAgentId;
-
-    const requestedExists =
-        agents.value.some(
-            (agent) =>
-                agent.id ===
-                requestedAgentID,
-        );
-
-    const activeAgentID =
-        agentStore.selectedID;
-
-    const activeExists =
-        agents.value.some(
-            (agent) =>
-                agent.id ===
-                activeAgentID,
-        );
-
+    await skillStore.load({ force });
+    const choices = [
+      selectedAgentID.value,
+      props.initialAgentId,
+      agentStore.selectedID,
+    ];
     selectedAgentID.value =
-        previousExists
-            ? previousAgentID
-            : (
-                requestedExists
-                    ? requestedAgentID
-                    : (
-                        activeExists
-                            ? activeAgentID
-                            : (
-                                agents.value[0]
-                                    ?.id ??
-                                ""
-                            )
-                    )
-            );
+      choices.find((id) => agents.value.some((agent) => agent.id === id)) ??
+      agents.value[0]?.id ??
+      "";
   } catch (error) {
-    if (!isCurrent()) return;
-    loadError.value =
-        error?.message ??
-        String(error);
-
-    console.error(
-        "[Skills] 加载技能列表失败",
-        error,
-    );
-  } finally {
-    if (isCurrent()) loading.value = false;
+    console.error("[Skills] 加载技能列表失败", error);
   }
 }
 
 function openDetail(skill) {
-  const name =
-      skill?.name ||
-      skill?.directoryName ||
-      "";
+  const name = skill?.name || skill?.directoryName || "";
 
   if (!name) {
     return;
   }
 
-  emit(
-      "open-detail",
-      name,
-  );
+  emit("open-detail", name);
 }
 
-async function setSkillEnabled(
-    skill,
-    enabled,
-) {
-  const agent =
-      selectedAgent.value;
+async function setSkillEnabled(skill, enabled) {
+  const agent = selectedAgent.value;
 
-  if (
-      !agent?.id ||
-      !skill?.name ||
-      updatingKey.value
-  ) {
+  if (!agent?.id || !skill?.name || updatingKey.value) {
     return;
   }
 
-  const key =
-      operationKey(
-          skill.name,
-          agent.id,
-      );
+  const key = operationKey(skill.name, agent.id);
 
   updatingKey.value = key;
 
   try {
     if (enabled) {
-      await enableSkillForAgent(
-          skill.name,
-          agent.id,
-      );
+      await enableSkillForAgent(skill.name, agent.id);
     } else {
-      await disableSkillForAgent(
-          skill.name,
-          agent.id,
-      );
+      await disableSkillForAgent(skill.name, agent.id);
     }
 
     await load({ force: true });
     syncAgentStore(agent.id);
 
     Message.success(
-        `「${displayName(skill)}」已为 ${agent.name || agent.id} ${enabled ? "启用" : "停用"}`,
+      `「${displayName(skill)}」已为 ${agent.name || agent.id} ${enabled ? "启用" : "停用"}`,
     );
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
   } finally {
     updatingKey.value = "";
   }
 }
 
-function onSkillSwitchChange(
-    skill,
-    checked,
-) {
-  void setSkillEnabled(
-      skill,
-      checked === true,
-  );
+function onSkillSwitchChange(skill, checked) {
+  void setSkillEnabled(skill, checked === true);
 }
 
-async function removeUnavailableReference(
-    name,
-) {
-  const agent =
-      selectedAgent.value;
+async function removeUnavailableReference(name) {
+  const agent = selectedAgent.value;
 
-  if (
-      !agent?.id ||
-      !name ||
-      updatingKey.value
-  ) {
+  if (!agent?.id || !name || updatingKey.value) {
     return;
   }
 
-  const key =
-      operationKey(
-          name,
-          agent.id,
-      );
+  const key = operationKey(name, agent.id);
 
   updatingKey.value = key;
 
   try {
-    await disableSkillForAgent(
-        name,
-        agent.id,
-    );
+    await disableSkillForAgent(name, agent.id);
 
     await load({ force: true });
     syncAgentStore(agent.id);
 
     Message.success(
-        `已从 ${agent.name || agent.id} 移除不可用 Skill「${name}」`,
+      `已从 ${agent.name || agent.id} 移除不可用 Skill「${name}」`,
     );
   } catch (error) {
-    Message.error(
-        error?.message ??
-        String(error),
-    );
+    Message.error(error?.message ?? String(error));
   } finally {
     updatingKey.value = "";
   }
 }
 
-
-watch(
-    selectedAgentID,
-    (value) => {
-      if (value) {
-        emit(
-            "agent-change",
-            value,
-        );
-      }
-    },
-);
+watch(selectedAgentID, (value) => {
+  if (value) {
+    emit("agent-change", value);
+  }
+});
 
 onMounted(load);
 </script>
@@ -604,55 +243,38 @@ onMounted(load);
         <div class="skill-control-panel__copy">
           <h2>为 Agent 配置技能</h2>
           <p>
-            先选择 Agent，再用右侧开关决定它可以使用哪些 Skill。安装、更新与修复 Package 请进入「设置 → 技能」。
+            先选择 Agent，再用右侧开关决定它可以使用哪些 Skill。安装、更新与修复
+            Package 请进入「设置 → 技能」。
           </p>
         </div>
 
         <div class="skill-control-panel__actions">
-          <a-button
-              :loading="loading"
-              @click="load"
-          >
+          <a-button :loading="loading" @click="load">
             <template #icon>
-              <IconRefresh/>
+              <IconRefresh />
             </template>
             刷新
           </a-button>
 
-          <a-button
-              type="primary"
-              @click="emit('manage-packages')"
-          >
+          <a-button type="primary" @click="emit('manage-packages')">
             <template #icon>
-              <IconSettings/>
+              <IconSettings />
             </template>
             管理 Skill Packages
           </a-button>
         </div>
       </div>
 
-      <div
-          v-if="loadError"
-          class="skill-load-error"
-      >
+      <div v-if="loadError" class="skill-load-error">
         <div>
           <strong>Skills 数据加载失败</strong>
           <span>{{ loadError }}</span>
         </div>
 
-        <a-button
-            size="small"
-            @click="load"
-        >
-          重试
-        </a-button>
+        <a-button size="small" @click="load"> 重试 </a-button>
       </div>
 
-      <a-alert
-          v-if="sourceError"
-          type="warning"
-          :show-icon="true"
-      >
+      <a-alert v-if="sourceError" type="warning" :show-icon="true">
         {{ sourceError }}。Skill 列表仍可使用，但来源更新/修复功能会暂时不可用。
       </a-alert>
 
@@ -665,45 +287,44 @@ onMounted(load);
           <div class="agent-picker__copy">
             <span>当前 Agent</span>
             <small>
-              {{ selectedAgent ? `已启用 ${selectedEnabledCount} 个 Skill` : "创建 Agent 后即可在这里配置" }}
+              {{
+                selectedAgent
+                  ? `已启用 ${selectedEnabledCount} 个 Skill`
+                  : "创建 Agent 后即可在这里配置"
+              }}
             </small>
           </div>
         </div>
 
         <a-select
-            v-model="selectedAgentID"
-            class="agent-picker__select"
-            :disabled="agents.length === 0"
-            placeholder="选择 Agent"
+          v-model="selectedAgentID"
+          class="agent-picker__select"
+          :disabled="agents.length === 0"
+          placeholder="选择 Agent"
         >
-          <a-option
-              v-for="agent in agents"
-              :key="agent.id"
-              :value="agent.id"
-          >
+          <a-option v-for="agent in agents" :key="agent.id" :value="agent.id">
             {{ agent.name || agent.id }}
           </a-option>
         </a-select>
       </div>
 
-      <div
-          v-if="unavailableSkills.length > 0"
-          class="stale-skills"
-      >
+      <div v-if="unavailableSkills.length > 0" class="stale-skills">
         <div class="stale-skills__copy">
           <strong>
-            {{ selectedAgent?.name || "当前 Agent" }} 有 {{ unavailableSkills.length }} 个失效 Skill 配置
+            {{ selectedAgent?.name || "当前 Agent" }} 有
+            {{ unavailableSkills.length }} 个失效 Skill 配置
           </strong>
           <span>
-            这些配置对应已删除或损坏的 Skill Package，可能阻止该 Agent 开始新的对话轮次，可以在这里安全移除。
+            这些配置对应已删除或损坏的 Skill Package，可能阻止该 Agent
+            开始新的对话轮次，可以在这里安全移除。
           </span>
         </div>
 
         <div class="stale-skills__items">
           <div
-              v-for="issue in unavailableSkills"
-              :key="issue.name"
-              class="stale-skills__item"
+            v-for="issue in unavailableSkills"
+            :key="issue.name"
+            class="stale-skills__item"
           >
             <div>
               <strong>{{ issue.displayName }}</strong>
@@ -712,11 +333,11 @@ onMounted(load);
             </div>
 
             <a-button
-                size="small"
-                status="warning"
-                :loading="updatingKey === operationKey(issue.name)"
-                :disabled="Boolean(updatingKey)"
-                @click="removeUnavailableReference(issue.name)"
+              size="small"
+              status="warning"
+              :loading="updatingKey === operationKey(issue.name)"
+              :disabled="Boolean(updatingKey)"
+              @click="removeUnavailableReference(issue.name)"
             >
               从 Agent 移除
             </a-button>
@@ -726,12 +347,12 @@ onMounted(load);
 
       <div class="skill-toolbar">
         <a-input
-            v-model="catalogSearch"
-            allow-clear
-            placeholder="搜索显示名称、Skill 名称或描述"
+          v-model="catalogSearch"
+          allow-clear
+          placeholder="搜索显示名称、Skill 名称或描述"
         >
           <template #prefix>
-            <IconSearch/>
+            <IconSearch />
           </template>
         </a-input>
 
@@ -741,36 +362,34 @@ onMounted(load);
       <div class="skill-browse-hint">
         <span class="skill-browse-hint__icon" aria-hidden="true">↗</span>
         <span>
-          点击任意 Skill 卡片会打开独立详情页，可查看 SKILL.md / references / scripts，并修改中文显示名称；右侧开关只负责当前 Agent 的启用状态。
+          点击任意 Skill 卡片会打开独立详情页，可查看 SKILL.md / references /
+          scripts，并修改中文显示名称；右侧开关只负责当前 Agent 的启用状态。
         </span>
       </div>
     </section>
 
-    <div
-        v-if="loading && skills.length === 0"
-        class="skill-page-state"
-    >
+    <div v-if="loading && skills.length === 0" class="skill-page-state">
       正在读取本地 Skills…
     </div>
 
-    <div
-        v-else-if="visibleSkills.length > 0"
-        class="skill-list"
-    >
+    <div v-else-if="visibleSkills.length > 0" class="skill-list">
       <article
-          v-for="skill in visibleSkills"
-          :key="skill.directoryName || skill.name"
-          class="skill-row"
-          :class="{
-            'skill-row--enabled': selectedAgent && enabledForSelectedAgent(skill.name),
-            'skill-row--invalid': !skill.valid,
-            'skill-row--unsupported': skill.valid && ['unsupported', 'needs_setup'].includes(skill.runtimeStatus),
-          }"
-          role="button"
-          tabindex="0"
-          :aria-label="`查看 ${displayName(skill)} 详情`"
-          @click="openDetail(skill)"
-          @keydown.enter="openDetail(skill)"
+        v-for="skill in visibleSkills"
+        :key="skill.directoryName || skill.name"
+        class="skill-row"
+        :class="{
+          'skill-row--enabled':
+            selectedAgent && enabledForSelectedAgent(skill.name),
+          'skill-row--invalid': !skill.valid,
+          'skill-row--unsupported':
+            skill.valid &&
+            ['unsupported', 'needs_setup'].includes(skill.runtimeStatus),
+        }"
+        role="button"
+        tabindex="0"
+        :aria-label="`查看 ${displayName(skill)} 详情`"
+        @click="openDetail(skill)"
+        @keydown.enter="openDetail(skill)"
       >
         <div class="skill-row__body">
           <div class="skill-row__title">
@@ -780,47 +399,54 @@ onMounted(load);
               {{ skill.name }}
             </code>
 
-            <span
-                v-if="!skill.valid"
-                class="skill-status skill-status--error"
-            >
+            <span v-if="!skill.valid" class="skill-status skill-status--error">
               无效
             </span>
             <span
-                v-else-if="skill.runtimeStatus === 'unsupported'"
-                class="skill-status skill-status--warning"
+              v-else-if="skill.runtimeStatus === 'unsupported'"
+              class="skill-status skill-status--warning"
             >
               暂不可启用
             </span>
             <span
-                v-else-if="skill.runtimeStatus === 'needs_setup'"
-                class="skill-status skill-status--warning"
+              v-else-if="skill.runtimeStatus === 'needs_setup'"
+              class="skill-status skill-status--warning"
             >
               需要配置
             </span>
             <span
-                v-else-if="skill.specStatus === 'legacy'"
-                class="skill-status skill-status--muted"
+              v-else-if="skill.specStatus === 'legacy'"
+              class="skill-status skill-status--muted"
             >
               兼容模式
             </span>
           </div>
 
           <p :class="{ 'skill-row__error': !skill.valid }">
-            {{ skill.valid ? skill.description : (skill.error || "Skill Package 校验失败") }}
+            {{
+              skill.valid
+                ? skill.description
+                : skill.error || "Skill Package 校验失败"
+            }}
           </p>
 
           <div class="skill-row__meta">
-            <span v-if="skill.valid">
-              {{ skill.fileCount }} 个文件
-            </span>
+            <span v-if="skill.valid"> {{ skill.fileCount }} 个文件 </span>
             <span v-if="skill.hasScripts">scripts</span>
             <span v-if="skill.hasReferences">references</span>
             <span v-if="skill.hasAssets">assets</span>
-            <span v-if="skill.valid && ['unsupported', 'needs_setup'].includes(skill.runtimeStatus)"
-                  class="skill-row__runtime-warning">
+            <span
+              v-if="
+                skill.valid &&
+                ['unsupported', 'needs_setup'].includes(skill.runtimeStatus)
+              "
+              class="skill-row__runtime-warning"
+            >
               {{
-                skill.runtimeMessage || (skill.runtimeStatus === 'needs_setup' ? "需要补充运行环境" : "当前 Runtime 暂不支持启用")
+                skill.runtimeMessage ||
+                (skill.runtimeStatus === "needs_setup"
+                  ? "需要补充运行环境"
+                  : "当前 Runtime 暂不支持启用")
               }}
             </span>
             <span v-if="usedByAgents(skill).length > 0">
@@ -834,48 +460,50 @@ onMounted(load);
 
         <div class="skill-row__actions">
           <button
-              type="button"
-              class="skill-row__detail"
-              title="查看 Skill 详情并修改显示名称"
-              @click.stop="openDetail(skill)"
+            type="button"
+            class="skill-row__detail"
+            title="查看 Skill 详情并修改显示名称"
+            @click.stop="openDetail(skill)"
           >
             <span>查看详情</span>
             <span aria-hidden="true">›</span>
           </button>
 
-          <div
-              class="skill-row__switch"
-              @click.stop
-          >
+          <div class="skill-row__switch" @click.stop>
             <span>
-              {{ selectedAgent ? (enabledForSelectedAgent(skill.name) ? "已启用" : "未启用") : "选择 Agent 后启用" }}
+              {{
+                selectedAgent
+                  ? enabledForSelectedAgent(skill.name)
+                    ? "已启用"
+                    : "未启用"
+                  : "选择 Agent 后启用"
+              }}
             </span>
 
             <a-switch
-                :model-value="enabledForSelectedAgent(skill.name)"
-                :loading="updatingKey === operationKey(skill.name)"
-                :disabled="
-                  !selectedAgent ||
-                  Boolean(updatingKey) ||
-                  ((!skill.valid || skill.runtimeStatus === 'unsupported') && !enabledForSelectedAgent(skill.name))
-            "
-                @change="onSkillSwitchChange(skill, $event)"
+              :model-value="enabledForSelectedAgent(skill.name)"
+              :loading="updatingKey === operationKey(skill.name)"
+              :disabled="
+                !selectedAgent ||
+                Boolean(updatingKey) ||
+                ((!skill.valid || skill.runtimeStatus === 'unsupported') &&
+                  !enabledForSelectedAgent(skill.name))
+              "
+              @change="onSkillSwitchChange(skill, $event)"
             />
           </div>
         </div>
       </article>
     </div>
 
-    <div
-        v-else
-        class="skill-page-state"
-    >
+    <div v-else class="skill-page-state">
       {{ skills.length > 0 ? "没有匹配的 Skill" : "还没有安装 Skill" }}
     </div>
 
     <div class="skill-settings__footer">
       <span>
-        Skill 文件预览只读；scripts 只有在 Agent 启用 run_skill_script 且通过 Sandbox / Permission 后才会执行。
+        Skill 文件预览只读；scripts 只有在 Agent 启用 run_skill_script 且通过
+        Sandbox / Permission 后才会执行。
       </span>
       <code>{{ rootDir || "~/.humbert-agent/skills" }}</code>
     </div>
@@ -1013,7 +641,6 @@ onMounted(load);
   width: min(320px, 44%);
   min-width: 210px;
 }
-
 
 .stale-skills {
   display: flex;
@@ -1187,7 +814,6 @@ onMounted(load);
   background: var(--h-surface-hover);
   color: var(--h-text-muted);
 }
-
 
 .skill-row__body p {
   display: -webkit-box;

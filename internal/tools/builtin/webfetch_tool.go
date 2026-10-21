@@ -5,16 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
+
+	"github.com/sda1-hacker/humbert-agent/internal/publicweb"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 )
 
@@ -62,7 +62,7 @@ func NewWebFetchFactory(timeout time.Duration, maxBodyBytes int64, defaultMaxCha
 		return nil, errors.New("WebFetch MaxRedirects 不能小于 0")
 	}
 	transport := &http.Transport{
-		Proxy: nil, DialContext: (&publicWebDialer{}).DialContext,
+		Proxy: nil, DialContext: (&publicweb.Dialer{}).DialContext,
 		ForceAttemptHTTP2: true, MaxIdleConns: 32, MaxIdleConnsPerHost: 4,
 		IdleConnTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
 		ResponseHeaderTimeout: timeout,
@@ -112,7 +112,7 @@ func (f *WebFetchFactory) run(ctx context.Context, input *WebFetchInput) (*WebFe
 	if len(rawURL) > maxWebFetchURLBytes {
 		return nil, fmt.Errorf("web_fetch url 超过 %d bytes 安全上限", maxWebFetchURLBytes)
 	}
-	current, err := parsePublicFetchURL(rawURL)
+	current, err := publicweb.ParseURL(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("web_fetch URL 无效: %w", err)
 	}
@@ -143,7 +143,7 @@ func (f *WebFetchFactory) run(ctx context.Context, input *WebFetchInput) (*WebFe
 			if err != nil {
 				return nil, fmt.Errorf("web_fetch 解析重定向地址失败: %w", err)
 			}
-			current, err = parsePublicFetchURL(next.String())
+			current, err = publicweb.ParseURL(next.String())
 			if err != nil {
 				return nil, fmt.Errorf("web_fetch 重定向目标不安全: %w", err)
 			}
@@ -187,30 +187,6 @@ func (f *WebFetchFactory) doRequest(ctx context.Context, target *url.URL) (*http
 }
 
 // URL 静态检查不代替 DNS 校验；真正拨号时必须直接使用校验过的 IP。
-func parsePublicFetchURL(raw string) (*url.URL, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return nil, fmt.Errorf("解析 URL 失败: %w", err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return nil, fmt.Errorf("只允许 http/https URL，实际为 %q", parsed.Scheme)
-	}
-	if parsed.Hostname() == "" {
-		return nil, errors.New("URL 缺少 Host")
-	}
-	if parsed.User != nil {
-		return nil, errors.New("URL 不允许包含用户名或密码")
-	}
-	if port := parsed.Port(); port != "" {
-		value, err := strconv.Atoi(port)
-		if err != nil || value < 1 || value > 65535 {
-			return nil, fmt.Errorf("URL 端口不合法: %q", port)
-		}
-	}
-	parsed.Fragment = ""
-	return parsed, nil
-}
-
 func isRedirectStatus(status int) bool {
 	switch status {
 	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
@@ -249,65 +225,6 @@ func truncateUTF8ByRunes(value string, maxRunes int) (string, bool) {
 		count++
 	}
 	return builder.String(), true
-}
-
-// publicWebDialer 同时供 web_fetch 和 browser 代理使用；混合公网/私网 DNS 整体拒绝。
-type publicWebDialer struct{}
-
-func (d *publicWebDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("解析 web_fetch 目标地址失败: %w", err)
-	}
-	ips, err := resolvePublicIPs(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	var lastErr error
-	for _, ip := range ips {
-		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-	}
-	return nil, fmt.Errorf("连接 web_fetch Host %q 失败: %w", host, lastErr)
-}
-
-func resolvePublicIPs(ctx context.Context, host string) ([]net.IP, error) {
-	if parsed := net.ParseIP(host); parsed != nil {
-		if isForbiddenWebFetchIP(parsed) {
-			return nil, fmt.Errorf("web_fetch 拒绝访问非公网地址 %s", parsed.String())
-		}
-		return []net.IP{parsed}, nil
-	}
-	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("解析 web_fetch Host %q 失败: %w", host, err)
-	}
-	if len(addresses) == 0 {
-		return nil, fmt.Errorf("web_fetch Host %q 没有 DNS 记录", host)
-	}
-	result := make([]net.IP, 0, len(addresses))
-	for _, address := range addresses {
-		if isForbiddenWebFetchIP(address.IP) {
-			return nil, fmt.Errorf("web_fetch Host %q 解析到非公网地址 %s", host, address.IP)
-		}
-		result = append(result, address.IP)
-	}
-	return result, nil
-}
-
-func isForbiddenWebFetchIP(ip net.IP) bool {
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-		return true
-	}
-	if v4 := ip.To4(); v4 != nil {
-		// 0/8、CGNAT、benchmark 与保留地址不是公开网页目标。
-		return v4[0] == 0 || v4[0] >= 240 || (v4[0] == 100 && v4[1] >= 64 && v4[1] <= 127) || (v4[0] == 198 && (v4[1] == 18 || v4[1] == 19))
-	}
-	return false
 }
 
 func looksLikeHTML(body []byte) bool {

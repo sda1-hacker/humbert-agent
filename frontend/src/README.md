@@ -17,3 +17,7 @@
 `components/workspace/ContextPanel.vue` 在面板可见时每两秒同步已展开目录及选中文件的父目录，回到窗口时立即同步；窗口隐藏或面板卸载后停止定时检查。`stores/workspace.js` 根据最新目录结果清理已删除节点、子树缓存和预览，使迟到请求失效；截断目录的缺项不作为删除证据。后台刷新跳过总览扫描，仅在文件大小或修改时间变化时重读已有预览。读取失败会复查父目录：确认删除则清理选择，无法确认时仍报告原错误。
 
 更新异步状态时继续使用请求编号，旧响应不能覆盖新选择、审批或运行。前端不维护自动化测试；生产资源由 `npm run build` 生成，交互、状态和四种语言在桌面应用中核对。
+
+Skill 目录统一由 `stores/skills.js` 读取、规范化和刷新；普通并发读取共享请求，保存后的强制刷新使旧响应失效。页面保留搜索词、选择与编辑草稿，不各自复制目录。
+
+`SkillDetailView.vue` 负责详情与别名/删除交互，`SkillSourcePanel.vue` 负责更新、重装和来源修复，`SkillFileTree.vue` 负责目录展开。`composables/useSkillFiles.js` 拥有当前详情与文件预览，请求切换或组件销毁后拒绝提交旧响应。两者不改变 Runtime Store 与 Session Store 的事实边界。

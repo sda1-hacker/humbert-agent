@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
@@ -16,7 +15,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
-	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
 const (
@@ -48,26 +46,15 @@ type RunSkillScriptInput struct {
 
 // RunSkillScriptOutput 是受控 Skill 脚本执行结果。
 type RunSkillScriptOutput struct {
-	Skill             string   `json:"skill"`
-	Script            string   `json:"script"`
-	Runtime           string   `json:"runtime"`
-	Command           string   `json:"command"`
-	Args              []string `json:"args,omitempty"`
-	WorkingDirectory  string   `json:"working_directory"`
-	ExitCode          int      `json:"exit_code"`
-	TimedOut          bool     `json:"timed_out"`
-	TerminationReason string   `json:"termination_reason"`
-	Message           string   `json:"message,omitempty"`
-	Output            string   `json:"output,omitempty"`
-	OutputTruncated   bool     `json:"output_truncated"`
-	DurationMS        int64    `json:"duration_ms"`
-	NativeSandbox     bool     `json:"native_sandbox"`
+	Skill   string `json:"skill"`
+	Script  string `json:"script"`
+	Runtime string `json:"runtime"`
+	RunCommandOutput
 }
 
 // RunSkillScriptFactory 让标准 Agent Skill 的 scripts/ 能在现有 Humbert 安全边界内执行。
 type RunSkillScriptFactory struct {
 	skills      *skills.Manager
-	workspaces  *workspace.Manager
 	runner      *sandbox.Runner
 	limits      CommandLimits
 	environment []string
@@ -75,16 +62,12 @@ type RunSkillScriptFactory struct {
 
 func NewRunSkillScriptFactory(
 	skillManager *skills.Manager,
-	workspaceManager *workspace.Manager,
 	runner *sandbox.Runner,
 	limits CommandLimits,
 	environment []string,
 ) (*RunSkillScriptFactory, error) {
 	if skillManager == nil {
 		return nil, errors.New("RunSkillScript SkillManager 不能为空")
-	}
-	if workspaceManager == nil {
-		return nil, errors.New("RunSkillScript WorkspaceManager 不能为空")
 	}
 	if runner == nil {
 		return nil, errors.New("RunSkillScript Sandbox Runner 不能为空")
@@ -94,7 +77,6 @@ func NewRunSkillScriptFactory(
 	}
 	return &RunSkillScriptFactory{
 		skills:      skillManager,
-		workspaces:  workspaceManager,
 		runner:      runner,
 		limits:      limits,
 		environment: cloneStringSlice(environment),
@@ -228,47 +210,16 @@ func (f *RunSkillScriptFactory) run(
 		return nil, fmt.Errorf("Stage 后找不到脚本 %q: %w", scriptPath, err)
 	}
 
-	timeout := f.limits.DefaultTimeout
-	if input.TimeoutSeconds > 0 {
-		timeout = time.Duration(input.TimeoutSeconds) * time.Second
-		if timeout < minimumCommandTimeout {
-			timeout = minimumCommandTimeout
-		}
-	}
-	if timeout > f.limits.MaxTimeout {
-		timeout = f.limits.MaxTimeout
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	capture := newBoundedCommandOutput(f.limits.MaxOutputBytes)
-	argv := make([]string, 0, len(input.Args)+1)
-	argv = append(argv, stagedScript)
-	argv = append(argv, input.Args...)
-	processResult, err := f.runner.Run(
-		runCtx,
-		scope.SandboxPolicy(),
-		sandbox.ProcessSpec{
-			Executable:        executable,
-			Args:              argv,
-			Dir:               workingDirectory,
-			Env:               cloneStringSlice(f.environment),
-			Stdout:            capture,
-			Stderr:            capture,
-			ReadOnlyWorkspace: true,
-		},
-	)
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("run_skill_script 被取消: %w", ctx.Err())
-	}
+	timeout := commandTimeout(f.limits, input.TimeoutSeconds)
+	argv := append([]string{stagedScript}, input.Args...)
+	processResult, output, truncated, err := executeCaptured(ctx, f.runner, scope.SandboxPolicy(), sandbox.ProcessSpec{
+		Executable: executable, Args: argv, Dir: workingDirectory,
+		Env: cloneStringSlice(f.environment), ReadOnlyWorkspace: true,
+	}, f.limits, input.TimeoutSeconds, runSkillScriptToolName)
 	if err != nil {
-		return nil, fmt.Errorf("run_skill_script Sandbox 执行失败: %w", err)
+		return nil, err
 	}
-	output, truncated := capture.Result()
 	terminationReason := processResult.TerminationReason
-	if terminationReason == "" {
-		terminationReason = "exited"
-	}
 	message := ""
 	if processResult.TimedOut {
 		message = fmt.Sprintf("Skill 脚本执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时。", timeout)
@@ -280,19 +231,9 @@ func (f *RunSkillScriptFactory) run(
 		message += " 这通常表示脚本运行时或原生 Sandbox 启动阶段失败。"
 	}
 	return &RunSkillScriptOutput{
-		Skill:             skillName,
-		Script:            scriptPath,
-		Runtime:           scriptRuntime.Language,
-		Command:           command,
-		Args:              append([]string(nil), input.Args...),
-		WorkingDirectory:  displayDirectory,
-		ExitCode:          processResult.ExitCode,
-		TimedOut:          processResult.TimedOut,
-		TerminationReason: terminationReason,
-		Message:           message,
-		Output:            output,
-		OutputTruncated:   truncated,
-		DurationMS:        processResult.Duration.Milliseconds(),
-		NativeSandbox:     processResult.NativeUsed,
+		Skill:            skillName,
+		Script:           scriptPath,
+		Runtime:          scriptRuntime.Language,
+		RunCommandOutput: commandResult(command, input.Args, displayDirectory, processResult, output, truncated, message),
 	}, nil
 }

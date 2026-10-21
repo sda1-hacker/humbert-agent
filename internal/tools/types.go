@@ -74,6 +74,9 @@ const (
 //
 // 两者职责不同，不应该混成同一个结构。
 type Descriptor struct {
+	// Display 允许工具自带展示定义，避免在桌面服务增加名称分支。
+	Display *DisplayMetadata
+
 	Name string
 	Risk RiskLevel
 
@@ -277,4 +280,9 @@ type ResolvedTools struct {
 	// 当前 Turn 创建以后，即使 Registry revision 继续增加，
 	// 本对象中的 Tools 和 Revision 都保持不变。
 	Revision uint64
+}
+
+// ImageWriter 让观察工具提交会话截图，不暴露附件存储实现或工作区写权限。
+type ImageWriter interface {
+	SaveToolImage(context.Context, string, string, string, []byte) (string, error)
 }

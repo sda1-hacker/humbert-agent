@@ -13,7 +13,9 @@ import (
 	"github.com/cloudwego/eino/adk/middlewares/summarization"
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
+
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 )
 
 // MidRunCompactor 将 Eino 摘要中间件与应用的持久化边界连接起来。
@@ -375,25 +377,8 @@ func runtimeToolTransactionStart(messages []*schema.Message, first int, toolInde
 }
 
 func messageVisibleText(message *schema.Message) string {
-	if message == nil {
-		return ""
-	}
-	if strings.TrimSpace(message.Content) != "" {
+	if message != nil && strings.TrimSpace(message.Content) != "" {
 		return message.Content
 	}
-	var builder strings.Builder
-	if message.Role == schema.User {
-		for _, part := range message.UserInputMultiContent {
-			if part.Type == schema.ChatMessagePartTypeText {
-				builder.WriteString(part.Text)
-			}
-		}
-		return builder.String()
-	}
-	for _, part := range message.AssistantGenMultiContent {
-		if part.Type == schema.ChatMessagePartTypeText {
-			builder.WriteString(part.Text)
-		}
-	}
-	return builder.String()
+	return multimodal.MessagePartsText(message)
 }

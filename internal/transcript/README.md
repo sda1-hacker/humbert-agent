@@ -78,4 +78,4 @@ Store 持有每个日志路径的锁。`lockExistingSession` 统一完整历史�
 
 `location_index.go` 同时提供 `messageEntryPageFromIndex` 与 `contextWindowIndex`，内存缓存和磁盘位置索引共用这些推导规则。分页会向前扩展到完整的 ToolCall/ToolResult 事务；大文件不会为了复用代码改为每页全量重放。
 
-原 `errors.go` 的定义已迁入 `types.go`；旧文件仅保留 package 声明，可手动删除。
+原 `errors.go` 的定义已迁入 `types.go`；原空文件已清理。

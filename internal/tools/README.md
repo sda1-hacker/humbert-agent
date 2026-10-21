@@ -26,8 +26,14 @@ flowchart LR
 | `capability_identity.go` | 授权规则匹配所需身份 |
 | `reduction.go` | Eino 与会话归档资源协议之间的适配 |
 
-文件工具的 schema、解析和显示由 Eino filesystem 提供；`builtin/filesystem.go` 实现受限 Backend，保留 PathGuard、os.Root、UTF-8、大小限制和原子写入。`apply_patch`、移动/复制/删除、命令沙箱仍是独立产品能力，不能用普通读写工具替代其行为。
+文件工具的 schema、解析和显示由 Eino filesystem 提供；`fileops.Backend` 实现受限文件访问，`builtin/filesystem.go` 只适配 Eino 工具，保留 PathGuard、os.Root、UTF-8、大小限制和原子写入。命令执行仍由受控 Runner 提供，不通过普通文件访问模拟。
 
 `List` 与 `Resolve` 共用 `definitions`：在读锁内复制 Factory 引用与 Revision，释放锁后读取各自的 Descriptor，再按名称排序。Descriptor 与 Build 都不在 Registry 锁内执行；一次解析只读取一次描述符，选择校验与实际构造使用同一份元数据，没有新增常驻缓存。`EnabledBuiltinTools=nil` 继承全部工具，显式空集合关闭可选工具；Internal 工具仍按内部规则装配，显式禁用优先。
 
-无调用的 `Unregister` 和只供浏览器测试使用的启动包装已移除。现有模型可见工具名称全部保留：Git 查询的固定只读边界、批量补丁、文档提取与资源/历史回查各有独立语义。原 `errors.go`、`permission.go` 已迁空，只保留 package 声明，可手动删除。
+无调用的 `Unregister` 和只供浏览器测试使用的启动包装已移除。现有模型可见工具名称全部保留：Git 查询的固定只读边界、文档提取与资源/历史回查各有独立语义。只有 package 声明的空文件已清理。
+
+## 工具目录与内部能力包
+
+`Descriptor.Display` 可以声明类别、显示文案键和默认启用状态；既有工具从 `catalog.go` 的同一份目录读取。Wails 返回 `defaultEnabled`，前端不再维护第二份默认名称列表。未知工具使用通用展示，展示信息不参与权限判断。
+
+文件 I/O 位于 `internal/fileops`；浏览器与桌面工具分别位于 `tools/browser`、`tools/desktop`。`builtin/process.go` 共用超时、受控执行与结果组装，`process_output.go` 负责限长输出；命令和 Skill 脚本各自保留参数、身份和只读策略。跨观察工具的截图写入只依赖 `ImageWriter`。

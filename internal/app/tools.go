@@ -10,13 +10,15 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/collaboration"
 	"github.com/sda1-hacker/humbert-agent/internal/config"
+	"github.com/sda1-hacker/humbert-agent/internal/fileops"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
+	browsertools "github.com/sda1-hacker/humbert-agent/internal/tools/browser"
 	builtin "github.com/sda1-hacker/humbert-agent/internal/tools/builtin"
-	"github.com/sda1-hacker/humbert-agent/internal/workspace"
+	desktoptools "github.com/sda1-hacker/humbert-agent/internal/tools/desktop"
 )
 
 // registerCollaborationTools 暴露同步 Agent-as-Tool 能力。Factory 持有应用级 Manager；
@@ -41,15 +43,14 @@ func registerCollaborationTools(registry *humberttools.Registry, manager *collab
 // toolDependencies 是默认工具组合需要的显式依赖；不允许通过 Application 查找服务。
 // 每个 Factory 仍只接收自己的依赖。BrowserVision 是跨模型/Agent 的观察用例，由装配层注入。
 type toolDependencies struct {
-	Workspaces  *workspace.Manager
 	Sandbox     *sandbox.Manager
 	Skills      *skills.Manager
 	EnableSkill builtin.AgentSkillEnableFunc
 	// 同一个会话服务拥有历史、附件和结果归档，避免装配两份平行来源。
 	Sessions           *sessions.Service
 	BrowserProfileRoot string
-	BrowserVision      builtin.BrowserVisionInspector
-	ComputerVision     builtin.ComputerVisionInspector
+	BrowserVision      browsertools.BrowserVisionInspector
+	ComputerVision     desktoptools.ComputerVisionInspector
 }
 
 // buildToolRegistry 是默认工具唯一的装配位置；业务实现仍留在各个 Eino Factory 中。
@@ -102,7 +103,7 @@ func buildToolRegistry(ctx context.Context, configFile string, deps toolDependen
 		return nil, err
 	}
 	if cfg.Files.Enabled {
-		limits := builtin.FileLimits{MaxReadableFileBytes: cfg.Files.MaxReadableFileBytes, MaxReadLines: cfg.Files.MaxReadLines, MaxListEntries: cfg.Files.MaxListEntries}
+		limits := fileops.Limits{MaxReadableFileBytes: cfg.Files.MaxReadableFileBytes, MaxReadLines: cfg.Files.MaxReadLines, MaxListEntries: cfg.Files.MaxListEntries}
 		factories, err := builtin.NewFilesystemFactories(limits, cfg.Files.MaxWritableFileBytes)
 		if err != nil {
 			return nil, err
@@ -116,12 +117,12 @@ func buildToolRegistry(ctx context.Context, configFile string, deps toolDependen
 	if deps.BrowserProfileRoot == "" {
 		return nil, errors.New("浏览器 Profile 目录不能为空")
 	}
-	browser := builtin.NewBrowserFactory(filepath.Clean(deps.BrowserProfileRoot), deps.BrowserVision)
+	browser := browsertools.NewBrowserFactory(filepath.Clean(deps.BrowserProfileRoot), deps.BrowserVision)
 	browser.SetAttachmentWriter(deps.Sessions)
 	if err := register(browser, nil); err != nil {
 		return nil, err
 	}
-	if err := register(builtin.NewComputerFactory(deps.Sessions, deps.ComputerVision), nil); err != nil {
+	if err := register(desktoptools.NewComputerFactory(deps.Sessions, deps.ComputerVision), nil); err != nil {
 		return nil, err
 	}
 	if cfg.WebSearch.Enabled {
@@ -141,11 +142,11 @@ func buildToolRegistry(ctx context.Context, configFile string, deps toolDependen
 			MaxTimeout: time.Duration(cfg.Command.MaxTimeoutSeconds) * time.Second, MaxOutputBytes: cfg.Command.MaxOutputBytes,
 			MaxArgs: cfg.Command.MaxArgs, MaxArgBytes: cfg.Command.MaxArgBytes}
 		environment := config.SafeCommandEnvironment()
-		if err := register(builtin.NewRunCommandFactory(deps.Workspaces, deps.Sandbox.Runner(), limits, environment)); err != nil {
+		if err := register(builtin.NewRunCommandFactory(deps.Sandbox.Runner(), limits, environment)); err != nil {
 			return nil, err
 		}
 		// Skill 脚本仍经受控工具执行，Stage 与身份检查由原 Factory 保留。
-		if err := register(builtin.NewRunSkillScriptFactory(deps.Skills, deps.Workspaces, deps.Sandbox.Runner(), limits, environment)); err != nil {
+		if err := register(builtin.NewRunSkillScriptFactory(deps.Skills, deps.Sandbox.Runner(), limits, environment)); err != nil {
 			return nil, err
 		}
 		if err := register(builtin.NewGitFactory(deps.Sandbox.Runner(), environment, cfg.Command.MaxOutputBytes)); err != nil {

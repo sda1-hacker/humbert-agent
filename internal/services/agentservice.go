@@ -95,11 +95,12 @@ type AgentSkillsRequest struct {
 
 // BuiltinToolDTO 是 Settings/Agent UI 可选择的内置 Capability。
 type BuiltinToolDTO struct {
-	Name     string `json:"name"`
-	Risk     string `json:"risk"`
-	Category string `json:"category"`
-	Label    string `json:"label"`
-	OptIn    bool   `json:"optIn,omitempty"`
+	DefaultEnabled bool   `json:"defaultEnabled"`
+	Name           string `json:"name"`
+	Risk           string `json:"risk"`
+	Category       string `json:"category"`
+	Label          string `json:"label"`
+	OptIn          bool   `json:"optIn,omitempty"`
 }
 
 // SandboxStatusDTO 描述当前平台实际可用的原生隔离能力及全局默认值。
@@ -401,12 +402,14 @@ func (s *AgentService) ListBuiltinTools() []BuiltinToolDTO {
 		if descriptor.MCPOrigin != nil {
 			continue
 		}
+		display := descriptor.DisplayMetadata()
 		result = append(result, BuiltinToolDTO{
-			Name:     descriptor.Name,
-			Risk:     string(descriptor.Risk),
-			Category: builtinToolCategory(descriptor.Name),
-			Label:    builtinToolLabel(descriptor.Name),
-			OptIn:    descriptor.OptIn,
+			Name:           descriptor.Name,
+			Risk:           string(descriptor.Risk),
+			Category:       display.Category,
+			Label:          display.Label,
+			OptIn:          descriptor.OptIn,
+			DefaultEnabled: display.DefaultEnabled,
 		})
 	}
 	return result
@@ -655,40 +658,4 @@ func (s *AgentService) validateBuiltinToolNames(values []string) error {
 		}
 	}
 	return nil
-}
-
-func builtinToolCategory(name string) string {
-	switch name {
-	case "list_files", "read_file", "write_file", "edit_file", "glob_files", "grep_files":
-		return "files"
-	case "run_command", "computer":
-		return "execution"
-	case "git":
-		return "git"
-	case "web_search", "web_fetch", "browser":
-		return "web"
-	case "install_skill":
-		return "skills"
-	case "list_agents", "run_agent":
-		return "collaboration"
-	case "schedule_task":
-		return "agent"
-	default:
-		return "other"
-	}
-}
-
-func builtinToolLabel(name string) string {
-	labels := map[string]string{
-		"list_files": "列出文件", "read_file": "读取文件", "write_file": "写入文件", "edit_file": "编辑文件",
-		"glob_files": "按名称查找文件", "grep_files": "搜索文件内容", "run_command": "执行本地命令",
-		"git": "查看 Git", "web_search": "网页搜索",
-		"web_fetch": "读取网页", "browser": "浏览网页与截图", "install_skill": "安装 Skill", "schedule_task": "安排提醒或任务",
-		"list_agents": "查看可用 Agent", "run_agent": "调用专业 Agent",
-		"computer": "操作桌面应用",
-	}
-	if label := labels[name]; label != "" {
-		return label
-	}
-	return name
 }

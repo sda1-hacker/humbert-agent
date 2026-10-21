@@ -1,48 +1,20 @@
-# Builtin Tools：具体动作实现
+# 内置工具适配
 
-[总目录](../../../docs/项目源码详解.md) · [Tool Registry](../README.md)
+本包把现有领域能力适配成 Eino 工具。Factory 在 Bootstrap 注册，每轮通过 Scope 构造实例，再由 Registry 套上 Permission Guard。真实 I/O 继续执行路径、网络或进程校验。
 
-本目录负责具体的文件、网页、系统与会话动作。每个 Factory 的 `Descriptor` 告诉 Registry 如何暴露；`Build(ctx, scope)` 固定本轮依赖；`run` 对模型输入做校验并执行。新建 Agent 默认勾选 `computer`、`install_skill`、`list_agents`、`run_agent`，用户仍可逐项关闭；真正调用会经过 Registry 的 Guard、Permission 和各自的 Sandbox/Workspace 校验。名称、描述与参数 Schema 通过 Eino `ToolsConfig` 传递，System 保留通用安全规则。
+| 文件 | 职责 |
+| --- | --- |
+| `filesystem.go` | 创建六个 Eino 文件工具，I/O 委托 `internal/fileops` |
+| `run_command.go`、`run_skill_script.go` | 参数与 Skill 身份检查、暂存脚本和执行策略 |
+| `process.go`、`process_output.go` | 公共超时、Runner 调用、结果字段和 head/tail 输出限制 |
+| `git_tools.go` | 固定只读 Git 查询，复用限长输出 |
+| `extract_document.go` | 会话附件或受控文档原件转换、缓存和分页 |
+| `context_history.go`、`context_artifact.go` | 按需读取历史及完整归档结果 |
+| `websearch_tool.go`、`webfetch_tool.go`、`htmlmarkdown.go` | 网页搜索与抓取；真实拨号复用 `internal/publicweb` |
+| `install_skill.go`、`collaboration_tools.go`、`schedule_task.go` | Skill、协作与任务领域的工具入口 |
 
-```mermaid
-flowchart TD
-  E[Eino ToolCall JSON] --> G[Guard: 权限/审批]
-  G --> F[Factory.Build 固定 Scope]
-  F --> V[输入验证、大小/次数限制]
-  V --> B{工具类别}
-  B -->|文件| P[Sandbox Target / Workspace Handle]
-  B -->|命令| R[Sandbox Runner]
-  B -->|网页| W[网络/URL 边界]
-  B -->|历史| H[Sessions/Transcript 只读接口]
-  B -->|任务/Skill| T[对应 Manager]
-```
+浏览器和桌面工具分别在相邻的 `tools/browser`、`tools/desktop` 包注册，不在本包复写实现。`app/tools.go` 是默认工具装配位置；`tools/catalog.go` 提供能力设置元数据。
 
-| 功能 | 文件 | 实现入口与要点 |
-| --- | --- | --- |
-| 文件浏览/读取/查找 | `filesystem.go`、`search_files.go` | `openSandboxTarget` 后按相对路径访问，遍历和输出受限。 |
-| 文件修改 | `filesystem.go`、`atomic_fs.go`、`file_transactions.go` | 检查写入范围和文件大小；写入结果进入 Transcript 的工具事务。 |
-| 命令与 Git | `run_command.go`、`run_skill_script.go`、`git_tools.go` | 受命令配置、工作区、Sandbox Runner、时间和输出上限约束。 |
-| 文档 | `extract_document.go` | 从附件 ID 或允许路径读取，调用 `documenttext.Extract` 得到 Markdown，再按 offset/limit 返回。 |
-| 历史和大内容 | `context_history.go`、`context_artifact.go` | `session_history` 搜索/回读旧 Entry；`context_resource` 分段读附件或归档结果。 |
-| 网页 | `websearch_tool.go`、`browser_proxy.go`、`webfetch_tool.go`、`browser_tool.go` | 搜索/抓取与 Chrome CDP 操作分别实现；网络目标与内容长度受限。 |
-| 扩展与任务 | `install_skill.go`、`collaboration_tools.go`、`schedule_task.go` | 调用 Skill、子 Agent 或 Task Manager。 |
+命令仍使用程序与 argv，不隐式启动 Shell；环境数组为空时也不继承宿主环境。Skill 脚本必须匹配本轮冻结身份，先暂存到工作区，再使用只读派生策略。Git 也强制只读进程策略。Permission Allow 不扩大本轮 Sandbox。
 
-`browser_tool.go` 启动独立配置的可见 Chrome 窗口，用户与 Agent 共用一页；每个 Agent 的配置保存在 cache/browser-profiles，Cookie 跨应用重启保留，其他 Agent 无法复用。CDP 负责交互，截图以原始 PNG 保存到当前会话的 attachments 并显示在聊天中，返回附件 ID；用户可以通过聊天中的下载按钮保存截图原件。检测到网站验证页时只返回 `needs_human_verification`，交由用户在窗口中手动完成，工具不会自动操作验证控件。它没有桌面级操作能力。`webfetch_tool.go` 的网页正文是外部不可信内容；`htmlmarkdown.go` 只是格式转换。`run_command.go` 不应通过拼接字符串绕开 Sandbox Runner。`sandbox_fs.go` 是多个文件工具共享的路径入口；新增文件操作应优先复用它。
-
-`glob_files` 递归查找文件名，`list_files` 列目录。`run_command` 支持程序名、绝对路径和相对工作目录的程序路径；`sandbox/command_environment.go` 统一处理审批身份与执行路径，并补足桌面启动时缺少的 Homebrew、Go 等 PATH。命令按当前 Sandbox 目录权限执行，允许工作区内构建与编辑；每次调用有独立临时目录。风险审批模式自动允许原生隔离下可识别的常规检查（如 `go vet/test/build`），删除和未知脚本等请求确认。会话或 Agent 长期允许绑定完整 argv、工作目录与超时的指纹。请求审批模式忽略历史 Allow；完全操作模式不再询问，并在下一轮采用全目录文件权限。权限 Allow 本身仍不能突破当前轮的冻结沙箱。
-
-风险审批下，内置 `glob_files`、`grep_files`、`list_files`、`read_file` 查询工作区外的已授权目录也不会弹窗；查询不会自行扩大权限，实际路径仍经 `PathGuard` 校验。本次仓库外归档回归从真实 Registry/Permission Guard 走到 Eino 文件工具，验证了外部目录正常查询与受保护目录拒绝；现有测试代码已按维护者要求移出仓库。
-
-调试一个工具：先从 `app/tools.go` 找注册名，再看本文件 Factory 的 `Descriptor`/`Build`/`run`，最后查 `GuardInvokableTool` 与 `runtime.Executor` 的 Tool Started/Completed 事件和对应 JSONL ToolResult。
-
-## 新工具的实现清单
-
-以文件写入为例，`Descriptor` 应声明稳定名称、能力身份与风险；`Build` 只接收受控 Scope；`run` 校验 JSON 参数、调用 `openSandboxTarget`/`CheckPath` 后执行文件操作，并返回长度受限的结构化结果。Registry 的 Guard 提供审批，但不会替工具做文件系统层面的最终检查。对于命令或 Skill 脚本则调用 `sandbox.Runner`；对于网络工具则在真实连接前校验目标地址。
-
-旧历史和大内容回查是只读工具：`session_history` 通过 ActiveBranch 索引搜索或按 Entry ID 读取，不把整个 JSONL 放进提示词；`context_resource` 用 ID、offset、limit 读取附件或 ContextArtifact。`extract_document` 从附件或受控路径取原件，调用 `documenttext` 转 Markdown 后分段返回。这样的工具让 Agent 按需拿细节，而不必在每轮自动装入完整文档。
-
-文件读写/编辑/目录/glob/grep 统一由 `filesystem.go` 的受限 Backend 接入 Eino 原生工具；原子写辅助在 `atomic_fs.go`，目录遍历辅助在 `search_files.go`。Schema 使用原生 file_path、offset/limit、old_string/new_string。
-
-递归遍历和目录列表通过 `sandboxTarget.canReadChild` 逐项检查策略，父目录授权不会覆盖禁止后代。`file_transactions.go` 协调所有文件修改工具的跨会话锁与提交前冲突检查；多文件统一排序取锁，等待响应 Context 取消。浏览器每次调用检查网络策略，禁网调用回收旧连接，close 保留为清理入口。
-
-浏览器进程使用专用本机 HTTP 代理，无 DIRECT 回退且关闭隐式本地目标 bypass。HTTP/HTTPS 和 WS/WSS 在实际 socket 连接处复用 `publicWebDialer` 的解析、拒绝和 IP 拨号，页面、弹窗及 worker 使用同一代理，不再以当前 page 的 Fetch 拦截充当进程网络边界。代理限制连接和请求并发，关闭时取消转发并释放 CONNECT/升级连接；Chrome 启动失败也回收代理和临时 Profile。启动参数禁用 QUIC，并请求 WebRTC 禁止非代理 UDP（后者仍需逐平台验证）；这不是对所有 Chrome 原生能力的 OS 沙箱保证。
+文件读写、目录和搜索继续经 PathGuard + os.Root；遍历逐后代检查规则，原子写入使用跨会话锁与提交前冲突检测。工具结果由已有 Reduction/会话资源存储归档，不另存一份事实。审批恢复执行 checkpoint 保存的原参数，避免批准内容与执行内容不同。

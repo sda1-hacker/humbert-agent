@@ -1,17 +1,18 @@
 # RAG 模块
 
-对业务调用方提供已经组合好的 `rag.Service`，包含文档导入、检索、分块读取、取消和删除。组件开发者可以直接组合 Eino Indexer、Retriever 和 Transformer。本模块仍独立运行，尚未接入 Agent 或 Wails。
+对业务调用方提供已经组合好的 `rag.Service`，包含文档导入、检索、分块读取、取消和删除。组件开发者可以直接组合 Eino Indexer、Retriever 和 Transformer。核心处理流程可独立运行；桌面与 Agent 通过 `internal/knowledge` 业务模块接入。
 
 ## 包的职责
 
 | 位置 | 职责 |
 | --- | --- |
-| `rag.go`、`service.go` | 唯一业务入口、组件注入及默认流程 |
+| `rag.go`、`service.go` | 组件注入、业务请求类型与检索入口 |
+| `ingestion.go`、`ingestion_document.go`、`ingestion_batch.go` | 导入收尾、原件与文档阶段、切分批次 |
 | `indexing.go`、`persistence.go`、`validation.go` | 文档批次、版本、原文及父子块的业务契约 |
 | `published.go` | 外部索引命中的版本校验与正文回查 |
 | `indexer/`、`retriever/` | 实现或组合 Eino 原生组件 |
-| `chunker/`、`transformer/chunker/` | 切分算法与 Eino Transformer |
-| `loader/`、`provider/` | 文档解析、Embedding 和精排实现 |
+| `chunker/` | 切分算法与 Eino Transformer |
+| `loader.go`、`embedding/`、`rerank/` | 文档解析、Embedding 和精排实现 |
 | `examples/5-rag/main.go` | 当前 PostgreSQL、Tabula 和模型的具体组装 |
 
 核心包不导入 PostgreSQL、Tabula 或具体模型 Provider。没有 `rag.NewPostgres`、`rag.RAG` 或第二层 `application.Service`。增加新后端时，在调用方替换 Eino 组件；只有确实缺少组件时，才添加相应适配器。
@@ -122,3 +123,5 @@ go vet ./internal/rag/... ./examples/5-rag
 现有 Go 测试文件已于 2026-10-12 按维护者要求移出仓库，本次使用仓库外归档用例再次验证。归档回归覆盖原生组件、独立索引发布失败、版本过滤、父子块引用、超时及降级诊断；没有配置专用 PostgreSQL 测试地址，5 个真实数据库用例跳过。上面的编译和静态检查不能代替这些行为验证。
 
 组件边界采用 [Eino Indexer](https://github.com/cloudwego/eino/blob/main/components/indexer/interface.go) 和 [Eino Retriever](https://github.com/cloudwego/eino/blob/main/components/retriever/interface.go)。切分参考 [WeKnora](https://github.com/Tencent/WeKnora/blob/main/internal/infrastructure/chunker/strategy.go) 的结构判断、校验回退和父子块处理，没有引入后端注册器。
+
+导入主入口保留版本预留、阶段推进、取消与失败持久化的所有权；`resolveIngestSource` 处理托管原件与重试，`ingestDocument` 处理一份解析结果，`splitIngestDocument` 统一两种切分策略。索引发布与补偿仍由 `indexing.go` 执行，不增加新的编排框架。

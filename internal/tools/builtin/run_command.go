@@ -1,23 +1,17 @@
 package builtin
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
-	"unicode/utf8"
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/components/tool/utils"
 
 	"github.com/sda1-hacker/humbert-agent/internal/sandbox"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
-	"github.com/sda1-hacker/humbert-agent/internal/workspace"
 )
 
 const (
@@ -29,44 +23,6 @@ const (
 
 	runCommandToolDescription = `在当前 Sandbox 授权范围内执行本地程序。command 可填程序名或路径，args 逐项填写；不会隐式启动 Shell。命令可修改获准的目录；删除、未知脚本等由审批策略判断。临时文件请写入 TMPDIR。网页操作和网页截图使用 browser。exit_code=-1 时结合 termination_reason 区分 timeout 与 signaled。`
 )
-
-// CommandLimits 描述 run_command 的资源边界。
-type CommandLimits struct {
-	DefaultTimeout time.Duration
-
-	MaxTimeout time.Duration
-
-	MaxOutputBytes int
-
-	MaxArgs int
-
-	MaxArgBytes int
-}
-
-// Validate 校验 CommandLimits。
-func (l CommandLimits) Validate() error {
-	if l.DefaultTimeout <= 0 {
-		return errors.New("DefaultTimeout 必须大于 0")
-	}
-
-	if l.MaxTimeout <= 0 || l.DefaultTimeout > l.MaxTimeout {
-		return errors.New("MaxTimeout 无效")
-	}
-
-	if l.MaxOutputBytes <= 0 {
-		return errors.New("MaxOutputBytes 必须大于 0")
-	}
-
-	if l.MaxArgs <= 0 {
-		return errors.New("MaxArgs 必须大于 0")
-	}
-
-	if l.MaxArgBytes <= 0 {
-		return errors.New("MaxArgBytes 必须大于 0")
-	}
-
-	return nil
-}
 
 // RunCommandInput 是 run_command 的模型输入。
 type RunCommandInput struct {
@@ -115,8 +71,6 @@ type RunCommandOutput struct {
 
 // RunCommandFactory 为每个 RuntimeSnapshot 创建绑定 Workspace 的 run_command。
 type RunCommandFactory struct {
-	workspaces *workspace.Manager
-
 	runner *sandbox.Runner
 
 	limits CommandLimits
@@ -129,14 +83,10 @@ type RunCommandFactory struct {
 // environment 必须由 Application Config Boundary 生成，Builtin Tool 不会自行继承
 // os.Environ，从而避免把 Token/API Key 等敏感环境变量自动泄露给 Agent 脚本。
 func NewRunCommandFactory(
-	workspaceManager *workspace.Manager,
 	runner *sandbox.Runner,
 	limits CommandLimits,
 	environment []string,
 ) (*RunCommandFactory, error) {
-	if workspaceManager == nil {
-		return nil, errors.New("RunCommand WorkspaceManager 不能为空")
-	}
 
 	if runner == nil {
 		return nil, errors.New("RunCommand Sandbox Runner 不能为空")
@@ -146,7 +96,7 @@ func NewRunCommandFactory(
 		return nil, fmt.Errorf("RunCommand Limits 无效: %w", err)
 	}
 
-	return &RunCommandFactory{workspaces: workspaceManager, runner: runner, limits: limits, environment: cloneStringSlice(environment)}, nil
+	return &RunCommandFactory{runner: runner, limits: limits, environment: cloneStringSlice(environment)}, nil
 }
 
 // Descriptor 返回 Humbert Registry 描述。
@@ -205,23 +155,17 @@ func (f *RunCommandFactory) run(
 		return nil, errors.New("run_command 输入不能为空")
 	}
 
-	command :=
-		normalizeCommandName(input.Command)
+	command := normalizeCommandName(input.Command)
 
-	if err :=
-		validateCommandName(command); err != nil {
+	if err := validateCommandName(command); err != nil {
 		return nil, fmt.Errorf("run_command command 无效: %w", err)
 	}
 
-	if err :=
-		validateCommandArguments(input.Args, f.limits); err != nil {
+	if err := validateCommandArguments(input.Args, f.limits); err != nil {
 		return nil, fmt.Errorf("run_command args 无效: %w", err)
 	}
 
-	workingDirectory,
-		displayDirectory,
-		err :=
-		resolveCommandWorkingDirectory(ctx, scope, input.WorkingDirectory)
+	workingDirectory, displayDirectory, err := resolveCommandWorkingDirectory(ctx, scope, input.WorkingDirectory)
 
 	if err != nil {
 		return nil, fmt.Errorf("run_command working_directory 无效: %w", err)
@@ -232,51 +176,15 @@ func (f *RunCommandFactory) run(
 		return nil, fmt.Errorf("run_command: %w", err)
 	}
 
-	timeout :=
-		f.limits.DefaultTimeout
-
-	if input.TimeoutSeconds > 0 {
-		timeout = time.Duration(input.TimeoutSeconds) * time.Second
-		if timeout < minimumCommandTimeout {
-			timeout = minimumCommandTimeout
-		}
-	}
-
-	if timeout > f.limits.MaxTimeout {
-		timeout = f.limits.MaxTimeout
-	}
-
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	capture := newBoundedCommandOutput(f.limits.MaxOutputBytes)
-	processResult, err := f.runner.Run(
-		runCtx,
-		scope.SandboxPolicy(),
-		sandbox.ProcessSpec{
-			Executable: executable,
-			Args:       append([]string(nil), input.Args...),
-			Dir:        workingDirectory,
-			Env:        cloneStringSlice(f.environment),
-			Stdout:     capture,
-			Stderr:     capture,
-		},
-	)
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("run_command 被取消: %w", ctx.Err())
-	}
+	timeout := commandTimeout(f.limits, input.TimeoutSeconds)
+	processResult, output, truncated, err := executeCaptured(ctx, f.runner, scope.SandboxPolicy(), sandbox.ProcessSpec{
+		Executable: executable, Args: append([]string(nil), input.Args...), Dir: workingDirectory,
+		Env: cloneStringSlice(f.environment),
+	}, f.limits, input.TimeoutSeconds, runCommandToolName)
 	if err != nil {
-		return nil, fmt.Errorf("run_command Sandbox 执行失败: %w", err)
+		return nil, err
 	}
-
-	output,
-		truncated :=
-		capture.Result()
-
 	terminationReason := processResult.TerminationReason
-	if terminationReason == "" {
-		terminationReason = "exited"
-	}
 	message := ""
 	if processResult.TimedOut {
 		message = fmt.Sprintf("命令执行超过 %s 后被 Humbert 终止。exit_code=-1 在这里表示超时，不表示 Shell 未启用。", timeout)
@@ -288,221 +196,6 @@ func (f *RunCommandFactory) run(
 		message += " 这通常表示本地运行时或原生 Sandbox 启动阶段失败；不要把它解释为 Shell 未启用。"
 	}
 
-	return &RunCommandOutput{
-		Command:           command,
-		Args:              append([]string(nil), input.Args...),
-		WorkingDirectory:  displayDirectory,
-		ExitCode:          processResult.ExitCode,
-		TimedOut:          processResult.TimedOut,
-		TerminationReason: terminationReason,
-		Message:           message,
-		Output:            output,
-		OutputTruncated:   truncated,
-		DurationMS:        processResult.Duration.Milliseconds(),
-		NativeSandbox:     processResult.NativeUsed,
-	}, nil
-}
-
-// cloneStringSlice 返回独立的字符串切片副本。
-//
-// 即使输入为空，也返回一个非 nil 的空切片。exec.Cmd 的 Env==nil 会继承当前进程
-// 的全部环境变量，这会让 API Key、Token 等敏感信息意外暴露给 Agent 启动的子进程；
-// 因此 run_command 必须显式使用非 nil 环境。
-func cloneStringSlice(
-	values []string,
-) []string {
-	cloned :=
-		make([]string, len(values))
-
-	copy(cloned, values)
-
-	return cloned
-}
-
-func normalizeCommandName(command string) string { return strings.TrimSpace(command) }
-func validateCommandName(command string) error   { return sandbox.ValidateCommand(command) }
-
-func validateCommandArguments(
-	args []string,
-	limits CommandLimits,
-) error {
-	if len(args) > limits.MaxArgs {
-		return fmt.Errorf("参数数量 %d 超过最大值 %d", len(args), limits.MaxArgs)
-	}
-
-	for index, arg := range args {
-		if strings.ContainsRune(arg, '\x00') {
-			return fmt.Errorf("第 %d 个参数包含 NUL", index+1)
-		}
-
-		if len(arg) > limits.MaxArgBytes {
-			return fmt.Errorf("第 %d 个参数超过 %d bytes", index+1, limits.MaxArgBytes)
-		}
-
-		if !utf8.ValidString(arg) {
-			return fmt.Errorf("第 %d 个参数不是有效 UTF-8", index+1)
-		}
-	}
-
-	return nil
-}
-
-func resolveCommandWorkingDirectory(
-	ctx context.Context,
-	scope humberttools.Scope,
-	input string,
-) (
-	absolute string,
-	display string,
-	err error,
-) {
-	if err := ctx.Err(); err != nil {
-		return "", "", err
-	}
-	input = strings.TrimSpace(input)
-	if input == "" {
-		input = "."
-	}
-	decision, err := scope.SandboxPolicy().CheckPath(input, sandbox.OpList)
-	if err != nil {
-		return "", "", err
-	}
-	resolved := decision.CanonicalPath
-	info, err := os.Stat(resolved)
-	if err != nil {
-		return "", "", fmt.Errorf("检查工作目录失败: %w", err)
-	}
-	if !info.IsDir() {
-		return "", "", errors.New("working_directory 不是目录")
-	}
-	if rel, relErr := filepath.Rel(scope.Workspace.RootDir, resolved); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		display = filepath.ToSlash(rel)
-		if display == "" {
-			display = "."
-		}
-	} else {
-		display = resolved
-	}
-	return resolved, display, nil
-}
-
-// boundedCommandOutput 对 stdout/stderr 做固定内存预算。
-//
-// 为了同时保留命令开头上下文和结尾错误信息，超过预算以后保留 head + tail，
-// 中间被丢弃。Write 永远返回 len(p)，因此不会因为 UI 输出达到上限而向子进程
-// 制造 Broken Pipe。
-type boundedCommandOutput struct {
-	mu sync.Mutex
-
-	limit int
-
-	headLimit int
-
-	tailLimit int
-
-	head bytes.Buffer
-
-	tail []byte
-
-	total int64
-}
-
-func newBoundedCommandOutput(
-	limit int,
-) *boundedCommandOutput {
-	headLimit :=
-		limit / 2
-
-	if headLimit == 0 {
-		headLimit =
-			limit
-	}
-
-	return &boundedCommandOutput{limit: limit, headLimit: headLimit, tailLimit: limit - headLimit}
-}
-
-func (b *boundedCommandOutput) Write(
-	p []byte,
-) (
-	int,
-	error,
-) {
-	originalLength :=
-		len(p)
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.total +=
-		int64(originalLength)
-
-	remainingHead :=
-		b.headLimit - b.head.Len()
-
-	if remainingHead > 0 {
-		take :=
-			remainingHead
-
-		if len(p) < take {
-			take =
-				len(p)
-		}
-
-		_, _ =
-			b.head.Write(p[:take])
-
-		p =
-			p[take:]
-	}
-
-	if len(p) > 0 && b.tailLimit > 0 {
-		b.tail =
-			append(b.tail, p...)
-
-		if len(b.tail) > b.tailLimit {
-			overflow :=
-				len(b.tail) - b.tailLimit
-
-			copy(b.tail, b.tail[overflow:])
-
-			b.tail =
-				b.tail[:b.tailLimit]
-		}
-	}
-
-	return originalLength,
-		nil
-}
-
-func (b *boundedCommandOutput) Result() (
-	string,
-	bool,
-) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.total <= int64(b.limit) {
-		combined :=
-			append([]byte(nil), b.head.Bytes()...)
-
-		combined =
-			append(combined, b.tail...)
-
-		return strings.ToValidUTF8(string(combined), "�"),
-			false
-	}
-
-	dropped :=
-		b.total - int64(b.head.Len()) - int64(len(b.tail))
-
-	var builder strings.Builder
-
-	builder.Write(b.head.Bytes())
-
-	fmt.Fprintf(&builder, "\n... [truncated %d bytes] ...\n", dropped)
-
-	builder.Write(b.tail)
-
-	return strings.ToValidUTF8(builder.String(), "�"),
-		true
+	result := commandResult(command, input.Args, displayDirectory, processResult, output, truncated, message)
+	return &result, nil
 }

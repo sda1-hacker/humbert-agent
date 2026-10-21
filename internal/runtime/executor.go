@@ -13,6 +13,7 @@ import (
 
 	"github.com/sda1-hacker/humbert-agent/internal/approval"
 	"github.com/sda1-hacker/humbert-agent/internal/logging"
+	"github.com/sda1-hacker/humbert-agent/internal/multimodal"
 	"github.com/sda1-hacker/humbert-agent/internal/sessions"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
@@ -179,7 +180,7 @@ func (e *Executor) consumeEvents(ctx context.Context, snapshot *Snapshot, events
 					}
 
 					if len(message.ToolCalls) == 0 {
-						result.Content = assistantText(message)
+						result.Content = multimodal.MessageText(message)
 						result.MessageID = stored.EntryID
 					}
 				}
@@ -335,10 +336,10 @@ func emitAssistantDeltas(message *schema.Message, emit DeltaEmitter) {
 	if message == nil || emit == nil {
 		return
 	}
-	if reasoning := assistantReasoning(message); reasoning != "" {
+	if reasoning := multimodal.MessageReasoning(message); reasoning != "" {
 		emit(EventAssistantReasoningDelta, reasoning)
 	}
-	if text := assistantText(message); text != "" {
+	if text := multimodal.MessageText(message); text != "" {
 		emit(EventAssistantDelta, text)
 	}
 }
@@ -363,8 +364,8 @@ func concatMessagesBestEffort(chunks []*schema.Message) *schema.Message {
 		if chunk == nil {
 			continue
 		}
-		content.WriteString(assistantText(chunk))
-		reasoning.WriteString(assistantReasoning(chunk))
+		content.WriteString(multimodal.MessageText(chunk))
+		reasoning.WriteString(multimodal.MessageReasoning(chunk))
 	}
 	fallback.Content = content.String()
 	fallback.ReasoningContent = reasoning.String()
@@ -464,42 +465,6 @@ func persistCompletedTool(ctx context.Context, snapshot *Snapshot, message *sche
 		return sessions.Message{}, fmt.Errorf("持久化 ToolResultMessage 失败: %w", err)
 	}
 	return stored, nil
-}
-
-// assistantText 仅用于 Streaming UI 与最终 ExecutionResult，不参与磁盘协议转换。
-func assistantText(message *schema.Message) string {
-	if message == nil {
-		return ""
-	}
-	if message.Content != "" {
-		return message.Content
-	}
-
-	var builder strings.Builder
-	for _, part := range message.AssistantGenMultiContent {
-		if part.Type == schema.ChatMessagePartTypeText {
-			builder.WriteString(part.Text)
-		}
-	}
-	return builder.String()
-}
-
-// assistantReasoning 仅用于把 Provider Reasoning Streaming 到 UI。
-func assistantReasoning(message *schema.Message) string {
-	if message == nil {
-		return ""
-	}
-	if message.ReasoningContent != "" {
-		return message.ReasoningContent
-	}
-
-	var builder strings.Builder
-	for _, part := range message.AssistantGenMultiContent {
-		if part.Type == schema.ChatMessagePartTypeReasoning && part.Reasoning != nil {
-			builder.WriteString(part.Reasoning.Text)
-		}
-	}
-	return builder.String()
 }
 
 // extraString 从 Eino Message Extra 中读取非敏感字符串元数据。

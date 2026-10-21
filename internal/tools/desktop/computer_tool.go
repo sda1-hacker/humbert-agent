@@ -1,4 +1,4 @@
-package builtin
+package desktop
 
 import (
 	"bytes"
@@ -66,12 +66,12 @@ type ComputerFactory struct {
 	op          sync.Mutex
 	lease       *computerLease
 	closed      bool
-	attachments BrowserAttachmentWriter
+	attachments humberttools.ImageWriter
 	inspect     ComputerVisionInspector
 	newDriver   func() computer.Driver
 }
 
-func NewComputerFactory(writer BrowserAttachmentWriter, inspector ComputerVisionInspector) *ComputerFactory {
+func NewComputerFactory(writer humberttools.ImageWriter, inspector ComputerVisionInspector) *ComputerFactory {
 	return &ComputerFactory{attachments: writer, inspect: inspector, newDriver: computer.NewDriver}
 }
 func (f *ComputerFactory) Descriptor() humberttools.Descriptor {

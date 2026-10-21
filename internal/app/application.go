@@ -32,7 +32,6 @@ import (
 	"github.com/sda1-hacker/humbert-agent/internal/skills"
 	"github.com/sda1-hacker/humbert-agent/internal/tasks"
 	humberttools "github.com/sda1-hacker/humbert-agent/internal/tools"
-	builtin "github.com/sda1-hacker/humbert-agent/internal/tools/builtin"
 	"github.com/sda1-hacker/humbert-agent/internal/transcript"
 	"github.com/sda1-hacker/humbert-agent/internal/usecases"
 	"github.com/sda1-hacker/humbert-agent/internal/workspace"
@@ -252,150 +251,33 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 	resources.add(closeResources, "Search", func(context.Context) error { return searchService.Close() })
 	// ToolRegistry 在 SessionService 之后创建，使内部 history/context_artifact Tool 能读取
 	// 当前 Session 的受控完整记录与大结果 sidecar。普通 Builtin 仍保持原有注册语义。
-	toolDeps := toolDependencies{
-		Workspaces: workspaceManager, Sandbox: sandboxManager, Skills: skillManager,
-		EnableSkill: func(callCtx context.Context, agentID, skillName string) error {
-			_, err := agentService.EnableSkillForAgent(callCtx, agentID, skillName)
-			return err
-		},
-		Sessions: sessionService,
-		// Profile 位于 Cache，不把站点登录信息放进业务数据备份。
-		BrowserProfileRoot: filepath.Join(filepath.Dir(cfg.Paths.ConfigFile), "cache", "browser-profiles"),
-		BrowserVision:      usecases.NewVisionInspector(agentService, modelRegistry).Inspect,
-		ComputerVision:     usecases.NewVisionInspector(agentService, modelRegistry).InspectComputer,
+	application := &Application{
+		config: cfg, logger: logger, credentials: credentials, resources: resources,
+		workspaces: workspaceManager, workspaceView: workspaceViewService, sandbox: sandboxManager,
+		permissions: permissionEngine, approvals: approvalManager, preferences: preferenceStore,
+		skills: skillManager, mcp: mcpManager, models: modelRegistry, agents: agentService,
+		sessions: sessionService, sessionStore: sessionStore, search: searchService,
 	}
-	toolRegistry, err := buildToolRegistry(ctx, cfg.Paths.ConfigFile, toolDeps, permissionEngine, logger)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 ToolRegistry 失败: %w", err)
-	}
-	resources.add(closeResources, "Tools", func(context.Context) error { return toolRegistry.Close() })
-	// 上下文摘要是唯一自动派生记忆；个人记忆由用户明确保存。
-	tokenEstimator := contextengine.NewApproxEstimator()
-	contextEngine, err := contextengine.NewEngine(cfg.Runtime.Context, sessionService, tokenEstimator, logger)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 ContextEngine 失败: %w", err)
-	}
-	events := eventbus.New()
-	resources.add(closeResources, "EventBus", func(context.Context) error { events.Close(); return nil })
-	runtimeReporter := newRuntimeEventReporter(
-		func(eventCtx context.Context, event agentruntime.Event) {
-			if eventCtx == nil {
-				eventCtx = context.Background()
-			}
-			if err := events.Publish(eventCtx, agentruntime.TopicEvent, event); err != nil {
-				logger.Warn(context.Background(), "发布 Runtime Event 失败", "operation", "runtime.event.publish", "request_id", event.RequestID, "session_id", event.SessionID, "run_id", event.RunID, "error", err)
-			}
-		},
-	)
-	runtimeResolver := agentruntime.NewResolver(agentService, sessionService, modelRegistry, workspaceManager, sandboxManager, toolRegistry,
-		skillManager, mcpManager, contextEngine, preferenceStore, runtimeReporter, cfg.Runtime.MaxIterations)
-	if err := runtimeResolver.Validate(); err != nil {
-		return nil, fmt.Errorf("RuntimeResolver 配置无效: %w", err)
-	}
-	runtimeExecutor := agentruntime.NewExecutor()
-	collaborationStore, err := collaboration.NewStore(sessionService)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Collaboration Store 失败: %w", err)
-	}
-	collaborationManager, err := collaboration.NewManager(agentService, collaborationStore, runtimeResolver)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Collaboration Manager 失败: %w", err)
-	}
-	if err := registerCollaborationTools(toolRegistry, collaborationManager); err != nil {
-		return nil, err
-	}
-	runtimeService := agentruntime.NewService(runtimeResolver, runtimeExecutor, sessionService, events, logger, approvalManager)
-	resources.add(finishRuns, "Runtime", runtimeService.Close)
-	runtimeService.AddRunLifecycleObserver(collaborationManager)
-	runtimeService.AddRunLifecycleObserver(mcpManager)
-	taskStore, err := tasks.NewStore(ctx, cfg.Paths.AgentsDir)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Task Store 失败: %w", err)
-	}
-	for _, issue := range taskStore.Issues() {
-		logger.Warn(ctx, "Task 数据损坏，已隔离且不影响其它任务", "operation", "task.recovery.isolate", "agent_id", issue.AgentID, "task_id", issue.TaskID, "run_id", issue.RunID, "error", issue.Error)
-	}
-	taskManager, err := tasks.NewManager(taskStore, agentService, sessionService, runtimeService, events, logger)
-	if err != nil {
-		return nil, fmt.Errorf("初始化 Task Manager 失败: %w", err)
-	}
-	resources.add(stopWork, "Tasks", taskManager.Close)
-	scheduleTaskFactory, err := builtin.NewScheduleTaskFactory(taskManager)
+	runtimeResolver, err := application.initRuntime(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if err := toolRegistry.Register(scheduleTaskFactory); err != nil {
-		return nil, fmt.Errorf("注册对话任务工具失败: %w", err)
-	}
-	notificationService := notifications.New(notifications.NewEventProvider(events))
-	taskManager.SetNotificationService(notificationService)
-	proactiveStore, err := proactive.NewStore(ctx, filepath.Join(cfg.Paths.ConfigDir, "proactive.json"))
-	if err != nil {
-		return nil, fmt.Errorf("初始化主动助手状态存储失败: %w", err)
-	}
-	proactiveManager, err := proactive.NewManager(proactiveStore, taskManager, approvalManager, events, notificationService,
-		proactive.NewWorkspaceMonitor(agentService, workspaceManager), logger)
-	if err != nil {
-		return nil, fmt.Errorf("初始化主动助手 Manager 失败: %w", err)
-	}
-	resources.add(stopWork, "Proactive", proactiveManager.Close)
-	modules := &moduleManager{}
-	resources.add(closeResources, "Modules", modules.close)
-	resources.add(stopWork, "Modules", modules.stop)
-	var knowledgeManager *knowledge.Manager
-	installers := append([]agentruntime.ModuleInstaller{func(ctx context.Context, host agentruntime.ModuleHost) (agentruntime.Module, error) {
-		var err error
-		knowledgeManager, err = knowledge.New(ctx, host, modelRegistry)
-		if err != nil {
-			return agentruntime.Module{}, err
-		}
-		return knowledgeManager.Module(), nil
-	}}, opts.modules...)
-	if err := modules.install(ctx, agentruntime.ModuleHost{DataDir: cfg.Paths.HomeDir, Logger: logger, Credentials: credentials, Events: events, Sandbox: sandboxManager}, runtimeResolver, installers); err != nil {
+	if err := application.initTasks(ctx); err != nil {
 		return nil, err
 	}
-	if err := modules.start(ctx); err != nil {
+	if err := application.initModules(ctx, runtimeResolver, opts.modules); err != nil {
 		return nil, err
 	}
-	if err := taskManager.Start(ctx); err != nil {
+	if err := application.tasks.Start(ctx); err != nil {
 		return nil, fmt.Errorf("启动 Task Scheduler 失败: %w", err)
 	}
-	if err := proactiveManager.Start(ctx); err != nil {
+	if err := application.proactive.Start(ctx); err != nil {
 		return nil, fmt.Errorf("启动主动助手失败: %w", err)
 	}
-	lifecycle := usecases.NewAgentLifecycle(agentService, sessionService, runtimeService, taskManager, permissionEngine)
-	maintenance := usecases.NewSkillMaintenance(agentService, skillManager)
-	mcpConfiguration := usecases.NewMCPConfiguration(mcpManager, credentials, logger)
-	application := &Application{
-		knowledge:        knowledgeManager,
-		resources:        resources,
-		mcpConfiguration: mcpConfiguration,
-		search:           searchService, lifecycle: lifecycle, maintenance: maintenance,
-		config:        cfg,
-		logger:        logger,
-		credentials:   credentials,
-		events:        events,
-		workspaces:    workspaceManager,
-		workspaceView: workspaceViewService,
-		sandbox:       sandboxManager,
-		permissions:   permissionEngine,
-		preferences:   preferenceStore,
-		approvals:     approvalManager,
-		tools:         toolRegistry,
-		skills:        skillManager,
-		mcp:           mcpManager,
-		models:        modelRegistry,
-		agents:        agentService,
-		sessions:      sessionService,
-		sessionStore:  sessionStore,
-		contextEngine: contextEngine,
-		runtime:       runtimeService,
-		tasks:         taskManager,
-		collaboration: collaborationManager,
-		notifications: notificationService,
-		proactive:     proactiveManager,
-		startedAt:     time.Now().UTC(),
-	}
+	application.lifecycle = usecases.NewAgentLifecycle(agentService, sessionService, application.runtime, application.tasks, permissionEngine)
+	application.maintenance = usecases.NewSkillMaintenance(agentService, skillManager)
+	application.mcpConfiguration = usecases.NewMCPConfiguration(mcpManager, credentials, logger)
+	application.startedAt = time.Now().UTC()
 	application.ready.Store(true)
 	owned = false
 	logger.Info(
@@ -408,7 +290,7 @@ func Bootstrap(ctx context.Context, options ...BootstrapOption) (*Application, e
 		"mcp_servers_file", cfg.Paths.MCPServersFile,
 		"managed_workspace_root", managedWorkspaceRoot,
 		"model_revision", modelRegistry.Revision(),
-		"tool_revision", toolRegistry.Revision(),
+		"tool_revision", application.tools.Revision(),
 		"mcp_revision", mcpManager.Revision(),
 	)
 	return application, nil
