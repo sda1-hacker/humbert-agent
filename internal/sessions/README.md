@@ -63,4 +63,6 @@ sequenceDiagram
 
 归档以版本、SessionID、ToolName 和全文的 SHA-256 生成稳定 `artifact_<hash>.json`，相同结果重放或清理时复用引用，避免随机 resource_id 破坏模型的 KV cache 前缀，并减少重复落盘。保留版本 1、会话身份、全文、Unicode 字符数和 UTC 时间；路径仍为会话内 `context-artifacts/`。读取验证版本、ID、会话归属以及真实目录/文件，旧 UUID 引用继续可读。文档内容不可变，相同归档并发提交的内容一致，atomicfile 保证原子落盘；没有增加跨会话全局锁或第二份索引。
 
-JSONL 仍记录可见工具事务与引用，归档保存完整结果，两者不是同一份协议。归档随 Session 目录删除；已删除会话不能再创建归档。后端测试使用真实 SessionStore 验证归档读写、身份拒绝、删除与并发首次创建目录。
+JSONL 仍记录可见工具事务与引用，归档保存完整结果，两者不是同一份协议。归档随 Session 目录删除；已删除会话不能再创建归档。相关验证应使用真实 SessionStore 覆盖归档读写、身份拒绝、删除与并发首次创建目录；仓库外回归的保存与运行方式见 [持续验证说明](../../docs/持续验证说明.md)。
+
+知识库原件位于独立的 `knowledge/sources/`，不属于当前 Session 的附件。`knowledge_search` 返回的来源快照随工具结果保存在对话中，但当前版本和 Agent 授权仍由 [Knowledge Manager](../knowledge/README.md) 校验；删除会话不会删除知识库文档。

@@ -17,6 +17,9 @@ const (
 	defaultMaxWritableFileBytes int64 = 2 * 1024 * 1024
 	defaultMaxReadLines               = 1000
 	defaultMaxListEntries             = 1000
+	defaultMaxSearchResults           = 500
+	defaultMaxSearchEntries           = 20000
+	defaultMaxSearchLineChars         = 2000
 
 	defaultWebSearchProvider       = "auto"
 	defaultWebSearchTimeoutSeconds = 15
@@ -41,6 +44,9 @@ const (
 	absoluteMaxWritableFileBytes int64 = 64 * 1024 * 1024
 	absoluteMaxReadLines               = 10000
 	absoluteMaxListEntries             = 10000
+	absoluteMaxSearchResults           = 10000
+	absoluteMaxSearchEntries           = 100000
+	absoluteMaxSearchLineChars         = 10000
 
 	absoluteMaxWebSearchTimeoutSeconds = 60
 	absoluteMaxWebSearchResults        = 100
@@ -92,7 +98,10 @@ type FileToolConfig struct {
 	MaxReadLines int
 
 	// MaxListEntries 是 list_files 一次最多返回的目录项数量。
-	MaxListEntries int
+	MaxListEntries     int
+	MaxSearchResults   int
+	MaxSearchEntries   int
+	MaxSearchLineChars int
 }
 
 // WebSearchToolConfig 是 web_search 的运行参数。
@@ -199,6 +208,9 @@ func LoadToolConfig(configFile string) (ToolConfig, error) {
 			MaxWritableFileBytes: v.GetInt64("tools.files.max_writable_file_bytes"),
 			MaxReadLines:         v.GetInt("tools.files.max_read_lines"),
 			MaxListEntries:       v.GetInt("tools.files.max_list_entries"),
+			MaxSearchResults:     v.GetInt("tools.files.max_search_results"),
+			MaxSearchEntries:     v.GetInt("tools.files.max_search_entries"),
+			MaxSearchLineChars:   v.GetInt("tools.files.max_search_line_chars"),
 		},
 		WebSearch: WebSearchToolConfig{
 			Enabled:        v.GetBool("tools.web_search.enabled"),
@@ -246,7 +258,10 @@ func (c FileToolConfig) Validate() error {
 		toolBound{"max_readable_file_bytes", c.MaxReadableFileBytes, 1, absoluteMaxReadableFileBytes},
 		toolBound{"max_writable_file_bytes", c.MaxWritableFileBytes, 1, absoluteMaxWritableFileBytes},
 		toolBound{"max_read_lines", int64(c.MaxReadLines), 1, absoluteMaxReadLines},
-		toolBound{"max_list_entries", int64(c.MaxListEntries), 1, absoluteMaxListEntries})
+		toolBound{"max_list_entries", int64(c.MaxListEntries), 1, absoluteMaxListEntries},
+		toolBound{"max_search_results", int64(c.MaxSearchResults), 1, absoluteMaxSearchResults},
+		toolBound{"max_search_entries", int64(c.MaxSearchEntries), 1, absoluteMaxSearchEntries},
+		toolBound{"max_search_line_chars", int64(c.MaxSearchLineChars), 1, absoluteMaxSearchLineChars})
 }
 
 // Validate 校验 Web Search 配置。
@@ -357,6 +372,9 @@ func setToolDefaults(v *viper.Viper) {
 		"tools.files.max_writable_file_bytes":   defaultMaxWritableFileBytes,
 		"tools.files.max_read_lines":            defaultMaxReadLines,
 		"tools.files.max_list_entries":          defaultMaxListEntries,
+		"tools.files.max_search_results":        defaultMaxSearchResults,
+		"tools.files.max_search_entries":        defaultMaxSearchEntries,
+		"tools.files.max_search_line_chars":     defaultMaxSearchLineChars,
 		"tools.web_search.enabled":              true,
 		"tools.web_search.provider":             defaultWebSearchProvider,
 		"tools.web_search.timeout_seconds":      defaultWebSearchTimeoutSeconds,

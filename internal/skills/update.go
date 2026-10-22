@@ -377,6 +377,17 @@ func (m *Manager) replaceValidatedPackage(
 		return UpdateResult{}, fmt.Errorf("%w: 来源中的 Skill name=%q，与当前 %q 不一致", ErrInvalidSkill, candidate.Info.Name, name)
 	}
 
+	var staged *packageStage
+	// 未变化的普通更新无需复制；实际替换先在锁外准备，再按旧身份核对提交。
+	if force || !expected.Valid || candidate.Info.Identity != expected.identity() {
+		var err error
+		staged, err = m.preparePackage(ctx, candidate)
+		if err != nil {
+			return UpdateResult{}, err
+		}
+		defer staged.cleanup()
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -399,28 +410,6 @@ func (m *Manager) replaceValidatedPackage(
 			currentSource = stored
 		}
 		return UpdateResult{Info: current.Package.Info, PreviousIdentity: previousIdentity, Changed: false, Source: currentSource.Clone()}, nil
-	}
-
-	stage := filepath.Join(m.rootDir, ".humbert-update-"+uuid.NewString())
-	if err := os.Mkdir(stage, 0o700); err != nil {
-		return UpdateResult{}, fmt.Errorf("创建 Skill 更新临时目录失败: %w", err)
-	}
-	stageExists := true
-	defer func() {
-		if stageExists {
-			_ = os.RemoveAll(stage)
-		}
-	}()
-
-	if err := copyPackageTree(ctx, candidate.Info.RootDir, stage); err != nil {
-		return UpdateResult{}, fmt.Errorf("复制 Skill 更新 Package 失败: %w", err)
-	}
-	staged, err := inspectPackage(ctx, stage, m.config, false)
-	if err != nil {
-		return UpdateResult{}, fmt.Errorf("复核 Skill 更新 Package 失败: %w", err)
-	}
-	if staged.Info.Name != name || staged.Info.Identity != candidate.Info.Identity {
-		return UpdateResult{}, fmt.Errorf("%w: Skill 更新来源在复制过程中发生变化", ErrSkillSnapshotStale)
 	}
 
 	target := filepath.Join(m.rootDir, name)
@@ -447,23 +436,14 @@ func (m *Manager) replaceValidatedPackage(
 		return cause
 	}
 
-	if err := os.Rename(stage, target); err != nil {
-		return UpdateResult{}, rollback(fmt.Errorf("提交新 Skill Package 失败: %w", err))
-	}
-	stageExists = false
-
-	installed, err := inspectPackage(ctx, target, m.config, true)
+	installed, err := staged.commit(ctx, target, m.config)
 	if err != nil {
 		return UpdateResult{}, rollback(fmt.Errorf("验证更新后的 Skill Package 失败: %w", err))
 	}
 
 	now := time.Now().UTC()
-	if source.InstalledAt.IsZero() {
-		source.InstalledAt = now
-	}
 	source.UpdatedAt = now
-	source.Identity = installed.Info.Identity
-	source, err = normalizeStoredSourceInfo(source)
+	source, err = installedSource(source, installed.Info.Identity, now)
 	if err != nil {
 		return UpdateResult{}, rollback(fmt.Errorf("准备更新后的 Skill 来源记录失败: %w", err))
 	}

@@ -27,14 +27,15 @@ type engine struct {
 }
 
 // buildEngine 仅在用户初始化、上传或检索时连接外部服务；应用启动不依赖 PostgreSQL 在线。
+// 只读取调用方冻结的 state；连接期间不持有 Manager 锁，也不能重新读取可变配置。
 // 更换存储时替换这里的 Eino 组件，知识库页面、Agent 工具与核心导入流程无需改写。
-func (m *Manager) buildEngine(ctx context.Context, initialize bool) (_ *engine, err error) {
-	values := clone(m.state.Values)
+func (m *Manager) buildEngine(ctx context.Context, state diskState, initialize bool) (_ *engine, err error) {
+	values := clone(state.Values)
 	providerRevision := uint64(0)
 	if m.imageModels != nil {
 		providerRevision = m.imageModels.Revision()
 	}
-	for key, id := range m.state.Credentials {
+	for key, id := range state.Credentials {
 		value, e := m.host.Credentials.Get(ctx, id)
 		if e != nil {
 			return nil, e
@@ -49,7 +50,7 @@ func (m *Manager) buildEngine(ctx context.Context, initialize bool) (_ *engine, 
 			setValue(values, key, value)
 		}
 	}
-	values, err = m.connectionValues(ctx, values, m.state.Connections)
+	values, err = m.connectionValues(ctx, values, state.Connections)
 	if err != nil {
 		return nil, err
 	}

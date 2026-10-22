@@ -2,7 +2,7 @@ package fileops
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"path/filepath"
@@ -30,10 +30,9 @@ func displayRootChild(target *sandboxTarget, rel string) string {
 	return filepath.ToSlash(filepath.Join(target.display, rel))
 }
 
-func walkRoot(ctx context.Context, target *sandboxTarget, visit func(rel string, entry fs.DirEntry) error) error {
+func walkRoot(ctx context.Context, target *sandboxTarget, maxVisited int, visit func(rel string, entry fs.DirEntry) error) error {
 	start := target.relative
 	// 超过上限返回明确错误，调用方可缩小 path；不能把截断结果伪装成完整搜索。
-	const maxVisited = 20000
 	visited := 0
 	var walk func(string) error
 	walk = func(rel string) error {
@@ -64,7 +63,7 @@ func walkRoot(ctx context.Context, target *sandboxTarget, visit func(rel string,
 		}
 		visited += len(entries)
 		if visited > maxVisited {
-			return errors.New("扫描超过 20000 个目录项，请缩小 path 范围")
+			return fmt.Errorf("扫描超过 %d 个目录项，请缩小 path 范围", maxVisited)
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 		for _, entry := range entries {

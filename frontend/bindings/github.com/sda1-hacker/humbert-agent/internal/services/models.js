@@ -681,6 +681,13 @@ export class BuiltinToolDTO {
      * @param {Partial<BuiltinToolDTO>} [$$source = {}] - The source object to create the BuiltinToolDTO.
      */
     constructor($$source = {}) {
+        if (!("defaultEnabled" in $$source)) {
+            /**
+             * @member
+             * @type {boolean}
+             */
+            this["defaultEnabled"] = false;
+        }
         if (!("name" in $$source)) {
             /**
              * @member

@@ -17,6 +17,8 @@ flowchart TD
 
 `safeArchivePath` 与 `within` 防止归档路径逃逸；恢复先验证、再切换根目录，失败时按阶段清理或回滚。用户自定义 Workspace 在数据根目录之外，不能假设备份包含它。备份口令必须来自安全 Vault，不放在普通配置或日志中。
 
+知识库的 `knowledge/state.json`、托管原件、图片和解析缓存位于数据根下，会随本地归档保存；配置指向的 PostgreSQL 数据不在归档内。完整恢复 RAG 还需单独备份数据库，并使原件、分块版本、Embedding 模型档案和向量维度相互匹配。根目录的 `cache/`、`logs/`、`tmp/` 按归档规则跳过，不能据此推断 `knowledge/parse-cache/` 也被跳过。
+
 设置页可通过 `PendingRestoreStatus` 读取待恢复文件及加密状态，并通过 `CancelPendingRestore` 在下次启动前撤销计划；撤销加密恢复时同步清理系统凭据库中的暂存口令。
 
 从 `cmd/data/main.go` 的命令分派或 `cmd/desktop/main.go` 的启动前计划进入，再读 `CreateEncrypted`/`RestoreEncryptedAndImport`、`inspectReader` 与 `ApplyPendingRestore`。测试要覆盖错误口令、损坏归档、路径穿越和恢复中断。

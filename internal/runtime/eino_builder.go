@@ -110,8 +110,8 @@ func (r *Resolver) BuildChildAgent(ctx context.Context, input collaboration.Buil
 		instruction = strings.TrimSpace(instruction + "\n\n" + skillSnapshot.Instruction)
 	}
 
-	childTools, estimateTools := capabilities.executable, capabilities.schemas
-	toolTokens, err := r.contextEngine.EstimateTools(ctx, estimateTools)
+	childTools := capabilities.modelTools()
+	toolTokens, err := r.contextEngine.EstimateTools(ctx, childTools)
 	if err != nil {
 		return collaboration.BuiltAgent{}, fmt.Errorf("估算子 Agent Tool Context 占用失败: %w", err)
 	}

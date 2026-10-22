@@ -71,12 +71,35 @@ export function DiagnoseModel(id) {
 }
 
 /**
+ * DiscoverModels 只读供应商元数据，密钥始终留在 Registry 内部。
+ * @param {string} providerID
+ * @returns {$CancellablePromise<string[]>}
+ */
+export function DiscoverModels(providerID) {
+    return $Call.ByID(245247950, providerID).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType3($result);
+    }));
+}
+
+/**
+ * ProbeModel 由用户明确点击测试触发，不在保存或切换配置时调用。
+ * @param {string} id
+ * @param {string} kind
+ * @returns {$CancellablePromise<$models.ModelDiagnostic>}
+ */
+export function ProbeModel(id, kind) {
+    return $Call.ByID(3997574952, id, kind).then(/** @type {($result: any) => any} */(($result) => {
+        return $$createType2($result);
+    }));
+}
+
+/**
  * State 返回 Provider + Model 完整状态。
  * @returns {$CancellablePromise<$models.ModelSettingsState>}
  */
 export function State() {
     return $Call.ByID(3745089920).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType3($result);
+        return $$createType4($result);
     }));
 }
 
@@ -87,7 +110,7 @@ export function State() {
  */
 export function TestModel(id) {
     return $Call.ByID(1572021496, id).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType4($result);
+        return $$createType5($result);
     }));
 }
 
@@ -110,7 +133,7 @@ export function UpdateModel(id, request) {
  */
 export function UpdateMultimediaConfig(request) {
     return $Call.ByID(1381143563, request).then(/** @type {($result: any) => any} */(($result) => {
-        return $$createType5($result);
+        return $$createType6($result);
     }));
 }
 
@@ -130,6 +153,7 @@ export function UpdateProvider(id, request) {
 const $$createType0 = $models.ModelDTO.createFrom;
 const $$createType1 = $models.ProviderDTO.createFrom;
 const $$createType2 = $models.ModelDiagnostic.createFrom;
-const $$createType3 = $models.ModelSettingsState.createFrom;
-const $$createType4 = $models.TestModelResponse.createFrom;
-const $$createType5 = $models.MultimediaConfigDTO.createFrom;
+const $$createType3 = $Create.Array($Create.Any);
+const $$createType4 = $models.ModelSettingsState.createFrom;
+const $$createType5 = $models.TestModelResponse.createFrom;
+const $$createType6 = $models.MultimediaConfigDTO.createFrom;

@@ -1,6 +1,6 @@
 # Humbert Agent
 
-Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，使用 **Go + Eino** 运行 Agent，使用 **Wails 3 + Vue 3** 提供桌面界面。它把对话、工作区、工具、Skills、MCP 连接器和定时任务放在同一个应用中：用户可以与 Agent 讨论问题，也可以让它读取工作区文件、检索资料、操作网页或按计划执行任务。
+Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，使用 **Go + Eino** 运行 Agent，使用 **Wails 3 + Vue 3** 提供桌面界面。它把对话、工作区、工具、知识库 RAG、Skills、MCP 连接器和定时任务放在同一个应用中：用户可以与 Agent 讨论问题，也可以让它读取工作区文件、检索资料、操作网页或按计划执行任务。
 
 项目名称来自作者喜欢的日本民谣组合「ハンバート ハンバート」。项目仍在持续开发中，欢迎通过 Issue 交流使用问题和改进建议。
 
@@ -13,7 +13,8 @@ Humbert Agent 是一个面向个人使用的本地优先桌面 Agent 助手，�
 | 对话与模型 | 多 Agent、多会话；OpenAI、OpenAI 兼容接口和 Ollama；模型能力配置、连接测试与首次使用引导；流式对话和工具调用展示 |
 | 附件与图片 | 支持图片，以及文本、源码、PDF、DOCX、XLSX、PPTX 等可提取文本的附件；聊天模型有视觉能力时直接处理图片，否则由配置的视觉模型先生成观察文本，再交给聊天模型完成本轮对话 |
 | 上下文与记忆 | 自动压缩长对话、保留最近原始消息、按需回查旧历史；会话派生记忆与用户确认后保存的跨会话个人记忆 |
-| 工作区与工具 | 文件浏览和预览、文件读写与检索、补丁、Git 查询、网页搜索与抓取、浏览器操作；本地命令需显式开启并受权限与沙盒控制 |
+| 工作区与工具 | 文件浏览和预览、文件读写、文本编辑与检索、Git 查询、网页搜索与抓取、浏览器操作；本地命令需显式开启并受权限与沙盒控制 |
+| 知识库 RAG | 文档/图片原件托管、后台导入与重试、结构化父子切分、向量 + BM25 混合检索、可选图片 OCR/描述与精排；按 Agent 绑定知识库并引用来源 |
 | 扩展能力 | 按 Agent 配置内置工具、Skills 和 MCP 连接器；可将显式开放的其他 Agent 作为一次性子 Agent 调用 |
 | 主动任务 | 一次性、间隔、每日、每周及手动任务；聊天中安排提醒；运行记录、重试、通知、审批与执行限额 |
 | 数据管理 | 跨会话正文搜索、工作区文档搜索、会话归档、加密备份与恢复 |
@@ -57,9 +58,9 @@ wails3 dev 会启动桌面应用和前端开发服务。构建桌面程序可运
 
 每个 Agent 可以有多个会话。消息保留用户输入、可见回答、工具调用与结果，便于查看和回溯。聊天支持引用选中的文字或整条消息；“记住”会先让用户编辑确认，再写入可管理的个人记忆。
 
-上传图片时，如果当前聊天模型支持视觉，它直接接收图片并完成本轮对话；否则需要在模型设置中配置一个具备视觉能力的图片模型。图片模型产生受限的观察文本，聊天模型继续负责推理、工具调用和最终回答。普通 UTF-8 文本附件会直接提供给模型；PDF、DOCX、XLSX、PPTX 保留原件和附件编号，Agent 可用 `extract_document` 按需转换成 Markdown，并使用 `offset`、`limit` 分段读取。该工具也可读取 Sandbox 允许的工作区文档，需启用文件工具。单份文档上限 12 MiB，Markdown 提取结果上限 512 KiB；扫描版 PDF 当前没有 OCR。音频、视频尚未形成完整的输入处理链路。
+上传图片时，如果当前聊天模型支持视觉，它直接接收图片并完成本轮对话；否则需要在模型设置中配置一个具备视觉能力的图片模型。图片模型产生受限的观察文本，聊天模型继续负责推理、工具调用和最终回答。普通 UTF-8 文本附件会直接提供给模型；PDF、DOCX、XLSX、PPTX 保留原件和附件编号，Agent 可用 `extract_document` 按需转换成 Markdown，并使用 `offset`、`limit` 分段读取。该工具也可读取 Sandbox 允许的工作区文档，需启用文件工具。单份文档上限 12 MiB，Markdown 提取结果上限 512 KiB；扫描页依赖本地 OCR 支持，缺少支持时明确失败。聊天附件不会调用知识库的图片识别模型。音频、视频尚未形成完整的输入处理链路。
 
-长对话会在需要时追加压缩检查点，并继续保留完整原始记录。构造模型上下文时，使用最近的有效检查点和其后的原始消息；较旧内容可由历史查询工具按需读取。模型的 thinking 会保存用于当前会话展示和排障，但不写进压缩摘要或派生记忆；历史 thinking 不作为一般聊天上下文反复发送。工具调用及结果作为会话事实保留，进入模型上下文时会受到窗口与输出预算约束。
+长对话会在需要时追加压缩检查点，并继续保留完整原始记录。构造模型上下文时，使用最近的有效检查点和其后的原始消息；较旧内容可由历史查询工具按需读取。模型的 thinking 会保存用于当前会话展示和排障，但不写进压缩摘要或派生记忆；历史 thinking 是否回传由模型协议策略决定：代码识别的 MiMo/DeepSeek 模型保留当前窗口内推理，Ollama 保留当前轮，其他模型默认省略。工具调用及结果作为会话事实保留，进入模型上下文时会受到窗口与输出预算约束。
 
 聊天中的「思考完成」等状态由界面根据运行事件显示；展开后看到的思考正文来自模型的原始 `reasoning_content`，并非界面生成。消息按游标分页加载，初次只读取最近 80 条；展开更早消息才继续读取。语言切换不会翻译或改写已经保存的用户消息、模型回答、思考、工具结果和文件内容。模型的原始思考可能使用与界面不同的语言。
 
@@ -76,6 +77,21 @@ Agent 可使用应用管理的工作区，也可指向用户选择的目录。�
 桌面交互使用 `computer windows → screenshot → click/type/key/scroll/drag → 新截图核对`，可选择单个应用窗口或包含菜单、启动器的屏幕。坐标相对本次观察的预览像素，原始截图保存为会话附件。每轮最多 100 次桌面调用，只有一个运行能占用桌面；过期观察、会话串用和取消后的输入都会被拒绝。点击全局“停止桌面任务并接管”可中止运行；macOS/Windows 也支持 Ctrl+Alt+Escape 停止桌面输入。Wayland 的键盘授权属于桌面级，不能宣称按应用隔离。截图会发送给配置的视觉模型，桌面应用的文件和网络行为不受文件沙盒隔离。
 
 浏览器后端使用 Rod，负责 Chrome 启动、协议通信、控件等待和页面输入。桌面输入统一由 RobotGo v1.3.5 执行，包含可逐步取消的 macOS 拖拽；Windows/X11 的窗口尺寸、激活和常规截图也复用库接口。原生适配只保留库未覆盖的窗口身份、权限与遮挡检查、macOS ScreenCaptureKit 单窗口截图，以及 X11 特殊像素格式。Wayland 仍使用同一次系统授权的 RemoteDesktop/ScreenCast Portal，因为 RobotGo 的 libei 后端尚不提供截图能力。审批、会话持久化和视觉观察由 Humbert 统一管理。
+
+### 知识库 RAG
+
+1. 在「设置 → Agent 能力 → 知识库 RAG」启用功能，配置 PostgreSQL、Embedding 模型及**实际输出维度**。Embedding 可选 OpenAI 兼容协议或 Ollama；也可引用已有供应商连接。
+2. 保存并执行初始化，创建缺失的数据库、扩展和表。PostgreSQL 服务与扩展文件需提前安装，连接角色需具备相应权限；应用不会安装数据库软件或创建数据库角色。
+3. 打开左侧「知识库」，创建知识库并绑定允许使用它的 Agent，然后通过原生文件选择器上传文档。页面可查看导入阶段、失败原因、图片识别提示、已发布分块，执行取消、重试、重新索引、原件下载和删除。
+4. 使用检索预览比较 hybrid、semantic、keyword 三种模式。与已绑定的 Agent 对话时，它可按需调用 `knowledge_search` 的 list/search/read，最终回答通过来源链接打开已发布证据预览；原件可在知识库页面下载。
+
+应用启动不要求 PostgreSQL 在线；初始化、文档操作和检索时才连接。默认最多同时导入两篇文档，单次选择及待处理任务最多 16 个。重启不会自动重放调用模型的导入任务，需要用户明确重试。
+
+正文先切分，图片 OCR/描述再形成独立证据块。图片识别默认关闭；开启后可复用「多媒体」中的图片模型，或配置独立视觉/OCR 服务。纯图片、扫描页没有可检索文字时会明确提示，不能把仅保存图片当成已完成识别。可选 PaddleOCR-VL 结构化 PDF 服务会接收 PDF 原件；普通解析默认使用本机解析进程。
+
+内置检索后端检查 PostgreSQL 14+、pgvector 0.6.2+、pg_search 0.20.10+。支持 halfvec 的 pgvector 可使用最多 4000 维 HNSW；旧版 vector HNSW 最多 2000 维。建表、文档向量、查询向量和模型档案共用同一维度；更换模型或维度需核对现有库并重新导入，不能靠修改配置转换已有向量。
+
+知识库与右侧工作区文档搜索分别管理：工作区搜索是可重建的 SQLite 关键词索引，RAG 使用独立的文档版本、PostgreSQL 检索索引和 Agent 授权范围。使用及源码说明见 [RAG 模块](internal/rag/README.md)、[RAG 源码详解](docs/RAG源码详解.md) 和 [独立上传/查询示例](examples/5-rag/README.md)。
 
 ### Skills、MCP 与多 Agent
 
@@ -98,7 +114,10 @@ Vue 3 / Pinia / Wails 桌面界面
                │
 Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
                │
-本地文件、会话元数据 SQLite 与系统凭据库；搜索 SQLite 可重建
+静态业务模块：Knowledge → rag.Service → Eino Loader/Indexer/Retriever
+               │
+本地文件、会话 SQLite、系统凭据库；RAG PostgreSQL 与模型服务
+（工作区/会话搜索 SQLite 可重建）
 ~~~
 
 每次 Turn 都固定当时的 Agent、模型、工作区、工具、Skills、MCP、权限与上下文配置，避免运行中配置变化影响正在执行的调用。主要代码位置：
@@ -109,12 +128,15 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 | internal/app/、internal/services/ | Core 组装与 Wails 服务边界 |
 | internal/runtime/、internal/contextengine/ | Eino Turn 执行、模型路由、上下文构造与压缩 |
 | internal/agents/、internal/sessions/、internal/transcript/ | Agent 配置、会话与追加式记录 |
-| internal/tools/、internal/skills/、internal/mcp/ | 内置工具与扩展能力 |
+| internal/tools/、internal/fileops/、internal/publicweb/ | 工具注册与 Guard；受控文件 I/O；网页地址校验与拨号 |
+| internal/tools/browser/、internal/tools/desktop/ | 浏览器和桌面工具各自的实例、观察及截图生命周期 |
+| internal/skills/、internal/mcp/ | Skill 包维护与运行快照；MCP 配置、目录及协议会话 |
+| internal/knowledge/、internal/rag/、internal/documenttext/ | 桌面知识库业务；导入/检索底座；共享文档解析与来源定位 |
 | internal/tasks/、internal/proactive/ | 任务调度、运行与主动事件 |
 | internal/searchindex/、internal/databackup/ | SQLite 搜索投影与加密备份 |
 | frontend/ | Vue 3 桌面界面与 Wails bindings |
 
-完整的代码学习说明集中在 [项目源码详解](docs/项目源码详解.md)：根据当前源码解读全部非 RAG 后端、前端、桌面入口和数据命令，覆盖设计、调用流程、持久化、并发、权限及失败处理，并附桌面接口、数据字段、函数索引和验证说明。首次阅读可按其中的 [学习路线](docs/项目源码详解.md#reading) 跟踪一次真实聊天。
+[项目源码详解](docs/项目源码详解.md) 解释桌面入口、后端与前端的数据流、生命周期、权限及知识库集成；[RAG 源码详解](docs/RAG源码详解.md) 进一步说明解析、图片增强、分块、版本发布、检索和数据库。两份文档附当前源码索引；开始阅读时可按 [源码学习路线](docs/源码学习路线.md) 分阶段追踪一次聊天、工具调用和资料查询，包含具体入口、阅读目标、练习与注意事项。
 
 ### 默认数据目录
 
@@ -147,6 +169,11 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 ├── workspaces/                     # 应用管理的工作区
 ├── skills/                         # 本地 Skills
 ├── mcp/servers.json                # MCP 连接器配置
+├── knowledge/
+│   ├── state.json                  # RAG 非敏感配置、知识库/Agent 绑定、任务摘要
+│   ├── sources/                    # 知识库原件（不属于会话附件）
+│   ├── images/                     # 解析图片与识别动作缓存
+│   └── parse-cache/                # 解析缓存
 ├── cache/
 │   ├── conversation-search.sqlite # 会话正文搜索索引
 │   ├── document-search.sqlite     # 工作区文档搜索索引
@@ -154,6 +181,8 @@ Go Core：Agent · Session · Runtime/Eino · Context · Tools · Tasks
 ├── tmp/
 └── logs/humbert.log
 ~~~
+
+知识库的已发布文档元数据、分块和检索索引位于配置的 PostgreSQL 中，不在上面的 SQLite 文件里。桌面设置保存到 `knowledge/state.json`，不是直接读取 `rag.example.yaml`。
 
 部分文件会在首次使用对应功能时才创建。session.jsonl 是会话消息与工具事务的事实来源；长会话使用内存缓存或 session.locations.jsonl 的字节位置按需读取，不要求每次构造上下文时把整份 JSONL 加载进内存。会话控制面以 agents/session-metadata.sqlite 为事实来源，该数据库使用 WAL，必须包含在离线备份中。旧版会话的 config.json 被忽略；数据库记录缺失时，只能从 JSONL Header 恢复会话身份，标题会成为“恢复的会话”，归档状态会重置。memory.json、位置索引及 cache/*.sqlite 是可重建的派生数据，两个缓存 SQLite 只用于搜索。browser-profiles 则保存可清除的站点状态，不进入备份。自定义工作区位于用户指定路径，不一定在上述数据目录内。
 
@@ -182,6 +211,8 @@ go run ./cmd/data restore -archive /path/to/humbert-backup.age -passphrase-file 
 
 口令文件须位于数据目录之外，在 Unix 系统上权限为 0600 或更严格。恢复会先校验归档，并把原数据目录保留为 ~/.humbert-agent.before-restore-* 供回退；旧版未加密 ZIP 也可校验和恢复。应用内恢复安排在下次启动执行。
 
+应用归档包含数据根目录内的知识库状态、托管原件和图片；**不包含 PostgreSQL 数据库**，也不包含数据根目录外的自选工作区。恢复完整知识库还需单独备份并恢复对应 PostgreSQL 数据，保持原件、知识库 ID 和已发布版本一致。
+
 ## 开发与验证
 
 ~~~bash
@@ -193,7 +224,7 @@ go build ./cmd/... ./internal/... ./examples/...
 go vet ./...
 ~~~
 
-2026-10-12 按维护者要求移除了仓库中的现有测试代码。此次精简在移除前执行了全量回归与相关包的 race 检查，移除后通过仓库外归档用例再次验证。上面的编译和静态检查不替代行为回归；后续高风险修改仍需针对性验证。不要在 macOS 上以 `go build ./...` 链接 iOS 支架，它由对应平台构建任务组装。
+统一构建检查使用 `./scripts/verify.sh`；已有仓库外回归目录时，执行 `./scripts/verify.sh --checks ../humbert-agent-checks`，同时运行 Go overlay/race、固定 RAG 基准和前端状态/渲染检查。外部用例需要单独保留或版本管理，见 [持续验证说明](docs/持续验证说明.md)。仓库没有恢复后端测试目录；构建、外部回归和真实模型/PostgreSQL/Wails GUI 验收分别记录。macOS 的常规后端构建使用上面的目录范围，iOS 支架由平台任务组装。
 
 frontend/dist/.gitkeep 让未构建前端的干净检出也能通过 Go 的嵌入资源检查。前端通过 Wails Runtime 的 `Call.ByName` 调用服务，正常构建不依赖生成的 JS bindings。修改 Wails 服务签名时，应同步检查 `frontend/src/api/` 的调用参数；如需类型 bindings，可显式执行：
 
@@ -201,4 +232,4 @@ frontend/dist/.gitkeep 让未构建前端的干净检出也能通过 Go 的嵌�
 wails3 generate bindings ./cmd/desktop/main.go -d ./frontend/bindings
 ~~~
 
-工程约束见 [DEVELOPMENT.md](DEVELOPMENT.md)；目前的实现与核心边界见 [项目源码详解](docs/项目源码详解.md)。
+工程约束见 [DEVELOPMENT.md](DEVELOPMENT.md)。扩展业务模块可从 `app.WithModules`、`runtime.CapabilityProvider` 和 [textstats 示例](examples/modules/textstats.go) 入手；新增内置工具仍走 Factory → Registry → Scope → Guard。当前模块职责与数据边界见两份源码详解。

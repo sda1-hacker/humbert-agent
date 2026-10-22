@@ -2,7 +2,7 @@
 
 [架构目录](../../docs/项目源码详解.md) · [App](../app/README.md) · [Usecases](../usecases/README.md)
 
-`enter.go:All` 是桌面依赖注入与注册点。12 个 Service 分别接收 `dependencies.go` 中声明的 Dependencies，方法使用自己的依赖，不再通过整个 `Application` 查找其他模块。
+`enter.go:All` 是桌面依赖注入与注册点。当前 13 个 Service 分别接收 `dependencies.go` 中声明的 Dependencies，方法使用自己的依赖，不再通过整个 `Application` 查找其他模块。
 
 Service 保留现有名称、方法、请求和返回 DTO，负责超时、桌面对话框、DTO 转换和 Wails 事件桥。Agent/会话删除、Skill 引用检查、MCP 凭据提交与失败清理由应用用例复用。会话和文件搜索资源归 `searchindex.Service` 所有，Wails 入口只查询并返回 `updating` 状态。
 
@@ -15,6 +15,8 @@ Service 保留现有名称、方法、请求和返回 DTO，负责超时、桌�
 `SkillService.skillMutationTimeout` 统一远程单包安装、批量安装和更新的等待规则，按配置的下载超时增加必要的收尾时间，不在多个公开方法中重复计算。网络/Git/ZIP 的验证和清理由 Skill Manager 拥有，Wails 服务不增加另一套下载实现。
 
 `ChatService.StartTurn` 返回初始化收据，后续状态经 EventBus 桥接为 `humbert:runtime:event`。已持久化的 `UserMessageID` 用于失败重试去重；流式 delta 不直接写入历史。
+
+`KnowledgeService` 是 [知识库模块](../knowledge/README.md) 的桌面适配器，直接传递 Wails 注入的 Context。上传路径只来自原生文件选择器，下载使用原生保存对话框；设置、导入任务、绑定、检索与来源校验归 Knowledge Manager。知识库 DTO 直接使用领域类型，字段包含 `snake_case`，不能按其他服务的命名习惯擅自转换。服务订阅 `knowledge.changed`、`knowledge.sources` 并桥接给界面，关闭时解除订阅。完整公开接口见 [源码索引](../../docs/项目源码详解.md#appendix)。
 
 新增模块先实现自己的领域服务，再构造薄 Wails 入口，在桌面装配点调用 `All(core, additional...)`。既有 Service 不需要获取新模块的 Store。修改公开 DTO 后，可针对 `./cmd/desktop` 生成绑定，避免扫描不在当前应用依赖图中的开发模块。
 

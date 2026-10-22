@@ -31,14 +31,12 @@ type MCPSource interface {
 // capabilitySet 是本轮冻结的能力装配结果。主/子 Agent 和 Context 查询共用它，
 // 模型工具和预算共用提前准备的定义，Skill 正文继续通过工具结果渐进披露。
 type capabilitySet struct {
-	tools       humberttools.ResolvedTools
-	skills      skills.RuntimeSnapshot
-	mcp         humbertmcp.RuntimeSnapshot
-	scope       humberttools.Scope
-	descriptors []humberttools.Descriptor
-	executable  []einotool.BaseTool
-	schemas     []einotool.BaseTool
-	summaries   []CapabilitySummary
+	tools     humberttools.ResolvedTools
+	skills    skills.RuntimeSnapshot
+	mcp       humbertmcp.RuntimeSnapshot
+	scope     humberttools.Scope
+	resolved  resolvedCapabilities
+	summaries []CapabilitySummary
 }
 
 // capabilityAssembler 只协调已有能力来源，不重写它们的安装、连接或授权规则。
@@ -83,44 +81,29 @@ func (a *capabilityAssembler) resolve(ctx context.Context, profile agents.Agent,
 		return capabilitySet{}, fmt.Errorf("解析 Agent MCP Tool Snapshot 失败: %w", err)
 	}
 
-	// 先在 Humbert Capability 层完成所有模型侧 Tool Name 冲突检查，再做 Schema Token
-	// 估算。Skill 的固定工具名 `skill`，因此它也必须参与同一套 fail-closed
-	// 规则，不能依赖“Builtin 目前恰好没有同名 Tool”的隐含前提。
-	descriptors, err := mergeRuntimeDescriptors(resolvedTools.Descriptors, mcpSnapshot.Descriptors)
-	if err != nil {
+	var resolved resolvedCapabilities
+	if err := resolved.add(ctx, resolvedTools.Descriptors, resolvedTools.Tools); err != nil {
+		return capabilitySet{}, err
+	}
+	if err := resolved.add(ctx, mcpSnapshot.Descriptors, mcpSnapshot.Tools); err != nil {
 		return capabilitySet{}, err
 	}
 	if skillSnapshot.Enabled() {
-		descriptors, err = mergeRuntimeDescriptors(descriptors, []humberttools.Descriptor{{Name: skills.SkillToolName, Risk: humberttools.RiskRead}})
-		if err != nil {
+		if err := resolved.add(ctx, []humberttools.Descriptor{{Name: skills.SkillToolName, Risk: humberttools.RiskRead}}, []einotool.BaseTool{skillSnapshot.ToolDefinition()}); err != nil {
 			return capabilitySet{}, err
 		}
 	}
-
-	// Skill 不属于全局 Tool Registry，执行与预算都在本轮初始化时包含它的定义。
-	estimateTools := mergeRuntimeTools(resolvedTools.Tools, mcpSnapshot.Tools)
-	if skillSnapshot.Enabled() {
-		estimateTools = append(estimateTools, skillSnapshot.ToolDefinition())
-	}
-
 	extraDescriptors, extraTools, summaries, err := a.extensions.resolve(ctx, profile.ID, toolScope, bestEffortMCP, a.tools)
 	if err != nil {
 		return capabilitySet{}, err
 	}
-	descriptors, err = mergeRuntimeDescriptors(descriptors, extraDescriptors)
-	if err != nil {
+	if err := resolved.add(ctx, extraDescriptors, extraTools); err != nil {
 		return capabilitySet{}, err
-	}
-	estimateTools = mergeRuntimeTools(estimateTools, extraTools)
-	executable := mergeRuntimeTools(mergeRuntimeTools(resolvedTools.Tools, mcpSnapshot.Tools), extraTools)
-	// Skills 与其余工具一起提前绑定；正文通过 ToolResult 返回，不在运行中增加定义。
-	if skillSnapshot.Enabled() {
-		executable = append(executable, skillSnapshot.ToolDefinition())
 	}
 
 	return capabilitySet{
 		tools: resolvedTools, skills: skillSnapshot, mcp: mcpSnapshot, scope: toolScope,
-		descriptors: descriptors, executable: executable, schemas: estimateTools, summaries: summaries,
+		resolved: resolved, summaries: summaries,
 	}, nil
 }
 
@@ -152,9 +135,9 @@ func (a *capabilityAssembler) resolveMCP(ctx context.Context, selection []humber
 // 主 Agent Manifest 与子 Agent 能力校验共用它，新增来源只需进入 resolve 的集合，
 // 不必再修改另一份 Builtin/MCP/Skill 名称拼装分支。
 func (c capabilitySet) toolNames() []string {
-	names := make([]string, 0, len(c.descriptors))
-	for _, descriptor := range c.descriptors {
-		names = append(names, descriptor.Name)
+	names := make([]string, 0, len(c.resolved))
+	for _, capability := range c.resolved {
+		names = append(names, capability.descriptor.Name)
 	}
 	return uniqueSortedStrings(names)
 }
@@ -192,30 +175,61 @@ func mcpSelectionMap(values []humbertmcp.ToolSelection) map[string][]string {
 	return result
 }
 
-// mergeRuntimeDescriptors 合并不同 Tool Source 的模型侧名称，并在任何碰撞时 fail-closed。
-// MCP Tool 使用 mcp_<serverKey>_ 前缀，但仍不依赖命名约定来假设“永远不会冲突”。
-func mergeRuntimeDescriptors(base []humberttools.Descriptor, extra []humberttools.Descriptor) ([]humberttools.Descriptor, error) {
-	result := make([]humberttools.Descriptor, 0, len(base)+len(extra))
-	seen := make(map[string]struct{}, len(base)+len(extra))
-	for _, values := range [][]humberttools.Descriptor{base, extra} {
-		for _, descriptor := range values {
-			if _, exists := seen[descriptor.Name]; exists {
-				return nil, fmt.Errorf("Runtime Tool Name 冲突: %s", descriptor.Name)
-			}
-			seen[descriptor.Name] = struct{}{}
-			result = append(result, descriptor)
-		}
+// resolvedCapabilities 是最终工具集合；名称、Schema 预算和实际执行均从这里投影。
+// 不依赖不同来源的 slice 顺序相同，先按 Schema 名称关联并拒绝缺项与碰撞。
+type resolvedCapability struct {
+	descriptor humberttools.Descriptor
+	tool       einotool.BaseTool
+}
+type resolvedCapabilities []resolvedCapability
+
+func (r *resolvedCapabilities) add(ctx context.Context, descriptors []humberttools.Descriptor, tools []einotool.BaseTool) error {
+	if len(descriptors) != len(tools) {
+		return errors.New("Runtime 工具描述与定义数量不一致")
 	}
-	return result, nil
+	seen := make(map[string]bool, len(*r)+len(descriptors))
+	for _, item := range *r {
+		seen[item.descriptor.Name] = true
+	}
+	definitions := make(map[string]einotool.BaseTool, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			return errors.New("Runtime 工具定义不能为空")
+		}
+		info, err := tool.Info(ctx)
+		if err != nil {
+			return err
+		}
+		if info == nil || info.Name == "" {
+			return errors.New("Runtime 工具 Schema 缺少名称")
+		}
+		if definitions[info.Name] != nil {
+			return fmt.Errorf("Runtime Tool Name 冲突: %s", info.Name)
+		}
+		definitions[info.Name] = tool
+	}
+	added := make(resolvedCapabilities, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		if seen[descriptor.Name] {
+			return fmt.Errorf("Runtime Tool Name 冲突: %s", descriptor.Name)
+		}
+		tool := definitions[descriptor.Name]
+		if tool == nil {
+			return fmt.Errorf("Runtime 工具 %q 缺少对应 Schema", descriptor.Name)
+		}
+		seen[descriptor.Name] = true
+		added = append(added, resolvedCapability{descriptor: descriptor, tool: tool})
+	}
+	*r = append(*r, added...)
+	return nil
 }
 
-// mergeRuntimeTools 生成新的 Tool slice，避免把 MCP Tool append 到 Registry Snapshot 的
-// backing array。当前 Turn 创建后两个来源都保持冻结。
-func mergeRuntimeTools(base []einotool.BaseTool, extra []einotool.BaseTool) []einotool.BaseTool {
-	result := make([]einotool.BaseTool, 0, len(base)+len(extra))
-	result = append(result, base...)
-	result = append(result, extra...)
-	return result
+func (c capabilitySet) modelTools() []einotool.BaseTool {
+	tools := make([]einotool.BaseTool, 0, len(c.resolved))
+	for _, item := range c.resolved {
+		tools = append(tools, item.tool)
+	}
+	return tools
 }
 
 // toolResultMaxCharsForContext 给单个 ToolResult 设置与模型窗口相关的直接注入上限。

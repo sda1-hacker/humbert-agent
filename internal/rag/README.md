@@ -1,127 +1,81 @@
 # RAG 模块
 
-对业务调用方提供已经组合好的 `rag.Service`，包含文档导入、检索、分块读取、取消和删除。组件开发者可以直接组合 Eino Indexer、Retriever 和 Transformer。核心处理流程可独立运行；桌面与 Agent 通过 `internal/knowledge` 业务模块接入。
+`rag.Service` 提供导入、检索、原件与文档状态管理。桌面功能由 [internal/knowledge](../knowledge/README.md) 接入；独立实验使用 [上传/查询示例](../../examples/5-rag/README.md)。完整实现说明见 [RAG 源码详解](../../docs/RAG源码详解.md)。
 
-## 包的职责
+## 职责与调用方向
 
 | 位置 | 职责 |
 | --- | --- |
-| `rag.go`、`service.go` | 组件注入、业务请求类型与检索入口 |
-| `ingestion.go`、`ingestion_document.go`、`ingestion_batch.go` | 导入收尾、原件与文档阶段、切分批次 |
-| `indexing.go`、`persistence.go`、`validation.go` | 文档批次、版本、原文及父子块的业务契约 |
-| `published.go` | 外部索引命中的版本校验与正文回查 |
-| `indexer/`、`retriever/` | 实现或组合 Eino 原生组件 |
-| `chunker/` | 切分算法与 Eino Transformer |
-| `loader.go`、`embedding/`、`rerank/` | 文档解析、Embedding 和精排实现 |
-| `examples/5-rag/main.go` | 当前 PostgreSQL、Tabula 和模型的具体组装 |
+| `rag.go`、`service.go` | 依赖校验、资源生命周期、请求/批次类型及 Search |
+| `ingestion.go` | 导入占用、版本预留、阶段推进、取消与失败回写 |
+| `ingestion_document.go`、`ingestion_batch.go` | 托管原件/重试、单文档处理、普通/父子批次 |
+| `ingest.go`、`indexing.go` | 并发与完整输入预算、版本 ID、Eino Store、发布与补偿 |
+| `source.go`、`persistence.go`、`published.go` | 原件、文档状态、权威分块、命中版本校验 |
+| `loader.go`、`loader_images.go` | 本地 Eino Loader、共享解析器、图片资产落盘 |
+| `image_pipeline.go`、`image_index.go` | 按图/动作识别和缓存、独立 OCR/描述块、状态与重试 |
+| `chunker/` | 共用 Markdown AST/Layout 的结构切分与 Eino Transformer |
+| `config/` | 唯一参数定义、默认值、校验、YAML/环境变量与页面投影 |
+| `embedding/` | OpenAI 兼容/Ollama 的 eino-ext 适配、预算、重试与模型档案 |
+| `indexer/`、`retriever/` | PG 文档/索引、向量/BM25、通用 Multi/Hybrid |
+| `retrieval/`、`rerank/`、`search/` | 检索文本与结果、RRF、精排、父块扩展和预算选择 |
 
-核心包不导入 PostgreSQL、Tabula 或具体模型 Provider。没有 `rag.NewPostgres`、`rag.RAG` 或第二层 `application.Service`。增加新后端时，在调用方替换 Eino 组件；只有确实缺少组件时，才添加相应适配器。
+Service 的编排通过 Eino Loader/Indexer/Retriever 和显式文档业务接口组合；PG 连接及模型选择由装配方负责。内置 Loader 位于 rag 根包，复用 `internal/documenttext`；不是一个完全不依赖具体解析器的独立 Go 包。新增后端时替换 Eino 组件和所需文档能力，见 [BACKENDS.md](BACKENDS.md)。
 
-## 默认执行流程
+## 执行流程
 
 ```mermaid
 flowchart LR
-    File[真实文档] --> Load[Loader 解析]
-    Load --> Split[规范化与切分]
-    Split --> Index[Eino Indexer]
-    Index --> Publish[文档版本发布]
-    Query[问题] --> Recall[Eino Retriever]
-    Recall --> Visible[已发布版本校验]
-    Visible --> Rank[可选精排]
-    Rank --> Parent[可选父块扩展]
-    Parent --> Result[正文与引用]
+  File[托管原件] --> Parse[Loader / documenttext]
+  Parse --> Split[Layout 结构切分]
+  Split --> Images[可选图片 OCR / 描述独立块]
+  Images --> Embed[完整输入预算与 Embedding]
+  Embed --> Publish[版本校验后发布]
+  Query[查询] --> Recall[向量 / BM25 / Hybrid]
+  Publish --> Recall
+  Recall --> Check[权威分块与版本校验]
+  Check --> Rank[可选精排]
+  Rank --> Context[父块扩展与预算选择]
+  Context --> Evidence[证据 / 来源 / 诊断]
 ```
 
-- 普通模式索引普通块；父子模式只索引子块，父块留在文档库供上下文扩展。
-- 完整 Markdown 来自 Loader，不能拼接重叠分块重建原文。
-- `IndexDocuments` 将标题、面包屑和正文组成统一检索文本，`rag_raw_content` 保留原始子块正文。
-- 版本号在解析前通过显式 `Lifecycle` 预留。分块 ID 包含版本，失败的新索引不会覆盖旧版。
-- 外部索引全部成功后，由 `Publisher` 发布原文和父子块；`PublishedChunks` 过滤旧版、未发布及已删除命中。
-- PostgreSQL 原子 Indexer 通过 `WithIngestionBatch` 在同一事务内保存原文、父子块及两路索引，`Publisher` 留空。
-- Hybrid 按 Eino 返回顺序做 RRF，默认向量/关键词权重为 0.7/0.3，K 为 60。无分数的原生组件也可以参与融合。
-- 返回的 `Content` 保留命中子块，`ContextContent` 是扩展上下文；父块扩展不改变人工标注的分块身份。
-- 当前 `Service.Search` 不执行问题改写或 MMR。MMR 算法保留在独立 `Engine.Rerank` 中，统一流程使用 `RerankCandidates` 保留候选池，后续接入须由最终选择阶段协调父块去重与数量。
+父块只供上下文，普通块/子块以及成功的图片 OCR/描述块参与索引。普通正文在图片识别前已确定，识别文本不会覆盖原件。主表保存原件引用和管理状态，正文由分块承载；完整 Markdown 只在解析/处理期间使用，不拼接重叠块重建全文。
 
-## 共享实现与阅读顺序
+`Service.Search` 返回证据，不调用回答模型；桌面 Agent 通过 `knowledge_search` 读取证据后继续回答。统一 Search 不执行 Query Rewrite 或 MMR；MMR 仅在独立 `rerank.Engine.Rerank` 中使用。
 
-分块的普通调用与诊断调用共用 `chunker/strategy.go` 中的一条策略循环，算法通过直接调用选择。`SplitterConfig.Clone()` 统一复制可变配置，`retrieval/documents.go` 统一定义元数据键并提供顶层复制。索引文本和精排文本共用 `searchcontent.BuildText()`，精排模型不可用或返回异常时使用同一套回退处理。
+## 业务 API
 
-建议先阅读 `rag.go` 的组件依赖，再看 `service.go` 的 `Ingest` 和 `Search`。需要调整分块时进入 `chunker/strategy.go`，调整混合召回时进入 `retriever/hybrid.go`，数据库实现集中在对应的 `postgres` 子包。代码注释说明当前行为和关键约定，不再保留阶段性实现计划。
-
-## 业务调用
-
-调用方初始化一次服务，此后使用业务参数调用：
+以下假设 `service` 已由装配方创建；单次请求不覆盖模型、数据库或任意 Eino Option：
 
 ```go
-// engine 已由启动代码注入 Loader、Indexer、Retriever 和所需文档能力。
-ingested, err := engine.Ingest(ctx, rag.IngestRequest{
+result, err := service.Ingest(ctx, rag.IngestRequest{
     CollectionID: "example",
-    DocumentID:   "uploaded-document", // 重导入时保持相同 ID。
-    Source:       document.Source{URI: "/绝对路径/你的文档.pdf"},
-    Splitter:     chunker.DefaultConfig(),
+    DocumentID: "stable-document-id",
+    Source: document.Source{URI: "/path/to/document.pdf"},
+    Splitter: cfg.Chunking.Splitter,
+    ParentChild: cfg.Chunking.ParentChild,
+    ParentChunkSize: cfg.Chunking.ParentChunkSize,
+    ChildChunkSize: cfg.Chunking.ChildChunkSize,
 })
-
-response, err := engine.Search(ctx, rag.SearchRequest{
-    CollectionID: "example",
-    Query:        "文档中的问题",
-    Mode:         "hybrid", // semantic / keyword 查看单路效果。
-    Limit:        5,
+response, err := service.Search(ctx, rag.SearchRequest{
+    CollectionID: "example", Query: "文档中的问题", Mode: "hybrid", Limit: 5,
 })
 ```
 
-业务 API 不接受任意 Eino Option，也不允许临时替换 Embedding、索引范围或过滤语法。模型、召回阈值、候选数量和融合策略在组装阶段配置。原生组件的 `Store`、`Retrieve` 仍保留 Eino Option，供内部开发和实验使用。空正文导入返回错误。
+其它入口包括 `GetDocument`、`ListChunks`、`RetryDocument`、`RecoverDocuments`、`CancelDocument`、`DeleteDocument`、`ReadDocumentImage`。重试需要托管原件和状态存储；取消只作废未发布版本，旧发布版本仍可检索。`Shutdown(ctx)` 取消在途操作并等待失败回写/补偿，超时只结束等待；`Close()` 等待完整关闭且可重复调用。
 
-可选的文档操作：
+## 配置与数据库
 
-```go
-chunks, err := engine.ListChunks(ctx, "example", "uploaded-document")
-err = engine.CancelDocument(ctx, "example", "uploaded-document")
-err = engine.DeleteDocument(ctx, "example", "uploaded-document")
-engine.Close() // 多次调用也只释放一次资源。
-```
-
-取消只作废尚未发布的版本，上一版仍可检索。删除使权威文档失效；外部索引残留由版本回查隐藏，物理清理由所选后端承担。具体组件组合见 [BACKENDS.md](BACKENDS.md)。
-
-## 真实文件 example
-
-完整示例见 [examples/5-rag/README.md](../../examples/5-rag/README.md)。它导入真实文件、打印分块，先输入问题并人工标注相关子块，再对比 hybrid、semantic、keyword 的 Recall 和 Precision。
-
-```bash
-export OPENAI_API_KEY='你的密钥'
-export OPEN_BASE_URL='你的 OpenAI 兼容 API 地址'
-export RAG_EMBEDDING_MODEL='服务实际支持且输出 1024 维的模型名'
-go run ./examples/5-rag /绝对路径/你的文档.pdf
-```
-
-全部示例代码集中在 [examples/5-rag/main.go](../../examples/5-rag/main.go)，调参修改其中的 `exampleConfig`，包括解析、分块、召回、精排和父块扩展的中文说明。数据库地址可通过 `RAG_DATABASE_URL` 设置；数据库需提前创建，示例自动创建扩展和表，连接用户需具备对应权限。运行时分别打印配置开关与实际执行诊断。
-
-当前 PostgreSQL 适配器要求 PostgreSQL 15+、pgvector 0.7+、pg_search 0.25+，schema 使用 `halfvec(1024)`。模型实际输出必须是 1024 维；`Dimensions=0` 仅省略请求参数。通用 Service 没有维度限制。
-
-| 示例参数 | 含义 |
-| --- | --- |
-| `cfg.Search.FinalTopK` | 最终返回条数 |
-| `cfg.Hybrid.ChannelTopK` | 每路召回候选数 |
-| `cfg.Hybrid.TopK` | 融合候选数，同时设置 Service 的 RecallTopK |
-| `cfg.Vector.ScoreThreshold` / `cfg.Keyword.ScoreThreshold` | 两路原始召回阈值 |
-| `cfg.Hybrid.RRF` | 融合权重和 K |
-| `IngestRequest.Splitter` | 切分策略、大小和重叠等 |
-
-评测必须先标注再检索，并按最终结果中去重后的子块证据计算：
-
-- `Recall = 找回的相关子块数 / 全部标注的相关子块数`
-- `Precision = 找回的相关子块数 / 实际返回的子块证据数`
-
-这里的“准确率”指检索 Precision，示例一次评估一个问题。同父块合并后的 `Evidence` 也参与评测，父块正文中未经召回的其他子块不自动算命中；最终上下文条数可能少于子块证据数。调整切分参数后分块边界会改变，需要重新标注。回答生成、异步任务和用户知识库管理属于后续业务层。
+- `config.Default()` 是基础预设；`Load(path)` 使用默认值 < YAML < `HUMBERT_RAG_*`，`FromValues` 不读取环境变量。
+- 桌面设置写入 `knowledge/state.json`，秘密交给系统凭据库，原件和图片目录由应用固定。
+- 当前上传/查询示例读取 `examples/5-rag/example.go` 的固定 Config，不读取 `rag.example.yaml` 或位置参数；迁移 CLI 读取 YAML。这是不同入口。
+- 内置 PG 后端检查 PostgreSQL 14+、pgvector 0.6.2+、pg_search 0.20.10+。halfvec HNSW 最多 4000 维；旧 vector HNSW 最多 2000 维。输出维度由 `embedding.dimensions` 统一提供，没有固定 1024 维。
+- collection profile 固定供应商、地址、模型、版本、维度和检索文本规则；同维度也不能随意混用不同模型。
 
 ## 验证
 
 ```bash
-go build ./internal/rag/... ./examples/5-rag
-go vet ./internal/rag/... ./examples/5-rag
+go build ./internal/rag/... ./internal/knowledge/... ./examples/5-rag/... ./cmd/rag-migrate
+go vet ./internal/rag/... ./internal/knowledge/... ./examples/5-rag/... ./cmd/rag-migrate
 ```
 
-现有 Go 测试文件已于 2026-10-12 按维护者要求移出仓库，本次使用仓库外归档用例再次验证。归档回归覆盖原生组件、独立索引发布失败、版本过滤、父子块引用、超时及降级诊断；没有配置专用 PostgreSQL 测试地址，5 个真实数据库用例跳过。上面的编译和静态检查不能代替这些行为验证。
-
-组件边界采用 [Eino Indexer](https://github.com/cloudwego/eino/blob/main/components/indexer/interface.go) 和 [Eino Retriever](https://github.com/cloudwego/eino/blob/main/components/retriever/interface.go)。切分参考 [WeKnora](https://github.com/Tencent/WeKnora/blob/main/internal/infrastructure/chunker/strategy.go) 的结构判断、校验回退和父子块处理，没有引入后端注册器。
-
-导入主入口保留版本预留、阶段推进、取消与失败持久化的所有权；`resolveIngestSource` 处理托管原件与重试，`ingestDocument` 处理一份解析结果，`splitIngestDocument` 统一两种切分策略。索引发布与补偿仍由 `indexing.go` 执行，不增加新的编排框架。
+固定回归通过仓库根的 `scripts/verify.sh --checks ../humbert-agent-checks` 加载，包含导入基准、失败收尾和相关并发场景。外部用例需单独保留；真实 PG、模型和 GUI 验收按 [持续验证说明](../../docs/持续验证说明.md) 执行，不能把构建或模拟回归当作已完成真实联调。

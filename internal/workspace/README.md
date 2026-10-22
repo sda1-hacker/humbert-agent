@@ -1,6 +1,6 @@
 # Workspace：Agent 工作目录与安全文件句柄
 
-[总目录](../../docs/项目源码详解.md) · [Sandbox](../sandbox/README.md) · [工作区视图](../workspaceview/README.md)
+[总目录](../../docs/项目源码详解.md) · [Sandbox](../sandbox/README.md) · [工作区查询用例](../usecases/README.md)
 
 `Manager` 支持应用管理的 Managed Workspace 和用户选择的 Custom Workspace。`Validate`/`Resolve` 规范化目录并检查归属；Session 创建时把解析后的路径冻结为 CWD。`OpenRoot` 提供受控文件句柄，`NormalizeRelativePath` 防止把模型传入的相对路径直接拼接成越界绝对路径。只有 Managed Workspace 属于应用，可以随 Agent 删除；Custom Workspace 不会被级联物理删除。
 

@@ -206,7 +206,7 @@ func (b *Backend) GlobInfo(ctx context.Context, req *einofs.GlobInfoRequest) ([]
 	}
 	defer target.Close()
 	var result []einofs.FileInfo
-	err = walkRoot(ctx, target, func(rel string, entry fs.DirEntry) error {
+	err = walkRoot(ctx, target, b.limits.MaxSearchEntries, func(rel string, entry fs.DirEntry) error {
 		candidate := entry.Name()
 		if strings.Contains(req.Pattern, "/") {
 			candidate, _ = filepath.Rel(target.relative, rel)
@@ -220,8 +220,8 @@ func (b *Backend) GlobInfo(ctx context.Context, req *einofs.GlobInfoRequest) ([]
 			return err
 		}
 		result = append(result, fileInfo(displayRootChild(target, rel), info))
-		if len(result) > 500 {
-			return errors.New("匹配超过 500 项，请缩小搜索范围")
+		if len(result) > b.limits.MaxSearchResults {
+			return fmt.Errorf("匹配超过 %d 项，请缩小搜索范围", b.limits.MaxSearchResults)
 		}
 		return nil
 	})
@@ -253,7 +253,7 @@ func (b *Backend) GrepRaw(ctx context.Context, req *einofs.GrepRequest) ([]einof
 	}
 	defer target.Close()
 	var result []einofs.GrepMatch
-	err = walkRoot(ctx, target, func(rel string, entry fs.DirEntry) error {
+	err = walkRoot(ctx, target, b.limits.MaxSearchEntries, func(rel string, entry fs.DirEntry) error {
 		if entry.IsDir() || !entry.Type().IsRegular() {
 			return nil
 		}
@@ -284,7 +284,7 @@ func (b *Backend) GrepRaw(ctx context.Context, req *einofs.GrepRequest) ([]einof
 		lines := strings.Split(content, "\n")
 		selected := make(map[int]bool)
 		if req.EnableMultiline {
-			for _, match := range re.FindAllStringIndex(content, 501) {
+			for _, match := range re.FindAllStringIndex(content, b.limits.MaxSearchResults+1) {
 				a := strings.Count(content[:match[0]], "\n")
 				z := a + strings.Count(content[match[0]:match[1]], "\n")
 				for i := max(0, a-req.BeforeLines); i <= min(len(lines)-1, z+req.AfterLines); i++ {
@@ -304,12 +304,12 @@ func (b *Backend) GrepRaw(ctx context.Context, req *einofs.GrepRequest) ([]einof
 			if !selected[i] {
 				continue
 			}
-			if len([]rune(line)) > 2000 {
-				line = string([]rune(line)[:2000]) + "…"
+			if len([]rune(line)) > b.limits.MaxSearchLineChars {
+				line = string([]rune(line)[:b.limits.MaxSearchLineChars]) + "…"
 			}
 			result = append(result, einofs.GrepMatch{Path: displayRootChild(target, rel), Line: i + 1, Content: line})
-			if len(result) > 500 {
-				return errors.New("搜索超过 500 行，请缩小范围")
+			if len(result) > b.limits.MaxSearchResults {
+				return fmt.Errorf("搜索超过 %d 行，请缩小范围", b.limits.MaxSearchResults)
 			}
 		}
 		return ctx.Err()

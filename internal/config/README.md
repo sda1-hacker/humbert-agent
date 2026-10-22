@@ -18,3 +18,5 @@ flowchart LR
 `tools.go` 的 `checkToolBounds` 按声明顺序检查范围，保持原先的上限、首个错误和错误文本；工具默认值集中注册。读取仍显式使用原有 Viper 键，环境变量入口、`shell_enabled` 开关与命令环境白名单保持原样。
 
 阅读 `config.go:Load` → `loadFromHome` → `resolvePaths` → `normalize/validate`，再按设置类型看 `SavePermissionConfig` 或 `SaveSandboxAndShellConfig`。UI 上的动态 Provider 设置请去 `models` 包追踪。
+
+文件搜索限制由 `tools.files.max_search_results`（默认 500，最大 10000）、`max_search_entries`（默认 20000，最大 100000）和 `max_search_line_chars`（默认 2000，最大 10000）配置，均须大于零。读取大小、分页和写入大小继续使用各自原有参数。

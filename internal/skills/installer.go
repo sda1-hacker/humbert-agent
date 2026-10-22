@@ -71,86 +71,11 @@ func (m *Manager) installValidatedPackage(
 	sourcePackage Package,
 	source SourceInfo,
 ) (Info, error) {
-	name := sourcePackage.Info.Name
-	if name == "" {
-		return Info{}, fmt.Errorf("%w: 待安装 Skill 缺少 canonical name", ErrInvalidSkill)
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// 在修改 Package 前先读取来源文档。如果用户手工破坏了内部来源文件，安装会明确失败，
-	// 而不是先提交目录再发现无法记录可更新来源。
-	sources, err := m.readSourcesLocked(ctx)
+	installed, err := m.installValidatedPackages(ctx, []validatedInstallRequest{{Package: sourcePackage, Source: source}})
 	if err != nil {
 		return Info{}, err
 	}
-
-	target := filepath.Join(m.rootDir, name)
-	if _, err := os.Lstat(target); err == nil {
-		return Info{}, fmt.Errorf("%w: %s", ErrSkillExists, name)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return Info{}, fmt.Errorf("检查 Skill 安装目标失败: %w", err)
-	}
-
-	tempDir := filepath.Join(m.rootDir, ".humbert-install-"+uuid.NewString())
-	if err := os.Mkdir(tempDir, 0o700); err != nil {
-		return Info{}, fmt.Errorf("创建 Skill 安装临时目录失败: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.RemoveAll(tempDir)
-		}
-	}()
-
-	if err := copyPackageTree(ctx, sourcePackage.Info.RootDir, tempDir); err != nil {
-		return Info{}, fmt.Errorf("复制 Skill Package 失败: %w", err)
-	}
-
-	// 临时目录 basename 与 Skill name 不同，因此先用宽松模式复核内容身份；rename 后再做
-	// 严格目录名检查。两次验证能够发现复制过程中的源文件变化或短写。
-	copied, err := inspectPackage(ctx, tempDir, m.config, false)
-	if err != nil {
-		return Info{}, fmt.Errorf("复核已复制 Skill Package 失败: %w", err)
-	}
-	if copied.Info.Name != name || copied.Info.Identity != sourcePackage.Info.Identity {
-		return Info{}, fmt.Errorf("%w: Skill 源目录在安装过程中发生变化", ErrSkillSnapshotStale)
-	}
-
-	if err := os.Rename(tempDir, target); err != nil {
-		return Info{}, fmt.Errorf("提交 Skill 安装目录失败: %w", err)
-	}
-	committed = true
-
-	installed, err := inspectPackage(ctx, target, m.config, true)
-	if err != nil {
-		_ = os.RemoveAll(target)
-		return Info{}, fmt.Errorf("验证已安装 Skill 失败: %w", err)
-	}
-
-	source.Identity = installed.Info.Identity
-	if source.InstalledAt.IsZero() {
-		source.InstalledAt = time.Now().UTC()
-	}
-	if source.UpdatedAt.IsZero() {
-		source.UpdatedAt = source.InstalledAt
-	}
-	source, err = normalizeStoredSourceInfo(source)
-	if err != nil {
-		_ = os.RemoveAll(target)
-		return Info{}, fmt.Errorf("准备 Skill 来源记录失败: %w", err)
-	}
-	sources.Skills[name] = source
-	if err := m.writeSourcesLocked(ctx, sources); err != nil {
-		removeErr := os.RemoveAll(target)
-		if removeErr != nil {
-			return Info{}, errors.Join(fmt.Errorf("Skill 来源记录保存失败: %w", err), fmt.Errorf("回滚已安装 Skill 失败: %w", removeErr))
-		}
-		return Info{}, fmt.Errorf("Skill 来源记录保存失败，安装已回滚: %w", err)
-	}
-
-	return installed.Info, nil
+	return installed[0], nil
 }
 
 // Remove 删除一个已安装 Skill Package。
@@ -328,31 +253,26 @@ type validatedInstallRequest struct {
 
 // installValidatedPackages 原子提交一组已经验证的 Skill Package。
 //
-// 所有目标、临时副本、Identity 与来源记录都会先完成校验，再统一切换到 Skills Root。
+// 临时副本和 Identity 在锁外验证；锁内核对目标后提交目录并保存来源记录。
 // 任一步失败都会回滚本批次已经提交的目录，避免多选安装留下“前几个成功、后几个失败”的
 // 半完成状态。
-func (m *Manager) installValidatedPackages(
-	ctx context.Context,
-	requests []validatedInstallRequest,
-) ([]Info, error) {
+func (m *Manager) installValidatedPackages(ctx context.Context, requests []validatedInstallRequest) ([]Info, error) {
 	if len(requests) == 0 {
 		return nil, errors.New("没有选择要安装的 Skill")
 	}
 	if ctx == nil {
 		return nil, errors.New("context.Context 不能为空")
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	sources, err := m.readSourcesLocked(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	names := make(map[string]struct{}, len(requests))
+	staged := make([]*packageStage, 0, len(requests))
+	defer func() {
+		for _, item := range staged {
+			item.cleanup()
+		}
+	}()
+	// 准备阶段不修改已安装目录，也不阻塞目录读取与其他 Skill 操作。
 	for _, request := range requests {
-		name := strings.TrimSpace(request.Package.Info.Name)
+		name := request.Package.Info.Name
 		if name == "" {
 			return nil, fmt.Errorf("%w: 待安装 Skill 缺少 canonical name", ErrInvalidSkill)
 		}
@@ -360,95 +280,59 @@ func (m *Manager) installValidatedPackages(
 			return nil, fmt.Errorf("%w: 本次安装包含重复 Skill %q", ErrInvalidSkill, name)
 		}
 		names[name] = struct{}{}
-		target := filepath.Join(m.rootDir, name)
-		if _, statErr := os.Lstat(target); statErr == nil {
-			return nil, fmt.Errorf("%w: %s", ErrSkillExists, name)
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			return nil, fmt.Errorf("检查 Skill %q 安装目标失败: %w", name, statErr)
-		}
-	}
-
-	type stagedInstall struct {
-		request validatedInstallRequest
-		tempDir string
-		target  string
-	}
-	staged := make([]stagedInstall, 0, len(requests))
-	cleanupTemps := func() {
-		for _, item := range staged {
-			if item.tempDir != "" {
-				_ = os.RemoveAll(item.tempDir)
-			}
-		}
-	}
-	defer cleanupTemps()
-
-	for _, request := range requests {
-		name := request.Package.Info.Name
-		tempDir := filepath.Join(m.rootDir, ".humbert-install-"+uuid.NewString())
-		if err := os.Mkdir(tempDir, 0o700); err != nil {
-			return nil, fmt.Errorf("创建 Skill %q 安装临时目录失败: %w", name, err)
-		}
-		item := stagedInstall{request: request, tempDir: tempDir, target: filepath.Join(m.rootDir, name)}
-		staged = append(staged, item)
-
-		if err := copyPackageTree(ctx, request.Package.Info.RootDir, tempDir); err != nil {
-			return nil, fmt.Errorf("复制 Skill %q 失败: %w", name, err)
-		}
-		copied, err := inspectPackage(ctx, tempDir, m.config, false)
+		item, err := m.preparePackage(ctx, request.Package)
 		if err != nil {
-			return nil, fmt.Errorf("复核 Skill %q 临时副本失败: %w", name, err)
+			return nil, err
 		}
-		if copied.Info.Name != name || copied.Info.Identity != request.Package.Info.Identity {
-			return nil, fmt.Errorf("%w: Skill %q 来源在安装过程中发生变化", ErrSkillSnapshotStale, name)
+		staged = append(staged, item)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sources, err := m.readSourcesLocked(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, request := range requests {
+		target := filepath.Join(m.rootDir, request.Package.Info.Name)
+		if _, err := os.Lstat(target); err == nil {
+			return nil, fmt.Errorf("%w: %s", ErrSkillExists, request.Package.Info.Name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("检查 Skill 安装目标失败: %w", err)
 		}
 	}
-
-	committed := make([]string, 0, len(staged))
 	rollback := func(cause error) error {
-		errorsList := []error{cause}
-		for index := len(committed) - 1; index >= 0; index-- {
-			if removeErr := os.RemoveAll(committed[index]); removeErr != nil {
-				errorsList = append(errorsList, fmt.Errorf("回滚 %s 失败: %w", committed[index], removeErr))
+		failures := []error{cause}
+		for i := len(staged) - 1; i >= 0; i-- {
+			if target := staged[i].target; target != "" {
+				if err := os.RemoveAll(target); err != nil {
+					failures = append(failures, fmt.Errorf("回滚 Skill 失败: %w", err))
+				}
 			}
 		}
-		return errors.Join(errorsList...)
+		return errors.Join(failures...)
 	}
-
+	previousSources := cloneSkillSourcesDocument(sources)
 	installed := make([]Info, 0, len(staged))
 	now := time.Now().UTC()
-	for index := range staged {
-		item := &staged[index]
-		if err := os.Rename(item.tempDir, item.target); err != nil {
-			return nil, rollback(fmt.Errorf("提交 Skill %q 失败: %w", item.request.Package.Info.Name, err))
-		}
-		item.tempDir = ""
-		committed = append(committed, item.target)
-
-		pkg, err := inspectPackage(ctx, item.target, m.config, true)
+	for i, item := range staged {
+		pkg, err := item.commit(ctx, filepath.Join(m.rootDir, requests[i].Package.Info.Name), m.config)
 		if err != nil {
-			return nil, rollback(fmt.Errorf("验证已安装 Skill %q 失败: %w", item.request.Package.Info.Name, err))
+			return nil, rollback(err)
 		}
-		source := item.request.Source
-		source.Identity = pkg.Info.Identity
-		if source.InstalledAt.IsZero() {
-			source.InstalledAt = now
-		}
-		if source.UpdatedAt.IsZero() {
-			source.UpdatedAt = source.InstalledAt
-		}
-		source, err = normalizeStoredSourceInfo(source)
+		source, err := installedSource(requests[i].Source, pkg.Info.Identity, now)
 		if err != nil {
-			return nil, rollback(fmt.Errorf("准备 Skill %q 来源记录失败: %w", pkg.Info.Name, err))
+			return nil, rollback(err)
 		}
 		sources.Skills[pkg.Info.Name] = source
 		installed = append(installed, pkg.Info)
 	}
-
 	if err := m.writeSourcesLocked(ctx, sources); err != nil {
-		return nil, rollback(fmt.Errorf("Skill 来源记录保存失败，批量安装已回滚: %w", err))
+		cause := rollback(fmt.Errorf("Skill 来源记录保存失败，安装已回滚: %w", err))
+		if restoreErr := m.writeSourcesLocked(context.Background(), previousSources); restoreErr != nil {
+			cause = errors.Join(cause, fmt.Errorf("恢复旧 Skill 来源记录失败: %w", restoreErr))
+		}
+		return nil, cause
 	}
-
 	return installed, nil
 }
 
@@ -496,25 +380,9 @@ func (m *Manager) StagePackage(
 	if pkg.Info.Identity != expectedIdentity {
 		return Info{}, fmt.Errorf("%w: Skill %q Identity 已从 %s 变为 %s", ErrSkillSnapshotStale, name, expectedIdentity, pkg.Info.Identity)
 	}
-	if err := os.Mkdir(destination, 0o700); err != nil {
-		return Info{}, fmt.Errorf("创建 Skill Stage 目录失败: %w", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = os.RemoveAll(destination)
-		}
-	}()
-	if err := copyPackageTree(ctx, pkg.Info.RootDir, destination); err != nil {
-		return Info{}, fmt.Errorf("Stage Skill %q 失败: %w", name, err)
-	}
-	staged, err := inspectPackage(ctx, destination, m.config, false)
+	staged, err := copyVerifiedPackage(ctx, pkg, destination, m.config)
 	if err != nil {
-		return Info{}, fmt.Errorf("复核 Stage Skill %q 失败: %w", name, err)
+		return Info{}, err
 	}
-	if staged.Info.Name != name || staged.Info.Identity != expectedIdentity {
-		return Info{}, fmt.Errorf("%w: Stage Skill %q 内容与当前 Turn Snapshot 不一致", ErrSkillSnapshotStale, name)
-	}
-	committed = true
 	return staged.Info, nil
 }

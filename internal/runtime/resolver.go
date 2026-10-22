@@ -221,7 +221,7 @@ func (r *Resolver) ResolveTurn(
 		ContextAssembly:   contextSnapshot.Assembly,
 		ContextHandler:    contextHandler,
 		AgentHandlers:     handlers,
-		Tools:             base.executable,
+		Tools:             base.modelTools(),
 		Messages:          providerMessages,
 		Workspace:         base.scope.Workspace,
 		Sandbox:           base.scope.Sandbox,
@@ -412,7 +412,7 @@ func (r *Resolver) resolveContextBase(
 		return resolvedContextBase{}, err
 	}
 	skillSnapshot, mcpSnapshot := capabilities.skills, capabilities.mcp
-	estimateTools := capabilities.schemas
+	estimateTools := capabilities.modelTools()
 	toolTokens, err := r.contextEngine.EstimateTools(ctx, estimateTools)
 	if err != nil {
 		return resolvedContextBase{}, fmt.Errorf("估算 Tool/Skill Schema Context 占用失败: %w", err)

@@ -64,9 +64,9 @@ ResolveApproval: permission decision → Resume(checkpoint) → 同样三种出�
 
 System Instruction 只包含稳定的策略、工作区、时区和用户配置，不注入每轮变化的秒级墙钟时间。Context 投影在每条原始用户消息末尾附加该 Entry 的固定 `sent_at`；子 Agent 使用轻量运行记录中的固定 StartedAt。重放不重写旧时间，原始 JSONL／用户正文也不修改，因此新轮次可以继续复用历史前缀。发送时间带本机时区偏移；实时命令按现有 `run_command` 权限执行。相同工具结果的归档引用同样保持稳定；摘要、配置／能力变更或图片重放窗口变化仍可能合法地改变前缀，不保证供应商缓存命中率。
 
-`reasoningReplayPolicyForModel` 使用冻结的 Provider 类型和 ModelName。MiMo 选择 Include，当前窗口中的历史和同轮 thinking 都保留；主／子 Agent 中间件和手动压缩使用同一策略。Ollama 保持 Auto，OpenAI 和未知兼容模型保持 Omit。Include 不绕过上下文预算，也不重新加载压缩前全部历史；原始 thinking 一直保存在 Transcript。
+`reasoningReplayPolicyForModel` 使用冻结的 Provider 类型和 ModelName。代码识别的 MiMo/DeepSeek 模型选择 Include，当前窗口中的历史和同轮 thinking 都保留；主／子 Agent 中间件和手动压缩使用同一策略。Ollama 保持 Auto，OpenAI 和未知兼容模型保持 Omit。Include 不绕过上下文预算，也不重新加载压缩前全部历史；原始 thinking 一直保存在 Transcript。
 
-`resolvedContextBase` 嵌入唯一的 `capabilitySet`，工具、Skills、MCP 与授权 Scope 不再复制成平行字段。模型可见名称由最终描述符统一生成，主 Agent Manifest 和子 Agent 校验共用该投影；模型请求前将全部 Schema 深复制并按名称排序，每轮工具循环使用同一份定义。`materializeOutput` 统一流读取、合并与关闭；Assistant 入口保留失败前的文本供上层恢复，普通消息入口在失败时丢弃半截 ToolResult。取消、审核拦截与持久化仍由 `consumeEvents` 明确判断。
+`resolvedContextBase` 嵌入唯一的 `capabilitySet`，工具、Skills、MCP 与授权 Scope 不再复制成平行字段。`resolvedCapabilities` 将描述符与实际工具按 Schema 名称关联，拒绝数量不符、缺项和重名。模型可见名称、Schema 预算和执行列表由同一集合投影，不再分别拼接三份工具列表；预览仍只读 MCP 本地定义。模型可见名称由最终描述符统一生成，主 Agent Manifest 和子 Agent 校验共用该投影；模型请求前将全部 Schema 深复制并按名称排序，每轮工具循环使用同一份定义。`materializeOutput` 统一流读取、合并与关闭；Assistant 入口保留失败前的文本供上层恢复，普通消息入口在失败时丢弃半截 ToolResult。取消、审核拦截与持久化仍由 `consumeEvents` 明确判断。
 
 `Service.Close` 取消活动运行并等待 worker，审批等待者也要收敛。Task 的运行上限属于 `ExecutionLimits`，普通聊天没有任务上限。任何在 Service 外直接调用 `Executor` 的新入口都可能绕过 Session reservation 和快照冻结，应优先通过 Runtime Service 扩展。
 
@@ -76,7 +76,7 @@ System Instruction 只包含稳定的策略、工作区、时区和用户配置�
 
 ## 新模块能力
 
-`component.Provider` 只贡献 Agent 显式选择的 Eino 工具。Describe 用于本地预览和预算，Resolve 用于真实 Turn；两者返回相同工具名称及内容版本。模块工具与 Builtin/Skills/MCP 一起做名称冲突检查、Schema Token 估算和 Reduction，并复用统一 Permission Guard。
+`module_contracts.go` 的 `CapabilityProvider` 只贡献 Agent 实际绑定的 Eino 工具。Describe 用于本地预览和预算，Resolve 用于真实 Turn；两者返回相同工具名称及内容版本。`ModuleInstaller` 接收 `ModuleHost`，返回包含能力与生命周期回调的 `Module`。模块工具与 Builtin/Skills/MCP 一起做名称冲突检查、Schema Token 估算和 Reduction，并复用统一 Permission Guard。知识库是正式接入示例，工具实现见 [capability.go](../knowledge/capability.go)。
 
 子 Agent 使用自己的模块绑定，授权 Scope 仍继承父运行。宿主复制模块请求中的可变集合；Manifest 只公开模块 ID、版本和工具名称。Allow 精确绑定版本，Deny 绑定稳定模块与工具。实现或配置变化必须更新版本，当前 Turn 使用已经捕获的配置与连接，审批恢复不重新装配。
 

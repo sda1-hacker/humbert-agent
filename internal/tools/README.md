@@ -2,14 +2,14 @@
 
 [总目录](../../docs/项目源码详解.md) · [内置工具](builtin/README.md) · [Permission](../permission/README.md)
 
-`Registry.Resolve` 根据冻结的 Scope 构造工具。Scope 的 Agent、Session、工作区与安全策略来自 Runtime，模型参数不能修改这些身份。所有 Builtin 与 MCP 工具进入同一套 Permission Guard，Ask 通过 Eino interrupt/checkpoint 恢复原调用，不接受前端重新提供参数。
+`Registry.Resolve` 根据冻结的 Scope 构造工具。Scope 的 Agent、Session、工作区与安全策略来自 Runtime，模型参数不能修改这些身份。Builtin、MCP 和模块工具共用 Permission Guard，Ask 通过 Eino interrupt/checkpoint 恢复原调用，不接受前端重新提供参数。
 
 ```mermaid
 flowchart LR
   F[Factory / MCP Adapter] --> G[Permission Guard]
   G --> I[实际 I/O 与 Sandbox]
   I --> R[Eino Reduction]
-  R --> A[完整结果存入 contextartifact]
+  R --> A[完整结果存入 Sessions 归档]
   R --> P[预览和资源 ID]
   P --> C[context_resource 分页恢复]
 ```
@@ -25,12 +25,14 @@ flowchart LR
 | `guarded_tool.go` | 授权与审批恢复 |
 | `capability_identity.go` | 授权规则匹配所需身份 |
 | `reduction.go` | Eino 与会话归档资源协议之间的适配 |
+| `selection.go` | 过滤退役工具名、归一旧 Git 名称；不改写持久化选择 |
+| `catalog.go` | 工具类别、界面文案键与默认选择 |
 
 文件工具的 schema、解析和显示由 Eino filesystem 提供；`fileops.Backend` 实现受限文件访问，`builtin/filesystem.go` 只适配 Eino 工具，保留 PathGuard、os.Root、UTF-8、大小限制和原子写入。命令执行仍由受控 Runner 提供，不通过普通文件访问模拟。
 
 `List` 与 `Resolve` 共用 `definitions`：在读锁内复制 Factory 引用与 Revision，释放锁后读取各自的 Descriptor，再按名称排序。Descriptor 与 Build 都不在 Registry 锁内执行；一次解析只读取一次描述符，选择校验与实际构造使用同一份元数据，没有新增常驻缓存。`EnabledBuiltinTools=nil` 继承全部工具，显式空集合关闭可选工具；Internal 工具仍按内部规则装配，显式禁用优先。
 
-无调用的 `Unregister` 和只供浏览器测试使用的启动包装已移除。现有模型可见工具名称全部保留：Git 查询的固定只读边界、文档提取与资源/历史回查各有独立语义。只有 package 声明的空文件已清理。
+六个文件工具为 `list_files`、`read_file`、`write_file`、`edit_file`、`glob_files`、`grep_files`。`CurrentBuiltinName` 过滤已退役的 apply_patch、copy_file、move_file、delete_file、get_current_time 和 update_plan；旧 git_status/git_diff/git_log 归一为 git，获准动作仍按旧选择限制。Git 查询、文档提取与资源/历史回查各有独立语义，不能根据保存配置中的历史名称推断工具仍可执行。
 
 ## 工具目录与内部能力包
 

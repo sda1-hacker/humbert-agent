@@ -460,6 +460,14 @@ export class Event {
         }
         if (/** @type {any} */(false)) {
             /**
+             * 审核拦截等不可交付输出不得保留在实时视图。
+             * @member
+             * @type {boolean | undefined}
+             */
+            this["discardPartial"] = undefined;
+        }
+        if (/** @type {any} */(false)) {
+            /**
              * Approval 只在 approval.* Runtime Event 中存在。Request 本身不包含 raw Tool
              * Arguments，只包含 Permission 层已经脱敏的 Presentation。
              * @member
@@ -498,7 +506,7 @@ export class Event {
         const $$createField17_0 = $$createType11;
         const $$createField18_0 = $$createType3;
         const $$createField19_0 = $$createType12;
-        const $$createField31_0 = $$createType1;
+        const $$createField32_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("builtinToolNames" in $$parsedSource) {
             $$parsedSource["builtinToolNames"] = $$createField9_0($$parsedSource["builtinToolNames"]);
@@ -519,7 +527,7 @@ export class Event {
             $$parsedSource["runtime"] = $$createField19_0($$parsedSource["runtime"]);
         }
         if ("approval" in $$parsedSource) {
-            $$parsedSource["approval"] = $$createField31_0($$parsedSource["approval"]);
+            $$parsedSource["approval"] = $$createField32_0($$parsedSource["approval"]);
         }
         return new Event(/** @type {Partial<Event>} */($$parsedSource));
     }

@@ -21,6 +21,7 @@ type Manager struct {
 	directory   string
 	state       diskState
 	engine      *engine
+	connecting  *engineBuild
 	active      int
 	closed      bool
 	ctx         context.Context

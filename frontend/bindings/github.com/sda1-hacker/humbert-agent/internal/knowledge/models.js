@@ -333,6 +333,13 @@ export class SaveSettingsRequest {
              */
             this["log_queries"] = false;
         }
+        if (!("connections" in $$source)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: string }}
+             */
+            this["connections"] = {};
+        }
 
         Object.assign(this, $$source);
     }
@@ -345,12 +352,16 @@ export class SaveSettingsRequest {
     static createFrom($$source = {}) {
         const $$createField2_0 = $$createType3;
         const $$createField3_0 = $$createType4;
+        const $$createField5_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("values" in $$parsedSource) {
             $$parsedSource["values"] = $$createField2_0($$parsedSource["values"]);
         }
         if ("secrets" in $$parsedSource) {
             $$parsedSource["secrets"] = $$createField3_0($$parsedSource["secrets"]);
+        }
+        if ("connections" in $$parsedSource) {
+            $$parsedSource["connections"] = $$createField5_0($$parsedSource["connections"]);
         }
         return new SaveSettingsRequest(/** @type {Partial<SaveSettingsRequest>} */($$parsedSource));
     }
@@ -472,6 +483,13 @@ export class Settings {
              */
             this["log_queries"] = false;
         }
+        if (!("connections" in $$source)) {
+            /**
+             * @member
+             * @type {{ [_ in string]?: string }}
+             */
+            this["connections"] = {};
+        }
 
         Object.assign(this, $$source);
     }
@@ -484,12 +502,16 @@ export class Settings {
     static createFrom($$source = {}) {
         const $$createField2_0 = $$createType3;
         const $$createField3_0 = $$createType11;
+        const $$createField6_0 = $$createType4;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("values" in $$parsedSource) {
             $$parsedSource["values"] = $$createField2_0($$parsedSource["values"]);
         }
         if ("has_secrets" in $$parsedSource) {
             $$parsedSource["has_secrets"] = $$createField3_0($$parsedSource["has_secrets"]);
+        }
+        if ("connections" in $$parsedSource) {
+            $$parsedSource["connections"] = $$createField6_0($$parsedSource["connections"]);
         }
         return new Settings(/** @type {Partial<Settings>} */($$parsedSource));
     }

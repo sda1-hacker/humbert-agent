@@ -74,8 +74,14 @@ func (m *Manager) State() State {
 // SaveSettings 与在途操作互斥：下一轮使用新配置，当前轮不能悄悄切到别的数据库或模型。
 func (m *Manager) SaveSettings(ctx context.Context, req SaveSettingsRequest) (State, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed || m.active != 0 {
+	var retired *engine
+	defer func() {
+		m.mu.Unlock()
+		if retired != nil {
+			retired.Close()
+		}
+	}()
+	if m.closed || m.active != 0 || m.connecting != nil {
 		return State{}, errors.New("请等待导入和检索结束后再修改 RAG 配置")
 	}
 	if req.Revision != m.state.Revision {
@@ -164,7 +170,7 @@ func (m *Manager) SaveSettings(ctx context.Context, req SaveSettingsRequest) (St
 		}
 	}
 	if m.engine != nil {
-		m.engine.Close()
+		retired = m.engine
 		m.engine = nil
 	}
 	m.state = next

@@ -30,6 +30,11 @@ type Limits struct {
 
 	// MaxListEntries 是一次 list_files 最多返回的目录项数量。
 	MaxListEntries int
+
+	// 搜索限制分别约束结果数、遍历量和单行展示长度。
+	MaxSearchResults   int
+	MaxSearchEntries   int
+	MaxSearchLineChars int
 }
 
 // Validate 校验 File Tool Limits。
@@ -46,5 +51,8 @@ func (c Limits) Validate() error {
 		return errors.New("MaxListEntries 必须大于 0")
 	}
 
+	if c.MaxSearchResults <= 0 || c.MaxSearchEntries <= 0 || c.MaxSearchLineChars <= 0 {
+		return errors.New("搜索结果、扫描项和单行字符限制必须大于 0")
+	}
 	return nil
 }

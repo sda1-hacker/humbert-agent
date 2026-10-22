@@ -21,7 +21,7 @@ flowchart LR
 
 ## 来源与更新
 
-`parser.go` 解析 Frontmatter 和正文；`browser.go`/`discovery.go` 扫描候选；`installer.go` 复制已验证包；`remote_source.go`/`source_providers.go` 只解析来源 URL，`remote_installer.go` 编排获取与包选择，`remote_git.go`/`remote_archive.go` 执行获取和安全展开；`update.go` 检测身份变化并原子替换。坏包在列表中以 `Valid=false` 呈现，不让其它 Skill 完全不可见。第三方来源 Resolver 只规范化 URL，不能绕开最终下载和包验证。
+`parser.go` 解析 Frontmatter 和正文；`browser.go`/`discovery.go` 扫描候选；`installer.go` 编排本地/批量提交，`package_stage.go` 共用复制、身份复核和目录提交；`remote_source.go`/`source_providers.go` 只解析来源 URL，`remote_installer.go` 编排获取与包选择，`remote_git.go`/`remote_archive.go` 执行获取和安全展开；`update.go` 检测身份变化并原子替换。坏包在列表中以 `Valid=false` 呈现，不让其它 Skill 完全不可见。第三方来源 Resolver 只规范化 URL，不能绕开最终下载和包验证。
 
 ```mermaid
 sequenceDiagram
@@ -39,7 +39,8 @@ sequenceDiagram
 | --- | --- |
 | `manager.go`、`types.go` | `List`、`Get`、`NormalizeAndValidateSelection` 与包元数据。 |
 | `snapshot.go` | 本轮冻结、渐进披露、资源路径验证。 |
-| `installer.go`、`remote_installer.go` | 本地提交、Stage 与远程准备/包选择编排。 |
+| `installer.go`、`remote_installer.go` | 本地/批量提交、Stage 与远程准备/包选择编排。 |
+| `package_stage.go` | 安装、替换和脚本 Stage 的复制与身份复核；暂存副本所有权和提交。 |
 | `remote_git.go` | 系统 Git 定位、固定 fetch/ls-tree/archive 与候选路径选择。 |
 | `remote_archive.go` | HTTP 公网拨号、重定向、下载预算和 Git/HTTP 共用的 ZIP 展开。 |
 | `update.go`、`sources.go` | 更新身份与来源记录。 |
@@ -65,3 +66,5 @@ Agent Profile：enabled_skills = [name]
 仓库来源优先由 `materializeGitSkillRepository` 获取，固定命令禁用仓库 hooks 与危险 protocol，再生成 ZIP；Git 不可用或获取失败时，编排层按既有规则尝试 HTTPS Archive。两条路径随后都进入 `extractRemoteArchive`，共享入口路径、符号链接、展开预算和包检查，扩展来源时无需再写一套安装器。
 
 `remote_source.go` 和 `source_providers.go` 保持纯地址解析；新的来源 Resolver 只返回规范化描述。新增 Git 获取行为放在 `remote_git.go`，修改下载/ZIP 边界放在 `remote_archive.go`，安装原子提交仍在 `installer.go`/`update.go`。哨兵错误已与领域类型合并到 `types.go`，原空的 `errors.go` 已清理。
+
+单包安装直接复用批量提交。安装与更新先在锁外复制并验证候选包，再在锁内核对目标或旧身份、提交并保存来源记录；脚本 Stage 仍持读锁固定已安装包。失败清理未发布副本，已发布目录由对应事务回滚；来源写入失败同时尝试恢复旧来源文档。新增安装来源复用这套流程。

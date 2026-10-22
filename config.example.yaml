@@ -110,6 +110,11 @@ tools:
     # list_files 单次最多返回多少目录项。
     max_list_entries: 1000
 
+    # glob/grep 最大结果数、扫描目录项数和 grep 单行字符数。超出扫描/结果上限时要求缩小范围。
+    max_search_results: 500
+    max_search_entries: 20000
+    max_search_line_chars: 2000
+
   web_search:
     enabled: true
     provider: auto

@@ -103,7 +103,7 @@ func buildToolRegistry(ctx context.Context, configFile string, deps toolDependen
 		return nil, err
 	}
 	if cfg.Files.Enabled {
-		limits := fileops.Limits{MaxReadableFileBytes: cfg.Files.MaxReadableFileBytes, MaxReadLines: cfg.Files.MaxReadLines, MaxListEntries: cfg.Files.MaxListEntries}
+		limits := fileops.Limits{MaxReadableFileBytes: cfg.Files.MaxReadableFileBytes, MaxReadLines: cfg.Files.MaxReadLines, MaxListEntries: cfg.Files.MaxListEntries, MaxSearchResults: cfg.Files.MaxSearchResults, MaxSearchEntries: cfg.Files.MaxSearchEntries, MaxSearchLineChars: cfg.Files.MaxSearchLineChars}
 		factories, err := builtin.NewFilesystemFactories(limits, cfg.Files.MaxWritableFileBytes)
 		if err != nil {
 			return nil, err

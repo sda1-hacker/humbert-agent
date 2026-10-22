@@ -6,7 +6,7 @@
 
 工作区看板使用已有 usecases 包中的 `WorkspaceQuery`。工具装配只接收一份 `sessions.Service`，从中取得历史、附件和完整结果归档；不再另建 ContextArtifactStore，也不重复保存 History/Artifacts 两份来源。Builtin 的最小接口仍在工具侧定义，真实构造通过编译期接口匹配，构建入口先拒绝缺失会话服务。
 
-`modules.go` 提供可选的静态模块装配：`Bootstrap(ctx, WithModules(installer))`。模块只获得通用平台依赖，继续拥有自己的数据、连接和 Agent 绑定；能力交给 Runtime，桌面服务由桌面装配点独立注册。最小示例见 [textstats.go](../../examples/modules/textstats.go)。
+`modules.go` 默认安装 [knowledge](../knowledge/README.md)，并通过 `Bootstrap(ctx, WithModules(installer))` 追加静态模块。知识库使用已有 Models Registry，启动只读本地设置，数据库在初始化或实际操作时才连接。模块拥有自己的数据、连接和 Agent 绑定；能力交给 Runtime，桌面服务由 `services.All` 独立注册。通用契约定义在 `runtime/module_contracts.go`，最小示例见 [textstats.go](../../examples/modules/textstats.go)。
 
 `lifecycle.go` 保存每个已构造资源的清理方法。启动失败与正常退出共用清单，资源只关闭一次，一个关闭失败不会跳过后续清理：
 

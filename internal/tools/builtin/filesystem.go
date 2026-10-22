@@ -3,6 +3,7 @@ package builtin
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/cloudwego/eino/adk"
 	filesystemmw "github.com/cloudwego/eino/adk/middlewares/filesystem"
@@ -42,7 +43,16 @@ func (f *filesystemFactory) Descriptor() humberttools.Descriptor {
 }
 func (f *filesystemFactory) Build(ctx context.Context, scope humberttools.Scope) (einotool.InvokableTool, error) {
 	config := func(name string) *filesystemmw.ToolConfig {
-		return &filesystemmw.ToolConfig{Name: name, Disable: name != f.name}
+		cfg := &filesystemmw.ToolConfig{Name: name, Disable: name != f.name}
+		if name == "grep_files" {
+			description := fmt.Sprintf("搜索授权目录中的文件内容。pattern 使用 Go regexp（RE2）语法，不支持反向引用或 lookaround；支持大小写和多行选项、glob 与文件类型过滤、前后文。文本按 UTF-8 搜索；受支持文档先提取文本，因此行号对应提取后的文本。跳过符号链接、二进制、不可读、超大或无法解析的文件，结果不代表所有文件均被搜索。最多扫描 %d 个目录项、返回 %d 行，每行最多 %d 字符；超限请缩小 path 或 pattern。", f.limits.MaxSearchEntries, f.limits.MaxSearchResults, f.limits.MaxSearchLineChars)
+			cfg.Desc = &description
+		}
+		if name == "glob_files" {
+			description := fmt.Sprintf("在授权范围内按 glob 模式查找路径。支持 ** 递归匹配；跳过符号链接和 .git。最多扫描 %d 个目录项、返回 %d 项；超限请缩小 path 或 pattern。", f.limits.MaxSearchEntries, f.limits.MaxSearchResults)
+			cfg.Desc = &description
+		}
+		return cfg
 	}
 	backend, err := fileops.NewBackend(scope.SandboxPolicy(), f.limits, f.maxWritableBytes)
 	if err != nil {
