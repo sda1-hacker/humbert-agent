@@ -1,4 +1,11 @@
 export default [
+  ["推理回放", "Reasoning replay", "推論の再送", "추론 재전송"],
+  ["跟随预设", "Follow preset", "プリセットに従う", "사전 설정 따르기"],
+  ["当前窗口全部", "Entire context window", "現在のコンテキスト全体", "현재 컨텍스트 전체"],
+  ["仅当前用户轮次", "Current user turn only", "現在のユーザーターンのみ", "현재 사용자 턴만"],
+  ["不回传推理", "Omit reasoning", "推論を再送しない", "추론 보내지 않기"],
+  ["当前生效：{policy}", "Effective: {policy}", "現在の設定：{policy}", "적용 중: {policy}"],
+  ["控制原生 thinking 是否回传；不控制思考开关，也不改变消息保存。回放范围仍受上下文预算和压缩限制。", "Controls replay of native thinking, independently of thinking generation or message storage. Context budgets and compaction still apply.", "ネイティブな思考の再送を制御します。思考の生成やメッセージ保存は変更せず、予算と圧縮の制限は維持します。", "원본 추론의 재전송을 제어합니다. 추론 생성이나 메시지 저장은 바꾸지 않으며 컨텍스트 예산과 압축 제한은 유지됩니다."],
   ["清除已存密钥", "Clear saved key", "保存済みキーを削除", "저장된 키 삭제"],
   ["清除已存请求头", "Clear saved headers", "保存済みヘッダーを削除", "저장된 헤더 삭제"],
   ["清除已存密码", "Clear saved password", "保存済みパスワードを削除", "저장된 비밀번호 삭제"],

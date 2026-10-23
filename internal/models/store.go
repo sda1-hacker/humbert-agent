@@ -468,10 +468,10 @@ func (s *Store) readModelsDocumentLocked(ctx context.Context) (modelsDocument, e
 // normalizeCreateModelInput 拒绝，避免静默篡改用户显式配置。
 func applyModelDefaults(value Model) Model {
 	if value.ContextWindow == 0 {
-		value.ContextWindow = defaultModelContextWindow
+		value.ContextWindow = presetCatalog.Defaults.ContextWindow
 	}
 	if value.MaxOutputTokens == 0 {
-		value.MaxOutputTokens = defaultModelMaxOutputTokens
+		value.MaxOutputTokens = presetCatalog.Defaults.MaxOutputTokens
 	}
 	return value
 }

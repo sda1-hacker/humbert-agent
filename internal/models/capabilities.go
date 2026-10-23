@@ -37,7 +37,6 @@ type Capabilities struct {
 }
 
 // EffectiveCapabilities 将自动推断与用户覆盖合并成 Runtime 能力。
-// todo 后期存储到配置中，扩展不同模型的能力。
 func EffectiveCapabilities(providerType ProviderType, modelName string, config CapabilityConfig) Capabilities {
 	inferred := inferCapabilities(providerType, modelName)
 	return Capabilities{
@@ -103,13 +102,17 @@ func resolveCapability(mode CapabilityMode, inferred bool) bool {
 	}
 }
 
-// inferCapabilities 只承担“Auto”模式的默认推断，不是模型能力数据库。
+// inferCapabilities 优先读取共享预设，未收录的模型沿用保守默认值。
 //
 // 设计目标是：
 //  1. 旧 Humbert 配置升级后继续允许工具调用；
 //  2. 对 Vision/File 等容易导致 Provider 400 的能力保持保守；
 //  3. 用户始终可以在 Settings 中显式覆盖。
 func inferCapabilities(providerType ProviderType, modelName string) Capabilities {
+	// 已核实模型以共享预设为准；未知模型保留原有保守推断和用户覆盖入口。
+	if preset, ok := presetForModel(providerType, modelName); ok && preset.ID != "" {
+		return preset.Capabilities
+	}
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	if name == "" {
 		return Capabilities{}

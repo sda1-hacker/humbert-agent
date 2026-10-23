@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"time"
 
@@ -59,7 +60,11 @@ func (f *Factory) create(ctx context.Context, resolved ResolvedModel, client *ht
 	if providerType != ProviderTypeOpenAI && providerType != ProviderTypeOpenAICompatible && providerType != ProviderTypeOllama {
 		return nil, fmt.Errorf("不支持的 Provider 类型: %q", resolved.Provider.Type)
 	}
-	var err error
+	mode, err := normalizeReasoningReplay(resolved.Model.ReasoningReplay)
+	if err != nil {
+		return nil, err
+	}
+	policy := EffectiveReasoningReplay(providerType, resolved.Model.ModelName, mode)
 	if client == nil {
 		client, err = newStreamingHTTPClient(time.Duration(resolved.Model.TimeoutMS) * time.Millisecond)
 		if err != nil {
@@ -87,11 +92,17 @@ func (f *Factory) create(ctx context.Context, resolved ResolvedModel, client *ht
 		if err != nil {
 			return nil, fmt.Errorf("创建 Ollama ChatModel 失败: %w", err)
 		}
-		return value, nil
+		return &reasoningModel{inner: value, policy: policy}, nil
 	}
 	// 官方与兼容协议的输出预算字段不同，合并公共初始化时仍保留原请求语义。
 	maxOutput := resolved.Model.MaxOutputTokens
 	cfg := &openai.ChatModelConfig{APIKey: apiKey, BaseURL: resolved.Provider.BaseURL, Model: resolved.Model.ModelName, HTTPClient: client}
+	// 某些协议不仅需要回传字段，还要求显式启用历史推理读取；直接复用 Eino 扩展参数。
+	if policy != ReasoningReplayOmit {
+		if preset, ok := presetForModel(providerType, resolved.Model.ModelName); ok {
+			cfg.ExtraFields = maps.Clone(preset.ReasoningReplayParams)
+		}
+	}
 	if providerType == ProviderTypeOpenAI {
 		cfg.MaxCompletionTokens = &maxOutput
 	} else {
@@ -101,7 +112,7 @@ func (f *Factory) create(ctx context.Context, resolved ResolvedModel, client *ht
 	if err != nil {
 		return nil, fmt.Errorf("创建 %s ChatModel 失败: %w", providerType, err)
 	}
-	return &reasoningModel{inner: value, replay: supportsReasoningReplay(providerType, resolved.Model.ModelName)}, nil
+	return &reasoningModel{inner: value, policy: policy}, nil
 }
 
 // newStreamingHTTPClient 创建适用于 LLM SSE/Streaming 的 HTTP Client。

@@ -292,6 +292,7 @@ func (r *Registry) CreateModel(ctx context.Context, input CreateModelInput) (Mod
 		ContextWindow:   normalized.ContextWindow,
 		MaxOutputTokens: normalized.MaxOutputTokens,
 		Capabilities:    normalized.Capabilities,
+		ReasoningReplay: normalized.ReasoningReplay,
 		Enabled:         normalized.Enabled,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -326,6 +327,7 @@ func (r *Registry) UpdateModel(ctx context.Context, id string, input UpdateModel
 	existing.ContextWindow = normalized.ContextWindow
 	existing.MaxOutputTokens = normalized.MaxOutputTokens
 	existing.Capabilities = normalized.Capabilities
+	existing.ReasoningReplay = normalized.ReasoningReplay
 	existing.Enabled = normalized.Enabled
 	existing.UpdatedAt = time.Now().UTC()
 	multimedia, err := r.store.MultimediaConfig(ctx)

@@ -28,6 +28,6 @@ Registry 在创建/更新/删除时校验引用和能力，避免删掉仍被 Ag
 
 排查“模型能连接但不能调用工具”：先核对 Model Capability 与 Agent 角色，再看 Resolver 的 `validateToolCapability`，最后查供应商响应。连接测试只验证对应测试路径，不等于所有能力都可用。
 
-`reasoning_replay.go` 按已知模型协议控制回放。OpenAI 与未知兼容模型仍省略原生推理输入；OpenAI-compatible 下的已文档化 MiMo 模型（v2.6-pro／flash／pro-ultraspeed、v2.5-pro／v2.5）保留当前窗口的完整 `reasoning_content`，包括已完成轮次和同轮工具调用。`RuntimeSnapshot.SupportsReasoningReplay` 与 Factory 使用同一判断，避免 Context 预算和真实出站策略分离。该策略不同于 UI 的 Reasoning 能力开关，不会强制开启 thinking 或发起探测请求。
+`catalog.json` 是 Vue 与 Go 共用的预设来源，`reasoning_replay.go` 不再维护厂商白名单。模型的 `reasoning_replay` 可选择 `auto`（跟随预设）、`include`（当前窗口全部）、`current_turn`（仅当前用户轮次）或 `omit`（省略）；旧配置缺失此字段时按 `auto` 处理。`RuntimeSnapshot.ReasoningReplay` 与 Factory 使用同一解析结果，使 Context 预算和实际出站策略一致。预设还可声明回放所需参数，例如千问的 `preserve_thinking`。用户可在模型高级设置中覆盖策略，不会改写 Transcript、强制开启 thinking 或发起探测请求。
 
-`reasoningModel` 在 Generate／Stream／WithTools 后保持策略。MiMo 出站消息在副本上将文本与 thinking 统一成原生 Content／ReasoningContent，并去除仅用于 SSE 拼接的 ToolCall.Index；合法工具参数使用与 JSONL RawMessage 一致的 JSON 编码。调用 ID、参数含义和原始消息不变，非法参数不会被修正成合法请求。这样执行中的消息与持久化后重放的消息具有稳定表示。协议依据：[MiMo OpenAI API](https://mimo.mi.com/docs/en-US/api/chat/openai-api)。
+`reasoningModel` 在 Generate／Stream／WithTools 后保持策略。出站消息在副本上将文本与 thinking 统一成 Content／ReasoningContent，由 Eino SDK 映射为对应协议字段；去除仅用于 SSE 拼接的 ToolCall.Index，合法工具参数使用与 JSONL RawMessage 一致的 JSON 编码。调用 ID、参数含义和原始消息不变，非法参数不会被修正成合法请求。这样执行中的消息与持久化后重放的消息具有稳定表示。已核实的协议链接随共享预设维护。

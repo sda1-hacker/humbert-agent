@@ -204,14 +204,14 @@ func compactionModel(roles resolvedModelRoles) models.RuntimeSnapshot {
 	return roles.chat
 }
 
-// MiMo / DeepSeek 回放当前窗口内所有 thinking，保持前序工具链；Ollama 保留当前轮次。
-// OpenAI 与未知兼容端点默认只发送回答和工具事务。
+// 消费冻结的协议策略，不在 Runtime 再维护一份厂商/模型名单。
 func reasoningReplayPolicyForModel(model models.RuntimeSnapshot) contextengine.ReasoningReplayPolicy {
-	if model.ProviderType == models.ProviderTypeOllama {
+	switch model.ReasoningReplay {
+	case models.ReasoningReplayCurrentTurn:
 		return contextengine.ReasoningReplayAuto
-	}
-	if model.SupportsReasoningReplay() {
+	case models.ReasoningReplayInclude:
 		return contextengine.ReasoningReplayInclude
+	default:
+		return contextengine.ReasoningReplayOmit
 	}
-	return contextengine.ReasoningReplayOmit
 }

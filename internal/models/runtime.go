@@ -79,6 +79,9 @@ type RuntimeSnapshot struct {
 	MaxOutputTokens int
 
 	Capabilities Capabilities
+
+	// 已在相同配置 Revision 下解析完毕，与 Factory 出站策略保持一致。
+	ReasoningReplay ReasoningReplayMode
 }
 
 // ResolveSnapshot 在同一个 Registry 锁范围内同时解析模型实例、配置描述与 Revision。
@@ -152,6 +155,7 @@ func runtimeSnapshotFromResolved(
 		ContextWindow:    resolved.Model.ContextWindow,
 		MaxOutputTokens:  resolved.Model.MaxOutputTokens,
 		Capabilities:     EffectiveCapabilities(resolved.Provider.Type, resolved.Model.ModelName, resolved.Model.Capabilities),
+		ReasoningReplay:  EffectiveReasoningReplay(resolved.Provider.Type, resolved.Model.ModelName, resolved.Model.ReasoningReplay),
 	}
 }
 

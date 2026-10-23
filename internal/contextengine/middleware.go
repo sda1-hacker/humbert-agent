@@ -107,11 +107,18 @@ func (m *MidRunCompactor) BeforeModelRewriteState(ctx context.Context, state *ad
 		return ctx, state, err
 	}
 	// 不修改原始 Transcript，也不破坏要求重放推理内容的 Provider 协议。
-	if m.config.ReasoningPolicy == ReasoningReplayOmit {
+	if m.config.ReasoningPolicy != ReasoningReplayInclude {
+		latestUser := -1
+		for i, msg := range state.Messages {
+			if msg != nil && msg.Role == schema.User {
+				latestUser = i
+			}
+		}
 		copyState := *state
 		copyState.Messages = make([]*schema.Message, len(state.Messages))
 		for i, msg := range state.Messages {
-			copyState.Messages[i] = applyReasoningReplayPolicy(msg, ReasoningReplayOmit)
+			// 同轮工具循环和预算捕获也应用当前轮次策略，不能仅在历史加载时裁掉旧推理。
+			copyState.Messages[i] = applyReasoningReplayPolicy(msg, reasoningPolicyForIndex(m.config.ReasoningPolicy, i, latestUser))
 		}
 		state = &copyState
 	}

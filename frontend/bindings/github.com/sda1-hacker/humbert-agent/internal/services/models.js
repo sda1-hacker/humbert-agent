@@ -1994,6 +1994,20 @@ export class ModelDTO {
              */
             this["capabilities"] = (new ModelCapabilitiesDTO());
         }
+        if (!("reasoningReplay" in $$source)) {
+            /**
+             * @member
+             * @type {models$0.ReasoningReplayMode}
+             */
+            this["reasoningReplay"] = models$0.ReasoningReplayMode.$zero;
+        }
+        if (!("effectiveReasoningReplay" in $$source)) {
+            /**
+             * @member
+             * @type {models$0.ReasoningReplayMode}
+             */
+            this["effectiveReasoningReplay"] = models$0.ReasoningReplayMode.$zero;
+        }
         if (!("enabled" in $$source)) {
             /**
              * @member
@@ -3098,6 +3112,13 @@ export class SaveModelRequest {
              * @type {ModelCapabilityConfigDTO}
              */
             this["capabilityConfig"] = (new ModelCapabilityConfigDTO());
+        }
+        if (!("reasoningReplay" in $$source)) {
+            /**
+             * @member
+             * @type {models$0.ReasoningReplayMode}
+             */
+            this["reasoningReplay"] = models$0.ReasoningReplayMode.$zero;
         }
         if (!("enabled" in $$source)) {
             /**

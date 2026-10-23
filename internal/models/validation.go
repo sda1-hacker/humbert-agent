@@ -15,18 +15,9 @@ const (
 
 	defaultOllamaBaseURL = "http://127.0.0.1:11434"
 
-	defaultModelTimeoutMS = 600000
-
 	minModelTimeoutMS = 1000
 
 	maxModelTimeoutMS = 300000
-
-	// defaultModelContextWindow 为旧 models.json 与新建模型提供保守默认值。
-	// 128k 是当前主流长上下文模型较常见的能力档位；用户仍应按实际部署值修改。
-	defaultModelContextWindow = 128 * 1024
-
-	// defaultModelMaxOutputTokens 是默认输出预算，同时作为 Provider 请求的输出硬上限。
-	defaultModelMaxOutputTokens = 8 * 1024
 
 	minModelContextWindow = 4 * 1024
 	maxModelContextWindow = 2 * 1024 * 1024
@@ -103,8 +94,7 @@ func normalizeCreateModelInput(
 	timeoutMS := input.TimeoutMS
 
 	if timeoutMS == 0 {
-		timeoutMS =
-			defaultModelTimeoutMS
+		timeoutMS = presetCatalog.Defaults.TimeoutMS
 	}
 
 	if timeoutMS < minModelTimeoutMS || timeoutMS > maxModelTimeoutMS {
@@ -113,7 +103,7 @@ func normalizeCreateModelInput(
 
 	contextWindow := input.ContextWindow
 	if contextWindow == 0 {
-		contextWindow = defaultModelContextWindow
+		contextWindow = presetCatalog.Defaults.ContextWindow
 	}
 	if contextWindow < minModelContextWindow || contextWindow > maxModelContextWindow {
 		return CreateModelInput{}, fmt.Errorf("模型 Context Window 必须位于 %d-%d Token 之间", minModelContextWindow, maxModelContextWindow)
@@ -121,7 +111,7 @@ func normalizeCreateModelInput(
 
 	maxOutputTokens := input.MaxOutputTokens
 	if maxOutputTokens == 0 {
-		maxOutputTokens = defaultModelMaxOutputTokens
+		maxOutputTokens = presetCatalog.Defaults.MaxOutputTokens
 	}
 	if maxOutputTokens < minModelMaxOutputTokens {
 		return CreateModelInput{}, fmt.Errorf("模型 Max Output Tokens 不能小于 %d", minModelMaxOutputTokens)
@@ -131,6 +121,10 @@ func normalizeCreateModelInput(
 	}
 
 	capabilities, err := normalizeCapabilityConfig(input.Capabilities)
+	if err != nil {
+		return CreateModelInput{}, err
+	}
+	reasoningReplay, err := normalizeReasoningReplay(input.ReasoningReplay)
 	if err != nil {
 		return CreateModelInput{}, err
 	}
@@ -149,6 +143,8 @@ func normalizeCreateModelInput(
 		MaxOutputTokens: maxOutputTokens,
 
 		Capabilities: capabilities,
+
+		ReasoningReplay: reasoningReplay,
 
 		Enabled: input.Enabled,
 	}, nil

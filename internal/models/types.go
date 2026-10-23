@@ -79,6 +79,9 @@ type Model struct {
 
 	Capabilities CapabilityConfig `json:"capabilities,omitempty"`
 
+	// 推理回放独立于 Reasoning 能力；缺失时按共享预设解析，不改写已保存的 Thinking。
+	ReasoningReplay ReasoningReplayMode `json:"reasoning_replay,omitempty"`
+
 	Enabled bool `json:"enabled"`
 
 	CreatedAt time.Time `json:"created_at"`
@@ -171,6 +174,8 @@ type CreateModelInput struct {
 	MaxOutputTokens int
 
 	Capabilities CapabilityConfig
+
+	ReasoningReplay ReasoningReplayMode
 
 	Enabled bool
 }

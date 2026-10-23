@@ -41,20 +41,22 @@ type ModelCapabilitiesDTO = models.Capabilities
 
 // ModelDTO 是返回给 Vue 的 Model 数据。
 type ModelDTO struct {
-	ID               string                   `json:"id"`
-	ProviderID       string                   `json:"providerID"`
-	ProviderName     string                   `json:"providerName"`
-	ProviderType     string                   `json:"providerType"`
-	ModelName        string                   `json:"modelName"`
-	DisplayName      string                   `json:"displayName"`
-	TimeoutMS        int                      `json:"timeoutMS"`
-	ContextWindow    int                      `json:"contextWindow"`
-	MaxOutputTokens  int                      `json:"maxOutputTokens"`
-	CapabilityConfig ModelCapabilityConfigDTO `json:"capabilityConfig"`
-	Capabilities     ModelCapabilitiesDTO     `json:"capabilities"`
-	Enabled          bool                     `json:"enabled"`
-	CreatedAt        string                   `json:"createdAt"`
-	UpdatedAt        string                   `json:"updatedAt"`
+	ID                       string                     `json:"id"`
+	ProviderID               string                     `json:"providerID"`
+	ProviderName             string                     `json:"providerName"`
+	ProviderType             string                     `json:"providerType"`
+	ModelName                string                     `json:"modelName"`
+	DisplayName              string                     `json:"displayName"`
+	TimeoutMS                int                        `json:"timeoutMS"`
+	ContextWindow            int                        `json:"contextWindow"`
+	MaxOutputTokens          int                        `json:"maxOutputTokens"`
+	CapabilityConfig         ModelCapabilityConfigDTO   `json:"capabilityConfig"`
+	Capabilities             ModelCapabilitiesDTO       `json:"capabilities"`
+	ReasoningReplay          models.ReasoningReplayMode `json:"reasoningReplay"`
+	EffectiveReasoningReplay models.ReasoningReplayMode `json:"effectiveReasoningReplay"`
+	Enabled                  bool                       `json:"enabled"`
+	CreatedAt                string                     `json:"createdAt"`
+	UpdatedAt                string                     `json:"updatedAt"`
 }
 
 // MultimediaConfigDTO 是设置页维护的应用级多媒体模型路由。
@@ -89,14 +91,15 @@ type UpdateProviderRequest struct {
 
 // SaveModelRequest 同时用于新增和编辑 Model。
 type SaveModelRequest struct {
-	ProviderID       string                   `json:"providerID"`
-	ModelName        string                   `json:"modelName"`
-	DisplayName      string                   `json:"displayName"`
-	TimeoutMS        int                      `json:"timeoutMS"`
-	ContextWindow    int                      `json:"contextWindow"`
-	MaxOutputTokens  int                      `json:"maxOutputTokens"`
-	CapabilityConfig ModelCapabilityConfigDTO `json:"capabilityConfig"`
-	Enabled          bool                     `json:"enabled"`
+	ProviderID       string                     `json:"providerID"`
+	ModelName        string                     `json:"modelName"`
+	DisplayName      string                     `json:"displayName"`
+	TimeoutMS        int                        `json:"timeoutMS"`
+	ContextWindow    int                        `json:"contextWindow"`
+	MaxOutputTokens  int                        `json:"maxOutputTokens"`
+	CapabilityConfig ModelCapabilityConfigDTO   `json:"capabilityConfig"`
+	ReasoningReplay  models.ReasoningReplayMode `json:"reasoningReplay"`
+	Enabled          bool                       `json:"enabled"`
 }
 
 // TestModelResponse 返回真实连接测试结果。
@@ -389,7 +392,9 @@ func toModelDTO(value models.ModelInfo) ModelDTO {
 
 		CapabilityConfig: capabilityConfigDTO(value.Model.Capabilities),
 
-		Capabilities: capabilitiesDTO(models.EffectiveCapabilities(value.ProviderType, value.Model.ModelName, value.Model.Capabilities)),
+		Capabilities:             capabilitiesDTO(models.EffectiveCapabilities(value.ProviderType, value.Model.ModelName, value.Model.Capabilities)),
+		ReasoningReplay:          value.Model.ReasoningReplay,
+		EffectiveReasoningReplay: models.EffectiveReasoningReplay(value.ProviderType, value.Model.ModelName, value.Model.ReasoningReplay),
 
 		Enabled: value.Model.Enabled,
 
@@ -429,6 +434,7 @@ func (request SaveModelRequest) modelInput() models.CreateModelInput {
 		ProviderID: request.ProviderID, ModelName: request.ModelName, DisplayName: request.DisplayName,
 		TimeoutMS: request.TimeoutMS, ContextWindow: request.ContextWindow, MaxOutputTokens: request.MaxOutputTokens,
 		Capabilities: capabilityConfigFromDTO(request.CapabilityConfig), Enabled: request.Enabled,
+		ReasoningReplay: request.ReasoningReplay,
 	}
 }
 

@@ -71,3 +71,21 @@ export class Capabilities {
         return new Capabilities(/** @type {Partial<Capabilities>} */($$parsedSource));
     }
 }
+
+/**
+ * ReasoningReplayMode 只控制请求中是否回传原生推理，不控制模型是否开启 thinking。
+ * Auto 跟随共享预设；用户可为自建网关或新模型显式指定，无需修改厂商名单。
+ * @readonly
+ * @enum {string}
+ */
+export const ReasoningReplayMode = {
+    /**
+     * The Go zero value for the underlying type of the enum.
+     */
+    $zero: "",
+
+    ReasoningReplayAuto: "auto",
+    ReasoningReplayInclude: "include",
+    ReasoningReplayCurrentTurn: "current_turn",
+    ReasoningReplayOmit: "omit",
+};

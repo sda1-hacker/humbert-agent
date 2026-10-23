@@ -1,13 +1,17 @@
 {
-  "version": 1,
+  "version": 2,
   "verifiedAt": "2026-10-20",
-  "_说明": "预设仅用于新建表单，不覆盖用户保存的配置。capabilities 按当前接入协议填写；未实现的原生文件与音频入口不自动开启。maxOutputTokens 是服务公开上限，defaultOutputTokens 是应用的初始输出预算；null 表示没有核实统一上限。Ollama 的实际窗口取决于本机部署，默认按 4K 保守配置。",
-  "defaults": { "timeoutMS": 60000, "contextWindow": 131072, "maxOutputTokens": 8192 },
+  "_说明": "前后端共用此预设。defaults 提供通用缺省值，各模型的预算只填充新建表单；capabilities 用于能力自动推断，用户显式设置优先。reasoningReplay 是请求协议：include 回放当前窗口全部推理，current_turn 仅保留当前用户轮次，omit 不回传；与能否生成 thinking 分开。reasoningReplayParams 是回放时额外需要的协议参数，不覆盖消息、工具或预算。maxOutputTokens 是服务公开上限，defaultOutputTokens 是初始输出预算；null 表示未核实统一上限。Ollama 的实际窗口取决于本机部署，默认按 4K 保守配置。",
+  "reasoningVerifiedAt": "2026-10-22",
+  "defaults": { "timeoutMS": 60000, "contextWindow": 131072, "maxOutputTokens": 8192, "reasoningReplay": { "openai": "omit", "openai_compatible": "omit", "ollama": "current_turn" } },
   "providers": [
     {
       "id": "xiaomi",
       "name": "小米 MiMo",
       "type": "openai_compatible",
+      "reasoningReplay": "include",
+      "reasoningReplayAliases": ["mimo-v2.5-pro", "mimo-v2.5"],
+      "reasoningSource": "https://mimo.mi.com/docs/en-US/api/chat/openai-api",
       "baseURL": "https://api.xiaomimimo.com/v1",
       "baseURLAliases": ["https://token-plan-cn.xiaomimimo.com/v1"],
       "source": "https://mimo.mi.com/docs/quick-start/model",
@@ -21,6 +25,7 @@
       "id": "openai",
       "name": "OpenAI",
       "type": "openai",
+      "reasoningReplay": "omit",
       "baseURL": "https://api.openai.com/v1",
       "source": "https://developers.openai.com/api/docs/models",
       "models": [
@@ -31,6 +36,8 @@
       "id": "deepseek",
       "name": "DeepSeek",
       "type": "openai_compatible",
+      "reasoningReplay": "include",
+      "reasoningSource": "https://api-docs.deepseek.com/guides/thinking_mode/",
       "baseURL": "https://api.deepseek.com",
       "source": "https://api-docs.deepseek.com/quick_start/pricing/",
       "models": [
@@ -42,6 +49,9 @@
       "id": "dashscope",
       "name": "阿里云百炼",
       "type": "openai_compatible",
+      "reasoningReplay": "include",
+      "reasoningReplayParams": { "preserve_thinking": true },
+      "reasoningSource": "https://help.aliyun.com/zh/model-studio/deep-thinking",
       "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
       "source": "https://help.aliyun.com/zh/model-studio/qwen3-6-plus",
       "models": [
@@ -52,6 +62,7 @@
       "id": "ollama",
       "name": "Ollama",
       "type": "ollama",
+      "reasoningReplay": "current_turn",
       "baseURL": "http://127.0.0.1:11434",
       "source": "https://docs.ollama.com/context-length",
       "models": [

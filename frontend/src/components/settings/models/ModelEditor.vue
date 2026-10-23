@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { Browser } from "@wailsio/runtime";
 import { useModelStore } from "../../../stores/models.js";
-import { capabilityFields, formatTokens, modelDraft, presetForModel } from "../../../utils/modelCatalog.js";
+import { capabilityFields, formatTokens, modelDraft, presetForModel, reasoningReplayFor, reasoningReplayOptions } from "../../../utils/modelCatalog.js";
 import { Message } from "../../../utils/uiMessage.js";
 import { t } from "../../../i18n/index.js";
 import { useAgentStore } from "../../../stores/agents.js";
@@ -17,6 +17,7 @@ const saving = ref(false);
 const advanced = ref(false);
 const provider = computed(() => store.providers.find((item) => item.id === form.providerID));
 const reference = computed(() => presetForModel(provider.value, form.modelName));
+const replayLabel = computed(() => reasoningReplayOptions.find(option => option.value === reasoningReplayFor(provider.value?.type, form.modelName, form.reasoningReplay))?.label || "不回传推理");
 const baseline = ref("");
 const mayLeave = useSettingsGuard(() => props.visible && JSON.stringify(form) !== baseline.value, save, () => saving.value);
 const usages = computed(() => {
@@ -104,6 +105,11 @@ async function openReference() {
           <p class="field-help">预设能力已自动填入。自定义模型可使用“自动”，也可按服务实际能力覆盖。</p>
           <div class="capability-grid"><a-form-item v-for="field in capabilityFields" :key="field.key" :label="t(field.label)"><a-select v-model="form.capabilityConfig[field.key]" :aria-label="t(field.label)"><a-option value="auto">自动</a-option><a-option value="enabled">支持</a-option><a-option value="disabled">不支持</a-option></a-select></a-form-item></div>
           <p class="field-help">原生文件与音频仅为能力标记，不代表应用已支持对应输入入口。</p>
+          <a-form-item label="推理回放">
+            <a-select v-model="form.reasoningReplay" aria-label="推理回放"><a-option v-for="option in reasoningReplayOptions" :key="option.value" :value="option.value">{{ t(option.label) }}</a-option></a-select>
+            <template #extra>{{ t('当前生效：{policy}', { policy: t(replayLabel) }) }}</template>
+          </a-form-item>
+          <p class="field-help">控制原生 thinking 是否回传；不控制思考开关，也不改变消息保存。回放范围仍受上下文预算和压缩限制。</p>
           <div class="editor-grid">
             <a-form-item label="请求超时"><a-input-number v-model="form.timeoutMS" :min="1000" :max="300000" :step="1000"><template #suffix>ms</template></a-input-number></a-form-item>
             <a-form-item v-if="form.id" label="所属供应商"><a-select v-model="form.providerID" aria-label="所属供应商"><a-option v-for="item in store.providers" :key="item.id" :value="item.id">{{ item.name }}</a-option></a-select></a-form-item>

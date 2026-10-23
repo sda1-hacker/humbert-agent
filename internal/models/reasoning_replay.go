@@ -3,51 +3,70 @@ package models
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 )
 
-// SupportsReasoningReplay 描述当前模型的已知协议，而非能否生成 thinking。
-// MiMo 与 DeepSeek 当前协议要求工具链回传前序 reasoning_content；未知兼容模型仍保守省略。
-func (s RuntimeSnapshot) SupportsReasoningReplay() bool {
-	return supportsReasoningReplay(s.ProviderType, s.ModelName)
-}
+// ReasoningReplayMode 只控制请求中是否回传原生推理，不控制模型是否开启 thinking。
+// Auto 跟随共享预设；用户可为自建网关或新模型显式指定，无需修改厂商名单。
+type ReasoningReplayMode string
 
-func supportsReasoningReplay(provider ProviderType, modelName string) bool {
-	if provider == ProviderTypeOllama {
-		return true
+const (
+	ReasoningReplayAuto        ReasoningReplayMode = "auto"
+	ReasoningReplayInclude     ReasoningReplayMode = "include"
+	ReasoningReplayCurrentTurn ReasoningReplayMode = "current_turn"
+	ReasoningReplayOmit        ReasoningReplayMode = "omit"
+)
+
+func normalizeReasoningReplay(mode ReasoningReplayMode) (ReasoningReplayMode, error) {
+	mode = ReasoningReplayMode(strings.ToLower(strings.TrimSpace(string(mode))))
+	if mode == "" {
+		mode = ReasoningReplayAuto
 	}
-	if provider != ProviderTypeOpenAICompatible {
-		return false
-	}
-	// 只识别官方已文档化的模型 ID；预设新增模型也必须遵守对应协议，不能一概丢弃推理字段。
-	switch strings.ToLower(strings.TrimSpace(modelName)) {
-	case "mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5":
-		return true
-	case "deepseek-flash", "deepseek-v4-pro":
-		return true
+	switch mode {
+	case ReasoningReplayAuto, ReasoningReplayInclude, ReasoningReplayCurrentTurn, ReasoningReplayOmit:
+		return mode, nil
 	default:
-		return false
+		return "", fmt.Errorf("推理回放策略无效: %q，只允许 auto/include/current_turn/omit", mode)
 	}
 }
 
-// reasoningModel 是 OpenAI Chat Completions 的最终出站边界。
+// EffectiveReasoningReplay 让 DTO、冻结快照和实际请求读取同一份有效协议。
+func EffectiveReasoningReplay(provider ProviderType, modelName string, override ReasoningReplayMode) ReasoningReplayMode {
+	mode, err := normalizeReasoningReplay(override)
+	if err != nil {
+		return ReasoningReplayOmit
+	}
+	if mode != ReasoningReplayAuto {
+		return mode
+	}
+	if preset, ok := presetForModel(provider, modelName); ok && preset.ReasoningReplay != "" {
+		return preset.ReasoningReplay
+	}
+	if mode := presetCatalog.Defaults.ReasoningReplay[provider]; mode != "" {
+		return mode
+	}
+	return ReasoningReplayOmit
+}
+
+// reasoningModel 是各协议共用的最终出站边界。
 // Eino 同轮工具循环会产生新的 Assistant，故不能只在历史投影中应用回放策略。
 type reasoningModel struct {
 	inner  einomodel.ToolCallingChatModel
-	replay bool
+	policy ReasoningReplayMode
 }
 
 var _ einomodel.ToolCallingChatModel = (*reasoningModel)(nil)
 
 func (m *reasoningModel) Generate(ctx context.Context, input []*schema.Message, opts ...einomodel.Option) (*schema.Message, error) {
-	return m.inner.Generate(ctx, reasoningForRequest(input, m.replay), opts...)
+	return m.inner.Generate(ctx, reasoningForRequest(input, m.policy), opts...)
 }
 
 func (m *reasoningModel) Stream(ctx context.Context, input []*schema.Message, opts ...einomodel.Option) (*schema.StreamReader[*schema.Message], error) {
-	return m.inner.Stream(ctx, reasoningForRequest(input, m.replay), opts...)
+	return m.inner.Stream(ctx, reasoningForRequest(input, m.policy), opts...)
 }
 
 func (m *reasoningModel) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCallingChatModel, error) {
@@ -55,12 +74,20 @@ func (m *reasoningModel) WithTools(tools []*schema.ToolInfo) (einomodel.ToolCall
 	if err != nil {
 		return nil, err
 	}
-	return &reasoningModel{inner: bound, replay: m.replay}, nil
+	return &reasoningModel{inner: bound, policy: m.policy}, nil
 }
 
-// reasoningForRequest 只修改副本。MiMo 的文本/推理块统一为 Content/ReasoningContent，
+// reasoningForRequest 只修改副本。文本/推理块统一为 Content/ReasoningContent，
 // 与 Transcript Codec 重放表示一致，避免直播消息为数组、重放消息为字符串而改变请求。
-func reasoningForRequest(messages []*schema.Message, replay bool) []*schema.Message {
+func reasoningForRequest(messages []*schema.Message, policy ReasoningReplayMode) []*schema.Message {
+	latestUser := -1
+	if policy == ReasoningReplayCurrentTurn {
+		for index, message := range messages {
+			if message != nil && message.Role == schema.User {
+				latestUser = index
+			}
+		}
+	}
 	result := make([]*schema.Message, len(messages))
 	for index, message := range messages {
 		if message == nil || message.Role != schema.Assistant {
@@ -68,7 +95,8 @@ func reasoningForRequest(messages []*schema.Message, replay bool) []*schema.Mess
 			continue
 		}
 		clone := *message
-		if replay && len(message.ToolCalls) > 0 {
+		replay := policy == ReasoningReplayInclude || policy == ReasoningReplayCurrentTurn && index > latestUser
+		if len(message.ToolCalls) > 0 {
 			clone.ToolCalls = append([]schema.ToolCall(nil), message.ToolCalls...)
 			for i := range clone.ToolCalls {
 				// Index 仅用于合并 SSE delta；普通 Assistant 历史靠稳定 ID 关联。
@@ -100,9 +128,7 @@ func reasoningForRequest(messages []*schema.Message, replay bool) []*schema.Mess
 						reasoning.WriteString(part.Reasoning.Text)
 					}
 				case schema.ChatMessagePartTypeText:
-					if replay {
-						text.WriteString(part.Text)
-					}
+					text.WriteString(part.Text)
 					parts = append(parts, part)
 				default:
 					textOnly = false
@@ -110,17 +136,15 @@ func reasoningForRequest(messages []*schema.Message, replay bool) []*schema.Mess
 				}
 			}
 			clone.AssistantGenMultiContent = parts
-			if replay {
-				// 结构化和兼容字段通常是同一份内容，只保留一次，优先结构化原文。
-				if reasoning.Len() > 0 {
-					clone.ReasoningContent = reasoning.String()
+			// 结构化和兼容字段通常是同一份内容，只保留一次，优先结构化原文。
+			if reasoning.Len() > 0 {
+				clone.ReasoningContent = reasoning.String()
+			}
+			if textOnly {
+				if text.Len() > 0 {
+					clone.Content = text.String()
 				}
-				if textOnly {
-					if text.Len() > 0 {
-						clone.Content = text.String()
-					}
-					clone.AssistantGenMultiContent = nil
-				}
+				clone.AssistantGenMultiContent = nil
 			}
 		}
 		result[index] = &clone
